@@ -16,19 +16,5 @@
       "database_id": "00000000-0000-0000-0000-000000000000",
       "migrations_dir": "migrations"
     }
-  ],
-  "durable_objects": {
-    "bindings": [
-      {
-        "name": "RELAY_HUBS",
-        "class_name": "RelayHub"
-      }
-    ]
-  },
-  "migrations": [
-    {
-      "tag": "v1",
-      "new_sqlite_classes": ["RelayHub"]
-    }
   ]
 }

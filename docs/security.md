@@ -15,6 +15,9 @@ data requirements.
 - Never upload, persist, print, or log provider access tokens, refresh tokens, cookies, credential
   files, raw credential payloads, or authorization headers.
 - Read provider sessions without modifying credential files or Keychain entries.
+- QuotaBar may cache one last normalized local collection report in its application preferences for
+  immediate startup. The cache may contain masked labels and account fingerprints, but never raw
+  provider responses, credential payloads, access tokens, refresh tokens, cookies, or headers.
 - Store QuotaBar Relay credentials in Keychain. Store edge credentials in the platform credential
   store or a user-only (`0600`) file.
 - Derive account fingerprints from stable non-secret identifiers, never from access tokens when a
@@ -37,12 +40,14 @@ data requirements.
 
 ## Relay authentication and storage
 
-- Use one-time enrollment tokens. Do not reuse user read credentials as device write credentials.
+- Device enrollment follows
+  [`decisions/0002-relay-device-code-pairing.md`](decisions/0002-relay-device-code-pairing.md).
+- Do not reuse user read credentials as device write credentials.
 - Separate `quota:read`, `device:manage`, and `quota:write:self` scopes.
-- Bind every device credential to its Relay issuer and instance ID.
-- Persist hashes of owner/session bearer tokens, never plaintext bearer tokens.
-- Store only normalized snapshots, device public keys, credential hashes, and required ownership data
-  in D1/SQLite.
+- Store each device credential together with its Relay URL and instance ID; never send it to a
+  different Relay.
+- Persist hashes of device and owner/session bearer tokens, never plaintext bearer tokens.
+- Store only normalized snapshots, credential hashes, and required ownership data in D1/SQLite.
 - Keep D1 migrations explicit and review changes that broaden retained user data.
 - A self-hosted Relay requires a persistent SQLite volume and fails closed when storage cannot open.
 

@@ -5,7 +5,6 @@ services:
       dockerfile: apps/relay/Dockerfile
     environment:
       QUOTA_RELAY_INSTANCE_ID: "${QUOTA_RELAY_INSTANCE_ID:-self-hosted-primary}"
-      QUOTA_RELAY_OWNER_TOKEN: "${QUOTA_RELAY_OWNER_TOKEN:-development-only-change-me}"
     ports:
       - "127.0.0.1:8080:8080"
     volumes:

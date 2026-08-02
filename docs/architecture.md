@@ -22,17 +22,20 @@ QuotaBar ── user-only local IPC ── QuotaCLI ── local provider sessio
 
 QuotaBar starts its bundled QuotaCLI helper. QuotaCLI discovers logged-in provider sessions,
 collects quota, and returns a validated normalized report. Provider credentials remain inside the
-QuotaCLI process boundary.
+QuotaCLI process boundary. QuotaBar retains one last normalized local report so it can render
+immediately after launch, then replaces that cache after a successful background collection.
 
 ### Remote edge
 
 ```text
-Remote QuotaCLI ── outbound HTTPS / WebSocket ── QuotaRelay ── QuotaBar
+Remote QuotaCLI ── outbound HTTPS ── QuotaRelay ── QuotaBar
 ```
 
-QuotaCLI pairs with an explicitly selected Relay, receives a Relay-bound device credential, and
-sends normalized snapshots. Relay persists accepted snapshots and serves authenticated QuotaBar
-clients. It never receives provider credentials or runs provider collectors.
+QuotaCLI explicitly pairs with a selected Relay, receives a Relay-bound device credential, and sends
+normalized snapshots only after edge reporting is enabled. Relay persists accepted snapshots and
+serves authenticated QuotaBar clients. It never receives provider credentials or runs provider
+collectors. Pairing ownership and token generation are defined in
+[`decisions/0002-relay-device-code-pairing.md`](decisions/0002-relay-device-code-pairing.md).
 
 Provider-specific collection order is defined only in
 [`provider-collection.md`](provider-collection.md). Credential handling, logging, transport, and
@@ -44,12 +47,15 @@ storage requirements are defined only in [`security.md`](security.md).
 
 - Swift 6.2 and SwiftUI, targeting macOS 14 or newer.
 - Owns local presentation, Relay profiles, and merging local and remote snapshots.
+- Ships its exact compatible QuotaCLI helper inside the signed app bundle and never resolves it from
+  the user's `PATH`.
 - Stores Relay credentials in Keychain and profile metadata separately.
 - Discovers Relay capabilities before using versioned endpoints.
 
 ### QuotaCLI
 
-- TypeScript packaged as a standalone Bun executable.
+- TypeScript bundled as a Node ESM npm package and as a standalone Bun executable from the same
+  entry point.
 - Owns all provider credential discovery and quota collection.
 - Uses the same normalized schemas for local output and edge uploads.
 - Avoids native Node addons so standalone cross-platform builds remain possible.
@@ -57,7 +63,7 @@ storage requirements are defined only in [`security.md`](security.md).
 ### QuotaRelay
 
 - Hono application shared across Cloudflare and self-hosted entry points.
-- Owns device lifecycle, Relay authentication, snapshot persistence, and realtime coordination.
+- Owns device lifecycle, Relay authentication, and snapshot persistence.
 - Accepts normalized protocol payloads only.
 
 ### Quota Web
@@ -69,7 +75,7 @@ storage requirements are defined only in [`security.md`](security.md).
 ## Package dependency rules
 
 ```text
-@gotry/quota-protocol
+@gotry-io/quota-protocol
     ▲          ▲             ▲
     │          │             │
 quota-model  provider-core  relay-core
@@ -88,9 +94,13 @@ quota-model  provider-core  relay-core
 
 ## Relay runtimes
 
-The managed runtime uses Cloudflare Workers, D1, and Durable Objects. The self-hosted runtime uses
-Bun and an embedded SQLite file. Both implement the `@gotry/relay-core` state contract and expose the
-same protocol behavior.
+The managed runtime uses Cloudflare Workers and D1. The self-hosted runtime uses Bun and an embedded
+SQLite file. Both implement the `@gotry-io/relay-core` state contract and expose the same protocol
+behavior. QuotaBar reads snapshots over authenticated HTTP polling in v1. If later product
+measurements justify realtime push, the managed runtime may add one Durable Object per owner for
+WebSocket
+coordination while D1 remains the source of truth; the self-hosted runtime would provide an
+equivalent in-process connection hub.
 
 The persistence requirement, D1/SQLite choice, and R2 boundary are recorded in
 [`decisions/0001-persistent-relay-storage.md`](decisions/0001-persistent-relay-storage.md). That ADR is

@@ -9,7 +9,8 @@ QuotaRelay has no stateless production mode.
 
 - The gotry-managed Cloudflare deployment uses D1 as its source of truth.
 - Self-hosted deployments use an embedded SQLite database by default.
-- Durable Objects coordinate Cloudflare WebSocket connections but do not replace D1 business data.
+- Durable Objects are not part of v1. They may later coordinate Cloudflare WebSocket connections if
+  polling proves insufficient, but never replace D1 business data.
 - R2 is not part of the core request path.
 
 ## Rationale
