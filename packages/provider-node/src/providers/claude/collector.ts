@@ -1,4 +1,5 @@
 import { homedir } from "node:os";
+import { setTimeout as delay } from "node:timers/promises";
 import {
   ProviderCollectionError,
   type CollectionContext,
@@ -17,8 +18,10 @@ import {
   CLAUDE_SOURCE_API,
   hasUserProfileScope,
   loadClaudeCredentials,
+  shouldRefreshClaudeCredentials,
   type ClaudeCredentials,
 } from "./credentials.ts";
+import { refreshClaudeAuthWithCli, type ClaudeCliAuthRefreshOptions } from "./auth-refresh.ts";
 import {
   buildClaudeSnapshot,
   claudePlanLabel,
@@ -38,6 +41,7 @@ export interface ClaudeCollectorOptions {
   transport?: HttpTransport;
   readJson?: (path: string) => Promise<unknown | undefined>;
   readKeychain?: (service: string) => Promise<string | undefined>;
+  refreshAuth?: (options: ClaudeCliAuthRefreshOptions) => Promise<boolean>;
 }
 
 export class ClaudeCollector implements ProviderCollector {
@@ -48,6 +52,7 @@ export class ClaudeCollector implements ProviderCollector {
   private readonly transport: HttpTransport;
   private readonly readJson: ClaudeCollectorOptions["readJson"];
   private readonly readKeychain: ClaudeCollectorOptions["readKeychain"];
+  private readonly refreshAuth: NonNullable<ClaudeCollectorOptions["refreshAuth"]>;
 
   constructor(options: ClaudeCollectorOptions = {}) {
     this.homeDirectory = options.homeDirectory ?? homedir();
@@ -56,6 +61,7 @@ export class ClaudeCollector implements ProviderCollector {
     this.transport = options.transport ?? createFetchTransport();
     this.readJson = options.readJson;
     this.readKeychain = options.readKeychain;
+    this.refreshAuth = options.refreshAuth ?? refreshClaudeAuthWithCli;
   }
 
   async discover(): Promise<ProviderSession[]> {
@@ -83,14 +89,7 @@ export class ClaudeCollector implements ProviderCollector {
     _session: ProviderSession,
     context: CollectionContext = {},
   ): Promise<QuotaSnapshot> {
-    const credentials = await loadClaudeCredentials({
-      homeDirectory: this.homeDirectory,
-      environment: this.environment,
-      platform: this.platform,
-      ...(context.signal ? { signal: context.signal } : {}),
-      ...(this.readJson ? { readJson: this.readJson } : {}),
-      ...(this.readKeychain ? { readKeychain: this.readKeychain } : {}),
-    });
+    let credentials = await this.loadCredentials(context.signal);
     if (!credentials) {
       throw new ProviderCollectionError(
         "auth_required",
@@ -107,37 +106,25 @@ export class ClaudeCollector implements ProviderCollector {
     }
 
     const now = context.now ?? new Date();
+    const refreshAttempted = shouldRefreshClaudeCredentials(credentials, now);
+
+    if (refreshAttempted) {
+      credentials = await this.refreshAndReload(credentials, context.signal);
+    }
+
     try {
-      const usage = await this.fetchUsage(credentials, context.signal);
-      const mapped = mapClaudeUsageResponse(usage);
-      if (!mapped.usable) {
-        throw new ProviderCollectionError(
-          "unavailable",
-          "Claude usage API returned no quota windows.",
-          CLAUDE_SOURCE_API,
-        );
-      }
-
-      let email: string | undefined;
-      let organizationId: string | undefined;
-      try {
-        const profile = await this.fetchProfile(credentials, context.signal);
-        const mappedProfile = mapClaudeProfile(profile);
-        email = mappedProfile.email;
-        organizationId = mappedProfile.organizationId;
-      } catch {
-        // Profile enrichment is best-effort; usage success must not be discarded.
-      }
-
-      const plan = claudePlanLabel(credentials.subscriptionType, credentials.rateLimitTier);
-      return buildClaudeSnapshot({
-        windows: mapped.windows,
-        now,
-        ...(plan ? { plan } : {}),
-        ...(email ? { email } : {}),
-        ...(organizationId ? { organizationId } : {}),
-      });
+      return await this.collectWithCredentials(credentials, now, context.signal);
     } catch (error) {
+      if (error instanceof ClaudeOAuthUnauthorizedError && !refreshAttempted) {
+        const refreshed = await this.refreshAndReload(credentials, context.signal);
+        if (credentialsChanged(credentials, refreshed)) {
+          try {
+            return await this.collectWithCredentials(refreshed, now, context.signal);
+          } catch (retryError) {
+            error = retryError;
+          }
+        }
+      }
       const classified = classifyProviderError(error);
       throw new ProviderCollectionError(
         classified.category,
@@ -145,6 +132,94 @@ export class ClaudeCollector implements ProviderCollector {
         classified.source ?? CLAUDE_SOURCE_API,
       );
     }
+  }
+
+  private async collectWithCredentials(
+    credentials: ClaudeCredentials,
+    now: Date,
+    signal?: AbortSignal,
+  ): Promise<QuotaSnapshot> {
+    if (!hasUserProfileScope(credentials)) {
+      throw new ProviderCollectionError(
+        "auth_required",
+        "Claude OAuth token missing 'user:profile' scope. Run `claude auth login`.",
+        CLAUDE_SOURCE_API,
+      );
+    }
+
+    const usage = await this.fetchUsage(credentials, signal);
+    const mapped = mapClaudeUsageResponse(usage);
+    if (!mapped.usable) {
+      throw new ProviderCollectionError(
+        "unavailable",
+        "Claude usage API returned no quota windows.",
+        CLAUDE_SOURCE_API,
+      );
+    }
+
+    let email: string | undefined;
+    let organizationId: string | undefined;
+    try {
+      const profile = await this.fetchProfile(credentials, signal);
+      const mappedProfile = mapClaudeProfile(profile);
+      email = mappedProfile.email;
+      organizationId = mappedProfile.organizationId;
+    } catch {
+      // Profile enrichment is best-effort; usage success must not be discarded.
+    }
+
+    const plan = claudePlanLabel(credentials.subscriptionType, credentials.rateLimitTier);
+    return buildClaudeSnapshot({
+      windows: mapped.windows,
+      now,
+      ...(plan ? { plan } : {}),
+      ...(email ? { email } : {}),
+      ...(organizationId ? { organizationId } : {}),
+    });
+  }
+
+  private async loadCredentials(signal?: AbortSignal): Promise<ClaudeCredentials | undefined> {
+    return await loadClaudeCredentials({
+      homeDirectory: this.homeDirectory,
+      environment: this.environment,
+      platform: this.platform,
+      ...(signal ? { signal } : {}),
+      ...(this.readJson ? { readJson: this.readJson } : {}),
+      ...(this.readKeychain ? { readKeychain: this.readKeychain } : {}),
+    });
+  }
+
+  private async refreshAndReload(
+    credentials: ClaudeCredentials,
+    signal?: AbortSignal,
+  ): Promise<ClaudeCredentials> {
+    let launched = false;
+    try {
+      launched = await this.refreshAuth({
+        homeDirectory: this.homeDirectory,
+        environment: this.environment,
+        platform: this.platform,
+        ...(signal ? { signal } : {}),
+      });
+    } catch (error) {
+      if (signal?.aborted) {
+        throw error;
+      }
+      return credentials;
+    }
+    if (!launched) {
+      return credentials;
+    }
+
+    if (signal?.aborted) {
+      throw new ProviderCollectionError("unavailable", "Claude credential reload cancelled.");
+    }
+    await delay(200);
+    if (signal?.aborted) {
+      throw new ProviderCollectionError("unavailable", "Claude credential reload cancelled.");
+    }
+    const reloaded = await this.loadCredentials(signal);
+    return reloaded && credentialsChanged(credentials, reloaded) ? reloaded : credentials;
   }
 
   private async fetchUsage(credentials: ClaudeCredentials, signal?: AbortSignal): Promise<unknown> {
@@ -160,10 +235,8 @@ export class ClaudeCollector implements ProviderCollector {
     });
 
     if (status === 401) {
-      throw new ProviderCollectionError(
-        "auth_required",
+      throw new ClaudeOAuthUnauthorizedError(
         "Claude OAuth request unauthorized. Run `claude auth login` to re-authenticate.",
-        CLAUDE_SOURCE_API,
       );
     }
     if (status === 403 && bodyText.toLowerCase().includes("user:profile")) {
@@ -203,4 +276,17 @@ export class ClaudeCollector implements ProviderCollector {
     }
     return json;
   }
+}
+
+class ClaudeOAuthUnauthorizedError extends ProviderCollectionError {
+  constructor(message: string) {
+    super("auth_required", message, CLAUDE_SOURCE_API);
+  }
+}
+
+function credentialsChanged(before: ClaudeCredentials, after: ClaudeCredentials): boolean {
+  return (
+    before.accessToken !== after.accessToken ||
+    before.expiresAt?.getTime() !== after.expiresAt?.getTime()
+  );
 }

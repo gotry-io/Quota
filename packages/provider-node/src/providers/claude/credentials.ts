@@ -11,6 +11,7 @@ import { parseFlexibleDate } from "../../runtime/time.ts";
 
 export const CLAUDE_KEYCHAIN_SERVICE = "Claude Code-credentials";
 export const CLAUDE_SOURCE_API = "anthropic_oauth_usage_api";
+export const CLAUDE_AUTH_REFRESH_SKEW_MS = 60_000;
 
 export interface ClaudeCredentials {
   accessToken: string;
@@ -44,13 +45,19 @@ export async function loadClaudeCredentials(
 ): Promise<ClaudeCredentials | undefined> {
   const environment = options.environment ?? {};
   const readJson = options.readJson ?? readJsonFile;
+  let fileCredentials: ClaudeCredentials | undefined;
 
   for (const path of claudeCredentialPaths(options.homeDirectory, environment)) {
     const json = await readJson(path);
     const parsed = parseClaudeCredentials(json, path);
     if (parsed) {
-      return parsed;
+      fileCredentials = parsed;
+      break;
     }
+  }
+
+  if (fileCredentials && !shouldRefreshClaudeCredentials(fileCredentials)) {
+    return fileCredentials;
   }
 
   const readKeychain =
@@ -71,11 +78,11 @@ export async function loadClaudeCredentials(
         return parsed;
       }
     } catch {
-      return undefined;
+      // Fall back to file credentials below.
     }
   }
 
-  return undefined;
+  return fileCredentials;
 }
 
 export function parseClaudeCredentials(
@@ -117,4 +124,13 @@ export function parseClaudeCredentials(
 
 export function hasUserProfileScope(credentials: ClaudeCredentials): boolean {
   return credentials.scopes.includes("user:profile");
+}
+
+export function shouldRefreshClaudeCredentials(
+  credentials: ClaudeCredentials,
+  now = new Date(),
+): boolean {
+  return credentials.expiresAt !== undefined
+    ? credentials.expiresAt.getTime() <= now.getTime() + CLAUDE_AUTH_REFRESH_SKEW_MS
+    : false;
 }

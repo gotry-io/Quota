@@ -1,3 +1,6 @@
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   GROK_BILLING_URL,
@@ -7,6 +10,7 @@ import {
   parseGrokCredentials,
 } from "../src/index.ts";
 import { GrokCollector } from "../src/providers/grok/collector.ts";
+import { refreshGrokAuthWithCli } from "../src/providers/grok/auth-refresh.ts";
 import { mapGrokBillingResponse } from "../src/providers/grok/map.ts";
 import type { HttpRequest, HttpResponse } from "../src/runtime/http.ts";
 
@@ -51,6 +55,69 @@ describe("grok credentials", () => {
     );
     expect(credentials?.userId).toBe("legacy_user");
   });
+
+  it("selects the OIDC entry with the latest expiry", () => {
+    const credentials = parseGrokCredentials(
+      {
+        [`${GROK_OIDC_SCOPE_PREFIX}fresh-client`]: {
+          key: "fresh-key",
+          user_id: "fresh-user",
+          expires_at: "2026-08-03T00:00:00Z",
+        },
+        [`${GROK_OIDC_SCOPE_PREFIX}stale-client`]: {
+          key: "stale-key",
+          user_id: "stale-user",
+          expires_at: "2026-08-01T00:00:00Z",
+        },
+      },
+      "/tmp/grok/auth.json",
+    );
+
+    expect(credentials?.userId).toBe("fresh-user");
+    expect(credentials?.accessToken).toBe("fresh-key");
+  });
+});
+
+describe("grok CLI auth refresh", () => {
+  it.skipIf(process.platform === "win32")(
+    "performs a headless cached-token ACP handshake",
+    async () => {
+      await withTemporaryExecutable(
+        `#!/bin/sh
+IFS= read -r request
+printf '%s\\n' "$request" >> "$GROK_TEST_MARKER"
+printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":{"authMethods":[{"id":"cached_token"},{"id":"grok.com"}],"_meta":{"defaultAuthMethodId":"cached_token"}}}'
+IFS= read -r request
+printf '%s\\n' "$request" >> "$GROK_TEST_MARKER"
+printf '%s\\n' '{"jsonrpc":"2.0","id":2,"result":{"_meta":{}}}'
+`,
+        async (executable, directory) => {
+          const marker = join(directory, "requests.jsonl");
+          await expect(
+            refreshGrokAuthWithCli({
+              homeDirectory: directory,
+              environment: {
+                GROK_CLI_PATH: executable,
+                GROK_TEST_MARKER: marker,
+                PATH: "/usr/bin:/bin",
+              },
+            }),
+          ).resolves.toBe(true);
+
+          const requests = (await readFile(marker, "utf8"))
+            .trim()
+            .split("\n")
+            .map((line) => JSON.parse(line) as Record<string, unknown>);
+          expect(requests).toHaveLength(2);
+          expect(requests[0]).toMatchObject({ method: "initialize" });
+          expect(requests[1]).toMatchObject({
+            method: "authenticate",
+            params: { methodId: "cached_token", _meta: { headless: true } },
+          });
+        },
+      );
+    },
+  );
 });
 
 describe("grok billing mapping", () => {
@@ -133,6 +200,7 @@ describe("grok collector", () => {
     const collector = new GrokCollector({
       homeDirectory: "/home/quota",
       readJson: syntheticAuth,
+      refreshAuth: async () => false,
       transport: async () => jsonResponse(401, { error: "Bearer synthetic-token" }),
     });
     const collection = collector.collect(grokSession(), { now: NOW });
@@ -141,6 +209,89 @@ describe("grok collector", () => {
       source: GROK_SOURCE_API,
     });
     await expect(collection).rejects.not.toThrow(/synthetic-token/);
+  });
+
+  it("refreshes expired credentials through Grok before requesting billing", async () => {
+    let auth = syntheticAuthPayload("expired-token", "2026-08-01T00:00:00Z");
+    let refreshCount = 0;
+    const requests: HttpRequest[] = [];
+    const collector = new GrokCollector({
+      homeDirectory: "/home/quota",
+      readJson: async () => auth,
+      refreshAuth: async () => {
+        refreshCount += 1;
+        auth = syntheticAuthPayload("refreshed-token", "2026-08-03T00:00:00Z");
+        return true;
+      },
+      transport: async (input) => {
+        requests.push(input);
+        return jsonResponse(200, billingPayload());
+      },
+    });
+
+    await expect(collector.collect(grokSession(), { now: NOW })).resolves.toMatchObject({
+      provider: "grok",
+      status: "available",
+    });
+    expect(refreshCount).toBe(1);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.headers?.Authorization).toBe("Bearer refreshed-token");
+  });
+
+  it("refreshes and retries once after an unauthorized billing response", async () => {
+    let auth = syntheticAuthPayload("rejected-token", "2026-08-03T00:00:00Z");
+    let refreshCount = 0;
+    const requests: HttpRequest[] = [];
+    const collector = new GrokCollector({
+      homeDirectory: "/home/quota",
+      readJson: async () => auth,
+      refreshAuth: async () => {
+        refreshCount += 1;
+        auth = syntheticAuthPayload("retry-token", "2026-08-03T06:00:00Z");
+        return true;
+      },
+      transport: async (input) => {
+        requests.push(input);
+        return requests.length === 1
+          ? jsonResponse(401, { error: "unauthorized" })
+          : jsonResponse(200, billingPayload());
+      },
+    });
+
+    await expect(collector.collect(grokSession(), { now: NOW })).resolves.toMatchObject({
+      provider: "grok",
+      status: "available",
+    });
+    expect(refreshCount).toBe(1);
+    expect(requests.map((request) => request.headers?.Authorization)).toEqual([
+      "Bearer rejected-token",
+      "Bearer retry-token",
+    ]);
+  });
+
+  it("does not loop when refreshed credentials are also rejected", async () => {
+    let auth = syntheticAuthPayload("rejected-token", "2026-08-03T00:00:00Z");
+    let refreshCount = 0;
+    let requestCount = 0;
+    const collector = new GrokCollector({
+      homeDirectory: "/home/quota",
+      readJson: async () => auth,
+      refreshAuth: async () => {
+        refreshCount += 1;
+        auth = syntheticAuthPayload("still-rejected", "2026-08-03T06:00:00Z");
+        return true;
+      },
+      transport: async () => {
+        requestCount += 1;
+        return jsonResponse(401, { error: "unauthorized" });
+      },
+    });
+
+    await expect(collector.collect(grokSession(), { now: NOW })).rejects.toMatchObject({
+      category: "auth_required",
+    });
+    expect(refreshCount).toBe(1);
+    expect(requestCount).toBe(2);
   });
 
   it("rejects malformed billing payloads", async () => {
@@ -164,13 +315,31 @@ describe("grok collector", () => {
 });
 
 function syntheticAuth(): Promise<unknown> {
-  return Promise.resolve({
+  return Promise.resolve(syntheticAuthPayload("synthetic-token"));
+}
+
+function syntheticAuthPayload(accessToken: string, expiresAt?: string): unknown {
+  return {
     [`${GROK_OIDC_SCOPE_PREFIX}client`]: {
-      key: "synthetic-token",
+      key: accessToken,
       user_id: "user_1",
       email: "grok@example.com",
+      ...(expiresAt ? { expires_at: expiresAt } : {}),
     },
-  });
+  };
+}
+
+function billingPayload(): unknown {
+  return {
+    config: {
+      creditUsagePercent: 8,
+      currentPeriod: {
+        type: "USAGE_PERIOD_TYPE_WEEKLY",
+        start: "2026-07-30T07:33:06Z",
+        end: "2026-08-06T07:33:06Z",
+      },
+    },
+  };
 }
 
 function grokSession() {
@@ -188,4 +357,19 @@ function jsonResponse(status: number, value: unknown): HttpResponse {
     headers: new Headers({ "content-type": "application/json" }),
     bodyText: JSON.stringify(value),
   };
+}
+
+async function withTemporaryExecutable(
+  contents: string,
+  action: (executable: string, directory: string) => Promise<void>,
+): Promise<void> {
+  const directory = await mkdtemp(join(tmpdir(), "quota-grok-refresh-"));
+  const executable = join(directory, "grok");
+  try {
+    await writeFile(executable, contents);
+    await chmod(executable, 0o755);
+    await action(executable, directory);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 }

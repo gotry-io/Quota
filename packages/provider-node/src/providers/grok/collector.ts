@@ -1,4 +1,5 @@
 import { homedir } from "node:os";
+import { setTimeout as delay } from "node:timers/promises";
 import {
   type CollectionContext,
   ProviderCollectionError,
@@ -13,7 +14,13 @@ import {
   type HttpTransport,
   readJsonObject,
 } from "../../runtime/http.ts";
-import { GROK_SOURCE_API, type GrokCredentials, loadGrokCredentials } from "./credentials.ts";
+import { refreshGrokAuthWithCli } from "./auth-refresh.ts";
+import {
+  GROK_SOURCE_API,
+  type GrokCredentials,
+  loadGrokCredentials,
+  shouldRefreshGrokCredentials,
+} from "./credentials.ts";
 import { buildGrokSnapshot, mapGrokBillingResponse } from "./map.ts";
 
 export const GROK_BILLING_URL = "https://cli-chat-proxy.grok.com/v1/billing?format=credits";
@@ -24,6 +31,7 @@ export interface GrokCollectorOptions {
   environment?: Readonly<Record<string, string | undefined>>;
   transport?: HttpTransport;
   readJson?: (path: string) => Promise<unknown | undefined>;
+  refreshAuth?: (signal?: AbortSignal) => Promise<boolean>;
 }
 
 export class GrokCollector implements ProviderCollector {
@@ -33,6 +41,7 @@ export class GrokCollector implements ProviderCollector {
   private readonly environment: Readonly<Record<string, string | undefined>>;
   private readonly transport: HttpTransport;
   private readonly readJson: GrokCollectorOptions["readJson"];
+  private readonly refreshAuth: NonNullable<GrokCollectorOptions["refreshAuth"]>;
 
   constructor(options: GrokCollectorOptions = {}) {
     this.clientVersion = options.clientVersion ?? "development";
@@ -40,6 +49,14 @@ export class GrokCollector implements ProviderCollector {
     this.environment = options.environment ?? process.env;
     this.transport = options.transport ?? createFetchTransport();
     this.readJson = options.readJson;
+    this.refreshAuth =
+      options.refreshAuth ??
+      (async (signal) =>
+        await refreshGrokAuthWithCli({
+          homeDirectory: this.homeDirectory,
+          environment: this.environment,
+          ...(signal ? { signal } : {}),
+        }));
   }
 
   async discover(): Promise<ProviderSession[]> {
@@ -65,7 +82,7 @@ export class GrokCollector implements ProviderCollector {
     _session: ProviderSession,
     context: CollectionContext = {},
   ): Promise<QuotaSnapshot> {
-    const credentials = await loadGrokCredentials({
+    let credentials = await loadGrokCredentials({
       homeDirectory: this.homeDirectory,
       environment: this.environment,
       ...(this.readJson ? { readJson: this.readJson } : {}),
@@ -78,30 +95,82 @@ export class GrokCollector implements ProviderCollector {
       );
     }
     const now = context.now ?? new Date();
+    let refreshAttempted = false;
+
+    if (shouldRefreshGrokCredentials(credentials, now)) {
+      refreshAttempted = true;
+      credentials = (await this.refreshAndReload(credentials, context.signal)) ?? credentials;
+    }
 
     try {
-      const billing = await this.fetchBillingApi(credentials, context.signal);
-      const mapped = mapGrokBillingResponse(billing);
-      if (!mapped.usable || !mapped.window) {
-        throw new ProviderCollectionError(
-          "error",
-          "Grok billing API returned a malformed quota payload.",
-          GROK_SOURCE_API,
-        );
-      }
-      return buildGrokSnapshot({
-        window: mapped.window,
-        credentials,
-        now,
-      });
+      return await this.collectWithCredentials(credentials, now, context.signal);
     } catch (error) {
-      const classified = classifyProviderError(error);
+      let classified = classifyProviderError(error);
+      if (classified.category === "auth_required" && !refreshAttempted) {
+        const refreshed = await this.refreshAndReload(credentials, context.signal);
+        if (refreshed) {
+          try {
+            return await this.collectWithCredentials(refreshed, now, context.signal);
+          } catch (retryError) {
+            classified = classifyProviderError(retryError);
+          }
+        }
+      }
       throw new ProviderCollectionError(
         classified.category,
         classified.message,
         classified.source ?? GROK_SOURCE_API,
       );
     }
+  }
+
+  private async collectWithCredentials(
+    credentials: GrokCredentials,
+    now: Date,
+    signal?: AbortSignal,
+  ): Promise<QuotaSnapshot> {
+    const billing = await this.fetchBillingApi(credentials, signal);
+    const mapped = mapGrokBillingResponse(billing);
+    if (!mapped.usable || !mapped.window) {
+      throw new ProviderCollectionError(
+        "error",
+        "Grok billing API returned a malformed quota payload.",
+        GROK_SOURCE_API,
+      );
+    }
+    return buildGrokSnapshot({
+      window: mapped.window,
+      credentials,
+      now,
+    });
+  }
+
+  private async refreshAndReload(
+    previous: GrokCredentials,
+    signal?: AbortSignal,
+  ): Promise<GrokCredentials | undefined> {
+    try {
+      if (!(await this.refreshAuth(signal))) {
+        return undefined;
+      }
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        const credentials = await loadGrokCredentials({
+          homeDirectory: this.homeDirectory,
+          environment: this.environment,
+          ...(this.readJson ? { readJson: this.readJson } : {}),
+        });
+        if (credentials && credentialsChanged(previous, credentials)) {
+          return credentials;
+        }
+        if (attempt < 19) {
+          await delay(50, undefined, signal ? { signal } : undefined);
+        }
+      }
+    } catch {
+      // The direct API result remains authoritative when the optional Grok CLI
+      // refresh path is unavailable, cancelled, or unable to rotate auth.json.
+    }
+    return undefined;
   }
 
   private async fetchBillingApi(
@@ -142,4 +211,11 @@ export class GrokCollector implements ProviderCollector {
     }
     return json;
   }
+}
+
+function credentialsChanged(previous: GrokCredentials, current: GrokCredentials): boolean {
+  return (
+    previous.accessToken !== current.accessToken ||
+    previous.expiresAt?.getTime() !== current.expiresAt?.getTime()
+  );
 }

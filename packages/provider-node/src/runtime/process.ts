@@ -28,6 +28,39 @@ export async function resolveExecutable(
   return undefined;
 }
 
+export interface ProviderExecutableResolutionOptions {
+  name: string;
+  overrideKey: string;
+  knownPaths: readonly string[];
+  environment?: Readonly<Record<string, string | undefined>>;
+}
+
+export async function resolveProviderExecutable(
+  options: ProviderExecutableResolutionOptions,
+): Promise<string | undefined> {
+  const environment = options.environment ?? process.env;
+  const override = environment[options.overrideKey]?.trim();
+  if (override) {
+    const resolved = await resolveExecutable(override, environment);
+    if (resolved) {
+      return resolved;
+    }
+  }
+
+  const fromPath = await resolveExecutable(options.name, environment);
+  if (fromPath) {
+    return fromPath;
+  }
+
+  for (const path of options.knownPaths) {
+    const resolved = await resolveExecutable(path, environment);
+    if (resolved) {
+      return resolved;
+    }
+  }
+  return undefined;
+}
+
 async function canExecute(path: string): Promise<boolean> {
   try {
     await access(path, constants.X_OK);

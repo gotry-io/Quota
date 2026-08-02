@@ -15,13 +15,13 @@ export const providerDescriptors = [
     id: "claude",
     display_name: "Claude Code",
     credential_sources: ["~/.claude/.credentials.json", "macOS Keychain: Claude Code-credentials"],
-    collection_strategies: ["anthropic_oauth_usage_api"],
+    collection_strategies: ["anthropic_oauth_usage_api", "claude_cli_auth_refresh"],
   },
   {
     id: "grok",
     display_name: "Grok",
     credential_sources: ["$GROK_HOME/auth.json", "~/.grok/auth.json"],
-    collection_strategies: ["grok_billing_api"],
+    collection_strategies: ["grok_billing_api", "grok_cli_auth_refresh"],
   },
 ] as const satisfies readonly ProviderDescriptor[];
 

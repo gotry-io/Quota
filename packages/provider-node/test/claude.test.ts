@@ -1,9 +1,15 @@
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { ClaudeCollector } from "../src/providers/claude/collector.ts";
+import { refreshClaudeAuthWithCli } from "../src/providers/claude/auth-refresh.ts";
 import {
   CLAUDE_KEYCHAIN_SERVICE,
   hasUserProfileScope,
+  loadClaudeCredentials,
   parseClaudeCredentials,
+  shouldRefreshClaudeCredentials,
 } from "../src/providers/claude/credentials.ts";
 import { mapClaudeUsageResponse } from "../src/providers/claude/map.ts";
 import type { HttpResponse } from "../src/runtime/http.ts";
@@ -28,6 +34,7 @@ describe("claude credentials", () => {
     expect(credentials?.accessToken).toBe("claude-access");
     expect(hasUserProfileScope(credentials!)).toBe(true);
     expect(credentials?.subscriptionType).toBe("pro");
+    expect(shouldRefreshClaudeCredentials(credentials!, NOW)).toBe(true);
   });
 
   it("rejects mcp-only payloads and missing access tokens", () => {
@@ -36,6 +43,54 @@ describe("claude credentials", () => {
       parseClaudeCredentials({ claudeAiOauth: { scopes: ["user:profile"] } }, "file"),
     ).toBeUndefined();
   });
+
+  it("uses refreshed Keychain credentials when file credentials are expired", async () => {
+    const credentials = await loadClaudeCredentials({
+      homeDirectory: "/home/quota",
+      platform: "darwin",
+      readJson: async () => claudeCredentials("expired-file-token", "2000-01-01T00:00:00Z"),
+      readKeychain: async () =>
+        JSON.stringify(claudeCredentials("fresh-keychain-token", "2099-01-01T00:00:00Z")),
+    });
+
+    expect(credentials?.accessToken).toBe("fresh-keychain-token");
+    expect(credentials?.source).toBe(`macOS Keychain: ${CLAUDE_KEYCHAIN_SERVICE}`);
+  });
+});
+
+describe("claude CLI auth refresh", () => {
+  it.skipIf(process.platform !== "darwin")(
+    "touches only the interactive status path in a PTY",
+    async () => {
+      await withTemporaryExecutable(
+        `#!/bin/sh
+while IFS= read -r line; do
+  printf '%s\n' "$line" >> "$CLAUDE_TEST_MARKER"
+  case "$line" in
+    *'/status'*) exit 0 ;;
+  esac
+done
+`,
+        async (executable, directory) => {
+          const marker = join(directory, "commands.txt");
+          await expect(
+            refreshClaudeAuthWithCli({
+              homeDirectory: directory,
+              environment: {
+                CLAUDE_CLI_PATH: executable,
+                CLAUDE_CONFIG_DIR: "/dev/null",
+                CLAUDE_TEST_MARKER: marker,
+                PATH: "/usr/bin:/bin",
+              },
+              platform: "darwin",
+            }),
+          ).resolves.toBe(true);
+
+          expect(await readFile(marker, "utf8")).toContain("/status");
+        },
+      );
+    },
+  );
 });
 
 describe("claude usage mapping", () => {
@@ -196,12 +251,17 @@ describe("claude collector", () => {
   });
 
   it("classifies 401 and 429 responses", async () => {
+    let credentialReads = 0;
     const unauthorized = new ClaudeCollector({
       homeDirectory: "/home/quota",
-      readJson: async () => ({
-        claudeAiOauth: { accessToken: "claude-access", scopes: ["user:profile"] },
-      }),
+      readJson: async () => {
+        credentialReads += 1;
+        return {
+          claudeAiOauth: { accessToken: "claude-access", scopes: ["user:profile"] },
+        };
+      },
       transport: async () => jsonResponse({}, 401),
+      refreshAuth: async () => true,
     });
     await expect(
       unauthorized.collect(
@@ -214,6 +274,7 @@ describe("claude collector", () => {
         { now: NOW },
       ),
     ).rejects.toMatchObject({ category: "auth_required" });
+    expect(credentialReads).toBe(2);
 
     const limited = new ClaudeCollector({
       homeDirectory: "/home/quota",
@@ -246,6 +307,7 @@ describe("claude collector", () => {
         headers: new Headers({ "content-type": "text/html" }),
         bodyText: "<html>secret upstream diagnostics</html>",
       }),
+      refreshAuth: async () => false,
     });
 
     await expect(
@@ -263,6 +325,95 @@ describe("claude collector", () => {
       source: "anthropic_oauth_usage_api",
     });
   });
+
+  it("refreshes expiring credentials before requesting usage", async () => {
+    let credentials = claudeCredentials("expiring-token", "2026-08-02T12:00:30Z");
+    let refreshCount = 0;
+    const authorizations: string[] = [];
+    const collector = new ClaudeCollector({
+      homeDirectory: "/home/quota",
+      readJson: async () => credentials,
+      refreshAuth: async () => {
+        refreshCount += 1;
+        credentials = claudeCredentials("refreshed-token", "2026-08-02T18:00:00Z");
+        return true;
+      },
+      transport: async (request) => {
+        authorizations.push(request.headers?.Authorization ?? "");
+        return request.url.endsWith("/usage")
+          ? jsonResponse({
+              five_hour: { utilization: 7, resets_at: "2026-08-02T17:00:00Z" },
+            })
+          : jsonResponse({});
+      },
+    });
+
+    await expect(collector.collect(claudeSession(), { now: NOW })).resolves.toMatchObject({
+      provider: "claude",
+      status: "available",
+    });
+    expect(refreshCount).toBe(1);
+    expect(authorizations).toEqual(["Bearer refreshed-token", "Bearer refreshed-token"]);
+  });
+
+  it("refreshes and retries once after an unauthorized usage response", async () => {
+    let credentials = claudeCredentials("rejected-token", "2026-08-02T18:00:00Z");
+    let refreshCount = 0;
+    let usageCount = 0;
+    const collector = new ClaudeCollector({
+      homeDirectory: "/home/quota",
+      readJson: async () => credentials,
+      refreshAuth: async () => {
+        refreshCount += 1;
+        credentials = claudeCredentials("retry-token", "2026-08-03T00:00:00Z");
+        return true;
+      },
+      transport: async (request) => {
+        if (request.url.endsWith("/profile")) {
+          return jsonResponse({});
+        }
+        usageCount += 1;
+        return usageCount === 1
+          ? jsonResponse({}, 401)
+          : jsonResponse({
+              five_hour: { utilization: 9, resets_at: "2026-08-02T17:00:00Z" },
+            });
+      },
+    });
+
+    await expect(collector.collect(claudeSession(), { now: NOW })).resolves.toMatchObject({
+      provider: "claude",
+      status: "available",
+    });
+    expect(refreshCount).toBe(1);
+    expect(usageCount).toBe(2);
+  });
+
+  it("does not loop when Claude rejects the refreshed token", async () => {
+    let credentials = claudeCredentials("rejected-token", "2026-08-02T18:00:00Z");
+    let refreshCount = 0;
+    let usageCount = 0;
+    const collector = new ClaudeCollector({
+      homeDirectory: "/home/quota",
+      readJson: async () => credentials,
+      refreshAuth: async () => {
+        refreshCount += 1;
+        credentials = claudeCredentials("still-rejected", "2026-08-03T00:00:00Z");
+        return true;
+      },
+      transport: async () => {
+        usageCount += 1;
+        return jsonResponse({}, 401);
+      },
+    });
+
+    await expect(collector.collect(claudeSession(), { now: NOW })).rejects.toMatchObject({
+      category: "auth_required",
+      source: "anthropic_oauth_usage_api",
+    });
+    expect(refreshCount).toBe(1);
+    expect(usageCount).toBe(2);
+  });
 });
 
 function jsonResponse(body: unknown, status = 200): HttpResponse {
@@ -271,4 +422,39 @@ function jsonResponse(body: unknown, status = 200): HttpResponse {
     headers: new Headers({ "content-type": "application/json" }),
     bodyText: JSON.stringify(body),
   };
+}
+
+function claudeCredentials(accessToken: string, expiresAt: string): unknown {
+  return {
+    claudeAiOauth: {
+      accessToken,
+      refreshToken: "synthetic-refresh-token",
+      expiresAt: new Date(expiresAt).getTime(),
+      scopes: ["user:profile", "user:inference"],
+    },
+  };
+}
+
+function claudeSession() {
+  return {
+    provider: "claude" as const,
+    session_id: "ambient",
+    display_label: "Claude Code",
+    credential_source: "file",
+  };
+}
+
+async function withTemporaryExecutable(
+  contents: string,
+  action: (executable: string, directory: string) => Promise<void>,
+): Promise<void> {
+  const directory = await mkdtemp(join(tmpdir(), "quota-claude-refresh-"));
+  const executable = join(directory, "claude");
+  try {
+    await writeFile(executable, contents);
+    await chmod(executable, 0o755);
+    await action(executable, directory);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 }

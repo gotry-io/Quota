@@ -14,7 +14,10 @@ data requirements.
 
 - Never upload, persist, print, or log provider access tokens, refresh tokens, cookies, credential
   files, raw credential payloads, or authorization headers.
-- Read provider sessions without modifying credential files or Keychain entries.
+- Do not modify provider credential files or Keychain entries directly. QuotaCLI may invoke the
+  official provider CLI through the bounded flows documented in [`provider-collection.md`](provider-collection.md):
+  Codex app-server, Claude Code's probe-only `/status` PTY, and Grok's headless cached-token ACP
+  authentication. Only the provider CLI owns refresh-token exchange and credential rotation.
 - QuotaBar may cache one last normalized local collection report in its application preferences for
   immediate startup. The cache may contain masked labels and account fingerprints, but never raw
   provider responses, credential payloads, access tokens, refresh tokens, cookies, or headers.
@@ -31,6 +34,8 @@ data requirements.
 - Do not import browser cookies or hidden WebView state.
 - Spawn explicit executables with argument arrays; never construct a shell command from provider or
   user-controlled data.
+- Claude's macOS PTY adapter uses a fixed Quota-owned `expect` program and passes the resolved Claude
+  executable as an argument; it never interpolates provider data into executable code.
 - HTTP requests have a 20-second timeout and 1 MiB response-body limit.
 - JSON-RPC has a 1 MiB stdout-line limit and 64 KiB stderr-capture limit.
 - Respect cancellation and terminate child processes on success, failure, timeout, and cancellation.

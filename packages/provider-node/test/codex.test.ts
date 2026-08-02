@@ -1,3 +1,6 @@
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { ProviderCollectionError } from "@gotry-io/provider-core";
 import { CodexCollector } from "../src/providers/codex/collector.ts";
@@ -279,6 +282,7 @@ describe("codex collector", () => {
         tokens: { access_token: "test-access-token" },
       }),
       transport: async () => jsonResponse({ error: "nope" }, 401),
+      resolveCodexExecutable: async () => undefined,
     });
 
     await expect(
@@ -291,8 +295,63 @@ describe("codex collector", () => {
         },
         { now: NOW },
       ),
-    ).rejects.toMatchObject({ category: "auth_required" });
+    ).rejects.toMatchObject({ category: "auth_required", source: CODEX_SOURCE_API });
   });
+
+  it.skipIf(process.platform === "win32")(
+    "lets the official app-server recover an unauthorized direct token",
+    async () => {
+      await withTemporaryExecutable(
+        `#!/bin/sh
+printf '%s\n' "$*" > "$CODEX_TEST_ARGS"
+while IFS= read -r request; do
+  case "$request" in
+    *'"method":"initialize"'*)
+      printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{}}'
+      ;;
+    *'"method":"account/rateLimits/read"'*)
+      printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"rateLimits":{"planType":"plus","primary":{"usedPercent":17,"resetsAt":1754140800,"windowDurationMins":300},"secondary":{"usedPercent":31,"resetsAt":1754572800,"windowDurationMins":10080}}}}'
+      ;;
+    *'"method":"account/read"'*)
+      printf '%s\n' '{"jsonrpc":"2.0","id":3,"result":{"account":{"email":"rpc@example.com","planType":"plus"}}}'
+      ;;
+  esac
+done
+`,
+        async (executable, directory) => {
+          const argsPath = join(directory, "args.txt");
+          const collector = new CodexCollector({
+            homeDirectory: directory,
+            environment: {
+              CODEX_CLI_PATH: executable,
+              CODEX_TEST_ARGS: argsPath,
+              PATH: "/usr/bin:/bin",
+            },
+            readJson: async () => ({
+              tokens: { access_token: "expired-access", account_id: "acct_fixture" },
+            }),
+            transport: async () => jsonResponse({ error: "expired" }, 401),
+          });
+
+          const snapshot = await collector.collect(
+            {
+              provider: "codex",
+              session_id: "ambient",
+              display_label: "Codex",
+              credential_source: "/tmp/auth.json",
+            },
+            { now: NOW },
+          );
+
+          expect(snapshot.source).toBe(CODEX_SOURCE_RPC);
+          expect(snapshot.windows.map((window) => window.used_percent)).toEqual([17, 31]);
+          expect(await readFile(argsPath, "utf8")).toBe("-s read-only -a untrusted app-server\n");
+          expect(JSON.stringify(snapshot)).not.toContain("expired-access");
+          expect(JSON.stringify(snapshot)).not.toContain("rpc@example.com");
+        },
+      );
+    },
+  );
 });
 
 function jsonResponse(body: unknown, status = 200): HttpResponse {
@@ -311,3 +370,18 @@ function makeJwt(payload: Record<string, unknown>): string {
 
 // Keep RPC source constant referenced for greppable coverage.
 void CODEX_SOURCE_RPC;
+
+async function withTemporaryExecutable(
+  contents: string,
+  action: (executable: string, directory: string) => Promise<void>,
+): Promise<void> {
+  const directory = await mkdtemp(join(tmpdir(), "quota-codex-rpc-"));
+  const executable = join(directory, "codex");
+  try {
+    await writeFile(executable, contents);
+    await chmod(executable, 0o755);
+    await action(executable, directory);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}

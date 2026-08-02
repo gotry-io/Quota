@@ -5,6 +5,7 @@ import { parseFlexibleDate } from "../../runtime/time.ts";
 export const GROK_OIDC_SCOPE_PREFIX = "https://auth.x.ai::";
 export const GROK_LEGACY_SESSION_SCOPE = "https://accounts.x.ai/sign-in";
 export const GROK_SOURCE_API = "grok_billing_api";
+export const GROK_AUTH_REFRESH_SKEW_MS = 60_000;
 
 export interface GrokCredentials {
   scope: string;
@@ -98,8 +99,8 @@ export function parseGrokCredentials(
 function selectPreferredEntry(
   root: Record<string, unknown>,
 ): { scope: string; entry: Record<string, unknown> } | undefined {
-  let oidc: { scope: string; entry: Record<string, unknown> } | undefined;
-  let legacy: { scope: string; entry: Record<string, unknown> } | undefined;
+  const oidc: Array<{ scope: string; entry: Record<string, unknown> }> = [];
+  const legacy: Array<{ scope: string; entry: Record<string, unknown> }> = [];
 
   for (const [scope, value] of Object.entries(root)) {
     const entry = asRecord(value);
@@ -111,13 +112,44 @@ function selectPreferredEntry(
       continue;
     }
     if (scope.startsWith(GROK_OIDC_SCOPE_PREFIX)) {
-      oidc = { scope, entry };
+      oidc.push({ scope, entry });
     } else if (scope === GROK_LEGACY_SESSION_SCOPE || scope.includes("/sign-in")) {
-      legacy = { scope, entry };
+      legacy.push({ scope, entry });
     }
   }
 
-  return oidc ?? legacy;
+  return newestEntry(oidc) ?? newestEntry(legacy);
+}
+
+function newestEntry(
+  entries: Array<{ scope: string; entry: Record<string, unknown> }>,
+): { scope: string; entry: Record<string, unknown> } | undefined {
+  return entries.reduce<(typeof entries)[number] | undefined>((best, candidate) => {
+    if (!best) {
+      return candidate;
+    }
+    const bestExpiry = parseFlexibleDate(best.entry.expires_at ?? best.entry.expiresAt)?.getTime();
+    const candidateExpiry = parseFlexibleDate(
+      candidate.entry.expires_at ?? candidate.entry.expiresAt,
+    )?.getTime();
+    if (
+      candidateExpiry !== undefined &&
+      (bestExpiry === undefined || candidateExpiry > bestExpiry)
+    ) {
+      return candidate;
+    }
+    return best;
+  }, undefined);
+}
+
+export function shouldRefreshGrokCredentials(
+  credentials: GrokCredentials,
+  now = new Date(),
+): boolean {
+  return (
+    credentials.expiresAt !== undefined &&
+    credentials.expiresAt.getTime() <= now.getTime() + GROK_AUTH_REFRESH_SKEW_MS
+  );
 }
 
 export function grokDisplayName(credentials: GrokCredentials): string | undefined {

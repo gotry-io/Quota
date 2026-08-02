@@ -17,12 +17,13 @@ import {
   CODEX_RPC_INITIALIZE_TIMEOUT_MS,
   CODEX_RPC_REQUEST_TIMEOUT_MS,
 } from "../../runtime/limits.ts";
-import { JsonRpcClient, resolveExecutable } from "../../runtime/process.ts";
+import { JsonRpcClient } from "../../runtime/process.ts";
 import {
   extractCodexIdentity,
   loadCodexCredentials,
   type CodexCredentials,
 } from "./credentials.ts";
+import { resolveCodexExecutable } from "./executable.ts";
 import {
   buildCodexSnapshot,
   CODEX_SOURCE_API,
@@ -61,7 +62,7 @@ export class CodexCollector implements ProviderCollector {
     this.transport = options.transport ?? createFetchTransport();
     this.resolveCodexExecutable =
       options.resolveCodexExecutable ??
-      (async (environment) => await resolveExecutable("codex", environment));
+      (async (environment) => await resolveCodexExecutable(this.homeDirectory, environment));
     this.readJson = options.readJson;
   }
 
@@ -104,6 +105,7 @@ export class CodexCollector implements ProviderCollector {
     const identity = extractCodexIdentity(credentials);
     const now = context.now ?? new Date();
 
+    let directAuthFailure: ProviderCollectionError | undefined;
     try {
       const apiSnapshot = await this.collectViaApi(credentials, identity, now, context.signal);
       if (apiSnapshot) {
@@ -111,19 +113,37 @@ export class CodexCollector implements ProviderCollector {
       }
     } catch (error) {
       const classified = classifyProviderError(error);
-      // Fallback only for unusable/transient direct OAuth results.
-      // Auth failures and malformed successful payloads must not hide behind RPC.
-      if (classified.category === "auth_required" || classified.category === "error") {
+      // A malformed successful payload is a parser failure and must not hide
+      // behind the app-server fallback. Auth failures are different: starting
+      // the official app-server lets Codex own any token renewal it needs.
+      if (classified.category === "error") {
         throw new ProviderCollectionError(
           classified.category,
           classified.message,
           classified.source ?? CODEX_SOURCE_API,
         );
       }
-      // continue to RPC fallback for unavailable
+      if (classified.category === "auth_required") {
+        directAuthFailure = new ProviderCollectionError(
+          classified.category,
+          classified.message,
+          classified.source ?? CODEX_SOURCE_API,
+        );
+      }
+      // Continue to RPC fallback for unavailable or auth_required.
     }
 
-    return await this.collectViaRpc(identity, now, context.signal);
+    try {
+      return await this.collectViaRpc(identity, now, context.signal);
+    } catch (error) {
+      if (directAuthFailure) {
+        const fallback = classifyProviderError(error);
+        if (fallback.category === "unavailable" || fallback.category === "unsupported") {
+          throw directAuthFailure;
+        }
+      }
+      throw error;
+    }
   }
 
   private async collectViaApi(
