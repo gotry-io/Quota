@@ -3,7 +3,7 @@ version: alpha
 name: Quota-design-analysis
 description: |
   A deliberately minimal, native-first system for QuotaBar, QuotaCLI, and QuotaRelay. QuotaBar
-  treats subscription quota as calm operational information: a paper-white menu panel, compact
+  treats subscription quota as calm operational information: a system-adaptive menu panel, compact
   provider rows, monochrome progress meters, black pill actions, and a single line-drawn quota
   gauge as the only ornamental element. There are no gradients, promotional illustrations, or
   custom shadows. The palette is pure black, pure white, and three neutral grays; interactive
@@ -113,6 +113,30 @@ typography:
     fontSize: 14px
     fontWeight: 500
     lineHeight: 1
+    letterSpacing: 0
+  panel-title:
+    fontFamily: SF Pro Rounded
+    fontSize: 17px
+    fontWeight: 600
+    lineHeight: 1.18
+    letterSpacing: 0
+  quota-label:
+    fontFamily: ui-sans-serif
+    fontSize: 12px
+    fontWeight: 500
+    lineHeight: 1.33
+    letterSpacing: 0
+  status-tag:
+    fontFamily: ui-sans-serif
+    fontSize: 10px
+    fontWeight: 400
+    lineHeight: 1.2
+    letterSpacing: 0
+  source-tag:
+    fontFamily: ui-sans-serif
+    fontSize: 9px
+    fontWeight: 500
+    lineHeight: 1.2
     letterSpacing: 0
 
 rounded:
@@ -247,12 +271,16 @@ components:
     backgroundColor: "{colors.primary}"
     rounded: "{rounded.full}"
     height: 6px
-  status-pill:
-    backgroundColor: "{colors.surface-soft}"
+  status-tag:
     textColor: "{colors.charcoal}"
-    typography: "{typography.caption-sm}"
-    rounded: "{rounded.full}"
-    padding: 4px 8px
+    typography: "{typography.status-tag}"
+    rounded: 3px
+    padding: 2px 5px
+  source-tag:
+    textColor: "{colors.charcoal}"
+    typography: "{typography.source-tag}"
+    rounded: 3px
+    padding: 1px 5px
   device-card:
     backgroundColor: "{colors.canvas}"
     textColor: "{colors.ink}"
@@ -280,15 +308,15 @@ components:
   panel-header:
     backgroundColor: "{colors.canvas}"
     textColor: "{colors.ink}"
-    typography: "{typography.body-sm-strong}"
+    typography: "{typography.panel-title}"
     rounded: "{rounded.none}"
-    height: 56px
+    height: 48px
   panel-footer:
     backgroundColor: "{colors.canvas}"
     textColor: "{colors.body}"
     typography: "{typography.caption-sm}"
     rounded: "{rounded.none}"
-    padding: 16px 0px
+    height: 40px
   hairline-strong:
     backgroundColor: "{colors.hairline-strong}"
     height: 1px
@@ -314,13 +342,15 @@ components:
 
 QuotaBar is an operational utility, not an analytics dashboard. Opening the menu bar panel should
 feel like reading a short, carefully typeset status note: the current machine first, its providers
-directly below, remote devices after a quiet section break, and settings at the bottom. The user
-should understand remaining quota and reset time within one glance and leave without navigating.
+directly below, and remote devices after a quiet section break. The user
+should understand remaining quota and reset time within one glance. Settings stays one level deep
+inside the same panel and returns to the overview through a familiar back control.
 
-The visual system is intentionally monochrome. Quota is represented by proportion, typography,
-icons, and explicit status labels rather than green/yellow/red thresholds. A black fill inside a
-soft-gray pill track communicates remaining capacity. Auth failures, stale data, unsupported quota,
-and revoked devices are distinguished with line icons and text, so color is never the only signal.
+The visual system is intentionally monochrome and follows the selected macOS appearance. Quota is
+represented by proportion, typography, icons, and explicit status labels rather than
+green/yellow/red thresholds. A high-contrast label-color fill inside a system-gray pill track
+communicates remaining capacity. Auth failures, stale data, unsupported quota, and revoked devices
+are distinguished with line icons and text, so color is never the only signal.
 
 All product surfaces share one geometry. Interactive controls use `{rounded.full}`; cards use
 `{rounded.lg}`; structural rows and dividers use `{rounded.none}`. There are no custom shadows or
@@ -331,11 +361,20 @@ Typography pairs SF Pro Rounded for display roles with the macOS system sans for
 and `ui-monospace` for commands, pairing codes, fingerprints, and device identifiers. The rounded
 display face and pill controls provide warmth without competing with the quota data.
 
+QuotaBar adapts Apple's native macOS patterns rather than imitating a full application window. The
+panel uses SwiftUI's window-style `MenuBarExtra` for data-rich content, keeps navigation and actions
+at the header edges, maintains comfortable information density, and honors Reduce Motion. The
+platform references are Apple's [Menus](https://developer.apple.com/design/human-interface-guidelines/menus),
+[Toolbars](https://developer.apple.com/design/human-interface-guidelines/toolbars),
+[Designing for macOS](https://developer.apple.com/design/human-interface-guidelines/designing-for-macos/),
+and [MenuBarExtra](https://developer.apple.com/documentation/swiftui/menubarextra) guidance.
+
 **Key Characteristics:**
 
-- Paper-white `{colors.canvas}` throughout the menu panel, onboarding, and settings surfaces.
+- Native macOS window and popover backgrounds throughout the menu panel and settings surfaces.
 - Pure-black `{colors.primary}` for the only high-emphasis action in a viewport.
-- Pill geometry for buttons, filters, status chips, quota meters, search, and text fields.
+- Pill geometry for buttons, filters, quota meters, search, and text fields; compact source and
+  status tags use small transparent rectangles.
 - Flat 12px cards for Relay profiles, remote devices, pairing, and larger quota summaries.
 - Provider rows remain compact and border-separated; the menu panel is not a stack of dashboard cards.
 - Quota status is encoded through amount, label, icon, and freshness—not chromatic thresholds.
@@ -356,8 +395,8 @@ display face and pill controls provide warmth without competing with the quota d
 ### Surface
 
 - **Canvas** (`{colors.canvas}` — `#ffffff`): the application background and default control surface.
-- **Soft Surface** (`{colors.surface-soft}` — `#fafafa`): status pills, command pills, search controls,
-  and the lightest possible grouped-row distinction.
+- **Soft Surface** (`{colors.surface-soft}` — `#fafafa`): command pills, search controls, and the
+  lightest possible grouped-row distinction.
 - **Surface Card** (`{colors.surface-card}` — `#ffffff`): card surface when a named token is required.
 - **Surface Dark** (`{colors.surface-dark}` — `#171717`): one optional attention surface per viewport,
   such as the active pairing instruction or the quota requiring immediate review.
@@ -382,9 +421,11 @@ high-contrast mode, and reduced-transparency mode:
 
 - **Available:** quota amount, reset time, and a standard gauge icon.
 - **Stale:** `Stale` label plus clock icon and last observation time.
-- **Authentication required:** `Sign in again` label plus key icon.
-- **Unavailable:** em dash for the amount plus an explicit reason.
-- **Unsupported:** `Not supported` label plus information icon.
+- **Authentication required:** omit the agent from the quota overview and show quiet `Not signed in`
+  text beside its visibility switch in Settings.
+- **Unavailable:** omit the agent from the quota overview and show an explicit reason in Settings.
+- **Unsupported:** omit the agent from the quota overview and show `Unsupported` in Settings.
+- **Error:** omit the agent from the quota overview and show `Error` in Settings.
 - **Revoked:** `Revoked` label plus slash-circle icon.
 
 The macOS traffic-light colors retain their standard values only inside `{components.terminal-card}`:
@@ -402,9 +443,12 @@ They must not be reused for quota state.
 
 ### System Appearance
 
-The canonical design is light. A future dark appearance should map the same semantic tokens through
-macOS dynamic colors rather than invert hexadecimal values ad hoc. Until a complete dark token set
-is specified and contrast-tested, QuotaBar should ship the reference light appearance.
+QuotaBar always follows the current macOS appearance through SwiftUI's inherited environment. It
+does not expose an appearance setting or apply a `preferredColorScheme` override. Native surfaces
+use the containing menu window's default background; text, separators, controls, status tags, and
+meters map through AppKit semantic colors. The hexadecimal palette above remains the light-reference
+palette for documentation and web use. Dark appearance comes from the same semantic colors rather
+than a separate custom palette or manual inversion.
 
 ## Typography
 
@@ -431,18 +475,23 @@ rounded heading and exact operational data, not from a custom typeface.
 | `{typography.body-strong}` | 16px | 500 | 1.5 | 0 | Remaining-quota value and inline emphasis |
 | `{typography.body-sm}` | 14px | 400 | 1.43 | 0 | Reset time, plan, device, and Relay metadata |
 | `{typography.body-sm-strong}` | 14px | 500 | 1.43 | 0 | Provider name, button label, selected navigation |
-| `{typography.caption-sm}` | 12px | 400 | 1.33 | 0 | Freshness, status chip, and smallest utility copy |
+| `{typography.caption-sm}` | 12px | 400 | 1.33 | 0 | Freshness and small utility copy |
 | `{typography.code-md}` | 16px | 400 | 1.5 | 0 | Pairing command or setup command |
 | `{typography.code-sm}` | 14px | 400 | 1.43 | 0 | IDs, fingerprints, and diagnostic output |
 | `{typography.button-md}` | 14px | 500 | 1 | 0 | Every pill button label |
+| `{typography.panel-title}` | 17px | 600 | 1.18 | 0 | Compact QuotaBar and Settings header title |
+| `{typography.quota-label}` | 12px | 500 | 1.33 | 0 | Quota window name and remaining value |
+| `{typography.status-tag}` | 10px | 400 | 1.2 | 0 | Compact semantic tag |
+| `{typography.source-tag}` | 9px | 500 | 1.2 | 0 | Compact `Local` or `Remote` origin tag |
 
 ### Principles
 
 - Use 400 for ordinary copy and 500 for most emphasis. Weight 600 is limited to
-  `{typography.heading-lg}`.
+  `{typography.heading-lg}` and the compact `{typography.panel-title}`.
 - Use tabular numerals for percentages, times, limits, and countdowns so values do not jump during refresh.
 - Use a true ellipsis for truncated account labels and never truncate the quota amount.
-- Keep provider name and remaining value on one line; move reset time below rather than compressing type.
+- Keep each quota-window name and remaining value on one line; move reset time below rather than
+  compressing type.
 - Prefer sentence case. Uppercase is reserved for short technical identifiers provided by a protocol.
 - Never encode freshness or severity through weight alone; pair type with label and icon.
 
@@ -471,19 +520,49 @@ Inter may substitute for body text, while JetBrains Mono or Fira Code may substi
 - Preferred width: 360px; supported range: 340–400px.
 - Maximum visible height: 640px; provider/device content scrolls while header and footer remain stable.
 - One content column only.
-- Header height: 56px.
+- Header height: 48px; title type is `{typography.panel-title}`.
+- Footer height: 40px.
 - Local device appears first and does not require a card border.
 - Remote devices follow as named groups separated by one hairline and `{spacing.xl}` top space.
 - Provider rows are ordered Codex, Claude Code, Grok unless the user explicitly reorders them.
-- Settings and Quit remain low-emphasis footer actions.
+- On launch, render the last normalized local report immediately and refresh it in the background;
+  never replace cached quota with a loading-only screen.
+- The top-right settings control opens one embedded secondary level. Settings uses a leading back
+  control and the title `Settings`; it does not use a trailing close button.
+- Forward navigation enters from the trailing edge and overview leaves toward the leading edge;
+  back navigation reverses that relationship. Both combine motion with opacity over 180ms using an
+  ease-in-out curve. Reduce Motion removes the transition.
+- The footer shows the app version on the left and a clickable last-refresh time on the right.
 
-### Settings Window
+### Settings Panel
 
-- Preferred content width: 760px; maximum 960px.
-- At 760px and above, use a narrow navigation column plus one detail column.
-- Below 760px, navigation becomes a top pill selector and content remains single-column.
-- Never use more than two columns.
-- Relay and device collections use 12px cards with 24px padding and 16px gaps.
+- Settings remain inside the 340–400px menu-bar panel; do not open a separate settings window.
+- Visible-agent controls, About information, and Quit are grouped as flat sections.
+- Provider switches list all supported agents and describe unsigned or unavailable sessions as
+  quiet secondary text.
+- A provider enters the quota overview only when collection succeeds and at least one `available`
+  or `stale` snapshot contains a quota window. Authentication, unavailable, unsupported, empty, and
+  error outcomes remain discoverable in Settings instead of becoming provider rows.
+
+### Compact Menu Language
+
+The following roles are the canonical display grammar for QuotaBar. New menu-panel UI reuses these
+roles rather than introducing one-off sizes, containers, tags, or transitions.
+
+| Role | Canonical treatment | Purpose |
+|---|---|---|
+| Panel | 360×520px, one reading column | Stable data-rich menu surface |
+| Header | 48px, 16px inset, 17px semibold title, 32px edge control | Current location and one edge action |
+| Navigation | One secondary level, leading back, 180ms directional fade | Embedded Settings without an abrupt page replacement |
+| Provider | 16px vertical inset, 14px medium name, flat separators | One authenticated provider with usable quota |
+| Quota window | 12px medium labels, 6px remaining meter, 11px reset time | Repeatable unit across every provider |
+| Source tag | 9px medium, 1×5px inset, 3px radius, transparent fill | Quiet `Local` or `Remote` provenance |
+| Status tag | 10px regular, 2×5px inset, 3px radius, transparent fill | Secondary state on an otherwise displayable row |
+| Footer | 40px, 12px text | Version on the left; the sole refresh action on the right |
+
+The overview answers only “how much quota remains?” Provider configuration and collection health
+belong to Settings. This separation prevents transient diagnostics or unsigned agents from changing
+the overview's visual inventory during repeated refreshes.
 
 ### Onboarding & Pairing
 
@@ -529,7 +608,7 @@ there is no photography, texture, glow, glass effect, or background artwork.
 | `{rounded.sm}` | 6px | Inline code and compact technical labels |
 | `{rounded.md}` | 8px | Rare native menu or transient utility surface |
 | `{rounded.lg}` | 12px | Quota cards, Relay cards, device cards, terminal output |
-| `{rounded.full}` | 9999px | Buttons, inputs, tabs, filters, status pills, quota meters |
+| `{rounded.full}` | 9999px | Buttons, inputs, tabs, filters, quota meters |
 
 The working vocabulary is binary: `{rounded.full}` for interaction and `{rounded.lg}` for
 containment. `{rounded.sm}` and `{rounded.md}` exist for system compatibility and must not become
@@ -539,7 +618,8 @@ new default shapes.
 
 - Product mark: circular quota gauge, 2px line stroke at large sizes and 1–1.5px at menu-bar sizes.
 - Menu-bar icon: template image, 16×16pt, monochrome, no percentage text inside the glyph.
-- Provider icons: monochrome template icons or text labels; do not introduce original brand colors.
+- Provider icons: use the Codex, Claude Code, and Grok monochrome SVG assets from Lobe Icons as
+  semantic template images; do not substitute SF Symbols or introduce original brand colors.
 - Utility icons: SF Symbols with regular or medium weight and consistent optical size.
 - Progress tracks: 6px height with `{rounded.full}` ends.
 
@@ -596,10 +676,11 @@ new default shapes.
 
 - Background `{colors.canvas}`, padding `16px 0`, no corner radius, and 1px bottom
   `{colors.hairline}` except for the final row in a group.
-- First line: provider name in `{typography.body-sm-strong}` and remaining percentage or explicit
-  status in `{typography.body-strong}`.
-- Second line: plan/account label and reset time in `{typography.body-sm}` `{colors.body}`.
-- Third line: optional 6px quota meter with 8px top gap.
+- First line: provider name in `{typography.body-sm-strong}` and a compact `Local` or `Remote`
+  source tag immediately after the name. Do not place an enlarged remaining value in this title row.
+- Second line: optional plan/account label in `{typography.caption-sm}` `{colors.body}`.
+- Every quota window, including the first, uses the same compact row: window title and remaining
+  percentage, followed by a 6px meter and reset time.
 - Clicking the row opens details; the full row is the hit target.
 
 **`quota-progress-track`** and **`quota-progress-fill`**
@@ -607,7 +688,7 @@ new default shapes.
 - Track: `{colors.hairline}`, 6px height, `{rounded.full}`.
 - Fill: `{colors.primary}`, 6px height, `{rounded.full}`.
 - The filled proportion always represents **remaining**, never sometimes used and sometimes remaining.
-- Show the numeric value next to the provider name; the meter is supplementary.
+- Show the numeric value at the trailing edge of its quota-window label; the meter is supplementary.
 - For unlimited or unknown quota, replace the meter with an explicit text label.
 
 **`quota-card`** — expanded quota detail
@@ -625,12 +706,20 @@ new default shapes.
 - Use at most once per viewport and only when the product must direct immediate attention.
 - Still include an explicit state label; inversion alone is not semantic communication.
 
-**`status-pill`**
+**`status-tag`**
 
-- `{colors.surface-soft}` background, `{colors.charcoal}` text, `{typography.caption-sm}`, padding
-  `4px 8px`, rounded `{rounded.full}`.
-- Text examples: `Local`, `Remote`, `Stale`, `Auth required`, `Unsupported`, `Revoked`.
+- Transparent background, a subtle `{colors.hairline}` border, `{colors.charcoal}` text,
+  `{typography.status-tag}`, padding `2px 5px`, 3px radius.
+- Text examples: `Stale`, `Unsupported`, `Unavailable`, `Revoked`.
 - Never display a colored dot without a text label.
+
+**`source-tag`**
+
+- Transparent background, a subtle `{colors.hairline}` border, `{colors.charcoal}` text,
+  `{typography.source-tag}`, padding `1px 5px`, and 3px radius rather than pill geometry.
+- Appears immediately after a subscription/provider name with values such as `Local` or `Remote`.
+- It identifies origin only; authentication and error states use text in Settings or a semantic
+  status treatment when the row otherwise remains displayable.
 
 ### Relay & Device
 
@@ -653,7 +742,7 @@ new default shapes.
 
 - `{colors.surface-soft}` background, `{colors.ink}` in `{typography.code-md}`, padding
   `12px 20px`, height `48px`, rounded `{rounded.full}`.
-- Contains a short command such as `quotacli pair --relay https://quota.gotry.io` and a right-aligned
+- Contains a short command such as `quotacli edge pair` and a right-aligned
   copy control.
 - If the command cannot fit without losing essential text, use a terminal card instead.
 
@@ -685,15 +774,19 @@ a clear recovery action. Do not create alert banners for ordinary provider failu
 
 **`panel-header`**
 
-- `{colors.canvas}` background, `{colors.ink}` text, height 56px, no radius.
-- QuotaBar title or current device on the left; freshness and refresh control on the right.
+- Native window background, `{colors.ink}` text, height 48px, no radius.
+- The overview shows a compact `QuotaBar` title on the left and a quiet settings control on the
+  right. Settings shows a leading back control followed by its title. Source labels belong to
+  subscription rows, not the panel header.
 - No border unless content scrolls beneath it, in which case add one bottom hairline.
 
 **`panel-footer`**
 
-- `{colors.canvas}`, optional top `{colors.hairline}` border, padding `16px 0`,
+- `{colors.canvas}`, optional top `{colors.hairline}` border, height 40px,
   `{typography.caption-sm}` `{colors.body}`.
-- Contains low-emphasis `Settings`, `About`, and `Quit` actions. Do not repeat primary actions here.
+- Shows the app version on the left and last-refresh time on the right. The refresh time is the one
+  refresh action and changes to `Refreshing…` while collection runs.
+- About and Quit belong inside the embedded Settings content rather than the footer.
 
 **`link-inline`** and **`link-mute`**
 
@@ -725,7 +818,8 @@ a clear recovery action. Do not create alert banners for ordinary provider failu
 - Don't switch between `used` and `remaining` representations across providers.
 - Don't use `{rounded.md}` as a compromise radius; interaction is pill, containment is 12px.
 - Don't add a dark attention card more than once per viewport.
-- Don't hide unavailable, stale, unsupported, or authentication-required states behind an empty value.
+- Don't hide a stale state on an otherwise displayable quota row. Authentication, unavailable,
+  unsupported, empty, and error outcomes are omitted from the overview and identified in Settings.
 - Don't truncate Relay URLs while editing or pairing commands before the meaningful hostname.
 - Don't create hover-only affordances; every action must remain discoverable by keyboard and touch/trackpad.
 
@@ -754,7 +848,7 @@ a clear recovery action. Do not create alert banners for ordinary provider failu
 
 - **Menu panel:** width stays fixed by profile; content scrolls vertically and never becomes two columns.
 - **Provider row:** plan and reset metadata wrap below the primary line; percentage never truncates.
-- **Settings:** sidebar becomes a top pill selector below 760px.
+- **Settings:** remains a single-column embedded panel with flat sections.
 - **Card actions:** horizontal button row becomes vertical, with primary action first.
 - **Commands:** short commands wrap inside `{components.command-pill}` only when still readable; otherwise
   switch to `{components.terminal-card}` with horizontal scrolling.
@@ -781,8 +875,8 @@ a clear recovery action. Do not create alert banners for ordinary provider failu
 6. Keep `{colors.primary}` scarce: one high-emphasis black pill per compact visual region.
 7. Before adding a component, test whether provider row, pill, flat card, command pill, or terminal card
    already expresses the requirement.
-8. Verify quota fixtures for all six states: available, stale, auth required, unavailable, unsupported,
-   and error.
+8. Verify quota fixtures for all six states across overview and Settings: available, stale, auth
+   required, unavailable, unsupported, and error.
 9. Review local and remote devices at 340px, 360px, 400px, 560px, and 760px widths.
 10. Treat the reference design as the source for color, type, spacing, radius, and elevation unless this
     document explicitly defines a native QuotaBar adaptation.
@@ -790,7 +884,7 @@ a clear recovery action. Do not create alert banners for ordinary provider failu
 ## Known Gaps
 
 - Production QuotaBar screens have not yet been visually captured; this specification guides their first pass.
-- A complete dark-appearance token set is intentionally deferred.
+- Final light- and dark-appearance screenshots still require release-candidate validation.
 - Hover states are not documented; macOS focus, pressed, selected, and disabled states take priority.
 - Menu-bar icon and line-drawn quota-gauge assets are not finalized.
 - Long provider/account combinations need validation with real anonymized data.
