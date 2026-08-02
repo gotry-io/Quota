@@ -12,13 +12,16 @@ relays that advertise persistent snapshots.
 
 The current menu panel invokes its bundled QuotaCLI helper, displays local normalized provider
 results, and supports manual refresh plus explicit loading, authentication, unavailable, and error
-states. Its appearance inherits the current macOS color scheme through SwiftUI and has no app-level
-appearance override. Agents without an authenticated session are omitted from the overview. A
-provider row requires a successful result with at least one available or stale quota window;
-Settings retains status and visibility controls for all supported agents. QuotaBar caches only the
-last normalized, redacted local report so subsequent launches render immediately while a
-background refresh runs. Release packaging, signing, updates, Relay settings, and the helper
-lifecycle will be added separately.
+states. The panel is a window-style `MenuBarExtra` with one overview level and one embedded Settings
+level, flat provider rows, and system-semantic monochrome styling from `DESIGN.md`. Appearance
+inherits the current macOS color scheme through SwiftUI and has no app-level appearance override.
+Agents without an authenticated session are omitted from the overview. A provider row requires a
+successful result with at least one available or stale quota window; Settings retains status and
+visibility controls for all supported agents. QuotaBar caches only the last normalized, redacted
+local report so subsequent launches render immediately while a background refresh runs. The release
+workflow packages an arm64-only app with its helper, signs every executable with Developer ID,
+notarizes and staples the bundle, publishes a GitHub Release, and updates the Homebrew Cask. Relay
+settings and remote-device UI remain separate milestones.
 
 The release target is a Homebrew Cask from `gotry-io/homebrew-tap`. The signed `.app` contains the
 standalone QuotaCLI helper at a fixed bundle path and invokes that copy instead of a `quotacli`
