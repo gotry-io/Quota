@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="QuotaBar keeps Codex, Claude Code, and Grok subscription quota visible from your Mac menu bar."
+    />
+    <meta name="theme-color" content="#ffffff" />
+    <meta property="og:title" content="QuotaBar — Agent quota at a glance" />
+    <meta
+      property="og:description"
+      content="See local and remote coding-agent quota without sending provider credentials to a relay."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://quota.gotry.io" />
+    <link rel="canonical" href="https://quota.gotry.io" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <title>QuotaBar — Agent quota at a glance</title>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <header class="site-header">
+      <a class="brand" href="/" aria-label="QuotaBar home">
+        <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true">
+          <circle class="brand-track" cx="12" cy="12" r="8.5" />
+          <path class="brand-value" d="M12 3.5a8.5 8.5 0 1 1-8.08 5.86" />
+        </svg>
+        <span>QuotaBar</span>
+      </a>
+      <nav aria-label="Primary navigation">
+        <a href="#product">Product</a>
+        <a href="#architecture">Architecture</a>
+        <a href="https://github.com/gotry-io/Quota">GitHub</a>
+      </nav>
+    </header>
+
+    <main id="main">
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="hero-copy">
+          <p class="eyebrow">Codex · Claude Code · Grok</p>
+          <h1 id="hero-title">Know what you have left.</h1>
+          <p class="hero-summary">
+            QuotaBar keeps coding-agent subscription quota visible from your Mac menu bar—on this
+            machine and every edge device you pair.
+          </p>
+          <div class="hero-actions">
+            <a class="button button-primary" href="https://github.com/gotry-io/Quota"
+              >View on GitHub</a
+            >
+            <a class="button button-secondary" href="#architecture">How it works</a>
+          </div>
+          <p class="release-note">Open source · Early development</p>
+        </div>
+
+        <figure class="product-preview">
+          <figcaption class="visually-hidden">QuotaBar menu preview</figcaption>
+          <div class="preview-header">
+            <p class="preview-title">QuotaBar</p>
+            <svg class="preview-settings" viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="12" cy="12" r="3" />
+              <path
+                d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.12 2.12-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.56V20h-3v-.08a1.7 1.7 0 0 0-1.1-1.56 1.7 1.7 0 0 0-1.88.34l-.06.06-2.12-2.12.06-.06A1.7 1.7 0 0 0 6.95 15a1.7 1.7 0 0 0-1.56-1.03H5v-3h.08A1.7 1.7 0 0 0 6.64 9.9a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.12-2.12.06.06a1.7 1.7 0 0 0 1.88.34A1.7 1.7 0 0 0 11.33 4.7V4h3v.39a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.88-.34l.06-.06 2.12 2.12-.06.06A1.7 1.7 0 0 0 19.02 9.6a1.7 1.7 0 0 0 1.56 1.03H21v3h-.08A1.7 1.7 0 0 0 19.4 15Z"
+              />
+            </svg>
+          </div>
+
+          <div class="provider-list">
+            <article class="provider-row">
+              <div class="provider-title-line">
+                <img
+                  class="provider-icon"
+                  src="../menubar/Sources/QuotaBar/Resources/BrandIcons/codex.svg"
+                  alt=""
+                />
+                <strong>Codex</strong>
+                <span class="source-tag">Local</span>
+              </div>
+              <p class="provider-meta">Plus</p>
+              <div class="quota-window">
+                <div class="quota-window-heading">
+                  <span>5 hour</span>
+                  <strong>72% left</strong>
+                </div>
+                <div
+                  class="quota-track"
+                  role="progressbar"
+                  aria-label="Codex 5 hour quota remaining"
+                  aria-valuemin="0"
+                  aria-valuemax="100"
+                  aria-valuenow="72"
+                >
+                  <span style="width: 72%"></span>
+                </div>
+                <p class="reset-time">Resets in 3h 18m</p>
+              </div>
+            </article>
+
+            <article class="provider-row">
+              <div class="provider-title-line">
+                <img
+                  class="provider-icon"
+                  src="../menubar/Sources/QuotaBar/Resources/BrandIcons/claudecode.svg"
+                  alt=""
+                />
+                <strong>Claude Code</strong>
+                <span class="source-tag">Local</span>
+              </div>
+              <p class="provider-meta">Max</p>
+              <div class="quota-window">
+                <div class="quota-window-heading">
+                  <span>Weekly</span>
+                  <strong>41% left</strong>
+                </div>
+                <div
+                  class="quota-track"
+                  role="progressbar"
+                  aria-label="Claude Code weekly quota remaining"
+                  aria-valuemin="0"
+                  aria-valuemax="100"
+                  aria-valuenow="41"
+                >
+                  <span style="width: 41%"></span>
+                </div>
+                <p class="reset-time">Resets tomorrow at 9:00</p>
+              </div>
+            </article>
+
+            <article class="provider-row">
+              <div class="provider-title-line">
+                <img
+                  class="provider-icon"
+                  src="../menubar/Sources/QuotaBar/Resources/BrandIcons/grok.svg"
+                  alt=""
+                />
+                <strong>Grok</strong>
+                <span class="source-tag">Local</span>
+              </div>
+              <p class="provider-meta">SuperGrok</p>
+              <div class="quota-window">
+                <div class="quota-window-heading">
+                  <span>Weekly</span>
+                  <strong>88% left</strong>
+                </div>
+                <div
+                  class="quota-track"
+                  role="progressbar"
+                  aria-label="Grok weekly quota remaining"
+                  aria-valuemin="0"
+                  aria-valuemax="100"
+                  aria-valuenow="88"
+                >
+                  <span style="width: 88%"></span>
+                </div>
+                <p class="reset-time">Resets in 14h</p>
+              </div>
+            </article>
+          </div>
+
+          <div class="preview-footer">
+            <span>v0.1.0</span>
+            <span>Updated just now</span>
+          </div>
+        </figure>
+      </section>
+
+      <section class="principles" id="product" aria-labelledby="product-title">
+        <div class="section-heading">
+          <p class="eyebrow">One quiet place</p>
+          <h2 id="product-title">Quota without the dashboard.</h2>
+        </div>
+        <div class="principle-grid">
+          <article>
+            <span class="index">01</span>
+            <h3>Local by default</h3>
+            <p>Read provider sessions already signed in on your Mac and show quota directly.</p>
+          </article>
+          <article>
+            <span class="index">02</span>
+            <h3>Remote by choice</h3>
+            <p>Run QuotaCLI on another machine, pair it once, and see its snapshots in QuotaBar.</p>
+          </article>
+          <article>
+            <span class="index">03</span>
+            <h3>Credentials stay put</h3>
+            <p>The Relay receives normalized quota snapshots—not provider tokens or cookies.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="architecture" id="architecture" aria-labelledby="architecture-title">
+        <div class="architecture-copy">
+          <p class="eyebrow">Simple architecture</p>
+          <h2 id="architecture-title">Your sessions stay on your machines.</h2>
+          <p>
+            QuotaCLI performs read-only collection where each provider is signed in. QuotaRelay
+            stores only normalized snapshots so QuotaBar can bring local and remote quota together.
+          </p>
+          <a class="text-link" href="https://github.com/gotry-io/Quota#architecture"
+            >Read the architecture on GitHub <span aria-hidden="true">→</span></a
+          >
+        </div>
+
+        <figure class="flow">
+          <figcaption class="visually-hidden">Quota data flow</figcaption>
+          <div class="flow-node">
+            <span class="diagram-tag">Machine</span>
+            <strong>Provider sessions</strong>
+            <span>Codex · Claude Code · Grok</span>
+          </div>
+          <span class="flow-arrow" aria-hidden="true">↓</span>
+          <div class="flow-node flow-node-dark">
+            <span class="diagram-tag diagram-tag-dark">Collector</span>
+            <strong>QuotaCLI</strong>
+            <span>Normalizes quota locally</span>
+          </div>
+          <span class="flow-arrow" aria-hidden="true">↓</span>
+          <div class="flow-node flow-node-split">
+            <div>
+              <span class="diagram-tag">Local</span>
+              <strong>QuotaBar</strong>
+            </div>
+            <div>
+              <span class="diagram-tag">Remote</span>
+              <strong>QuotaRelay</strong>
+            </div>
+          </div>
+        </figure>
+      </section>
+
+      <section class="cta" aria-labelledby="cta-title">
+        <div>
+          <p class="eyebrow eyebrow-dark">Built in the open</p>
+          <h2 id="cta-title">Follow QuotaBar from the first release.</h2>
+        </div>
+        <a class="button button-on-dark" href="https://github.com/gotry-io/Quota"
+          >Open GitHub</a
+        >
+      </section>
+    </main>
+
+    <footer>
+      <span>© <span id="copyright-year"></span> gotry-io contributors</span>
+      <div class="footer-links">
+        <a href="https://github.com/gotry-io/Quota/blob/main/LICENSE">MIT License</a>
+        <a href="https://github.com/gotry-io/Quota">Source</a>
+      </div>
+    </footer>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
