@@ -15,12 +15,13 @@
     "pnpm": ">=10.0.0"
   },
   "scripts": {
-    "build": "pnpm --filter @gotry-io/quota-web build && pnpm --filter @gotry-io/quotacli build && pnpm --filter @gotry-io/quota-relay build && swift build --package-path apps/menubar",
+    "build": "pnpm --filter @gotry-io/quotacli build && pnpm --filter @gotry-io/quota-relay build && swift build --package-path apps/menubar",
     "check": "pnpm -r --if-present check",
     "format": "biome format --write .",
     "format:check": "biome format .",
     "test": "pnpm -r --if-present test && swift test --package-path apps/menubar",
     "build:menubar:app": "./scripts/package-menubar.sh",
+    "deploy:cloudflare": "pnpm --filter @gotry-io/quota-relay deploy:cloudflare",
     "dev:web": "pnpm --filter @gotry-io/quota-web dev",
     "dev:relay": "pnpm --filter @gotry-io/quota-relay dev",
     "dev:relay:self-hosted": "pnpm --filter @gotry-io/quota-relay dev:self-hosted",

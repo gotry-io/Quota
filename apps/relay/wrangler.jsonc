@@ -1,8 +1,18 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "quota-relay",
+  "name": "quota",
   "main": "src/cloudflare.ts",
   "compatibility_date": "2026-08-01",
+  "routes": [
+    {
+      "pattern": "quota.gotry.io",
+      "custom_domain": true
+    }
+  ],
+  "assets": {
+    "directory": "../web/dist",
+    "run_worker_first": ["/healthz", "/readyz", "/.well-known/quotabar-relay", "/api/*"]
+  },
   "observability": {
     "enabled": true
   },
@@ -12,8 +22,8 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "quota-relay",
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_name": "quota",
+      "database_id": "e3bd8609-a9e0-4670-9182-62e8e2748d3f",
       "migrations_dir": "migrations"
     }
   ]

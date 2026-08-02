@@ -6,13 +6,15 @@
   "type": "module",
   "scripts": {
     "build": "pnpm run build:cloudflare && pnpm run build:self-hosted",
-    "build:cloudflare": "wrangler deploy --dry-run --outdir dist/cloudflare",
+    "build:web": "pnpm --filter @gotry-io/quota-web build",
+    "build:cloudflare": "pnpm run build:web && wrangler deploy --dry-run --outdir dist/cloudflare",
     "build:self-hosted": "bun build --target=bun --minify --outfile dist/self-hosted/quotarelay.js src/self-hosted.ts",
     "check": "tsc -p tsconfig.json",
-    "dev": "wrangler dev",
+    "deploy:cloudflare": "pnpm run build:web && wrangler deploy",
+    "dev": "pnpm run build:web && wrangler dev",
     "dev:self-hosted": "bun run src/self-hosted.ts",
-    "d1:migrate:local": "wrangler d1 migrations apply quota-relay --local",
-    "d1:migrate:remote": "wrangler d1 migrations apply quota-relay --remote",
+    "d1:migrate:local": "wrangler d1 migrations apply quota --local",
+    "d1:migrate:remote": "wrangler d1 migrations apply quota --remote",
     "test": "vitest run test/app.test.ts && bun test test/sqlite-state.bun.test.ts"
   },
   "dependencies": {

@@ -2,7 +2,7 @@
 
 QuotaRelay has two supported persistent runtimes:
 
-- Cloudflare Workers + D1 for the managed service at
+- A Cloudflare Worker with Static Assets + D1 for the managed service at
   [quota.gotry.io](https://quota.gotry.io).
 - Bun + SQLite for user self-hosting.
 
@@ -11,12 +11,34 @@ There is intentionally no stateless production mode. Both runtimes implement the
 
 ## Cloudflare development
 
-Create a D1 database, replace the placeholder `database_id` in `wrangler.jsonc`, then run:
+The managed Worker and its D1 database are both named `quota`. The Worker serves the public site
+from `apps/web/dist`, routes Relay endpoints through the Hono application, and binds the database
+as `DB`.
+
+Create the D1 database and replace the placeholder `database_id` in `wrangler.jsonc`:
+
+```bash
+pnpm exec wrangler d1 create quota
+```
+
+For local Cloudflare development, apply the local migration and start the Worker. The development
+command builds the website before starting Wrangler:
 
 ```bash
 pnpm d1:migrate:local
 pnpm dev
 ```
+
+For the first production deployment, apply the remote migration before deploying the Worker and
+its website together:
+
+```bash
+pnpm d1:migrate:remote
+pnpm deploy:cloudflare
+```
+
+The `quota.gotry.io` Custom Domain is declared in `wrangler.jsonc`; Cloudflare manages its DNS
+record and certificate during deployment.
 
 ## Self-hosted development
 

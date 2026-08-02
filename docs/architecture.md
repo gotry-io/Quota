@@ -69,7 +69,7 @@ storage requirements are defined only in [`security.md`](security.md).
 ### Quota Web
 
 - Static Vite application built independently into `apps/web/dist`.
-- May share the managed Cloudflare hostname and Worker deployment with Relay APIs.
+- Shares the managed `quota.gotry.io` hostname and `quota` Worker deployment with Relay APIs.
 - Is not included in the self-hosted Relay executable or container image.
 
 ## Package dependency rules
