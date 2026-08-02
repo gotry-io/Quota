@@ -44,7 +44,8 @@ bodies.
 `build:npm` creates the Node-based `dist/npm/quotacli.js` published as
 `@gotry-io/quotacli`. `build:standalone` creates `dist/standalone/quotacli` for the QuotaBar app
 bundle and direct release downloads. The npm package installs the same `quotacli` command and does
-not require Bun at runtime.
+not require Bun at runtime. A `v*` Git tag publishes the package from `release-cli.yml` through npm
+Trusted Publishing; the release workflow stores no long-lived npm credential.
 
 ## Planned edge pairing
 

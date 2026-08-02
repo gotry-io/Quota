@@ -1,0 +1,98 @@
+name: release-cli
+
+# A v* tag publishes the architecture-neutral Node.js QuotaCLI package. npm authenticates this
+# exact workflow through Trusted Publishing (OIDC), so no long-lived npm token is stored in GitHub.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Existing version to publish, without the leading v"
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: quotacli-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('v{0}', github.event.inputs.version) || github.ref }}
+
+      - name: Resolve version
+        id: version
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            VERSION="$INPUT_VERSION"
+          else
+            VERSION="${REF_NAME#v}"
+          fi
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.]+)?$'; then
+            echo "invalid version: $VERSION" >&2
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+          package-manager-cache: false
+
+      - name: Install pinned toolchain packages
+        run: |
+          set -euo pipefail
+          npm install --global npm@11.17.0 pnpm@10.23.0 bun@1.3.10
+          node --version
+          npm --version
+          pnpm --version
+          bun --version
+
+      - name: Install and verify
+        run: |
+          set -euo pipefail
+          pnpm install --frozen-lockfile
+          pnpm format:check
+          pnpm check
+          pnpm -r --if-present test
+
+      - name: Stamp and inspect package
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          npm pkg set "version=${VERSION}" --prefix apps/cli
+          test "$(node -p "require('./apps/cli/package.json').version")" = "$VERSION"
+          cd apps/cli
+          npm pack --dry-run
+
+      - name: Check registry
+        id: registry
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          if npm view "@gotry-io/quotacli@${VERSION}" version >/dev/null 2>&1; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "@gotry-io/quotacli@${VERSION} is already published"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish QuotaCLI
+        if: steps.registry.outputs.publish == 'true'
+        working-directory: apps/cli
+        run: npm publish
