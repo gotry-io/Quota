@@ -48,8 +48,8 @@
     "test": "vitest run"
   },
   "devDependencies": {
-    "@gotry-io/provider-node": "workspace:*",
     "@gotry-io/quota-model": "workspace:*",
+    "@gotry-io/quota-provider": "workspace:*",
     "@gotry-io/quota-protocol": "workspace:*"
   }
 }

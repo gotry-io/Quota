@@ -149,9 +149,17 @@ func refreshesMenuBarModelFromLocalCollector() async throws {
 
   #expect(model.report == report)
   #expect(model.result(for: .grok)?.outcome == .success)
-  #expect(model.displayedProviders(enabledProviders: Set(ProviderID.allCases)) == [.grok])
-  #expect(model.displayedProviders(enabledProviders: [.codex]).isEmpty)
-  #expect(model.displayedProviders(enabledProviders: [.claude]).isEmpty)
+  guard
+    case .content(let providers, _) = model.overviewState(
+      enabledProviders: Set(ProviderID.allCases)
+    )
+  else {
+    Issue.record("Expected Grok quota content")
+    return
+  }
+  #expect(providers.map(\.provider) == [.grok])
+  #expect(model.overviewState(enabledProviders: [.codex]) == .empty(refreshWarning: nil))
+  #expect(model.overviewState(enabledProviders: [.claude]) == .empty(refreshWarning: nil))
   #expect(model.errorMessage == nil)
   #expect(model.refreshedAt != nil)
 }
@@ -181,12 +189,138 @@ func restoresTheLastNormalizedReportBeforeRefreshing() async throws {
   #expect(restoredModel.refreshedAt != nil)
 }
 
+@Test @MainActor
+func overviewStateDisplaysEveryAccountAndDerivesExpiredSnapshotsAsStale() async throws {
+  let now = Date(timeIntervalSince1970: 1_754_112_000)
+  let report = QuotaCollectionReport(
+    schemaVersion: 1,
+    capturedAt: now,
+    results: [
+      QuotaCollectionResult(
+        provider: .codex,
+        outcome: .success,
+        snapshots: [
+          sampleSnapshot(
+            provider: .codex,
+            fingerprint: "account_current",
+            validUntil: now.addingTimeInterval(300)
+          ),
+          sampleSnapshot(
+            provider: .codex,
+            fingerprint: "account_expired",
+            validUntil: now.addingTimeInterval(-1)
+          ),
+        ],
+        source: "chatgpt_usage_api",
+        message: nil
+      )
+    ]
+  )
+  let model = MenuBarViewModel(
+    collector: StubLocalQuotaCollector(report: report),
+    reportCache: nil,
+    startsAutomatically: false
+  )
+
+  await model.refresh()
+
+  guard
+    case .content(let providers, let refreshWarning) = model.overviewState(
+      enabledProviders: [.codex],
+      now: now
+    )
+  else {
+    Issue.record("Expected quota content")
+    return
+  }
+  #expect(refreshWarning == nil)
+  #expect(providers.count == 1)
+  #expect(providers.first?.accounts.count == 2)
+  #expect(providers.first?.accounts.map(\.isStale) == [false, true])
+}
+
+@Test @MainActor
+func emptyOverviewPreservesARefreshFailureWarning() async throws {
+  let suiteName = "QuotaBarTests.\(UUID().uuidString)"
+  let defaults = try #require(UserDefaults(suiteName: suiteName))
+  defer { defaults.removePersistentDomain(forName: suiteName) }
+  let cache = LocalQuotaReportCache(defaults: defaults)
+  cache.save(report: sampleCollectionReport(), refreshedAt: .distantPast)
+  let model = MenuBarViewModel(
+    collector: FailingLocalQuotaCollector(),
+    reportCache: cache,
+    startsAutomatically: false
+  )
+
+  await model.refresh()
+
+  guard case .empty(let refreshWarning) = model.overviewState(enabledProviders: [.codex]) else {
+    Issue.record("Expected an empty overview")
+    return
+  }
+  #expect(refreshWarning == "Synthetic collection failure.")
+}
+
+@Test @MainActor
+func refreshCancellationDoesNotBecomeAUserVisibleError() async {
+  let model = MenuBarViewModel(
+    collector: CancellingLocalQuotaCollector(),
+    reportCache: nil,
+    startsAutomatically: false
+  )
+
+  await model.refresh()
+
+  #expect(model.errorMessage == nil)
+  #expect(!model.isRefreshing)
+}
+
 private struct StubLocalQuotaCollector: LocalQuotaCollecting {
   let report: QuotaCollectionReport
 
   func collect() async throws -> QuotaCollectionReport {
     report
   }
+}
+
+private struct FailingLocalQuotaCollector: LocalQuotaCollecting {
+  func collect() async throws -> QuotaCollectionReport {
+    throw SyntheticCollectionError()
+  }
+}
+
+private struct CancellingLocalQuotaCollector: LocalQuotaCollecting {
+  func collect() async throws -> QuotaCollectionReport {
+    throw CancellationError()
+  }
+}
+
+private struct SyntheticCollectionError: LocalizedError {
+  var errorDescription: String? { "Synthetic collection failure." }
+}
+
+private func sampleSnapshot(
+  provider: ProviderID,
+  fingerprint: String,
+  validUntil: Date?
+) -> QuotaSnapshot {
+  QuotaSnapshot(
+    provider: provider,
+    account: QuotaAccount(fingerprint: fingerprint, label: nil, plan: "Pro"),
+    windows: [
+      QuotaWindow(
+        id: "weekly",
+        title: "Weekly",
+        usedPercent: 25,
+        resetsAt: nil,
+        durationSeconds: nil
+      )
+    ],
+    source: "synthetic",
+    status: .available,
+    observedAt: Date(timeIntervalSince1970: 1_754_112_000),
+    validUntil: validUntil
+  )
 }
 
 private func sampleCollectionReport() -> QuotaCollectionReport {

@@ -38,6 +38,8 @@ data requirements.
   executable as an argument; it never interpolates provider data into executable code.
 - HTTP requests have a 20-second timeout and 1 MiB response-body limit.
 - JSON-RPC has a 1 MiB stdout-line limit and 64 KiB stderr-capture limit.
+- QuotaBar bounds each bundled QuotaCLI collection to 60 seconds and 1 MiB of stdout. It discards
+  helper stderr and terminates the helper on timeout, cancellation, or output overflow.
 - Respect cancellation and terminate child processes on success, failure, timeout, and cancellation.
 - Diagnostics use allowlisted error classifications. They must not contain raw HTTP bodies,
   subprocess stderr, JWTs, account identifiers, or full email addresses.

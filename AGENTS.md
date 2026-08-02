@@ -78,7 +78,8 @@ SQLite files, logs, or local credentials.
 ## Verification
 
 - TypeScript-only change: run the affected workspace's type check and tests, plus root formatting.
-- Provider change: run provider-node and QuotaCLI tests, including relevant failure and redaction cases.
+- Provider change: run quota-provider and QuotaCLI tests, including relevant failure and redaction
+  cases.
 - Protocol change: run protocol, model, provider, Relay, and Swift decoding tests.
 - Relay change: run Vitest, Bun SQLite tests, and the Cloudflare dry-run build.
 - Web change: run its type check and production build; inspect desktop and mobile rendering when

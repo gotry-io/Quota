@@ -76,19 +76,20 @@ storage requirements are defined only in [`security.md`](security.md).
 
 ```text
 @gotry-io/quota-protocol
-    ▲          ▲             ▲
-    │          │             │
-quota-model  provider-core  relay-core
-                 ▲             ▲
-                 │             │
-            provider-node    relay app
-                 ▲          ┌──┴──────────┐
-                 │          │             │
-             QuotaCLI     D1 state    SQLite state
+    ▲             ▲             ▲
+    │             │             │
+quota-model  quota-provider  relay-core
+                  ▲             ▲
+                  │             │
+              QuotaCLI       relay app
+                             ┌──┴──────────┐
+                             │             │
+                          D1 state    SQLite state
 ```
 
-- `quota-protocol`, `quota-model`, `provider-core`, and `relay-core` are runtime-neutral.
-- `provider-node` may use Node/Bun system APIs and is imported only by QuotaCLI.
+- `quota-protocol`, `quota-model`, and `relay-core` are runtime-neutral.
+- `quota-provider` owns both provider contracts and their local implementations. It may use Node/Bun
+  system APIs and is imported only by QuotaCLI.
 - Cloudflare code must not import filesystem, process execution, TCP, or `bun:sqlite` APIs.
 - Self-hosted Relay code may use Bun and `bun:sqlite`.
 

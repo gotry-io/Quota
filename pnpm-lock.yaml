@@ -32,15 +32,15 @@ importers:
 
   apps/cli:
     devDependencies:
-      '@gotry-io/provider-node':
-        specifier: workspace:*
-        version: link:../../packages/provider-node
       '@gotry-io/quota-model':
         specifier: workspace:*
         version: link:../../packages/quota-model
       '@gotry-io/quota-protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
+      '@gotry-io/quota-provider':
+        specifier: workspace:*
+        version: link:../../packages/provider
 
   apps/relay:
     dependencies:
@@ -66,17 +66,8 @@ importers:
         specifier: 4.4.3
         version: 4.4.3
 
-  packages/provider-core:
+  packages/provider:
     dependencies:
-      '@gotry-io/quota-protocol':
-        specifier: workspace:*
-        version: link:../protocol
-
-  packages/provider-node:
-    dependencies:
-      '@gotry-io/provider-core':
-        specifier: workspace:*
-        version: link:../provider-core
       '@gotry-io/quota-protocol':
         specifier: workspace:*
         version: link:../protocol

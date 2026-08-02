@@ -47,9 +47,10 @@ const { collectQuotaReport, diagnoseProviderSessions } = vi.hoisted(() => ({
   diagnoseProviderSessions: vi.fn(async () => []),
 }));
 
-vi.mock("@gotry-io/provider-node", async () => {
-  const actual =
-    await vi.importActual<typeof import("@gotry-io/provider-node")>("@gotry-io/provider-node");
+vi.mock("@gotry-io/quota-provider", async () => {
+  const actual = await vi.importActual<typeof import("@gotry-io/quota-provider")>(
+    "@gotry-io/quota-provider",
+  );
   return {
     ...actual,
     diagnoseProviderSessions,

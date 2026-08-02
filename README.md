@@ -29,8 +29,7 @@ apps/cli/                QuotaCLI Node package and Bun standalone executable
 apps/relay/              Hono Relay for Workers+D1 and Bun+SQLite
 packages/protocol/       Runtime schemas and language-neutral JSON Schemas
 packages/quota-model/    Runtime-neutral quota calculations
-packages/provider-core/  Provider interfaces without Node dependencies
-packages/provider-node/  Filesystem, process, and credential discovery for QuotaCLI
+packages/provider/       Node/Bun provider collection for QuotaCLI
 packages/relay-core/     Persistent Relay state contract
 deploy/                  Self-hosted container configuration
 docs/                    Architecture, security, and decision records

@@ -3,7 +3,7 @@ import {
   collectionExitCode,
   diagnoseProviderSessions,
   providerDescriptors,
-} from "@gotry-io/provider-node";
+} from "@gotry-io/quota-provider";
 import {
   ProviderIdSchema,
   QuotaCollectionReportSchema,

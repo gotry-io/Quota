@@ -1,13 +1,54 @@
 import SwiftUI
 
+#if VISUAL_TEST
+  import AppKit
+#endif
+
 @main
 struct QuotaBarApp: App {
-  @State private var model = MenuBarViewModel()
+  #if VISUAL_TEST
+    @State private var model: MenuBarViewModel
+    private let visualTestConfiguration: VisualTestConfiguration
 
-  var body: some Scene {
-    MenuBarExtra("QuotaBar", systemImage: "gauge.with.dots.needle.50percent") {
-      MenuBarContentView(model: model)
+    init() {
+      guard
+        let configuration = VisualTestConfiguration(
+          arguments: ProcessInfo.processInfo.arguments
+        )
+      else {
+        fatalError("Invalid Visual QA arguments.")
+      }
+      visualTestConfiguration = configuration
+      configuration.prepareEnvironment()
+      _model = State(initialValue: configuration.makeModel())
     }
-    .menuBarExtraStyle(.window)
-  }
+
+    var body: some Scene {
+      WindowGroup("QuotaBar Visual QA") {
+        MenuBarContentView(
+          model: model,
+          initialPath: visualTestConfiguration.initialPath,
+          performsInitialRefresh: false
+        )
+        .background(.regularMaterial)
+        .preferredColorScheme(visualTestConfiguration.colorScheme)
+        .dynamicTypeSize(visualTestConfiguration.dynamicTypeSize)
+        .onAppear {
+          NSApplication.shared.setActivationPolicy(.regular)
+          NSApplication.shared.activate(ignoringOtherApps: true)
+        }
+      }
+      .windowResizability(.contentSize)
+      .windowStyle(.hiddenTitleBar)
+    }
+  #else
+    @State private var model = MenuBarViewModel()
+
+    var body: some Scene {
+      MenuBarExtra("QuotaBar", systemImage: "gauge.with.dots.needle.50percent") {
+        MenuBarContentView(model: model)
+      }
+      .menuBarExtraStyle(.window)
+    }
+  #endif
 }

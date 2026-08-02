@@ -12,9 +12,10 @@ relays that advertise persistent snapshots.
 
 The current menu panel invokes its bundled QuotaCLI helper, displays local normalized provider
 results, and supports manual refresh plus explicit loading, authentication, unavailable, and error
-states. The panel is a window-style `MenuBarExtra` with one overview level and one embedded Settings
-level, flat provider rows, and system-semantic monochrome styling from `DESIGN.md`. Appearance
-inherits the current macOS color scheme through SwiftUI and has no app-level appearance override.
+states. The panel is a window-style `MenuBarExtra` with an overview-rooted system navigation stack,
+an embedded Settings hierarchy, flat provider rows, and system-semantic monochrome styling from
+`DESIGN.md`. Appearance inherits the current macOS color scheme through SwiftUI and has no app-level
+appearance override.
 Agents without an authenticated session are omitted from the overview. A provider row requires a
 successful result with at least one available or stale quota window; Settings retains status and
 visibility controls for all supported agents. QuotaBar caches only the last normalized, redacted
@@ -30,3 +31,27 @@ found on `PATH`. Users installing QuotaBar therefore do not install the npm CLI 
 Provider artwork uses the monochrome Codex, Claude Code, and Grok SVG assets from Lobe Icons. The
 source SVGs remain vector resources and render as semantic template images. See
 [`THIRD_PARTY_NOTICES.md`](Sources/QuotaBar/Resources/THIRD_PARTY_NOTICES.md) for attribution.
+
+## Visual QA
+
+Build the Debug-only visual acceptance app from the repository root:
+
+```bash
+pnpm build:menubar:visual
+```
+
+`QuotaBarVisual.app` uses the real menu-panel views inside an independently identified, ordinary
+macOS window. It never invokes QuotaCLI, reads provider credentials, or writes the production app's
+preferences. Launch a deterministic fixture with:
+
+```bash
+open -n dist/menubar-visual/QuotaBarVisual.app --args \
+  --fixture content --route overview --appearance light
+```
+
+Fixtures are `loading`, `content`, `cached-refresh-error`, `empty`, and `unavailable`. Routes are
+`overview` and `settings`; appearances are `system`, `light`, and `dark`. Text sizes are `standard`,
+`extra-large`, and `accessibility`, selected with `--text-size`. The visual app validates shared
+content, navigation, scrolling, accessibility, and appearance behavior. It does not reproduce the
+menu-bar icon, popover anchor, click-outside dismissal, or other `MenuBarExtra` window chrome, which
+retain a small manual smoke test.

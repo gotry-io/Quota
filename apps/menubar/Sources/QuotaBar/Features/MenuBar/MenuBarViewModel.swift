@@ -1,6 +1,26 @@
 import Foundation
 import Observation
 
+enum QuotaOverviewState: Equatable {
+  case loading
+  case unavailable(message: String)
+  case empty(refreshWarning: String?)
+  case content(providers: [ProviderQuotaPresentation], refreshWarning: String?)
+}
+
+struct ProviderQuotaPresentation: Equatable, Identifiable {
+  let provider: ProviderID
+  let accounts: [AccountQuotaPresentation]
+
+  var id: ProviderID { provider }
+}
+
+struct AccountQuotaPresentation: Equatable, Identifiable {
+  let id: String
+  let snapshot: QuotaSnapshot
+  let isStale: Bool
+}
+
 @MainActor
 @Observable
 final class MenuBarViewModel {
@@ -49,6 +69,21 @@ final class MenuBarViewModel {
     }
   }
 
+  #if DEBUG
+    init(
+      visualTestReport: QuotaCollectionReport?,
+      errorMessage: String?,
+      refreshedAt: Date?
+    ) {
+      report = visualTestReport
+      self.errorMessage = errorMessage
+      self.refreshedAt = refreshedAt
+      collector = nil
+      initializationError = nil
+      reportCache = nil
+    }
+  #endif
+
   func refreshIfNeeded(now: Date = Date()) async {
     if let refreshedAt, now.timeIntervalSince(refreshedAt) < 60 {
       return
@@ -73,6 +108,8 @@ final class MenuBarViewModel {
         reportCache?.save(report: report, refreshedAt: refreshedAt)
       }
       errorMessage = nil
+    } catch is CancellationError {
+      return
     } catch {
       errorMessage = Self.message(for: error)
     }
@@ -82,19 +119,51 @@ final class MenuBarViewModel {
     report?.results.first { $0.provider == provider }
   }
 
-  func displaySnapshot(for provider: ProviderID) -> QuotaSnapshot? {
+  func displaySnapshots(
+    for provider: ProviderID,
+    now: Date = Date()
+  ) -> [AccountQuotaPresentation] {
     guard let result = result(for: provider), result.outcome == .success else {
-      return nil
+      return []
     }
-    return result.snapshots.first { snapshot in
-      !snapshot.windows.isEmpty && (snapshot.status == .available || snapshot.status == .stale)
+
+    return result.snapshots.enumerated().compactMap { index, snapshot in
+      guard !snapshot.windows.isEmpty,
+        snapshot.status == .available || snapshot.status == .stale
+      else {
+        return nil
+      }
+
+      return AccountQuotaPresentation(
+        id: "\(snapshot.account.fingerprint):\(index)",
+        snapshot: snapshot,
+        isStale: snapshot.status == .stale || snapshot.validUntil.map({ $0 <= now }) == true
+      )
     }
   }
 
-  func displayedProviders(enabledProviders: Set<ProviderID>) -> [ProviderID] {
-    ProviderID.allCases.filter { provider in
-      enabledProviders.contains(provider) && displaySnapshot(for: provider) != nil
+  func overviewState(
+    enabledProviders: Set<ProviderID>,
+    now: Date = Date()
+  ) -> QuotaOverviewState {
+    guard report != nil else {
+      if let errorMessage {
+        return .unavailable(message: errorMessage)
+      }
+      return .loading
     }
+
+    let providers: [ProviderQuotaPresentation] = ProviderID.allCases.compactMap { provider in
+      guard enabledProviders.contains(provider) else { return nil }
+      let accounts = displaySnapshots(for: provider, now: now)
+      guard !accounts.isEmpty else { return nil }
+      return ProviderQuotaPresentation(provider: provider, accounts: accounts)
+    }
+
+    guard !providers.isEmpty else {
+      return .empty(refreshWarning: errorMessage)
+    }
+    return .content(providers: providers, refreshWarning: errorMessage)
   }
 
   private static func message(for error: Error) -> String {

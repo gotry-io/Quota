@@ -7,8 +7,7 @@ COPY apps/relay/package.json apps/relay/package.json
 COPY apps/web/package.json apps/web/package.json
 COPY packages/protocol/package.json packages/protocol/package.json
 COPY packages/quota-model/package.json packages/quota-model/package.json
-COPY packages/provider-core/package.json packages/provider-core/package.json
-COPY packages/provider-node/package.json packages/provider-node/package.json
+COPY packages/provider/package.json packages/provider/package.json
 COPY packages/relay-core/package.json packages/relay-core/package.json
 RUN bun install --production
 COPY apps/relay/src apps/relay/src

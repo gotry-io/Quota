@@ -14,16 +14,12 @@ enum QuotaDesign {
   }
 
   enum Typography {
-    static let panelTitle = Font.system(size: 17, weight: .semibold, design: .rounded)
-    static let providerTitle = Font.system(size: 14, weight: .medium)
-    static let quotaLabel = Font.system(size: 12, weight: .medium)
-    static let metadata = Font.system(size: 12)
-    static let resetTime = Font.system(size: 11)
-    static let statusTag = Font.system(size: 10)
-    static let sourceTag = Font.system(size: 9, weight: .medium)
-  }
-
-  enum Motion {
-    static let navigationDuration = 0.18
+    static let panelTitle = Font.system(.headline, design: .rounded, weight: .semibold)
+    static let providerTitle = Font.system(.subheadline, weight: .medium)
+    static let quotaLabel = Font.system(.caption, weight: .medium)
+    static let metadata = Font.caption
+    static let resetTime = Font.caption2
+    static let statusTag = Font.caption2
+    static let sourceTag = Font.system(.caption2, weight: .medium)
   }
 }
