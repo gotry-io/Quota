@@ -82,15 +82,18 @@ collection report. Credentials never leave the local machine and are never print
 - The same CLI source also produces a Bun standalone executable for the QuotaBar helper and release
   artifacts.
 
-These channels are release targets and are not published by the current development milestone.
+QuotaBar's arm64 release channel is automated from a `v*` tag: GitHub Actions signs and notarizes
+the app, publishes its ZIP, and pushes the matching Cask to `gotry-io/homebrew-tap`. The same tag
+publishes QuotaCLI independently through npm Trusted Publishing, without a long-lived npm token.
 
 ## Status
 
 This repository contains the architecture foundation plus local provider quota collection for Codex,
 Claude Code, and Grok. Protocol validation, D1/SQLite storage, Relay discovery, local
 provider-session discovery, the initial public website, and the Swift wire models are implemented.
-QuotaBar now includes its first local quota panel and bundled-helper integration. Authenticated Relay
-APIs, device pairing, release packaging, Homebrew/npm publication, remote-device UI, and production
+QuotaBar now includes its first local quota panel, bundled-helper integration, and arm64 release
+automation. QuotaCLI 0.1.0 is published on npm and later tags publish through OIDC. Authenticated
+Relay APIs, device pairing, the first published Homebrew artifact, remote-device UI, and production
 settings remain subsequent milestones. Realtime delivery is optional and not part of v1.
 
 ## License
