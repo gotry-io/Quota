@@ -1,21 +1,44 @@
 {
-  "name": "@gotry/quota-cli",
+  "name": "@gotry-io/quotacli",
   "version": "0.1.0",
   "license": "MIT",
-  "private": true,
+  "private": false,
   "type": "module",
+  "homepage": "https://quota.gotry.io",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gotry-io/Quota.git",
+    "directory": "apps/cli"
+  },
+  "bugs": {
+    "url": "https://github.com/gotry-io/Quota/issues"
+  },
+  "files": [
+    "dist/npm/LICENSE",
+    "dist/npm/quotacli.js",
+    "README.md"
+  ],
   "bin": {
-    "quotacli": "./dist/quotacli"
+    "quotacli": "dist/npm/quotacli.js"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
-    "build": "bun build --compile --minify --outfile dist/quotacli src/main.ts",
+    "build": "pnpm run build:npm && pnpm run build:standalone",
+    "build:npm": "bun run scripts/build-npm.ts",
+    "build:standalone": "bun build --compile --minify --outfile dist/standalone/quotacli src/main.ts",
     "check": "tsc -p tsconfig.json",
     "dev": "bun run src/main.ts",
+    "prepack": "pnpm run build:npm",
     "test": "vitest run"
   },
-  "dependencies": {
-    "@gotry/provider-node": "workspace:*",
-    "@gotry/quota-model": "workspace:*",
-    "@gotry/quota-protocol": "workspace:*"
+  "devDependencies": {
+    "@gotry-io/provider-node": "workspace:*",
+    "@gotry-io/quota-model": "workspace:*",
+    "@gotry-io/quota-protocol": "workspace:*"
   }
 }

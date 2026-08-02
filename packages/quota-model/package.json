@@ -1,5 +1,5 @@
 {
-  "name": "@gotry/quota-model",
+  "name": "@gotry-io/quota-model",
   "version": "0.1.0",
   "license": "MIT",
   "private": true,
@@ -12,6 +12,6 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@gotry/quota-protocol": "workspace:*"
+    "@gotry-io/quota-protocol": "workspace:*"
   }
 }

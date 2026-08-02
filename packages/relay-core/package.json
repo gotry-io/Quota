@@ -1,5 +1,5 @@
 {
-  "name": "@gotry/relay-core",
+  "name": "@gotry-io/relay-core",
   "version": "0.1.0",
   "license": "MIT",
   "private": true,
@@ -11,6 +11,6 @@
     "check": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@gotry/quota-protocol": "workspace:*"
+    "@gotry-io/quota-protocol": "workspace:*"
   }
 }

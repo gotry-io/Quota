@@ -31,23 +31,23 @@ importers:
         version: 4.118.0(@cloudflare/workers-types@5.20260801.1)
 
   apps/cli:
-    dependencies:
-      '@gotry/provider-node':
+    devDependencies:
+      '@gotry-io/provider-node':
         specifier: workspace:*
         version: link:../../packages/provider-node
-      '@gotry/quota-model':
+      '@gotry-io/quota-model':
         specifier: workspace:*
         version: link:../../packages/quota-model
-      '@gotry/quota-protocol':
+      '@gotry-io/quota-protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
 
   apps/relay:
     dependencies:
-      '@gotry/quota-protocol':
+      '@gotry-io/quota-protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
-      '@gotry/relay-core':
+      '@gotry-io/relay-core':
         specifier: workspace:*
         version: link:../../packages/relay-core
       hono:
@@ -68,28 +68,28 @@ importers:
 
   packages/provider-core:
     dependencies:
-      '@gotry/quota-protocol':
+      '@gotry-io/quota-protocol':
         specifier: workspace:*
         version: link:../protocol
 
   packages/provider-node:
     dependencies:
-      '@gotry/provider-core':
+      '@gotry-io/provider-core':
         specifier: workspace:*
         version: link:../provider-core
-      '@gotry/quota-protocol':
+      '@gotry-io/quota-protocol':
         specifier: workspace:*
         version: link:../protocol
 
   packages/quota-model:
     dependencies:
-      '@gotry/quota-protocol':
+      '@gotry-io/quota-protocol':
         specifier: workspace:*
         version: link:../protocol
 
   packages/relay-core:
     dependencies:
-      '@gotry/quota-protocol':
+      '@gotry-io/quota-protocol':
         specifier: workspace:*
         version: link:../protocol
 

@@ -1,5 +1,5 @@
 {
-  "name": "@gotry/provider-node",
+  "name": "@gotry-io/provider-node",
   "version": "0.1.0",
   "license": "MIT",
   "private": true,
@@ -12,7 +12,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@gotry/provider-core": "workspace:*",
-    "@gotry/quota-protocol": "workspace:*"
+    "@gotry-io/provider-core": "workspace:*",
+    "@gotry-io/quota-protocol": "workspace:*"
   }
 }

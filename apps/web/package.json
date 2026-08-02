@@ -1,12 +1,12 @@
 {
-  "name": "@gotry/quota-web",
+  "name": "@gotry-io/quota-web",
   "version": "0.1.0",
   "license": "MIT",
   "homepage": "https://quota.gotry.io",
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "vite build",
+    "build": "vite build && node scripts/publish-protocol-schemas.mjs",
     "check": "tsc -p tsconfig.json",
     "dev": "vite",
     "preview": "vite preview"

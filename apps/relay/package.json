@@ -1,5 +1,5 @@
 {
-  "name": "@gotry/quota-relay",
+  "name": "@gotry-io/quota-relay",
   "version": "0.1.0",
   "license": "MIT",
   "private": true,
@@ -16,8 +16,8 @@
     "test": "vitest run test/app.test.ts && bun test test/sqlite-state.bun.test.ts"
   },
   "dependencies": {
-    "@gotry/quota-protocol": "workspace:*",
-    "@gotry/relay-core": "workspace:*",
+    "@gotry-io/quota-protocol": "workspace:*",
+    "@gotry-io/relay-core": "workspace:*",
     "hono": "4.12.33"
   }
 }

@@ -1,5 +1,5 @@
 {
-  "name": "@gotry/quota",
+  "name": "@gotry-io/quota",
   "version": "0.1.0",
   "license": "MIT",
   "homepage": "https://quota.gotry.io",
@@ -15,15 +15,15 @@
     "pnpm": ">=10.0.0"
   },
   "scripts": {
-    "build": "pnpm --filter @gotry/quota-web build && pnpm --filter @gotry/quota-cli build && pnpm --filter @gotry/quota-relay build && swift build --package-path apps/menubar",
+    "build": "pnpm --filter @gotry-io/quota-web build && pnpm --filter @gotry-io/quotacli build && pnpm --filter @gotry-io/quota-relay build && swift build --package-path apps/menubar",
     "check": "pnpm -r --if-present check",
     "format": "biome format --write .",
     "format:check": "biome format .",
     "test": "pnpm -r --if-present test && swift test --package-path apps/menubar",
-    "dev:web": "pnpm --filter @gotry/quota-web dev",
-    "dev:relay": "pnpm --filter @gotry/quota-relay dev",
-    "dev:relay:self-hosted": "pnpm --filter @gotry/quota-relay dev:self-hosted",
-    "dev:cli": "pnpm --filter @gotry/quota-cli dev"
+    "dev:web": "pnpm --filter @gotry-io/quota-web dev",
+    "dev:relay": "pnpm --filter @gotry-io/quota-relay dev",
+    "dev:relay:self-hosted": "pnpm --filter @gotry-io/quota-relay dev:self-hosted",
+    "dev:cli": "pnpm --filter @gotry-io/quotacli dev"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.6",
