@@ -39,10 +39,12 @@ cookies and interactive PTY login are not fallback strategies.
 
 1. Discover `$GROK_HOME/auth.json` or `~/.grok/auth.json`.
 2. Prefer a non-empty `https://auth.x.ai::<client-id>` entry, then legacy sign-in entries.
-3. Resolve `grok` from `PATH` and spawn `grok agent stdio`.
-4. Send newline-delimited JSON-RPC `initialize`, then `x.ai/billing`.
-5. Map `usage.totalUsed.val / monthlyLimit.val * 100` to a billing-cycle window.
-6. Treat `-32601 Method not found` as `unsupported` and login guidance as `auth_required`.
+3. Call `GET https://cli-chat-proxy.grok.com/v1/billing?format=credits` with the local Grok OAuth
+   token. QuotaCLI does not require the `grok` executable after credentials have been created.
+4. Prefer `config.creditUsagePercent` and `config.currentPeriod`. For non-unified accounts, retain the
+   deprecated `config.used.val / config.monthlyLimit.val * 100` fields documented by Grok Build.
+5. Treat HTTP 401/403 as `auth_required` and require the user to refresh the provider-owned session
+   with `grok login`; QuotaCLI does not refresh Grok credentials itself.
 
 Local context-token or session totals are not subscription quota. Browser-cookie and browser billing
 fallbacks are out of scope.
