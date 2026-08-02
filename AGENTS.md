@@ -14,6 +14,7 @@ Read the relevant source before changing that area:
 | Credentials, trust, redaction, transport, storage safety | `docs/security.md` |
 | Codex, Claude Code, and Grok collection strategies | `docs/provider-collection.md` |
 | Persistent Relay storage decision and rationale | `docs/decisions/0001-persistent-relay-storage.md` |
+| Relay pairing, code ownership, and credential issuance | `docs/decisions/0002-relay-device-code-pairing.md` |
 | Visual tokens and UI behavior | `DESIGN.md` |
 | App-specific usage | The corresponding `apps/*/README.md` |
 
@@ -46,7 +47,8 @@ Do not create a second description of a canonical rule. Update its source and li
   for type-only imports.
 - Do not weaken the shared TypeScript checks to bypass errors.
 - Format supported files with Biome using the repository configuration.
-- Use `@gotry/*` for workspace packages and `workspace:*` for internal dependencies.
+- Use `@gotry-io/*` for workspace packages and `workspace:*` for internal dependencies. The public
+  CLI package is `@gotry-io/quotacli`; its installed command remains `quotacli`.
 - Keep dependencies pinned consistently and commit only `pnpm-lock.yaml`; do not add npm, Yarn, or
   Bun lockfiles.
 - Avoid native Node addons in QuotaCLI.
