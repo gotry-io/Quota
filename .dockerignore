@@ -1,0 +1,9 @@
+.git
+**/.build
+**/.swiftpm
+**/dist
+**/node_modules
+**/.wrangler
+data
+*.db
+*.log

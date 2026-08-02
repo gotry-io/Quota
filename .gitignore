@@ -1,0 +1,32 @@
+.DS_Store
+.env
+.env.*
+!.env.example
+
+# Swift / Xcode
+.build/
+.swiftpm/
+DerivedData/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+
+# JavaScript / TypeScript / Cloudflare
+node_modules/
+dist/
+.wrangler/
+coverage/
+
+# Build outputs
+bin/
+
+# Runtime data
+data/
+*.db
+*.db-shm
+*.db-wal
+*.log
+tmp/
+
+# IDEs
+.idea/
+.vscode/

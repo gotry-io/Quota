@@ -1,0 +1,21 @@
+{
+  "name": "@gotry/quota-cli",
+  "version": "0.1.0",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "quotacli": "./dist/quotacli"
+  },
+  "scripts": {
+    "build": "bun build --compile --minify --outfile dist/quotacli src/main.ts",
+    "check": "tsc -p tsconfig.json",
+    "dev": "bun run src/main.ts",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@gotry/provider-node": "workspace:*",
+    "@gotry/quota-model": "workspace:*",
+    "@gotry/quota-protocol": "workspace:*"
+  }
+}

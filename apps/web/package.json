@@ -1,0 +1,17 @@
+{
+  "name": "@gotry/quota-web",
+  "version": "0.1.0",
+  "license": "MIT",
+  "homepage": "https://quota.gotry.io",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "check": "tsc -p tsconfig.json",
+    "dev": "vite",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "vite": "8.2.0"
+  }
+}
