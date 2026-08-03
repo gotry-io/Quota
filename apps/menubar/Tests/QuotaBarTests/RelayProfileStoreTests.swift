@@ -32,6 +32,18 @@ struct RelayProfileStoreTests {
     #expect(try RelayProfileStore(defaults: fixture.defaults).load().isEmpty)
   }
 
+  @Test
+  func nonemptyProfilesRequireExactlyOneDefault() throws {
+    let fixture = try UserDefaultsFixture()
+    defer { fixture.remove() }
+    let store = RelayProfileStore(defaults: fixture.defaults)
+    let profile = try sampleProfile(isDefault: false)
+
+    #expect(throws: RelayProfileStoreError.invalidData) {
+      try store.save([profile])
+    }
+  }
+
   @Test(arguments: [
     Data("not json".utf8),
     Data(#"{"schema_version":2,"profiles":[]}"#.utf8),
@@ -89,7 +101,8 @@ private struct UserDefaultsFixture {
 
 private func sampleProfile(
   id: UUID = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
-  baseURL: URL = URL(string: "https://relay.example")!
+  baseURL: URL = URL(string: "https://relay.example")!,
+  isDefault: Bool = true
 ) throws -> RelayProfile {
   try RelayProfile(
     id: id,
@@ -104,6 +117,6 @@ private func sampleProfile(
       history: false,
       multiTenant: false
     ),
-    isDefault: true
+    isDefault: isDefault
   )
 }

@@ -57,7 +57,7 @@ struct RelayProfileStore {
   private func validate(_ profiles: [RelayProfile]) throws {
     guard Set(profiles.map(\.id)).count == profiles.count,
       Set(profiles.map(\.credentialReference)).count == profiles.count,
-      profiles.filter(\.isDefault).count <= 1
+      profiles.filter(\.isDefault).count == (profiles.isEmpty ? 0 : 1)
     else {
       throw RelayProfileStoreError.invalidData
     }

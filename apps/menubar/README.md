@@ -12,6 +12,10 @@ device revocation. It accepts protocol v1 Relays only when they advertise bearer
 persistent snapshots, and instant device revocation. Credential and transport requirements are
 defined in [`docs/security.md`](../../docs/security.md).
 
+The Relay state model coordinates profile mutation, pairing, last-known-good snapshot and device
+state, explicit refresh, and a cancellable five-minute polling loop. Polling remains opt-in at this
+layer until the production app lifecycle and Settings surfaces own its start and stop calls.
+
 The observation-preserving subscription resolver groups only globally scoped provider identities
 across local and remote sources, keeps source-scoped observations separate, selects one preferred
 snapshot without accumulating quota values, and retains every contributing source. The menu-panel
@@ -29,8 +33,8 @@ visibility controls for all supported agents. QuotaBar caches only the last norm
 local report so subsequent launches render immediately while a background refresh runs. The release
 workflow packages an arm64-only app with its helper, signs every executable with Developer ID,
 notarizes and staples the bundle, publishes a GitHub Release, and updates the Homebrew Cask. Relay
-polling, resolver integration, Settings orchestration, and remote-device UI remain separate
-milestones.
+app-lifecycle polling, resolver integration, Settings orchestration, and remote-device UI remain
+separate milestones.
 
 The release target is a Homebrew Cask from `gotry-io/homebrew-tap`. The signed `.app` contains the
 standalone QuotaCLI helper at a fixed bundle path and invokes that copy instead of a `quotacli`
