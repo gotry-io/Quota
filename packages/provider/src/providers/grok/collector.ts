@@ -95,18 +95,23 @@ export class GrokCollector implements ProviderCollector {
       );
     }
     const now = context.now ?? new Date();
-    let refreshAttempted = false;
+    // Only a real credential rotation counts as refresh success. A failed or
+    // no-op CLI handshake must not suppress the single 401 retry.
+    let refreshSucceeded = false;
 
     if (shouldRefreshGrokCredentials(credentials, now)) {
-      refreshAttempted = true;
-      credentials = (await this.refreshAndReload(credentials, context.signal)) ?? credentials;
+      const refreshed = await this.refreshAndReload(credentials, context.signal);
+      if (refreshed) {
+        credentials = refreshed;
+        refreshSucceeded = true;
+      }
     }
 
     try {
       return await this.collectWithCredentials(credentials, now, context.signal);
     } catch (error) {
       let classified = classifyProviderError(error);
-      if (classified.category === "auth_required" && !refreshAttempted) {
+      if (classified.category === "auth_required" && !refreshSucceeded) {
         const refreshed = await this.refreshAndReload(credentials, context.signal);
         if (refreshed) {
           try {

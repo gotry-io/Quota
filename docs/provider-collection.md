@@ -53,12 +53,14 @@ direct usage collection and report `auth_required` if Claude rejects the cached 
 1. Discover `$GROK_HOME/auth.json` or `~/.grok/auth.json`.
 2. Prefer the non-empty `https://auth.x.ai::<client-id>` entry with the latest expiry, then legacy
    sign-in entries.
-3. If the cached token is expired or within one minute of expiry, use the official Grok CLI's
-   headless `grok agent stdio` ACP flow to run `initialize` and `authenticate` with only the
-   advertised `cached_token` method. Reload `auth.json` after Grok atomically rotates its own token.
+3. If the cached token is expired or within one minute of expiry, snapshot readable `auth.json`, then
+   run the official Grok CLI headless `grok agent stdio` flow (`initialize` + `authenticate` with
+   `cached_token` only). Reload only on real credential rotation. If the CLI deletes `auth.json` after
+   a failed silent refresh, restore the snapshot and treat refresh as unsuccessful.
 4. Call `GET https://cli-chat-proxy.grok.com/v1/billing?format=credits` with the local Grok OAuth
-   token. On HTTP 401/403, perform the same headless CLI refresh once, reload credentials, and retry
-   exactly once. A valid cached token remains usable without the `grok` executable.
+   token. On HTTP 401/403, run the same CLI refresh only when credentials have not already rotated,
+   then retry once. A failed/no-op refresh must not suppress that retry. A valid cached token works
+   without the `grok` executable.
 5. Prefer `config.creditUsagePercent` and `config.currentPeriod`. For non-unified accounts, retain the
    deprecated `config.used.val / config.monthlyLimit.val * 100` fields documented by Grok Build.
 6. Billing does not expose a subscription plan field. Infer a CodexBar-compatible plan hint from local
@@ -69,7 +71,8 @@ direct usage collection and report `auth_required` if Claude rejects the cached 
    `auth_required` and require `grok login`.
 
 QuotaCLI never submits the refresh token itself and never starts Grok's interactive browser login.
-The provider-owned CLI is solely responsible for refresh-token rotation and credential-file writes.
+The provider-owned CLI is solely responsible for refresh-token rotation and credential-file writes;
+QuotaCLI only restores a pre-refresh snapshot when that CLI leaves credentials unreadable.
 `GROK_CLI_PATH` can identify the executable when it is outside `PATH`; QuotaCLI also checks Grok's
 installer directory, common user-local paths, and Homebrew paths for GUI launches.
 

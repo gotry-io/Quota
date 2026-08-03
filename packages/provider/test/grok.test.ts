@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -120,11 +120,19 @@ printf '%s\\n' '{"jsonrpc":"2.0","id":2,"result":{"_meta":{}}}'
 `,
         async (executable, directory) => {
           const marker = join(directory, "requests.jsonl");
+          const grokHome = join(directory, ".grok");
+          const authPath = join(grokHome, "auth.json");
+          await mkdir(grokHome, { recursive: true });
+          await writeFile(
+            authPath,
+            JSON.stringify(syntheticAuthPayload("pre-refresh-token", "2026-08-01T00:00:00Z")),
+          );
           await expect(
             refreshGrokAuthWithCli({
               homeDirectory: directory,
               environment: {
                 GROK_CLI_PATH: executable,
+                GROK_HOME: grokHome,
                 GROK_TEST_MARKER: marker,
                 PATH: "/usr/bin:/bin",
               },
@@ -141,6 +149,46 @@ printf '%s\\n' '{"jsonrpc":"2.0","id":2,"result":{"_meta":{}}}'
             method: "authenticate",
             params: { methodId: "cached_token", _meta: { headless: true } },
           });
+          await expect(readFile(authPath, "utf8")).resolves.toContain("pre-refresh-token");
+        },
+      );
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "restores auth.json when Grok drops credentials after a failed silent refresh",
+    async () => {
+      await withTemporaryExecutable(
+        `#!/bin/sh
+IFS= read -r request
+rm -f "$GROK_HOME/auth.json"
+printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":{"authMethods":[{"id":"grok.com"}]}}'
+`,
+        async (executable, directory) => {
+          const grokHome = join(directory, ".grok");
+          const authPath = join(grokHome, "auth.json");
+          await mkdir(grokHome, { recursive: true });
+          await writeFile(
+            authPath,
+            `${JSON.stringify(syntheticAuthPayload("keep-me-token", "2026-08-01T00:00:00Z"))}\n`,
+          );
+
+          await expect(
+            refreshGrokAuthWithCli({
+              homeDirectory: directory,
+              environment: {
+                GROK_CLI_PATH: executable,
+                GROK_HOME: grokHome,
+                PATH: "/usr/bin:/bin",
+              },
+            }),
+          ).resolves.toBe(false);
+
+          const restored = JSON.parse(await readFile(authPath, "utf8")) as Record<
+            string,
+            { key?: string }
+          >;
+          expect(Object.values(restored)[0]?.key).toBe("keep-me-token");
         },
       );
     },
@@ -345,6 +393,40 @@ describe("grok collector", () => {
     expect(requests.map((request) => request.headers?.Authorization)).toEqual([
       "Bearer rejected-token",
       "Bearer retry-token",
+    ]);
+  });
+
+  it("retries on 401 when a preemptive refresh does not rotate credentials", async () => {
+    let auth = syntheticAuthPayload("stale-token", "2026-08-01T00:00:00Z");
+    let refreshCount = 0;
+    const requests: HttpRequest[] = [];
+    const collector = new GrokCollector({
+      homeDirectory: "/home/quota",
+      readJson: async () => auth,
+      refreshAuth: async () => {
+        refreshCount += 1;
+        if (refreshCount >= 2) {
+          auth = syntheticAuthPayload("recovered-token", "2026-08-03T00:00:00Z");
+        }
+        return true;
+      },
+      transport: async (input) => {
+        requests.push(input);
+        if (input.headers?.Authorization === "Bearer recovered-token") {
+          return jsonResponse(200, billingPayload());
+        }
+        return jsonResponse(401, { error: "unauthorized" });
+      },
+    });
+
+    await expect(collector.collect(grokSession(), { now: NOW })).resolves.toMatchObject({
+      provider: "grok",
+      status: "available",
+    });
+    expect(refreshCount).toBe(2);
+    expect(requests.map((request) => request.headers?.Authorization)).toEqual([
+      "Bearer stale-token",
+      "Bearer recovered-token",
     ]);
   });
 
