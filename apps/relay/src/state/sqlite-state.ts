@@ -1,11 +1,31 @@
 import { Database } from "bun:sqlite";
 import { QuotaSnapshotSchema, type QuotaSnapshotEnvelope } from "@gotry-io/quota-protocol";
 import type {
+  AuthSessionRecord,
+  ConsumePairingSessionInput,
+  CreateAuthSessionInput,
+  CreatePairingSessionInput,
+  DecidePairingSessionInput,
   DeviceRecord,
+  PairingConsumeOutcome,
+  PairingDecisionOutcome,
+  RateLimitInput,
+  RateLimitResult,
   RegisterDeviceInput,
   RelayState,
   StoredQuotaSnapshot,
 } from "@gotry-io/relay-core";
+import {
+  type AuthSessionRow,
+  decodeAuthSession,
+  encodeAuthScopes,
+  pairingDecisionOutcome,
+  type PairingSessionRow,
+  pairingUnavailableConsumeOutcome,
+  rateLimitResult,
+  type RateLimitRow,
+  validateRateLimitInput,
+} from "./records.ts";
 import { SQLITE_SCHEMA } from "./schema.ts";
 
 interface SnapshotRow {
@@ -41,6 +61,38 @@ export class SQLiteRelayState implements RelayState {
       .run(ownerId, createdAt);
   }
 
+  async createAuthSession(input: CreateAuthSessionInput): Promise<void> {
+    this.database
+      .query(
+        `INSERT INTO auth_sessions
+          (id, owner_id, token_hash, scopes_json, expires_at, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
+      )
+      .run(
+        input.id,
+        input.owner_id,
+        input.token_hash,
+        encodeAuthScopes(input.scopes),
+        input.expires_at,
+        input.created_at,
+      );
+  }
+
+  async getActiveAuthSessionByTokenHash(
+    tokenHash: string,
+    checkedAt: string,
+  ): Promise<AuthSessionRecord | null> {
+    const row = this.database
+      .query<AuthSessionRow, [string, string]>(
+        `SELECT owner_id, scopes_json
+         FROM auth_sessions
+         WHERE token_hash = ?1 AND revoked_at IS NULL AND expires_at > ?2`,
+      )
+      .get(tokenHash, checkedAt);
+
+    return row ? decodeAuthSession(row) : null;
+  }
+
   async registerDevice(input: RegisterDeviceInput): Promise<void> {
     this.database
       .query(
@@ -60,6 +112,17 @@ export class SQLiteRelayState implements RelayState {
          WHERE id = ?1`,
       )
       .get(deviceId);
+  }
+
+  async getActiveDeviceByTokenHash(tokenHash: string): Promise<DeviceRecord | null> {
+    return this.database
+      .query<DeviceRecord, [string]>(
+        `SELECT id, owner_id, display_name, created_at, last_seen_at,
+                last_sequence, revoked_at
+         FROM devices
+         WHERE token_hash = ?1 AND revoked_at IS NULL`,
+      )
+      .get(tokenHash);
   }
 
   async listDevices(ownerId: string): Promise<DeviceRecord[]> {
@@ -84,6 +147,130 @@ export class SQLiteRelayState implements RelayState {
       .run(ownerId, deviceId, revokedAt);
 
     return result.changes > 0;
+  }
+
+  async createPairingSession(input: CreatePairingSessionInput): Promise<void> {
+    this.database
+      .query(
+        `INSERT INTO pairing_sessions
+          (id, device_code_hash, user_code_hash, device_display_name, expires_at, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
+      )
+      .run(
+        input.id,
+        input.device_code_hash,
+        input.user_code_hash,
+        input.device_display_name,
+        input.expires_at,
+        input.created_at,
+      );
+  }
+
+  async decidePairingSession(input: DecidePairingSessionInput): Promise<PairingDecisionOutcome> {
+    const updatePairing = this.database.query(
+      input.decision === "approve"
+        ? `UPDATE pairing_sessions
+           SET owner_id = ?2, approved_at = ?3
+           WHERE user_code_hash = ?1 AND owner_id IS NULL
+             AND approved_at IS NULL AND denied_at IS NULL AND consumed_at IS NULL
+             AND expires_at > ?3`
+        : `UPDATE pairing_sessions
+           SET owner_id = ?2, denied_at = ?3
+           WHERE user_code_hash = ?1 AND owner_id IS NULL
+             AND approved_at IS NULL AND denied_at IS NULL AND consumed_at IS NULL
+             AND expires_at > ?3`,
+    );
+    const transaction = this.database.transaction((value: DecidePairingSessionInput) => {
+      const existing = this.getPairingByUserCode(value.user_code_hash);
+      const existingOutcome = pairingDecisionOutcome(existing, value.decided_at);
+      if (existingOutcome) {
+        return existingOutcome;
+      }
+
+      const result = updatePairing.run(value.user_code_hash, value.owner_id, value.decided_at);
+      if (result.changes !== 1) {
+        const current = this.getPairingByUserCode(value.user_code_hash);
+        return pairingDecisionOutcome(current, value.decided_at) ?? "not_found";
+      }
+      return value.decision === "approve" ? "approved" : "denied";
+    });
+
+    return transaction(input);
+  }
+
+  async consumePairingSession(input: ConsumePairingSessionInput): Promise<PairingConsumeOutcome> {
+    const insertDevice = this.database.query(
+      `INSERT INTO devices
+        (id, owner_id, display_name, token_hash, pairing_session_id, created_at)
+       SELECT ?2, owner_id, device_display_name, ?3, id, ?4
+       FROM pairing_sessions
+       WHERE device_code_hash = ?1 AND owner_id IS NOT NULL
+         AND approved_at IS NOT NULL AND denied_at IS NULL AND consumed_at IS NULL
+         AND expires_at > ?4`,
+    );
+    const markConsumed = this.database.query(
+      `UPDATE pairing_sessions
+       SET consumed_at = ?2
+       WHERE device_code_hash = ?1 AND consumed_at IS NULL
+         AND EXISTS (
+           SELECT 1 FROM devices
+           WHERE devices.pairing_session_id = pairing_sessions.id
+             AND devices.id = ?3 AND devices.token_hash = ?4
+         )`,
+    );
+    const transaction = this.database.transaction((value: ConsumePairingSessionInput) => {
+      const existing = this.getPairingByDeviceCode(value.device_code_hash);
+      const unavailable = pairingUnavailableConsumeOutcome(existing, value.consumed_at);
+      if (unavailable) {
+        return unavailable;
+      }
+
+      const inserted = insertDevice.run(
+        value.device_code_hash,
+        value.device_id,
+        value.token_hash,
+        value.consumed_at,
+      );
+      const consumed = markConsumed.run(
+        value.device_code_hash,
+        value.consumed_at,
+        value.device_id,
+        value.token_hash,
+      );
+      if (inserted.changes !== 1 || consumed.changes !== 1) {
+        throw new Error("Pairing session credential issuance was not atomic");
+      }
+      return "issued";
+    });
+
+    return transaction(input);
+  }
+
+  async consumeRateLimit(input: RateLimitInput): Promise<RateLimitResult> {
+    validateRateLimitInput(input);
+    const deleteExpired = this.database.query(
+      `DELETE FROM rate_limit_counters
+       WHERE window_expires_at <= ?1`,
+    );
+    const increment = this.database.query<RateLimitRow, [string, string, string]>(
+      `INSERT INTO rate_limit_counters
+        (key_hash, window_started_at, window_expires_at, request_count)
+       VALUES (?1, ?2, ?3, 1)
+       ON CONFLICT(key_hash, window_started_at) DO UPDATE SET
+         request_count = rate_limit_counters.request_count + 1
+       WHERE rate_limit_counters.window_expires_at = excluded.window_expires_at
+       RETURNING request_count, window_expires_at`,
+    );
+    const transaction = this.database.transaction((value: RateLimitInput) => {
+      deleteExpired.run(value.checked_at);
+      const row = increment.get(value.key_hash, value.window_started_at, value.window_expires_at);
+      if (!row) {
+        throw new Error("Rate-limit fixed window does not match persisted state");
+      }
+      return rateLimitResult(row, value);
+    });
+
+    return transaction(input);
   }
 
   async recordSnapshot(envelope: QuotaSnapshotEnvelope): Promise<void> {
@@ -165,5 +352,25 @@ export class SQLiteRelayState implements RelayState {
       snapshot: QuotaSnapshotSchema.parse(JSON.parse(row.snapshot_json)),
       updated_at: row.updated_at,
     }));
+  }
+
+  private getPairingByUserCode(userCodeHash: string): PairingSessionRow | null {
+    return this.database
+      .query<PairingSessionRow, [string]>(
+        `SELECT expires_at, approved_at, denied_at, consumed_at
+         FROM pairing_sessions
+         WHERE user_code_hash = ?1`,
+      )
+      .get(userCodeHash);
+  }
+
+  private getPairingByDeviceCode(deviceCodeHash: string): PairingSessionRow | null {
+    return this.database
+      .query<PairingSessionRow, [string]>(
+        `SELECT expires_at, approved_at, denied_at, consumed_at
+         FROM pairing_sessions
+         WHERE device_code_hash = ?1`,
+      )
+      .get(deviceCodeHash);
   }
 }

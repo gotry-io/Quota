@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS devices (
   owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   display_name TEXT NOT NULL,
   token_hash TEXT NOT NULL UNIQUE,
+  pairing_session_id TEXT UNIQUE REFERENCES pairing_sessions(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL,
   last_seen_at TEXT,
   last_sequence INTEGER NOT NULL DEFAULT -1 CHECK (last_sequence >= -1),
@@ -57,10 +58,22 @@ CREATE TABLE IF NOT EXISTS auth_sessions (
   id TEXT PRIMARY KEY,
   owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   token_hash TEXT NOT NULL UNIQUE,
+  scopes_json TEXT NOT NULL,
   expires_at TEXT NOT NULL,
   revoked_at TEXT,
   created_at TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS auth_sessions_owner_id_idx ON auth_sessions(owner_id);
+
+CREATE TABLE IF NOT EXISTS rate_limit_counters (
+  key_hash TEXT NOT NULL,
+  window_started_at TEXT NOT NULL,
+  window_expires_at TEXT NOT NULL,
+  request_count INTEGER NOT NULL CHECK (request_count >= 1),
+  PRIMARY KEY (key_hash, window_started_at)
+);
+
+CREATE INDEX IF NOT EXISTS rate_limit_counters_expires_at_idx
+ON rate_limit_counters(window_expires_at);
 `;

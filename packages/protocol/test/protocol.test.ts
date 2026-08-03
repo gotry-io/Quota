@@ -3,8 +3,18 @@ import { basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
+  DeviceListResponseSchema,
+  OwnerSnapshotListResponseSchema,
+  PairingApprovalRequestSchema,
+  PairingCreateRequestSchema,
+  PairingCreateResponseSchema,
+  PairingDenialRequestSchema,
+  PairingTokenIssuedResponseSchema,
+  PairingTokenPendingResponseSchema,
+  PairingTokenRequestSchema,
   QuotaCollectionReportSchema,
   QuotaSnapshotEnvelopeSchema,
+  RelayErrorEnvelopeSchema,
   RelayInfoSchema,
 } from "../src/index.ts";
 
@@ -155,6 +165,166 @@ describe("quota protocol", () => {
     });
 
     expect(result.success).toBe(true);
+  });
+
+  it("validates the exact pairing creation and polling payloads", () => {
+    expect(
+      PairingCreateRequestSchema.safeParse({ device_display_name: "Kitchen Mac" }).success,
+    ).toBe(true);
+    expect(PairingCreateRequestSchema.safeParse({ device_display_name: "   " }).success).toBe(
+      false,
+    );
+    expect(
+      PairingCreateResponseSchema.safeParse({
+        device_code: "device-secret",
+        user_code: "ABCD-EFGH",
+        expires_at: "2026-08-02T12:10:00Z",
+        poll_interval_seconds: 5,
+      }).success,
+    ).toBe(true);
+    expect(PairingTokenRequestSchema.safeParse({ device_code: "device-secret" }).success).toBe(
+      true,
+    );
+    expect(PairingTokenRequestSchema.safeParse({ device_code: "   " }).success).toBe(false);
+    expect(
+      PairingTokenPendingResponseSchema.safeParse({
+        status: "pending",
+        poll_interval_seconds: 5,
+      }).success,
+    ).toBe(true);
+    expect(
+      PairingTokenIssuedResponseSchema.safeParse({
+        device_id: "device_01",
+        device_token: "relay-device-secret",
+      }).success,
+    ).toBe(true);
+
+    expect(
+      PairingCreateResponseSchema.safeParse({
+        device_code: "device-secret",
+        user_code: "ABCD-EFGH",
+        expires_at: "2026-08-02T12:10:00Z",
+        poll_interval_seconds: 5,
+        verification_uri: "https://quota.gotry.io/pair",
+      }).success,
+    ).toBe(false);
+    expect(
+      PairingTokenPendingResponseSchema.safeParse({
+        status: "issued",
+        poll_interval_seconds: 5,
+      }).success,
+    ).toBe(false);
+    expect(
+      PairingTokenIssuedResponseSchema.safeParse({
+        status: "issued",
+        device_id: "device_01",
+        device_token: "relay-device-secret",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("keeps approval and denial request bodies route-specific and strict", () => {
+    expect(PairingApprovalRequestSchema.safeParse({ user_code: "ABCD-EFGH" }).success).toBe(true);
+    expect(PairingDenialRequestSchema.safeParse({ user_code: "ABCD-EFGH" }).success).toBe(true);
+    expect(PairingApprovalRequestSchema.safeParse({ user_code: "   " }).success).toBe(false);
+    expect(
+      PairingApprovalRequestSchema.safeParse({
+        user_code: "ABCD-EFGH",
+        status: "approved",
+      }).success,
+    ).toBe(false);
+    expect(PairingDenialRequestSchema.safeParse({}).success).toBe(false);
+  });
+
+  it("uses stable Relay error codes in a strict envelope", () => {
+    const codes = [
+      "invalid_request",
+      "unauthorized",
+      "forbidden",
+      "not_found",
+      "pairing_denied",
+      "pairing_expired",
+      "pairing_consumed",
+      "rate_limited",
+      "conflict",
+      "internal_error",
+    ] as const;
+
+    for (const code of codes) {
+      expect(
+        RelayErrorEnvelopeSchema.safeParse({ error: { code, message: "Safe message" } }).success,
+      ).toBe(true);
+    }
+    expect(
+      RelayErrorEnvelopeSchema.safeParse({
+        error: { code: "storage_failure", message: "Unsafe implementation detail" },
+      }).success,
+    ).toBe(false);
+    expect(
+      RelayErrorEnvelopeSchema.safeParse({
+        error: { code: "not_found", message: "Missing", retryable: false },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("validates owner observations and device lists without leaking owner fields", () => {
+    expect(
+      OwnerSnapshotListResponseSchema.safeParse({
+        observations: [
+          {
+            device_id: "device_01",
+            sequence: 3,
+            captured_at: "2026-08-02T12:00:00Z",
+            snapshot: snapshot("codex"),
+            updated_at: "2026-08-02T12:00:01Z",
+          },
+        ],
+      }).success,
+    ).toBe(true);
+    expect(
+      OwnerSnapshotListResponseSchema.safeParse({
+        observations: [
+          {
+            device_id: "device_01",
+            display_name: "Kitchen Mac",
+            sequence: 3,
+            captured_at: "2026-08-02T12:00:00Z",
+            snapshot: snapshot("codex"),
+            updated_at: "2026-08-02T12:00:01Z",
+          },
+        ],
+      }).success,
+    ).toBe(false);
+
+    expect(
+      DeviceListResponseSchema.safeParse({
+        devices: [
+          {
+            device_id: "device_01",
+            display_name: "Kitchen Mac",
+            created_at: "2026-08-02T12:00:00Z",
+            last_seen_at: null,
+            last_sequence: -1,
+            revoked_at: null,
+          },
+        ],
+      }).success,
+    ).toBe(true);
+    expect(
+      DeviceListResponseSchema.safeParse({
+        devices: [
+          {
+            device_id: "device_01",
+            owner_id: "owner_01",
+            display_name: "Kitchen Mac",
+            created_at: "2026-08-02T12:00:00Z",
+            last_seen_at: null,
+            last_sequence: -1,
+            revoked_at: null,
+          },
+        ],
+      }).success,
+    ).toBe(false);
   });
 
   it("rejects unknown wire fields", () => {

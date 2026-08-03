@@ -54,11 +54,18 @@ data requirements.
 - Device enrollment follows
   [`decisions/0002-relay-device-code-pairing.md`](decisions/0002-relay-device-code-pairing.md).
 - Do not reuse user read credentials as device write credentials.
-- Separate `quota:read`, `device:manage`, and `quota:write:self` scopes.
+- Owner bearer sessions may carry `quota:read` and `device:manage`; device bearer credentials carry
+  only `quota:write:self`. These are distinct credential classes, and a device credential may write
+  snapshots only for its own device ID.
 - Store each device credential together with its Relay URL and instance ID; never send it to a
   different Relay.
-- Persist hashes of device and owner/session bearer tokens, never plaintext bearer tokens.
-- Store only normalized snapshots, credential hashes, and required ownership data in D1/SQLite.
+- Persist only hashes of device and owner-session bearer tokens and pairing device/user codes, never
+  their plaintext values. Return a generated device bearer credential only once when pairing is
+  consumed.
+- Persist rate limits as fixed-window counters keyed by hashes of their action and subject. Do not
+  retain the raw rate-limit subject, and delete expired counters while consuming new requests.
+- Store only normalized snapshots, credential hashes, required ownership and lifecycle metadata, and
+  bounded rate-limit counters in D1/SQLite.
 - Keep D1 migrations explicit and review changes that broaden retained user data.
 - A self-hosted Relay requires a persistent SQLite volume and fails closed when storage cannot open.
 

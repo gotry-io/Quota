@@ -1,0 +1,175 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://quota.gotry.io/schema/relay-http-v1.json",
+  "title": "QuotaRelay HTTP API v1 payload",
+  "anyOf": [
+    { "$ref": "#/$defs/pairing_create_request" },
+    { "$ref": "#/$defs/pairing_create_response" },
+    { "$ref": "#/$defs/pairing_token_request" },
+    { "$ref": "#/$defs/pairing_token_pending_response" },
+    { "$ref": "#/$defs/pairing_token_issued_response" },
+    { "$ref": "#/$defs/pairing_approval_request" },
+    { "$ref": "#/$defs/pairing_denial_request" },
+    { "$ref": "#/$defs/snapshot_upload_request" },
+    { "$ref": "#/$defs/owner_snapshot_list_response" },
+    { "$ref": "#/$defs/device_list_response" },
+    { "$ref": "#/$defs/error_envelope" }
+  ],
+  "$defs": {
+    "error_code": {
+      "enum": [
+        "invalid_request",
+        "unauthorized",
+        "forbidden",
+        "not_found",
+        "pairing_denied",
+        "pairing_expired",
+        "pairing_consumed",
+        "rate_limited",
+        "conflict",
+        "internal_error"
+      ]
+    },
+    "error_envelope": {
+      "type": "object",
+      "required": ["error"],
+      "properties": {
+        "error": {
+          "type": "object",
+          "required": ["code", "message"],
+          "properties": {
+            "code": { "$ref": "#/$defs/error_code" },
+            "message": { "type": "string", "minLength": 1 }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "pairing_create_request": {
+      "type": "object",
+      "required": ["device_display_name"],
+      "properties": {
+        "device_display_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "\\S"
+        }
+      },
+      "additionalProperties": false
+    },
+    "pairing_create_response": {
+      "type": "object",
+      "required": ["device_code", "user_code", "expires_at", "poll_interval_seconds"],
+      "properties": {
+        "device_code": { "type": "string", "minLength": 1, "pattern": "\\S" },
+        "user_code": { "type": "string", "minLength": 1, "pattern": "\\S" },
+        "expires_at": { "type": "string", "format": "date-time" },
+        "poll_interval_seconds": { "type": "integer", "exclusiveMinimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "pairing_token_request": {
+      "type": "object",
+      "required": ["device_code"],
+      "properties": {
+        "device_code": { "type": "string", "minLength": 1, "pattern": "\\S" }
+      },
+      "additionalProperties": false
+    },
+    "pairing_token_pending_response": {
+      "type": "object",
+      "required": ["status", "poll_interval_seconds"],
+      "properties": {
+        "status": { "const": "pending" },
+        "poll_interval_seconds": { "type": "integer", "exclusiveMinimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "pairing_token_issued_response": {
+      "type": "object",
+      "required": ["device_id", "device_token"],
+      "properties": {
+        "device_id": { "type": "string", "minLength": 1 },
+        "device_token": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "pairing_approval_request": {
+      "$ref": "#/$defs/pairing_decision_request"
+    },
+    "pairing_denial_request": {
+      "$ref": "#/$defs/pairing_decision_request"
+    },
+    "pairing_decision_request": {
+      "type": "object",
+      "required": ["user_code"],
+      "properties": {
+        "user_code": { "type": "string", "minLength": 1, "pattern": "\\S" }
+      },
+      "additionalProperties": false
+    },
+    "snapshot_upload_request": {
+      "$ref": "quota-snapshot-v1.json"
+    },
+    "owner_snapshot_observation": {
+      "type": "object",
+      "required": ["device_id", "sequence", "captured_at", "snapshot", "updated_at"],
+      "properties": {
+        "device_id": { "type": "string", "minLength": 1 },
+        "sequence": { "type": "integer", "minimum": 0 },
+        "captured_at": { "type": "string", "format": "date-time" },
+        "snapshot": { "$ref": "quota-snapshot-v1.json#/$defs/snapshot" },
+        "updated_at": { "type": "string", "format": "date-time" }
+      },
+      "additionalProperties": false
+    },
+    "owner_snapshot_list_response": {
+      "type": "object",
+      "required": ["observations"],
+      "properties": {
+        "observations": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/owner_snapshot_observation" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "device": {
+      "type": "object",
+      "required": [
+        "device_id",
+        "display_name",
+        "created_at",
+        "last_seen_at",
+        "last_sequence",
+        "revoked_at"
+      ],
+      "properties": {
+        "device_id": { "type": "string", "minLength": 1 },
+        "display_name": { "type": "string", "minLength": 1 },
+        "created_at": { "type": "string", "format": "date-time" },
+        "last_seen_at": {
+          "anyOf": [{ "type": "string", "format": "date-time" }, { "type": "null" }]
+        },
+        "last_sequence": { "type": "integer", "minimum": -1 },
+        "revoked_at": {
+          "anyOf": [{ "type": "string", "format": "date-time" }, { "type": "null" }]
+        }
+      },
+      "additionalProperties": false
+    },
+    "device_list_response": {
+      "type": "object",
+      "required": ["devices"],
+      "properties": {
+        "devices": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/device" }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

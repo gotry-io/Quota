@@ -142,6 +142,123 @@ export const RelayInfoSchema = z
   .strict();
 export type RelayInfo = z.infer<typeof RelayInfoSchema>;
 
+export const RelayErrorCodeSchema = z.enum([
+  "invalid_request",
+  "unauthorized",
+  "forbidden",
+  "not_found",
+  "pairing_denied",
+  "pairing_expired",
+  "pairing_consumed",
+  "rate_limited",
+  "conflict",
+  "internal_error",
+]);
+export type RelayErrorCode = z.infer<typeof RelayErrorCodeSchema>;
+
+export const RelayErrorEnvelopeSchema = z
+  .object({
+    error: z
+      .object({
+        code: RelayErrorCodeSchema,
+        message: z.string().min(1),
+      })
+      .strict(),
+  })
+  .strict();
+export type RelayErrorEnvelope = z.infer<typeof RelayErrorEnvelopeSchema>;
+
+export const PairingCreateRequestSchema = z
+  .object({
+    device_display_name: z.string().trim().min(1).max(128),
+  })
+  .strict();
+export type PairingCreateRequest = z.infer<typeof PairingCreateRequestSchema>;
+
+export const PairingCreateResponseSchema = z
+  .object({
+    device_code: z.string().trim().min(1),
+    user_code: z.string().trim().min(1),
+    expires_at: z.string().datetime({ offset: true }),
+    poll_interval_seconds: z.number().int().positive(),
+  })
+  .strict();
+export type PairingCreateResponse = z.infer<typeof PairingCreateResponseSchema>;
+
+export const PairingTokenRequestSchema = z
+  .object({
+    device_code: z.string().trim().min(1),
+  })
+  .strict();
+export type PairingTokenRequest = z.infer<typeof PairingTokenRequestSchema>;
+
+export const PairingTokenPendingResponseSchema = z
+  .object({
+    status: z.literal("pending"),
+    poll_interval_seconds: z.number().int().positive(),
+  })
+  .strict();
+export type PairingTokenPendingResponse = z.infer<typeof PairingTokenPendingResponseSchema>;
+
+export const PairingTokenIssuedResponseSchema = z
+  .object({
+    device_id: z.string().min(1),
+    device_token: z.string().min(1),
+  })
+  .strict();
+export type PairingTokenIssuedResponse = z.infer<typeof PairingTokenIssuedResponseSchema>;
+
+export const PairingApprovalRequestSchema = z
+  .object({
+    user_code: z.string().trim().min(1),
+  })
+  .strict();
+export type PairingApprovalRequest = z.infer<typeof PairingApprovalRequestSchema>;
+
+export const PairingDenialRequestSchema = z
+  .object({
+    user_code: z.string().trim().min(1),
+  })
+  .strict();
+export type PairingDenialRequest = z.infer<typeof PairingDenialRequestSchema>;
+
+export const OwnerSnapshotObservationSchema = z
+  .object({
+    device_id: z.string().min(1),
+    sequence: z.number().int().nonnegative(),
+    captured_at: z.string().datetime({ offset: true }),
+    snapshot: QuotaSnapshotSchema,
+    updated_at: z.string().datetime({ offset: true }),
+  })
+  .strict();
+export type OwnerSnapshotObservation = z.infer<typeof OwnerSnapshotObservationSchema>;
+
+export const OwnerSnapshotListResponseSchema = z
+  .object({
+    observations: z.array(OwnerSnapshotObservationSchema),
+  })
+  .strict();
+export type OwnerSnapshotListResponse = z.infer<typeof OwnerSnapshotListResponseSchema>;
+
+export const RelayDeviceSchema = z
+  .object({
+    device_id: z.string().min(1),
+    display_name: z.string().min(1),
+    created_at: z.string().datetime({ offset: true }),
+    last_seen_at: z.string().datetime({ offset: true }).nullable(),
+    last_sequence: z.number().int().min(-1),
+    revoked_at: z.string().datetime({ offset: true }).nullable(),
+  })
+  .strict();
+export type RelayDevice = z.infer<typeof RelayDeviceSchema>;
+
+export const DeviceListResponseSchema = z
+  .object({
+    devices: z.array(RelayDeviceSchema),
+  })
+  .strict();
+export type DeviceListResponse = z.infer<typeof DeviceListResponseSchema>;
+
 const RelayHelloMessageSchema = z
   .object({
     type: z.literal("hello"),

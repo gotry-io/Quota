@@ -99,9 +99,14 @@ quota-model  quota-provider  relay-core
 
 The managed runtime uses Cloudflare Workers and D1. The self-hosted runtime uses Bun and an embedded
 SQLite file. Both implement the `@gotry-io/relay-core` state contract and expose the same protocol
-behavior. QuotaBar reads snapshots over authenticated HTTP polling in v1. If later product
-measurements justify realtime push, the managed runtime may add one Durable Object per owner for
-WebSocket
+behavior. Versioned Relay operations live under `/api/v1`; the server core covers device-code
+pairing, device-owned snapshot writes, owner snapshot reads, and owner device management through
+scoped Bearer credentials. Pairing ownership is defined in
+[`decisions/0002-relay-device-code-pairing.md`](decisions/0002-relay-device-code-pairing.md), while
+credential and scope rules are defined in [`security.md`](security.md).
+
+QuotaBar reads snapshots over authenticated HTTP polling in v1. If later product measurements
+justify realtime push, the managed runtime may add one Durable Object per owner for WebSocket
 coordination while D1 remains the source of truth; the self-hosted runtime would provide an
 equivalent in-process connection hub.
 
@@ -120,4 +125,6 @@ GET /.well-known/quotabar-relay
 The managed discovery URL is
 `https://quota.gotry.io/.well-known/quotabar-relay`. The document identifies the Relay instance,
 supported API versions, authentication methods, deployment mode, and capabilities. Device
-credentials are bound to the advertised issuer and instance ID.
+credentials are bound to the advertised issuer and instance ID. A runtime advertises authentication
+and snapshot capabilities only after its owner-authentication bootstrap and client-facing wiring are
+operational; implementing the HTTP server core alone does not enable those flags.
