@@ -38,10 +38,11 @@ Overview presents that resolved result with compact local and remote provenance.
 
 The current menu panel invokes its bundled QuotaCLI helper, combines its normalized results with
 configured Relay observations, and supports manual refresh plus explicit loading, authentication,
-unavailable, and error states. The panel is a window-style `MenuBarExtra` with an overview-rooted
-system navigation stack, an embedded Settings hierarchy for Relay profiles, pairing, and devices,
-flat provider rows, and system-semantic monochrome styling from `DESIGN.md`. Appearance inherits the
-current macOS color scheme through SwiftUI and has no app-level appearance override.
+unavailable, and error states. The panel is a window-style `MenuBarExtra` with an overview-rooted,
+strongly typed page stack rendered inside one shared shell. Settings, Relay profiles, pairing, and
+devices use the shell's single custom back control rather than a system navigation bar. The panel
+keeps flat provider rows and system-semantic monochrome styling from `DESIGN.md`. Appearance
+inherits the current macOS color scheme through SwiftUI and has no app-level appearance override.
 Agents without an authenticated session are omitted from the overview. A provider row requires a
 successful result with at least one available or stale quota window; Settings retains status and
 visibility controls for all supported agents. QuotaBar caches only the last normalized, redacted

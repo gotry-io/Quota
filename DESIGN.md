@@ -344,8 +344,8 @@ QuotaBar is an operational utility, not an analytics dashboard. Opening the menu
 feel like reading a short, carefully typeset status note: resolved subscriptions are grouped by
 provider, with compact provenance showing whether observations are local, remote, or shared across
 sources. The user should understand remaining quota and reset time within one glance. The overview
-is the root of one typed system navigation stack; Settings, Relay profiles, pairing, and device
-management remain inside the same panel and return through a familiar leading back control.
+is the root of one typed, application-owned page stack; Settings, Relay profiles, pairing, and
+device management remain inside the same shared shell and return through its leading back control.
 
 The visual system is intentionally monochrome and follows the selected macOS appearance. Quota is
 represented by proportion, typography, icons, and explicit status labels rather than
@@ -531,11 +531,12 @@ Inter may substitute for body text, while JetBrains Mono or Fira Code may substi
 - Provider rows are ordered Codex, Claude Code, Grok unless the user explicitly reorders them.
 - On launch, render the last normalized local report immediately and refresh it in the background;
   never replace cached quota with a loading-only screen.
-- The top-right settings control pushes the Settings home destination on the panel's single typed
-  system navigation stack. Settings and deeper destinations use a leading back control; they do not
-  use a trailing close button or create nested navigation stacks.
-- Use the platform navigation transition and inherited Reduce Motion behavior. Do not layer a
-  second custom page animation over the system stack.
+- The top-right settings control pushes the Settings home destination on the panel's single typed,
+  application-owned page stack. The shared shell renders every destination and owns the sole
+  leading back control; destinations do not add a system navigation bar, trailing close button, or
+  nested navigation stack.
+- Replace the shell's current page directly. Do not add a second navigation container or a custom
+  page animation.
 - The footer shows the app version on the left and a clickable last-refresh time on the right.
 
 ### Settings Panel
@@ -569,7 +570,7 @@ roles rather than introducing one-off sizes, containers, tags, or transitions.
 |---|---|---|
 | Panel | 360×520px, one reading column | Stable data-rich menu surface |
 | Header | 48px, 16px inset, 17px semibold title, 32px edge control | Current location and one edge action |
-| Navigation | One typed system stack, leading back, platform transition | Embedded Settings and Relay detail destinations |
+| Navigation | One typed application-owned stack, shared-shell leading back | Embedded Settings and Relay detail destinations |
 | Provider | 16px vertical inset, 14px medium name, flat separators | One authenticated provider with usable quota |
 | Quota window | 12px medium labels, 6px remaining meter, 11px reset time | Repeatable unit across every provider |
 | Source tag | 9px medium, 1×5px inset, 3px radius, transparent fill | Quiet local/remote provenance summary |

@@ -29,56 +29,57 @@ struct MenuBarContentView: View {
       onNavigateBack: navigateBack,
       onOpenSettings: openSettings
     ) {
-      NavigationStack(path: $navigation.path) {
-        QuotaOverviewView(
-          model: model,
-          enabledProviders: enabledProviders,
-          onOpenSettings: openSettings
-        )
-        .navigationDestination(for: MenuBarRoute.self) { route in
-          switch route {
-          case .settings:
-            SettingsHomeView(
-              model: model,
-              showsCodex: $showsCodex,
-              showsClaude: $showsClaude,
-              showsGrok: $showsGrok,
-              onOpenRelays: { navigation.open(.relays) }
-            )
-          case .relays:
-            RelayListView(
-              model: model.relayStateModel,
-              onAddRelay: { navigation.open(.addRelay) },
-              onOpenRelay: { navigation.open(.relayDetail($0)) }
-            )
-          case .addRelay:
-            AddRelayView(model: model.relayStateModel) { profileID in
-              navigation.replaceLast(with: .relayDetail(profileID))
-            }
-          case .relayDetail(let profileID):
-            RelayDetailView(
-              model: model.relayStateModel,
-              profileID: profileID,
-              onOpenPairing: { navigation.open(.pairing(profileID)) },
-              onOpenDevices: { navigation.open(.devices(profileID)) },
-              onDeleted: { navigation.finishDeletingRelay(profileID) }
-            )
-          case .pairing(let profileID):
-            RelayPairingView(model: model.relayStateModel, profileID: profileID)
-          case .devices(let profileID):
-            RelayDevicesView(
-              model: model.relayStateModel,
-              profileID: profileID,
-              performsInitialRefresh: performsRelayRefreshes
-            )
-          }
-        }
-      }
-      .toolbar(.hidden, for: .windowToolbar)
+      currentPage
     }
     .task {
       guard performsInitialRefresh else { return }
       await model.refreshIfNeeded()
+    }
+  }
+
+  @ViewBuilder
+  private var currentPage: some View {
+    switch navigation.currentRoute {
+    case nil:
+      QuotaOverviewView(
+        model: model,
+        enabledProviders: enabledProviders,
+        onOpenSettings: openSettings
+      )
+    case .settings:
+      SettingsHomeView(
+        model: model,
+        showsCodex: $showsCodex,
+        showsClaude: $showsClaude,
+        showsGrok: $showsGrok,
+        onOpenRelays: { navigation.open(.relays) }
+      )
+    case .relays:
+      RelayListView(
+        model: model.relayStateModel,
+        onAddRelay: { navigation.open(.addRelay) },
+        onOpenRelay: { navigation.open(.relayDetail($0)) }
+      )
+    case .addRelay:
+      AddRelayView(model: model.relayStateModel) { profileID in
+        navigation.replaceLast(with: .relayDetail(profileID))
+      }
+    case .relayDetail(let profileID):
+      RelayDetailView(
+        model: model.relayStateModel,
+        profileID: profileID,
+        onOpenPairing: { navigation.open(.pairing(profileID)) },
+        onOpenDevices: { navigation.open(.devices(profileID)) },
+        onDeleted: { navigation.finishDeletingRelay(profileID) }
+      )
+    case .pairing(let profileID):
+      RelayPairingView(model: model.relayStateModel, profileID: profileID)
+    case .devices(let profileID):
+      RelayDevicesView(
+        model: model.relayStateModel,
+        profileID: profileID,
+        performsInitialRefresh: performsRelayRefreshes
+      )
     }
   }
 
@@ -122,7 +123,8 @@ enum MenuBarRoute: Hashable {
 struct MenuBarNavigationState: Equatable {
   var path: [MenuBarRoute] = []
 
-  var title: String { path.last?.title ?? "QuotaBar" }
+  var currentRoute: MenuBarRoute? { path.last }
+  var title: String { currentRoute?.title ?? "QuotaBar" }
   var canNavigateBack: Bool { !path.isEmpty }
 
   mutating func open(_ route: MenuBarRoute) {

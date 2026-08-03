@@ -41,6 +41,7 @@ struct MenuBarShell<Content: View>: View {
       MenuBarFooterView(model: model)
     }
     .frame(width: QuotaDesign.Layout.panelWidth, height: QuotaDesign.Layout.panelHeight)
+    .background(.regularMaterial)
   }
 
   private var panelHeader: some View {

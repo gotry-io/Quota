@@ -18,6 +18,58 @@ struct RelaySettingsUITests {
   }
 
   @Test
+  func currentRouteIsTheTopOfTheCustomPageStack() {
+    var navigation = MenuBarNavigationState()
+    #expect(navigation.currentRoute == nil)
+    #expect(navigation.title == "QuotaBar")
+    #expect(!navigation.canNavigateBack)
+
+    navigation.open(.settings)
+    navigation.open(.relays)
+
+    #expect(navigation.currentRoute == .relays)
+    #expect(navigation.title == "Relays")
+    #expect(navigation.canNavigateBack)
+  }
+
+  @Test
+  func pushAndPopMutateOnlyTheCustomPageStack() {
+    var navigation = MenuBarNavigationState(path: [.settings])
+
+    navigation.open(.relays)
+    navigation.open(.relays)
+    #expect(navigation.path == [.settings, .relays])
+
+    navigation.navigateBack()
+    #expect(navigation.currentRoute == .settings)
+    navigation.navigateBack()
+    navigation.navigateBack()
+    #expect(navigation.path.isEmpty)
+  }
+
+  @Test
+  func replaceTurnsTheAddPageIntoTheCreatedRelayDetail() {
+    var navigation = MenuBarNavigationState(path: [.settings, .relays, .addRelay])
+
+    navigation.replaceLast(with: .relayDetail(profileID))
+
+    #expect(navigation.path == [.settings, .relays, .relayDetail(profileID)])
+    #expect(navigation.currentRoute == .relayDetail(profileID))
+  }
+
+  @Test
+  func deletingRelayDropsItsDetailSubtreeAndReturnsToRelays() {
+    var navigation = MenuBarNavigationState(
+      path: [.settings, .relays, .relayDetail(profileID), .devices(profileID)]
+    )
+
+    navigation.finishDeletingRelay(profileID)
+
+    #expect(navigation.path == [.settings, .relays])
+    #expect(navigation.currentRoute == .relays)
+  }
+
+  @Test
   func navigationCallbacksUseOneTypedPathAndReturnToRelaysAfterDeletion() {
     var navigation = MenuBarNavigationState()
 
