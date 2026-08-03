@@ -13,28 +13,26 @@ persistent snapshots, and instant device revocation. Credential and transport re
 defined in [`docs/security.md`](../../docs/security.md).
 
 The Relay state model coordinates profile mutation, pairing, last-known-good snapshot and device
-state, explicit refresh, and a cancellable five-minute polling loop. Polling remains opt-in at this
-layer until the production app lifecycle and Settings surfaces own its start and stop calls.
+state, explicit refresh, and a cancellable five-minute polling loop. The production app creates one
+shared model for its lifecycle, Overview, and Settings stack and starts polling when the app starts.
 
 The observation-preserving subscription resolver groups only globally scoped provider identities
 across local and remote sources, keeps source-scoped observations separate, selects one preferred
 snapshot without accumulating quota values, and retains every contributing source. The menu-panel
-overview has not yet been switched from its local-only presentation to this resolver.
+Overview presents that resolved result with compact local and remote provenance.
 
-The current menu panel invokes its bundled QuotaCLI helper, displays local normalized provider
-results, and supports manual refresh plus explicit loading, authentication, unavailable, and error
-states. The panel is a window-style `MenuBarExtra` with an overview-rooted system navigation stack,
-an embedded Settings hierarchy, flat provider rows, and system-semantic monochrome styling from
-`DESIGN.md`. Appearance inherits the current macOS color scheme through SwiftUI and has no app-level
-appearance override.
+The current menu panel invokes its bundled QuotaCLI helper, combines its normalized results with
+configured Relay observations, and supports manual refresh plus explicit loading, authentication,
+unavailable, and error states. The panel is a window-style `MenuBarExtra` with an overview-rooted
+system navigation stack, an embedded Settings hierarchy for Relay profiles, pairing, and devices,
+flat provider rows, and system-semantic monochrome styling from `DESIGN.md`. Appearance inherits the
+current macOS color scheme through SwiftUI and has no app-level appearance override.
 Agents without an authenticated session are omitted from the overview. A provider row requires a
 successful result with at least one available or stale quota window; Settings retains status and
 visibility controls for all supported agents. QuotaBar caches only the last normalized, redacted
 local report so subsequent launches render immediately while a background refresh runs. The release
 workflow packages an arm64-only app with its helper, signs every executable with Developer ID,
-notarizes and staples the bundle, publishes a GitHub Release, and updates the Homebrew Cask. Relay
-app-lifecycle polling, resolver integration, Settings orchestration, and remote-device UI remain
-separate milestones.
+notarizes and staples the bundle, publishes a GitHub Release, and updates the Homebrew Cask.
 
 The release target is a Homebrew Cask from `gotry-io/homebrew-tap`. The signed `.app` contains the
 standalone QuotaCLI helper at a fixed bundle path and invokes that copy instead of a `quotacli`
@@ -52,6 +50,14 @@ Build the Debug-only visual acceptance app from the repository root:
 pnpm build:menubar:visual
 ```
 
+Run the deterministic launch-and-screenshot acceptance matrix with `pnpm test:menubar:visual`.
+Screenshots default to `dist/menubar-visual/screenshots`; use
+`pnpm test:menubar:visual --no-build` to reuse the existing app or pass
+`--output-dir <directory>` to select another screenshot directory. The visual app captures its own
+window content via AppKit (no Screen Recording permission). Pass
+`--screenshot-output <absolute path>` to request a PNG; relative paths are rejected and the default
+is no capture. The matrix fails instead of accepting missing or empty captures.
+
 `QuotaBarVisual.app` uses the real menu-panel views inside an independently identified, ordinary
 macOS window. Its default `fixture` data source is deterministic: it does not invoke QuotaCLI or read
 provider credentials, and the app does not write the production app's preferences. Launch a fixture
@@ -63,8 +69,9 @@ open -n dist/menubar-visual/QuotaBarVisual.app --args \
 ```
 
 Fixtures are `loading`, `content`, `cached-refresh-error`, `empty`, and `unavailable`. Routes are
-`overview` and `settings`; appearances are `system`, `light`, and `dark`. Text sizes are `standard`,
-`extra-large`, and `accessibility`, selected with `--text-size`.
+`overview`, `settings`, `relays`, `add`, `detail`, `pairing`, and `devices`; appearances are
+`system`, `light`, and `dark`. Text sizes are `standard`, `extra-large`, and `accessibility`, selected
+with `--text-size`.
 
 The visual bundle also contains the same arm64 standalone QuotaCLI helper as the production app. An
 explicit live run invokes that bundled helper and may read local Codex, Claude Code, or Grok provider

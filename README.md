@@ -88,25 +88,25 @@ publishes QuotaCLI independently through npm Trusted Publishing, without a long-
 
 ## Status
 
-This repository contains the architecture foundation plus local provider quota collection for Codex,
-Claude Code, and Grok. Protocol validation, D1/SQLite storage, Relay discovery, local
-provider-session discovery, the initial public website, and the Swift wire models are implemented.
-QuotaBar now includes its first local quota panel, bundled-helper integration, arm64 release
-automation, and the Relay owner transport, bound-profile storage, Keychain credential, state
-coordination, and five-minute polling core.
-Scoped account fingerprints, per-device Relay observation retention, and the observation-preserving
-subscription resolver core are implemented.
-QuotaRelay now implements its protocol-validated `/api/v1` server core for device-code pairing,
-scoped Bearer authentication, snapshot upload and reads, device management, and persistent rate
-limiting across D1 and SQLite. Self-hosted Relay owner bootstrap and its authenticated discovery
-capabilities are implemented; managed owner authentication remains disabled. QuotaCLI now implements
-Relay discovery, Device Code pairing, Relay-bound local credential storage, explicit one-shot
-snapshot reporting, local unpairing, and an explicit macOS LaunchAgent lifecycle for five-minute
-reporting; pairing does not enable recurring uploads. QuotaCLI 0.1.0 is published on npm and later
-tags publish through OIDC. QuotaBar app-lifecycle polling and Settings UI, background-service support
-outside macOS, overview integration of resolved subscriptions, the first published Homebrew
-artifact, remote-device UI, and production settings remain subsequent milestones. Realtime delivery
-is optional and not part of v1.
+This repository implements local provider collection for Codex, Claude Code, and Grok, normalized
+protocol validation, persistent D1/SQLite Relay storage, Relay discovery, and the initial public
+website. QuotaBar ships its bundled helper and now resolves local and remote observations into one
+stable Overview without accumulating conflicting quota values. One Relay state model is shared by
+five-minute app-lifecycle polling and the typed Settings stack for Relay profiles, pairing decisions,
+device listing, and revocation. Relay owner credentials remain in Keychain.
+
+QuotaRelay implements its protocol-validated `/api/v1` server core for device-code pairing, scoped
+Bearer authentication, snapshot upload and reads, device management, and persistent rate limiting.
+Self-hosted owner bootstrap and authenticated discovery are implemented; managed owner
+authentication remains disabled. QuotaCLI implements Relay pairing, one-shot reporting, local
+unpairing, and an explicit macOS LaunchAgent lifecycle for five-minute reporting; pairing never
+enables recurring uploads. QuotaCLI 0.1.0 is published on npm and later tags publish through OIDC.
+
+The deterministic Visual App captures its own window without Screen Recording permission, and its
+automated acceptance harness validates twelve Overview and Settings scenes across appearance and
+text-size variants. Background-service support outside macOS, managed owner authentication, and the
+first published Homebrew artifact remain incomplete. Realtime delivery is optional and not part of
+v1.
 
 ## License
 

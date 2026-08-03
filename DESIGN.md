@@ -341,11 +341,11 @@ components:
 ## Overview
 
 QuotaBar is an operational utility, not an analytics dashboard. Opening the menu bar panel should
-feel like reading a short, carefully typeset status note: the current machine first, its providers
-directly below, and remote devices after a quiet section break. The user
-should understand remaining quota and reset time within one glance. The overview is the root of one
-typed system navigation stack; Settings and its future detail destinations remain inside the same
-panel and return through a familiar leading back control.
+feel like reading a short, carefully typeset status note: resolved subscriptions are grouped by
+provider, with compact provenance showing whether observations are local, remote, or shared across
+sources. The user should understand remaining quota and reset time within one glance. The overview
+is the root of one typed system navigation stack; Settings, Relay profiles, pairing, and device
+management remain inside the same panel and return through a familiar leading back control.
 
 The visual system is intentionally monochrome and follows the selected macOS appearance. Quota is
 represented by proportion, typography, icons, and explicit status labels rather than
@@ -483,7 +483,7 @@ rounded heading and exact operational data, not from a custom typeface.
 | `{typography.panel-title}` | 17px | 600 | 1.18 | 0 | Compact QuotaBar and Settings header title |
 | `{typography.quota-label}` | 12px | 500 | 1.33 | 0 | Quota window name and remaining value |
 | `{typography.status-tag}` | 10px | 400 | 1.2 | 0 | Compact semantic tag |
-| `{typography.source-tag}` | 9px | 500 | 1.2 | 0 | Compact `Local` or `Remote` origin tag |
+| `{typography.source-tag}` | 9px | 500 | 1.2 | 0 | Compact local/remote provenance summary |
 
 ### Principles
 
@@ -524,8 +524,10 @@ Inter may substitute for body text, while JetBrains Mono or Fira Code may substi
 - One content column only.
 - Header height: 48px; title type is `{typography.panel-title}`.
 - Footer height: 40px.
-- Local device appears first and does not require a card border.
-- Remote devices follow as named groups separated by one hairline and `{spacing.xl}` top space.
+- Resolved subscription rows appear in provider order; local and remote observations may contribute
+  to the same row without being numerically combined.
+- Remote device inventory and revocation belong to the selected Relay profile in Settings rather
+  than appearing as a second Overview section.
 - Provider rows are ordered Codex, Claude Code, Grok unless the user explicitly reorders them.
 - On launch, render the last normalized local report immediately and refresh it in the background;
   never replace cached quota with a loading-only screen.
@@ -540,6 +542,8 @@ Inter may substitute for body text, while JetBrains Mono or Fira Code may substi
 
 - Settings remain inside the 340–400px menu-bar panel; do not open a separate settings window.
 - Visible-agent controls, About information, and Quit are grouped as flat sections.
+- Relay profile listing, setup, detail, pairing decisions, and device management use deeper
+  destinations in the same typed stack.
 - Provider switches list all supported agents and describe unsigned or unavailable sessions as
   quiet secondary text.
 - A provider enters the quota overview only when collection succeeds and at least one `available`
@@ -555,10 +559,10 @@ roles rather than introducing one-off sizes, containers, tags, or transitions.
 |---|---|---|
 | Panel | 360×520px, one reading column | Stable data-rich menu surface |
 | Header | 48px, 16px inset, 17px semibold title, 32px edge control | Current location and one edge action |
-| Navigation | One typed system stack, leading back, platform transition | Embedded Settings and future detail destinations |
+| Navigation | One typed system stack, leading back, platform transition | Embedded Settings and Relay detail destinations |
 | Provider | 16px vertical inset, 14px medium name, flat separators | One authenticated provider with usable quota |
 | Quota window | 12px medium labels, 6px remaining meter, 11px reset time | Repeatable unit across every provider |
-| Source tag | 9px medium, 1×5px inset, 3px radius, transparent fill | Quiet `Local` or `Remote` provenance |
+| Source tag | 9px medium, 1×5px inset, 3px radius, transparent fill | Quiet local/remote provenance summary |
 | Status tag | 10px regular, 2×5px inset, 3px radius, transparent fill | Secondary state on an otherwise displayable row |
 | Footer | 40px, 12px text | Version on the left; the sole refresh action on the right |
 
@@ -678,8 +682,10 @@ new default shapes.
 
 - Background `{colors.canvas}`, padding `16px 0`, no corner radius, and 1px bottom
   `{colors.hairline}` except for the final row in a group.
-- First line: provider name in `{typography.body-sm-strong}` and a compact `Local` or `Remote`
-  source tag immediately after the name. Do not place an enlarged remaining value in this title row.
+- First line: provider name in `{typography.body-sm-strong}`. When it has one resolved subscription,
+  place that subscription's source summary immediately after the provider; when it has several,
+  place each summary beside its account heading. Do not place an enlarged remaining value in this
+  title row.
 - Second line: optional plan/account label in `{typography.caption-sm}` `{colors.body}`.
 - Every quota window, including the first, uses the same compact row: window title and remaining
   percentage, followed by a 6px meter and reset time.
@@ -719,7 +725,8 @@ new default shapes.
 
 - Transparent background, a subtle `{colors.hairline}` border, `{colors.charcoal}` text,
   `{typography.source-tag}`, padding `1px 5px`, and 3px radius rather than pill geometry.
-- Appears immediately after a subscription/provider name with values such as `Local` or `Remote`.
+- Appears immediately after a subscription/provider name with values such as `Local`, `Remote`,
+  `Local + Remote`, `Local + N remote`, or `N remote`.
 - It identifies origin only; authentication and error states use text in Settings or a semantic
   status treatment when the row otherwise remains displayable.
 
@@ -735,7 +742,8 @@ new default shapes.
 **`device-card`**
 
 - Same geometry as `relay-card`.
-- Shows display name, shortened device ID, last seen time, provider count, and state.
+- Shows display name, shortened device ID, last seen or revoked time, last accepted sequence, and
+  state. The device API does not expose a provider count, so the card must not infer or fabricate one.
 - `Revoke` is a text or secondary control until confirmation; it must not become a chromatic red button.
 
 ### Commands & Diagnostics
@@ -885,12 +893,11 @@ a clear recovery action. Do not create alert banners for ordinary provider failu
 
 ## Known Gaps
 
-- Production QuotaBar screens have not yet been visually captured; this specification guides their first pass.
 - Final light- and dark-appearance screenshots still require release-candidate validation.
 - Hover states are not documented; macOS focus, pressed, selected, and disabled states take priority.
 - Menu-bar icon and line-drawn quota-gauge assets are not finalized.
 - Long provider/account combinations need validation with real anonymized data.
-- Device pairing, certificate management, quota history, and notification screens are not yet implemented.
+- Certificate management, quota history, and notification screens are not yet implemented.
 - Provider detail layouts for multiple accounts and multiple quota windows require usability testing.
 - The future public website may reuse these tokens, but marketing navigation and pricing layouts are out of scope.
 

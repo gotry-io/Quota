@@ -38,6 +38,9 @@ collectors. Pairing ownership and token generation are defined in
 [`decisions/0002-relay-device-code-pairing.md`](decisions/0002-relay-device-code-pairing.md).
 Relay observation retention and QuotaBar subscription presentation are defined in
 [`decisions/0003-observation-preserving-subscription-merge.md`](decisions/0003-observation-preserving-subscription-merge.md).
+Relay retains observations by reporting device rather than globally deduplicating subscriptions.
+QuotaBar attaches caller-owned source identity and combines local and remote observations only in
+its presentation resolver; Relay storage and protocol payloads remain unchanged.
 
 Provider-specific collection order is defined only in
 [`provider-collection.md`](provider-collection.md). Credential handling, logging, transport, and
@@ -48,12 +51,16 @@ storage requirements are defined only in [`security.md`](security.md).
 ### QuotaBar
 
 - Swift 6.2 and SwiftUI, targeting macOS 14 or newer.
-- Owns local presentation, Relay profiles, and merging local and remote snapshots.
+- Owns local presentation, Relay profiles, and presentation-time resolution of local and remote
+  observations as defined by
+  [`decisions/0003-observation-preserving-subscription-merge.md`](decisions/0003-observation-preserving-subscription-merge.md).
 - Ships its exact compatible QuotaCLI helper inside the signed app bundle and never resolves it from
   the user's `PATH`.
 - Stores Relay credentials in Keychain and profile metadata separately.
 - Discovers and binds a Relay profile before using its versioned owner endpoints. Its owner client
   covers pairing decisions, snapshot reads, device listing, and device revocation.
+- Shares one `RelayStateModel` between five-minute app-lifecycle polling, the Overview, and the
+  panel's single typed Settings stack for Relay profiles, pairing decisions, and device management.
 
 ### QuotaCLI
 

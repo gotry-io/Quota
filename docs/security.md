@@ -26,6 +26,12 @@ data requirements.
   `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`. Relay profile metadata in UserDefaults stores
   only its derived Keychain reference, never the bearer. Store edge credentials in the platform
   credential store or a user-only (`0600`) file.
+- QuotaBar Settings accepts an owner bearer only through transient `SecureField` state. It must
+  canonicalize and verify the Relay through discovery before moving the bearer into Keychain, then
+  clear the transient value after success. The bearer must never enter profile metadata or other
+  application preferences.
+- Relay setup failures, safe error presentation, fixtures, logs, and screenshots must never echo or
+  persist the owner bearer or an Authorization header.
 - Only the provider-specific, stable quota-owner identifiers documented in
   [`provider-collection.md`](provider-collection.md) may produce a globally scoped account
   fingerprint. Namespace the identifier type before hashing it.
