@@ -16,18 +16,48 @@ struct ProviderQuotaPresentation: Equatable, Identifiable {
 }
 
 struct AccountQuotaPresentation: Equatable, Identifiable {
-  let id: String
+  let identity: QuotaSubscriptionIdentity
   let snapshot: QuotaSnapshot
   let isStale: Bool
+  let sources: [QuotaObservationSource]
+  let selectedSource: QuotaObservationSource
+
+  var id: QuotaSubscriptionIdentity { identity }
+
+  var sourceSummary: String {
+    let hasLocal = sources.contains(.local)
+    let remoteCount = sources.count - (hasLocal ? 1 : 0)
+    if hasLocal {
+      switch remoteCount {
+      case 0: return "Local"
+      case 1: return "Local + Remote"
+      default: return "Local + \(remoteCount) remote"
+      }
+    }
+    return remoteCount == 1 ? "Remote" : "\(remoteCount) remote"
+  }
 }
 
 @MainActor
 @Observable
 final class MenuBarViewModel {
+  let relayStateModel: RelayStateModel
   private(set) var report: QuotaCollectionReport?
-  private(set) var isRefreshing = false
   private(set) var errorMessage: String?
-  private(set) var refreshedAt: Date?
+
+  var isRefreshing: Bool {
+    localRefreshInProgress || relayStateModel.profileStates.values.contains { $0.isRefreshing }
+  }
+
+  var refreshedAt: Date? {
+    ([localRefreshedAt] + relayStateModel.profileStates.values.map(\.lastSuccessfulRefreshAt))
+      .compactMap { $0 }
+      .max()
+  }
+
+  private var localRefreshInProgress = false
+
+  private var localRefreshedAt: Date?
 
   @ObservationIgnored
   private let collector: (any LocalQuotaCollecting)?
@@ -40,12 +70,14 @@ final class MenuBarViewModel {
 
   init(
     collector: (any LocalQuotaCollecting)? = nil,
-    reportCache: LocalQuotaReportCache? = .live
+    reportCache: LocalQuotaReportCache? = .live,
+    relayStateModel: RelayStateModel = RelayStateModel()
   ) {
+    self.relayStateModel = relayStateModel
     self.reportCache = reportCache
     if let cached = reportCache?.load() {
       report = cached.report
-      refreshedAt = cached.refreshedAt
+      localRefreshedAt = cached.refreshedAt
     }
 
     if let collector {
@@ -66,11 +98,13 @@ final class MenuBarViewModel {
     init(
       visualTestReport: QuotaCollectionReport?,
       errorMessage: String?,
-      refreshedAt: Date?
+      refreshedAt: Date?,
+      relayStateModel: RelayStateModel = RelayStateModel()
     ) {
+      self.relayStateModel = relayStateModel
       report = visualTestReport
       self.errorMessage = errorMessage
-      self.refreshedAt = refreshedAt
+      localRefreshedAt = refreshedAt
       collector = nil
       initializationError = nil
       reportCache = nil
@@ -78,33 +112,50 @@ final class MenuBarViewModel {
   #endif
 
   func refreshIfNeeded(now: Date = Date()) async {
-    if let refreshedAt, now.timeIntervalSince(refreshedAt) < 60 {
+    let localIsFresh = if collector == nil {
+      errorMessage != nil
+    } else {
+      localRefreshedAt.map { now.timeIntervalSince($0) < 60 } == true
+    }
+    let relayIsFresh = relayStateModel.profiles.allSatisfy { profile in
+      guard let state = relayStateModel.state(for: profile.id), state.refreshIssue == nil else {
+        return false
+      }
+      return state.lastSuccessfulRefreshAt.map { now.timeIntervalSince($0) < 60 } == true
+    }
+    if localIsFresh, relayIsFresh {
       return
     }
     await refresh()
   }
 
   func refresh() async {
-    guard !isRefreshing else { return }
-    guard let collector else {
+    guard !localRefreshInProgress else { return }
+
+    localRefreshInProgress = true
+    defer { localRefreshInProgress = false }
+
+    if let collector {
+      do {
+        report = try await collector.collect()
+        localRefreshedAt = Date()
+        if let report, let localRefreshedAt {
+          reportCache?.save(report: report, refreshedAt: localRefreshedAt)
+        }
+        errorMessage = nil
+      } catch is CancellationError {
+        if Task.isCancelled {
+          return
+        }
+      } catch {
+        errorMessage = Self.message(for: error)
+      }
+    } else {
       errorMessage = initializationError ?? "QuotaCLI is unavailable."
-      return
     }
 
-    isRefreshing = true
-    defer { isRefreshing = false }
-
-    do {
-      report = try await collector.collect()
-      refreshedAt = Date()
-      if let report, let refreshedAt {
-        reportCache?.save(report: report, refreshedAt: refreshedAt)
-      }
-      errorMessage = nil
-    } catch is CancellationError {
-      return
-    } catch {
-      errorMessage = Self.message(for: error)
+    if !Task.isCancelled {
+      await relayStateModel.refreshAllProfiles()
     }
   }
 
@@ -116,35 +167,16 @@ final class MenuBarViewModel {
     for provider: ProviderID,
     now: Date = Date()
   ) -> [AccountQuotaPresentation] {
-    guard let result = result(for: provider), result.outcome == .success else {
-      return []
-    }
-
-    return result.snapshots.enumerated().compactMap { index, snapshot in
-      guard !snapshot.windows.isEmpty,
-        snapshot.status == .available || snapshot.status == .stale
-      else {
-        return nil
-      }
-
-      return AccountQuotaPresentation(
-        id: "\(snapshot.account.fingerprint):\(index)",
-        snapshot: snapshot,
-        isStale: snapshot.status == .stale || snapshot.validUntil.map({ $0 <= now }) == true
-      )
-    }
+    resolvedSubscriptions(now: now)
+      .filter { $0.identity.provider == provider }
+      .map(Self.presentation(for:))
   }
 
   func overviewState(
     enabledProviders: Set<ProviderID>,
     now: Date = Date()
   ) -> QuotaOverviewState {
-    guard report != nil else {
-      if let errorMessage {
-        return .unavailable(message: errorMessage)
-      }
-      return .loading
-    }
+    let warning = refreshWarning
 
     let providers: [ProviderQuotaPresentation] = ProviderID.allCases.compactMap { provider in
       guard enabledProviders.contains(provider) else { return nil }
@@ -154,9 +186,80 @@ final class MenuBarViewModel {
     }
 
     guard !providers.isEmpty else {
-      return .empty(refreshWarning: errorMessage)
+      if hasCompletedRefresh {
+        return .empty(refreshWarning: warning)
+      }
+      if let warning {
+        return .unavailable(message: warning)
+      }
+      return .loading
     }
-    return .content(providers: providers, refreshWarning: errorMessage)
+    return .content(providers: providers, refreshWarning: warning)
+  }
+
+  private var hasCompletedRefresh: Bool {
+    report != nil
+      || relayStateModel.profileStates.values.contains { $0.lastSuccessfulRefreshAt != nil }
+  }
+
+  private var refreshWarning: String? {
+    var messages: [String] = []
+    if let errorMessage {
+      messages.append(errorMessage)
+    }
+    for profile in relayStateModel.profiles {
+      guard let message = relayStateModel.state(for: profile.id)?.refreshIssue?.message else {
+        continue
+      }
+      messages.append("\(profile.name): \(message)")
+    }
+    return messages.isEmpty ? nil : messages.joined(separator: " ")
+  }
+
+  private func resolvedSubscriptions(now: Date) -> [ResolvedQuotaSubscription] {
+    SubscriptionResolver().resolve(observations, now: now)
+  }
+
+  private var observations: [QuotaObservation] {
+    var observations = report?.results.flatMap { result in
+      guard result.outcome == .success else { return [QuotaObservation]() }
+      return result.snapshots.compactMap { snapshot in
+        Self.isPresentable(snapshot)
+          ? QuotaObservation(snapshot: snapshot, source: .local)
+          : nil
+      }
+    } ?? []
+
+    for profile in relayStateModel.profiles {
+      guard let state = relayStateModel.state(for: profile.id) else { continue }
+      observations.append(contentsOf: state.observations.compactMap { observation in
+        guard Self.isPresentable(observation.snapshot) else { return nil }
+        return QuotaObservation(
+          snapshot: observation.snapshot,
+          source: .remote(
+            relayInstanceID: profile.instanceID,
+            deviceID: observation.deviceID
+          )
+        )
+      })
+    }
+    return observations
+  }
+
+  private static func isPresentable(_ snapshot: QuotaSnapshot) -> Bool {
+    !snapshot.windows.isEmpty && (snapshot.status == .available || snapshot.status == .stale)
+  }
+
+  private static func presentation(
+    for subscription: ResolvedQuotaSubscription
+  ) -> AccountQuotaPresentation {
+    AccountQuotaPresentation(
+      identity: subscription.identity,
+      snapshot: subscription.selectedSnapshot,
+      isStale: subscription.isStale,
+      sources: subscription.sources,
+      selectedSource: subscription.selectedSource
+    )
   }
 
   private static func message(for error: Error) -> String {

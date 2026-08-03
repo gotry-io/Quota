@@ -106,7 +106,7 @@ struct MenuBarFooterView: View {
       }
       .buttonStyle(.plain)
       .disabled(model.isRefreshing)
-      .accessibilityLabel("Refresh local quota, \(lastRefreshLabel)")
+      .accessibilityLabel("Refresh quota, \(lastRefreshLabel)")
     }
     .font(.caption)
     .foregroundStyle(QuotaPalette.body)

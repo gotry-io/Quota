@@ -148,7 +148,8 @@ func refreshesMenuBarModelFromLocalCollector() async throws {
   let report = sampleCollectionReport()
   let model = MenuBarViewModel(
     collector: StubLocalQuotaCollector(report: report),
-    reportCache: nil
+    reportCache: nil,
+    relayStateModel: makeEmptyRelayStateModel()
   )
 
   await model.refresh()
@@ -180,14 +181,16 @@ func restoresTheLastNormalizedReportBeforeRefreshing() async throws {
   let collector = StubLocalQuotaCollector(report: report)
   let firstModel = MenuBarViewModel(
     collector: collector,
-    reportCache: cache
+    reportCache: cache,
+    relayStateModel: makeEmptyRelayStateModel()
   )
 
   await firstModel.refresh()
 
   let restoredModel = MenuBarViewModel(
     collector: collector,
-    reportCache: cache
+    reportCache: cache,
+    relayStateModel: makeEmptyRelayStateModel()
   )
   #expect(restoredModel.report == report)
   #expect(restoredModel.refreshedAt != nil)
@@ -222,7 +225,8 @@ func overviewStateDisplaysEveryAccountAndDerivesExpiredSnapshotsAsStale() async 
   )
   let model = MenuBarViewModel(
     collector: StubLocalQuotaCollector(report: report),
-    reportCache: nil
+    reportCache: nil,
+    relayStateModel: makeEmptyRelayStateModel()
   )
 
   await model.refresh()
@@ -251,7 +255,8 @@ func emptyOverviewPreservesARefreshFailureWarning() async throws {
   cache.save(report: sampleCollectionReport(), refreshedAt: .distantPast)
   let model = MenuBarViewModel(
     collector: FailingLocalQuotaCollector(),
-    reportCache: cache
+    reportCache: cache,
+    relayStateModel: makeEmptyRelayStateModel()
   )
 
   await model.refresh()
@@ -267,7 +272,8 @@ func emptyOverviewPreservesARefreshFailureWarning() async throws {
 func refreshCancellationDoesNotBecomeAUserVisibleError() async {
   let model = MenuBarViewModel(
     collector: CancellingLocalQuotaCollector(),
-    reportCache: nil
+    reportCache: nil,
+    relayStateModel: makeEmptyRelayStateModel()
   )
 
   await model.refresh()

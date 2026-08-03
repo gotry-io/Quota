@@ -21,8 +21,8 @@ struct QuotaOverviewView: View {
     case .loading:
       OverviewEmptyStateView(
         systemImage: "gauge.with.dots.needle.50percent",
-        title: "Reading local quota",
-        message: "Checking your signed-in Codex, Claude Code, and Grok sessions."
+        title: "Reading quota",
+        message: "Checking your local and Relay quota sources."
       )
     case .unavailable(let message):
       OverviewEmptyStateView(
@@ -41,7 +41,7 @@ struct QuotaOverviewView: View {
         OverviewEmptyStateView(
           systemImage: "eye.slash",
           title: "No providers to show",
-          message: "Sign in with a provider CLI or enable a signed-in provider in Settings.",
+          message: "Sign in with a provider CLI, connect a Relay, or enable a provider in Settings.",
           actionTitle: "Open settings",
           action: onOpenSettings
         )

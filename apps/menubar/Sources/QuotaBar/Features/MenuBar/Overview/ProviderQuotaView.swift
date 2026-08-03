@@ -34,17 +34,11 @@ struct ProviderQuotaView: View {
       .font(QuotaDesign.Typography.providerTitle)
       .foregroundStyle(QuotaPalette.ink)
 
-      Text("Local")
-        .font(QuotaDesign.Typography.sourceTag)
-        .foregroundStyle(QuotaPalette.charcoal)
-        .padding(.horizontal, 5)
-        .padding(.vertical, 1)
-        .overlay {
-          RoundedRectangle(cornerRadius: QuotaDesign.Layout.tagCornerRadius)
-            .stroke(QuotaPalette.hairline.opacity(0.5))
-        }
-        .fixedSize()
-        .accessibilityLabel("Source: Local")
+      if presentation.accounts.count == 1,
+        let account = presentation.accounts.first
+      {
+        SourceTag(summary: account.sourceSummary)
+      }
 
       if presentation.accounts.count == 1,
         presentation.accounts.first?.isStale == true
@@ -88,8 +82,11 @@ private struct AccountQuotaView: View {
         .lineLimit(1)
         .truncationMode(.middle)
 
-      if showsAccountStatus, presentation.isStale {
-        StaleTag()
+      if showsAccountStatus {
+        SourceTag(summary: presentation.sourceSummary)
+        if presentation.isStale {
+          StaleTag()
+        }
       }
     }
     .font(QuotaDesign.Typography.metadata)
@@ -131,6 +128,24 @@ private struct QuotaWindowRow: View {
       .foregroundStyle(QuotaPalette.body)
     }
     .padding(.top, 6)
+  }
+}
+
+private struct SourceTag: View {
+  let summary: String
+
+  var body: some View {
+    Text(summary)
+      .font(QuotaDesign.Typography.sourceTag)
+      .foregroundStyle(QuotaPalette.charcoal)
+      .padding(.horizontal, 5)
+      .padding(.vertical, 1)
+      .overlay {
+        RoundedRectangle(cornerRadius: QuotaDesign.Layout.tagCornerRadius)
+          .stroke(QuotaPalette.hairline.opacity(0.5))
+      }
+      .fixedSize()
+      .accessibilityLabel("Sources: \(summary)")
   }
 }
 
