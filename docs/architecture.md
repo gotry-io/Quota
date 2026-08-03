@@ -105,6 +105,11 @@ scoped Bearer credentials. Pairing ownership is defined in
 [`decisions/0002-relay-device-code-pairing.md`](decisions/0002-relay-device-code-pairing.md), while
 credential and scope rules are defined in [`security.md`](security.md).
 
+The self-hosted runtime requires `QUOTA_RELAY_OWNER_TOKEN` at startup. It binds that bearer to the
+fixed self-hosted owner and atomically replaces the fixed bootstrap session when the deployment
+token changes. The managed runtime has no equivalent environment-token bootstrap and does not
+advertise owner authentication before its managed identity path exists.
+
 QuotaBar reads snapshots over authenticated HTTP polling in v1. If later product measurements
 justify realtime push, the managed runtime may add one Durable Object per owner for WebSocket
 coordination while D1 remains the source of truth; the self-hosted runtime would provide an
@@ -125,6 +130,7 @@ GET /.well-known/quotabar-relay
 The managed discovery URL is
 `https://quota.gotry.io/.well-known/quotabar-relay`. The document identifies the Relay instance,
 supported API versions, authentication methods, deployment mode, and capabilities. Device
-credentials are bound to the advertised issuer and instance ID. A runtime advertises authentication
-and snapshot capabilities only after its owner-authentication bootstrap and client-facing wiring are
-operational; implementing the HTTP server core alone does not enable those flags.
+credentials are bound to the advertised issuer and instance ID. The bootstrapped self-hosted runtime
+advertises bearer authentication, persistent snapshots, and instant device revocation. The managed
+runtime continues to advertise those capabilities as disabled until managed owner authentication is
+operational.

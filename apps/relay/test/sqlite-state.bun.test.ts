@@ -211,7 +211,7 @@ describe("SQLiteRelayState", () => {
 
   it("looks up only active owner sessions with their exact scopes", async () => {
     const state = await makeState();
-    await state.createAuthSession({
+    await state.replaceAuthSession({
       id: "auth_01",
       owner_id: "owner_01",
       token_hash: "owner-token-hash-01",
@@ -228,6 +228,36 @@ describe("SQLiteRelayState", () => {
     expect(session?.scopes).toEqual(["quota:read", "device:manage"]);
     expect(
       await state.getActiveAuthSessionByTokenHash("owner-token-hash-01", "2026-08-02T02:00:00Z"),
+    ).toBeNull();
+  });
+
+  it("does not transfer an authentication session to another owner", async () => {
+    const state = await makeState();
+    await state.ensureOwner("owner_02", "2026-08-02T00:00:00Z");
+    await state.replaceAuthSession({
+      id: "auth_fixed",
+      owner_id: "owner_01",
+      token_hash: "owner-token-hash-01",
+      scopes: ["quota:read"],
+      expires_at: "2026-08-02T02:00:00Z",
+      created_at: "2026-08-02T01:00:00Z",
+    });
+
+    await expect(
+      state.replaceAuthSession({
+        id: "auth_fixed",
+        owner_id: "owner_02",
+        token_hash: "owner-token-hash-02",
+        scopes: ["device:manage"],
+        expires_at: "2026-08-02T03:00:00Z",
+        created_at: "2026-08-02T01:30:00Z",
+      }),
+    ).rejects.toThrow("owner does not match");
+    expect(
+      await state.getActiveAuthSessionByTokenHash("owner-token-hash-01", "2026-08-02T01:45:00Z"),
+    ).toEqual({ owner_id: "owner_01", scopes: ["quota:read"] });
+    expect(
+      await state.getActiveAuthSessionByTokenHash("owner-token-hash-02", "2026-08-02T01:45:00Z"),
     ).toBeNull();
   });
 

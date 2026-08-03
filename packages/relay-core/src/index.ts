@@ -27,7 +27,7 @@ export interface AuthSessionRecord {
   scopes: OwnerAuthScope[];
 }
 
-export interface CreateAuthSessionInput {
+export interface ReplaceAuthSessionInput {
   id: string;
   owner_id: string;
   token_hash: string;
@@ -100,8 +100,7 @@ export interface RelayState {
   initialize(): Promise<void>;
   ping(): Promise<void>;
   ensureOwner(ownerId: string, createdAt: string): Promise<void>;
-  /** Seeds bootstrap/test authentication material; Relay HTTP routes must not expose this. */
-  createAuthSession(input: CreateAuthSessionInput): Promise<void>;
+  replaceAuthSession(input: ReplaceAuthSessionInput): Promise<void>;
   getActiveAuthSessionByTokenHash(
     tokenHash: string,
     checkedAt: string,

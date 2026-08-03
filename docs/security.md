@@ -62,6 +62,10 @@ data requirements.
 - Persist only hashes of device and owner-session bearer tokens and pairing device/user codes, never
   their plaintext values. Return a generated device bearer credential only once when pairing is
   consumed.
+- A self-hosted Relay must receive `QUOTA_RELAY_OWNER_TOKEN` through its deployment environment and
+  fail startup when it is missing, shorter than 32 characters, or surrounded by whitespace. Hash it
+  before persistence, never include it in logs or errors, and replace the fixed bootstrap session on
+  every startup so rotation immediately invalidates the prior bearer.
 - Persist rate limits as fixed-window counters keyed by hashes of their action and subject. Do not
   retain the raw rate-limit subject, and delete expired counters while consuming new requests.
 - Store only normalized snapshots, credential hashes, required ownership and lifecycle metadata, and

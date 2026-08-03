@@ -245,7 +245,7 @@ async function makeFixture() {
   await state.initialize();
   await state.ensureOwner("owner_http", "2026-08-03T00:00:00Z");
   await state.ensureOwner("owner_other", "2026-08-03T00:00:00Z");
-  await state.createAuthSession({
+  await state.replaceAuthSession({
     id: "auth_manage",
     owner_id: "owner_http",
     token_hash: await sha256Hex(ownerManageToken),
@@ -253,7 +253,7 @@ async function makeFixture() {
     expires_at: "2026-08-04T00:00:00Z",
     created_at: "2026-08-03T00:00:00Z",
   });
-  await state.createAuthSession({
+  await state.replaceAuthSession({
     id: "auth_other_manage",
     owner_id: "owner_other",
     token_hash: await sha256Hex(otherOwnerManageToken),
@@ -261,7 +261,7 @@ async function makeFixture() {
     expires_at: "2026-08-04T00:00:00Z",
     created_at: "2026-08-03T00:00:00Z",
   });
-  await state.createAuthSession({
+  await state.replaceAuthSession({
     id: "auth_read",
     owner_id: "owner_http",
     token_hash: await sha256Hex(ownerReadToken),

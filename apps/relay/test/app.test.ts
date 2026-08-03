@@ -2,7 +2,6 @@ import type { QuotaSnapshotEnvelope, RelayInfo } from "@gotry-io/quota-protocol"
 import type {
   AuthSessionRecord,
   ConsumePairingSessionInput,
-  CreateAuthSessionInput,
   CreatePairingSessionInput,
   DecidePairingSessionInput,
   DeviceRecord,
@@ -12,10 +11,12 @@ import type {
   RateLimitResult,
   RegisterDeviceInput,
   RelayState,
+  ReplaceAuthSessionInput,
   StoredQuotaSnapshot,
 } from "@gotry-io/relay-core";
 import { describe, expect, it } from "vitest";
 import { createRelayApp } from "../src/app.ts";
+import { managedRelayInfo } from "../src/config.ts";
 
 class TestRelayState implements RelayState {
   ready = true;
@@ -30,7 +31,7 @@ class TestRelayState implements RelayState {
   }
 
   async ensureOwner(_ownerId: string, _createdAt: string): Promise<void> {}
-  async createAuthSession(_input: CreateAuthSessionInput): Promise<void> {}
+  async replaceAuthSession(_input: ReplaceAuthSessionInput): Promise<void> {}
   async getActiveAuthSessionByTokenHash(
     _tokenHash: string,
     _checkedAt: string,
@@ -89,6 +90,24 @@ describe("QuotaRelay app", () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual(relayInfo);
+  });
+
+  it("keeps managed discovery authentication and persistence capabilities disabled", async () => {
+    const app = createRelayApp({
+      state: new TestRelayState(),
+      relayInfo: managedRelayInfo("managed-test"),
+    });
+    const response = await app.request("/.well-known/quotabar-relay");
+    const discovery = (await response.json()) as RelayInfo;
+
+    expect(discovery.auth_methods).toEqual([]);
+    expect(discovery.capabilities).toEqual({
+      realtime: false,
+      persistent_snapshots: false,
+      instant_device_revocation: false,
+      history: false,
+      multi_tenant: false,
+    });
   });
 
   it("reports a storage readiness failure", async () => {

@@ -52,6 +52,7 @@ pnpm build
 Run the self-hosted Relay with persistent SQLite storage:
 
 ```bash
+export QUOTA_RELAY_OWNER_TOKEN="$(openssl rand -hex 32)"
 pnpm dev:relay:self-hosted
 ```
 
@@ -94,11 +95,11 @@ QuotaBar now includes its first local quota panel, bundled-helper integration, a
 automation. Scoped account fingerprints and per-device Relay observation retention are implemented.
 QuotaRelay now implements its protocol-validated `/api/v1` server core for device-code pairing,
 scoped Bearer authentication, snapshot upload and reads, device management, and persistent rate
-limiting across D1 and SQLite. QuotaCLI 0.1.0 is published on npm and later tags publish through
-OIDC. Owner-authentication bootstrap and runtime UI, the QuotaCLI and QuotaBar Relay integrations,
+limiting across D1 and SQLite. Self-hosted Relay owner bootstrap and its authenticated discovery
+capabilities are implemented; managed owner authentication remains disabled. QuotaCLI 0.1.0 is
+published on npm and later tags publish through OIDC. The QuotaCLI and QuotaBar Relay integrations,
 subscription resolution, the first published Homebrew artifact, remote-device UI, and production
-settings remain subsequent milestones. Relay discovery continues to advertise the disabled runtime
-capabilities until that wiring is complete. Realtime delivery is optional and not part of v1.
+settings remain subsequent milestones. Realtime delivery is optional and not part of v1.
 
 ## License
 

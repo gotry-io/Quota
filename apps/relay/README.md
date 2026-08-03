@@ -43,11 +43,26 @@ record and certificate during deployment.
 ## Self-hosted development
 
 ```bash
-pnpm dev:self-hosted
+export QUOTA_RELAY_OWNER_TOKEN="$(openssl rand -hex 32)"
+pnpm dev:relay:self-hosted
 ```
 
 The SQLite database defaults to `./data/quota-relay.db`. Set `QUOTA_RELAY_DATABASE_PATH` to move
-it. Provider credentials must never be stored in this database.
+it. `QUOTA_RELAY_OWNER_TOKEN` is required, must contain at least 32 characters, and must not have
+leading or trailing whitespace. It authenticates the fixed self-hosted owner with `quota:read` and
+`device:manage`; restarting with a different value immediately replaces the old owner bearer.
+QuotaRelay persists only its SHA-256 hash. Provider credentials must never be stored in this
+database.
+
+For the container deployment, copy `deploy/.env.example` to the ignored `deploy/.env`, generate and
+set `QUOTA_RELAY_OWNER_TOKEN`, then run from the repository root:
+
+```bash
+docker compose --env-file deploy/.env -f deploy/docker-compose.yml up --build
+```
+
+Compose refuses to render the service when the required token is unset or empty; the example file
+does not contain a default secret.
 
 ## HTTP API v1
 
@@ -67,7 +82,8 @@ defined in [ADR 0002](../../docs/decisions/0002-relay-device-code-pairing.md), a
 defined in the [security baseline](../../docs/security.md). D1 and SQLite implement the same
 persistent server behavior.
 
-Owner-authentication bootstrap and its runtime UI are not implemented yet, and QuotaCLI and QuotaBar
-do not call these routes yet. Discovery therefore continues to advertise no authentication or
-snapshot capabilities until that runtime wiring is complete. Realtime WebSocket routing and Durable
-Objects are not part of v1.
+The self-hosted runtime bootstraps its owner from `QUOTA_RELAY_OWNER_TOKEN` and advertises bearer
+authentication, persistent snapshots, and instant device revocation. The managed runtime still
+advertises those capabilities as disabled until managed owner authentication exists. QuotaCLI and
+QuotaBar do not call these routes yet. Realtime WebSocket routing and Durable Objects are not part
+of v1.

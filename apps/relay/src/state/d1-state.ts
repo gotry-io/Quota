@@ -2,7 +2,6 @@ import { QuotaSnapshotSchema, type QuotaSnapshotEnvelope } from "@gotry-io/quota
 import type {
   AuthSessionRecord,
   ConsumePairingSessionInput,
-  CreateAuthSessionInput,
   CreatePairingSessionInput,
   DecidePairingSessionInput,
   DeviceRecord,
@@ -11,6 +10,7 @@ import type {
   RateLimitInput,
   RateLimitResult,
   RegisterDeviceInput,
+  ReplaceAuthSessionInput,
   RelayState,
   StoredQuotaSnapshot,
 } from "@gotry-io/relay-core";
@@ -56,12 +56,18 @@ export class D1RelayState implements RelayState {
       .run();
   }
 
-  async createAuthSession(input: CreateAuthSessionInput): Promise<void> {
-    await this.database
+  async replaceAuthSession(input: ReplaceAuthSessionInput): Promise<void> {
+    const result = await this.database
       .prepare(
         `INSERT INTO auth_sessions
           (id, owner_id, token_hash, scopes_json, expires_at, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         ON CONFLICT(id) DO UPDATE SET
+           token_hash = excluded.token_hash,
+           scopes_json = excluded.scopes_json,
+           expires_at = excluded.expires_at,
+           revoked_at = NULL
+         WHERE auth_sessions.owner_id = excluded.owner_id`,
       )
       .bind(
         input.id,
@@ -72,6 +78,9 @@ export class D1RelayState implements RelayState {
         input.created_at,
       )
       .run();
+    if (result.meta.changes !== 1) {
+      throw new Error("Authentication session owner does not match");
+    }
   }
 
   async getActiveAuthSessionByTokenHash(
