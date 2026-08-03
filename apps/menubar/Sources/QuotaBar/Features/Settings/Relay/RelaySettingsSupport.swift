@@ -97,7 +97,6 @@ struct RelayCard<Content: View>: View {
     content
       .frame(maxWidth: .infinity, alignment: .leading)
       .padding(16)
-      .background(QuotaPalette.soft.opacity(0.18))
       .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
       .overlay {
         RoundedRectangle(cornerRadius: 12, style: .continuous)

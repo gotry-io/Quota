@@ -46,7 +46,6 @@ struct RelayListView: View {
       }
       .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
       .padding(.vertical, 12)
-      .background(.bar)
       .overlay(alignment: .top) {
         Divider().overlay(QuotaPalette.hairline)
       }

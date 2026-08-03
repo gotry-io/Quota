@@ -537,6 +537,9 @@ Inter may substitute for body text, while JetBrains Mono or Fira Code may substi
   nested navigation stack.
 - Replace the shell's current page directly. Do not add a second navigation container or a custom
   page animation.
+- The shared shell supplies the panel's only page-level material. Scroll regions, sections, cards,
+  and bottom action areas remain transparent and use spacing, strokes, or dividers for structure.
+  Reserve local background fills for independent controls such as buttons, fields, tags, and meters.
 - The footer shows the app version on the left and a clickable last-refresh time on the right.
 
 ### Settings Panel
