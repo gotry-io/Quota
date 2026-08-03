@@ -84,6 +84,7 @@ persistent server behavior.
 
 The self-hosted runtime bootstraps its owner from `QUOTA_RELAY_OWNER_TOKEN` and advertises bearer
 authentication, persistent snapshots, and instant device revocation. The managed runtime still
-advertises those capabilities as disabled until managed owner authentication exists. QuotaCLI and
-QuotaBar do not call these routes yet. Realtime WebSocket routing and Durable Objects are not part
-of v1.
+advertises those capabilities as disabled until managed owner authentication exists. QuotaCLI uses
+the device pairing and snapshot-write routes; QuotaBar owner authentication and its read/manage
+calls remain a subsequent milestone. Realtime WebSocket routing and Durable Objects are not part of
+v1.
