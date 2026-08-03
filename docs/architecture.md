@@ -52,7 +52,8 @@ storage requirements are defined only in [`security.md`](security.md).
 - Ships its exact compatible QuotaCLI helper inside the signed app bundle and never resolves it from
   the user's `PATH`.
 - Stores Relay credentials in Keychain and profile metadata separately.
-- Discovers Relay capabilities before using versioned endpoints.
+- Discovers and binds a Relay profile before using its versioned owner endpoints. Its owner client
+  covers pairing decisions, snapshot reads, device listing, and device revocation.
 
 ### QuotaCLI
 

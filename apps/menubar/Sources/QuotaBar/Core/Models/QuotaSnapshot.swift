@@ -87,11 +87,49 @@ struct QuotaSnapshotEnvelope: Codable, Equatable, Sendable {
   }
 }
 
+extension QuotaSnapshotEnvelope {
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+    deviceID = try container.decode(String.self, forKey: .deviceID)
+    sequence = try container.decode(Int.self, forKey: .sequence)
+    capturedAt = try container.decode(Date.self, forKey: .capturedAt)
+    snapshots = try container.decode([QuotaSnapshot].self, forKey: .snapshots)
+    guard schemaVersion == 1, !deviceID.isEmpty, sequence >= 0 else {
+      throw DecodingError.dataCorruptedError(
+        forKey: .schemaVersion,
+        in: container,
+        debugDescription: "Invalid quota snapshot envelope."
+      )
+    }
+  }
+}
+
 enum QuotaWireCodec {
   static func makeDecoder() -> JSONDecoder {
     let decoder = JSONDecoder()
     decoder.keyDecodingStrategy = .convertFromSnakeCase
-    decoder.dateDecodingStrategy = .iso8601
+    decoder.dateDecodingStrategy = .custom { decoder in
+      let container = try decoder.singleValueContainer()
+      let value = try container.decode(String.self)
+
+      let fractionalFormatter = ISO8601DateFormatter()
+      fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+      if let date = fractionalFormatter.date(from: value) {
+        return date
+      }
+
+      let formatter = ISO8601DateFormatter()
+      formatter.formatOptions = [.withInternetDateTime]
+      if let date = formatter.date(from: value) {
+        return date
+      }
+
+      throw DecodingError.dataCorruptedError(
+        in: container,
+        debugDescription: "Expected an ISO 8601 date-time."
+      )
+    }
     return decoder
   }
 

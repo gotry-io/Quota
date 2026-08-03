@@ -91,8 +91,9 @@ publishes QuotaCLI independently through npm Trusted Publishing, without a long-
 This repository contains the architecture foundation plus local provider quota collection for Codex,
 Claude Code, and Grok. Protocol validation, D1/SQLite storage, Relay discovery, local
 provider-session discovery, the initial public website, and the Swift wire models are implemented.
-QuotaBar now includes its first local quota panel, bundled-helper integration, and arm64 release
-automation. Scoped account fingerprints and per-device Relay observation retention are implemented.
+QuotaBar now includes its first local quota panel, bundled-helper integration, arm64 release
+automation, and the Relay owner transport, bound-profile storage, and Keychain credential core.
+Scoped account fingerprints and per-device Relay observation retention are implemented.
 QuotaRelay now implements its protocol-validated `/api/v1` server core for device-code pairing,
 scoped Bearer authentication, snapshot upload and reads, device management, and persistent rate
 limiting across D1 and SQLite. Self-hosted Relay owner bootstrap and its authenticated discovery
@@ -100,9 +101,9 @@ capabilities are implemented; managed owner authentication remains disabled. Quo
 Relay discovery, Device Code pairing, Relay-bound local credential storage, explicit one-shot
 snapshot reporting, local unpairing, and an explicit macOS LaunchAgent lifecycle for five-minute
 reporting; pairing does not enable recurring uploads. QuotaCLI 0.1.0 is published on npm and later
-tags publish through OIDC. QuotaBar Relay integration, background-service support outside macOS,
-subscription resolution, the first published Homebrew artifact, remote-device UI, and production
-settings remain subsequent milestones. Realtime delivery is optional and not part of v1.
+tags publish through OIDC. QuotaBar Relay polling and Settings UI, background-service support outside
+macOS, subscription resolution, the first published Homebrew artifact, remote-device UI, and
+production settings remain subsequent milestones. Realtime delivery is optional and not part of v1.
 
 ## License
 

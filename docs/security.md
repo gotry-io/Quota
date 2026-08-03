@@ -21,8 +21,11 @@ data requirements.
 - QuotaBar may cache one last normalized local collection report in its application preferences for
   immediate startup. The cache may contain masked labels and account fingerprints, but never raw
   provider responses, credential payloads, access tokens, refresh tokens, cookies, or headers.
-- Store QuotaBar Relay credentials in Keychain. Store edge credentials in the platform credential
-  store or a user-only (`0600`) file.
+- Store each QuotaBar Relay owner bearer only in Keychain under the fixed
+  `io.gotry.quotabar.relay-owner` service with
+  `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`. Relay profile metadata in UserDefaults stores
+  only its derived Keychain reference, never the bearer. Store edge credentials in the platform
+  credential store or a user-only (`0600`) file.
 - Only the provider-specific, stable quota-owner identifiers documented in
   [`provider-collection.md`](provider-collection.md) may produce a globally scoped account
   fingerprint. Namespace the identifier type before hashing it.
@@ -62,6 +65,9 @@ data requirements.
 - Before collection or authenticated upload, QuotaCLI discovers the credential's saved Relay URL
   without Authorization and requires the advertised instance ID to match the saved instance ID. A
   mismatch sends no device credential and starts no provider collection.
+- Before every authenticated owner request, QuotaBar discovers the profile's canonical Relay origin
+  without Authorization and requires the advertised instance ID to match the bound profile. It
+  refuses redirects and sends no owner bearer after a mismatch.
 - QuotaCLI's file-backed edge credential lives under `XDG_CONFIG_HOME` or the user's `.config`
   directory. Its containing QuotaCLI directory is `0700`, its credential file is `0600`, writes use
   a same-directory temporary file and atomic rename, and POSIX reads reject group/other-accessible
@@ -74,8 +80,9 @@ data requirements.
 - QuotaCLI persists the next device snapshot sequence only after Relay acceptance. Retrying after a
   local persistence failure reuses the prior sequence and relies on Relay's idempotent `204`
   response for that device sequence.
-- Local unpairing deletes only the local credential and must state that the owner still needs to
-  revoke the remote device through QuotaBar or Relay device management.
+- Local unpairing first stops the macOS reporting service when present, then deletes only the local
+  credential. It must state that the owner still needs to revoke the remote device through QuotaBar
+  or Relay device management.
 - Persist only hashes of device and owner-session bearer tokens and pairing device/user codes, never
   their plaintext values. Return a generated device bearer credential only once when pairing is
   consumed.

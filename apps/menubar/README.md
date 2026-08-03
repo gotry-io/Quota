@@ -6,9 +6,11 @@ remote snapshots from one or more persistent QuotaRelay profiles.
 The default managed Relay base URL is `https://quota.gotry.io`. Users may add independent
 self-hosted Relay profiles with their own base URLs.
 
-Relay credentials are referenced through Keychain identifiers; access tokens are never stored in
-the profile model. The app first reads `/.well-known/quotabar-relay` and only accepts protocol v1
-relays that advertise persistent snapshots.
+The Relay core now stores profile metadata separately from owner bearers, binds profiles to a
+discovered Relay instance, and implements pairing decisions, snapshot reads, device listing, and
+device revocation. It accepts protocol v1 Relays only when they advertise bearer authentication,
+persistent snapshots, and instant device revocation. Credential and transport requirements are
+defined in [`docs/security.md`](../../docs/security.md).
 
 The current menu panel invokes its bundled QuotaCLI helper, displays local normalized provider
 results, and supports manual refresh plus explicit loading, authentication, unavailable, and error
@@ -22,7 +24,8 @@ visibility controls for all supported agents. QuotaBar caches only the last norm
 local report so subsequent launches render immediately while a background refresh runs. The release
 workflow packages an arm64-only app with its helper, signs every executable with Developer ID,
 notarizes and staples the bundle, publishes a GitHub Release, and updates the Homebrew Cask. Relay
-settings and remote-device UI remain separate milestones.
+polling, subscription merging, Settings orchestration, and remote-device UI remain separate
+milestones.
 
 The release target is a Homebrew Cask from `gotry-io/homebrew-tap`. The signed `.app` contains the
 standalone QuotaCLI helper at a fixed bundle path and invokes that copy instead of a `quotacli`

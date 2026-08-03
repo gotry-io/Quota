@@ -28,6 +28,22 @@ struct QuotaCollectionReport: Codable, Equatable, Sendable {
   }
 }
 
+extension QuotaCollectionReport {
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+    capturedAt = try container.decode(Date.self, forKey: .capturedAt)
+    results = try container.decode([QuotaCollectionResult].self, forKey: .results)
+    guard schemaVersion == 1 else {
+      throw DecodingError.dataCorruptedError(
+        forKey: .schemaVersion,
+        in: container,
+        debugDescription: "Unsupported quota report schema version."
+      )
+    }
+  }
+}
+
 extension QuotaWindow {
   var remainingPercent: Double {
     min(max(100 - usedPercent, 0), 100)
