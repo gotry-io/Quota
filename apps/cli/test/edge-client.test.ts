@@ -1,4 +1,4 @@
-import type { PairingCreateResponse } from "@gotry-io/quota-protocol";
+import type { PairingCreateResponse, QuotaSnapshotEnvelope } from "@gotry-io/quota-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { RelayClient, RelayClientError, type RelayFetch } from "../src/edge/client.ts";
 
@@ -246,6 +246,87 @@ describe("RelayClient pairing polling", () => {
     await expectErrorCode(issuedClient.pollPairing(pairing), "invalid_response");
   });
 });
+
+describe("RelayClient snapshot upload", () => {
+  it("discovers without authentication and uploads the exact envelope with device Bearer auth", async () => {
+    const fetchMock = vi
+      .fn<RelayFetch>()
+      .mockResolvedValueOnce(jsonResponse(discovery))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    const client = new RelayClient("https://relay.example.com", { fetch: fetchMock });
+
+    await client.discover();
+    await client.uploadSnapshot("synthetic-device-token", snapshotEnvelope);
+
+    const discoveryHeaders = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
+    expect(discoveryHeaders.has("Authorization")).toBe(false);
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("https://relay.example.com/api/v1/snapshots");
+    expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({
+      method: "POST",
+      redirect: "error",
+      body: JSON.stringify(snapshotEnvelope),
+    });
+    const uploadHeaders = new Headers(fetchMock.mock.calls[1]?.[1]?.headers);
+    expect(uploadHeaders.get("Authorization")).toBe("Bearer synthetic-device-token");
+    expect(uploadHeaders.get("Content-Type")).toBe("application/json");
+  });
+
+  it.each([
+    [401, "unauthorized"],
+    [200, "internal_error"],
+  ] as const)("rejects non-204 snapshot status %s", async (status, code) => {
+    const client = new RelayClient("https://relay.example.com", {
+      fetch: vi.fn<RelayFetch>().mockResolvedValue(
+        jsonResponse(
+          {
+            error: {
+              code,
+              message: "Authorization Bearer synthetic-device-token raw-body-secret",
+            },
+          },
+          status,
+        ),
+      ),
+    });
+
+    const error = await captureError(
+      client.uploadSnapshot("synthetic-device-token", snapshotEnvelope),
+    );
+    expect(error.code).toBe(code);
+    expect(error.message).not.toMatch(/synthetic-device-token|raw-body-secret|Authorization/);
+  });
+
+  it("rejects an invalid envelope before sending the device credential", async () => {
+    const fetchMock = vi.fn<RelayFetch>();
+    const client = new RelayClient("https://relay.example.com", { fetch: fetchMock });
+
+    await expectErrorCode(
+      client.uploadSnapshot("synthetic-device-token", {
+        ...snapshotEnvelope,
+        sequence: -1,
+      }),
+      "invalid_request",
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+const snapshotEnvelope: QuotaSnapshotEnvelope = {
+  schema_version: 1,
+  device_id: "device_test",
+  sequence: 0,
+  captured_at: "2026-08-03T10:00:00Z",
+  snapshots: [
+    {
+      provider: "codex",
+      account: { fingerprint: "codex-test", fingerprint_scope: "global" },
+      windows: [],
+      source: "codex_source",
+      status: "available",
+      observed_at: "2026-08-03T10:00:00Z",
+    },
+  ],
+};
 
 function clientWithResponses(response: Response, now?: () => Date): RelayClient {
   return new RelayClient("https://relay.example.com", {

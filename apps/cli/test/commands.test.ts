@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
 import type { QuotaSnapshot } from "@gotry-io/quota-protocol";
+import { describe, expect, it, vi } from "vitest";
 import packageMetadata from "../package.json" with { type: "json" };
 
 const { collectQuotaReport, diagnoseProviderSessions } = vi.hoisted(() => ({
@@ -145,6 +145,7 @@ describe("QuotaCLI", () => {
     const code = await runCli(["help"], capture.output);
     expect(code).toBe(0);
     expect(capture.stdout.join("\n")).toContain("quotacli quota");
+    expect(capture.stdout.join("\n")).toContain("quotacli edge report");
   });
 
   it("returns quota help successfully", async () => {

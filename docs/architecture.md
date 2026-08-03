@@ -62,6 +62,8 @@ storage requirements are defined only in [`security.md`](security.md).
 - Uses the same normalized schemas for local output and edge uploads.
 - Owns Relay discovery, Device Code pairing, and the single Relay-bound local edge credential.
   Pairing never enables recurring reporting by itself.
+- Provides an explicit one-shot report path that validates the bound Relay instance, collects all
+  providers, uploads one normalized envelope, and commits its local sequence after acceptance.
 - Avoids native Node addons so standalone cross-platform builds remain possible.
 
 ### QuotaRelay

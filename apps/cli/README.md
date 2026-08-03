@@ -22,6 +22,7 @@ quotacli providers
 quotacli doctor
 quotacli quota [--provider codex|claude|grok|all] [--format text|json] [--pretty]
 quotacli edge pair [--relay <url>]
+quotacli edge report
 quotacli edge unpair
 quotacli edge --help
 quotacli help
@@ -39,8 +40,8 @@ Exit codes for `quota`:
 - `1`: collection completed with one or more provider failures
 - `2`: invalid CLI arguments
 
-Edge commands return `0` on success, `1` for pairing or credential-store failures, and `2` for
-invalid commands or arguments.
+Edge commands return `0` on complete success, `1` for pairing, reporting, credential-store, or
+partial provider-collection outcomes, and `2` for invalid commands or arguments.
 
 JSON output is one versioned `QuotaCollectionReport`. Provider failures stay inside the report.
 QuotaCLI never prints credentials, authorization headers, cookies, raw JWTs, or unredacted response
@@ -61,6 +62,7 @@ Pair an edge machine with the managed Relay origin or a selected self-hosted Rel
 ```text
 quotacli edge pair                         # defaults to https://quota.gotry.io
 quotacli edge pair --relay https://relay.example.com
+quotacli edge report
 quotacli edge unpair
 ```
 
@@ -76,4 +78,10 @@ credential ownership are defined in
 [`ADR 0002`](../../docs/decisions/0002-relay-device-code-pairing.md); storage requirements are in the
 [`security baseline`](../../docs/security.md).
 
-Recurring edge upload commands remain a subsequent milestone.
+`report` verifies the saved Relay instance through unauthenticated discovery, performs one local
+all-provider collection, and uploads the normalized successful snapshots. An empty snapshot list is
+sent when every provider fails so the Relay can record a device heartbeat without deleting retained
+observations. The local sequence advances only after the Relay returns `204`. A partial collection
+is uploaded but returns exit code `1` with an explicit notice.
+
+Recurring `start`, `status`, and `stop` service commands remain a subsequent milestone.

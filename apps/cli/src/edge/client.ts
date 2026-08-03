@@ -1,16 +1,18 @@
 import {
   PairingCreateRequestSchema,
-  PairingCreateResponseSchema,
   type PairingCreateResponse,
-  PairingTokenIssuedResponseSchema,
+  PairingCreateResponseSchema,
   type PairingTokenIssuedResponse,
+  PairingTokenIssuedResponseSchema,
   PairingTokenPendingResponseSchema,
   PairingTokenRequestSchema,
   PROTOCOL_VERSION,
-  RelayErrorEnvelopeSchema,
+  type QuotaSnapshotEnvelope,
+  QuotaSnapshotEnvelopeSchema,
   type RelayErrorCode,
-  RelayInfoSchema,
+  RelayErrorEnvelopeSchema,
   type RelayInfo,
+  RelayInfoSchema,
 } from "@gotry-io/quota-protocol";
 import { canonicalRelayUrl, DEFAULT_RELAY_URL } from "./url.ts";
 
@@ -157,6 +159,21 @@ export class RelayClient {
     throw pairingExpired();
   }
 
+  async uploadSnapshot(deviceToken: string, envelope: QuotaSnapshotEnvelope): Promise<void> {
+    if (deviceToken.length === 0 || deviceToken.trim() !== deviceToken) {
+      throw new RelayClientError("invalid_request", "The device credential is invalid.");
+    }
+    const validated = QuotaSnapshotEnvelopeSchema.safeParse(envelope);
+    if (!validated.success) {
+      throw new RelayClientError("invalid_request", "The snapshot envelope is invalid.");
+    }
+
+    const response = await this.#request("/api/v1/snapshots", "POST", validated.data, deviceToken);
+    if (response.status !== 204) {
+      throw this.#responseError(response);
+    }
+  }
+
   async #waitWithinPairingDeadline(delayMilliseconds: number, expiresAt: number): Promise<void> {
     const remaining = expiresAt - this.#now().getTime();
     if (remaining <= 0) {
@@ -165,7 +182,12 @@ export class RelayClient {
     await this.#sleep(Math.min(delayMilliseconds, remaining));
   }
 
-  async #request(path: string, method: "GET" | "POST", body?: unknown): Promise<RelayResponse> {
+  async #request(
+    path: string,
+    method: "GET" | "POST",
+    body?: unknown,
+    deviceToken?: string,
+  ): Promise<RelayResponse> {
     const controller = new AbortController();
     let timedOut = false;
     const timeout = setTimeout(() => {
@@ -184,6 +206,9 @@ export class RelayClient {
       if (body !== undefined) {
         headers.set("Content-Type", "application/json");
         init.body = JSON.stringify(body);
+      }
+      if (deviceToken !== undefined) {
+        headers.set("Authorization", `Bearer ${deviceToken}`);
       }
 
       const response = await this.#fetch(`${this.relayUrl}${path}`, init);
@@ -319,7 +344,7 @@ function errorMessage(code: RelayErrorCode): string {
     case "rate_limited":
       return "The Relay rate limit was reached.";
     case "not_found":
-      return "The pairing request was not found.";
+      return "The Relay resource was not found.";
     case "unauthorized":
     case "forbidden":
     case "invalid_request":

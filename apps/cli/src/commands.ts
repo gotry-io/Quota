@@ -1,14 +1,14 @@
 import {
-  collectQuotaReport,
+  type ProviderId,
+  ProviderIdSchema,
+  QuotaCollectionReportSchema,
+} from "@gotry-io/quota-protocol";
+import {
   collectionExitCode,
+  collectQuotaReport,
   diagnoseProviderSessions,
   providerDescriptors,
 } from "@gotry-io/quota-provider";
-import {
-  ProviderIdSchema,
-  QuotaCollectionReportSchema,
-  type ProviderId,
-} from "@gotry-io/quota-protocol";
 import packageMetadata from "../package.json" with { type: "json" };
 import { runEdgeCommand } from "./edge/commands.ts";
 import { renderJson, renderText } from "./render.ts";
@@ -213,6 +213,7 @@ Usage:
   quotacli doctor
   quotacli quota [--provider codex|claude|grok|all] [--format text|json] [--pretty]
   quotacli edge pair [--relay <url>]
+  quotacli edge report
   quotacli edge unpair
   quotacli help
 

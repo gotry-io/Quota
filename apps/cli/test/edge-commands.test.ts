@@ -9,7 +9,7 @@ import {
   type EdgeCommandDependencies,
   type EdgeCommandOutput,
   type EdgeCredentialStoreContract,
-  type EdgePairingClient,
+  type EdgeRelayClient,
   runEdgeCommand,
 } from "../src/edge/commands.ts";
 import type { EdgeCredential } from "../src/edge/store.ts";
@@ -62,13 +62,14 @@ describe("edge command arguments", () => {
       args: ["pair", "--relay", "https://one.example", "--relay", "https://two.example"],
     },
     { args: ["unpair", "extra"] },
+    { args: ["report", "extra"] },
     { args: ["--help", "extra"] },
   ])("rejects invalid arguments %#", async ({ args }) => {
     const capture = captureOutput();
     const dependencies = fakeDependencies();
 
     expect(await runEdgeCommand(args, capture.output, dependencies)).toBe(2);
-    expect(capture.stderr.join("\n")).toContain("QuotaCLI edge pairing");
+    expect(capture.stderr.join("\n")).toContain("QuotaCLI edge");
     expect(dependencies.createClient).not.toHaveBeenCalled();
   });
 
@@ -140,6 +141,7 @@ describe("edge pair", () => {
       store,
       now: () => new Date(now),
       deviceName: () => longHostname,
+      collect: vi.fn(async () => syntheticReport()),
     };
     const capture = captureOutput();
 
@@ -214,14 +216,14 @@ describe("edge unpair", () => {
 function fakeDependencies(
   options: { existing?: EdgeCredential | null; discoverError?: Error } = {},
 ): EdgeCommandDependencies & {
-  createClient: ReturnType<typeof vi.fn<(relayUrl: string) => EdgePairingClient>>;
+  createClient: ReturnType<typeof vi.fn<(relayUrl: string) => EdgeRelayClient>>;
   store: {
     load: ReturnType<typeof vi.fn<EdgeCredentialStoreContract["load"]>>;
     save: ReturnType<typeof vi.fn<EdgeCredentialStoreContract["save"]>>;
     delete: ReturnType<typeof vi.fn<EdgeCredentialStoreContract["delete"]>>;
   };
 } {
-  const client: EdgePairingClient = {
+  const client: EdgeRelayClient = {
     relayUrl: "https://quota.gotry.io",
     discover: vi.fn(async () => {
       if (options.discoverError) {
@@ -231,8 +233,9 @@ function fakeDependencies(
     }),
     createPairing: vi.fn(async () => pairing),
     pollPairing: vi.fn(async () => issued),
+    uploadSnapshot: vi.fn(async () => undefined),
   };
-  const createClient = vi.fn<(relayUrl: string) => EdgePairingClient>((relayUrl) => ({
+  const createClient = vi.fn<(relayUrl: string) => EdgeRelayClient>((relayUrl) => ({
     ...client,
     relayUrl,
   }));
@@ -245,6 +248,30 @@ function fakeDependencies(
     },
     now: () => new Date("2026-08-03T10:00:00Z"),
     deviceName: () => "synthetic-edge",
+    collect: vi.fn(async () => syntheticReport()),
+  };
+}
+
+function syntheticReport() {
+  return {
+    schema_version: 1 as const,
+    captured_at: "2026-08-03T10:00:00Z",
+    results: [
+      {
+        provider: "codex" as const,
+        outcome: "success" as const,
+        snapshots: [
+          {
+            provider: "codex" as const,
+            account: { fingerprint: "codex-test", fingerprint_scope: "global" as const },
+            windows: [],
+            source: "codex_source",
+            status: "available" as const,
+            observed_at: "2026-08-03T10:00:00Z",
+          },
+        ],
+      },
+    ],
   };
 }
 

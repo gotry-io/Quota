@@ -2,10 +2,23 @@ import { hostname } from "node:os";
 import type {
   PairingCreateResponse,
   PairingTokenIssuedResponse,
+  QuotaCollectionReport,
+  QuotaSnapshotEnvelope,
   RelayInfo,
 } from "@gotry-io/quota-protocol";
+import {
+  PROTOCOL_VERSION,
+  QuotaCollectionReportSchema,
+  QuotaSnapshotEnvelopeSchema,
+} from "@gotry-io/quota-protocol";
+import { collectionExitCode, collectQuotaReport } from "@gotry-io/quota-provider";
+import packageMetadata from "../../package.json" with { type: "json" };
 import { RelayClient, RelayClientError } from "./client.ts";
-import { type EdgeCredential, EdgeCredentialStore } from "./store.ts";
+import {
+  type EdgeCredential,
+  EdgeCredentialStore,
+  type SaveEdgeCredentialOptions,
+} from "./store.ts";
 import { canonicalRelayUrl, DEFAULT_RELAY_URL } from "./url.ts";
 
 export interface EdgeCommandOutput {
@@ -13,24 +26,26 @@ export interface EdgeCommandOutput {
   stderr(message: string): void;
 }
 
-export interface EdgePairingClient {
+export interface EdgeRelayClient {
   readonly relayUrl: string;
   discover(): Promise<RelayInfo>;
   createPairing(deviceDisplayName: string): Promise<PairingCreateResponse>;
   pollPairing(pairing: PairingCreateResponse): Promise<PairingTokenIssuedResponse>;
+  uploadSnapshot(deviceToken: string, envelope: QuotaSnapshotEnvelope): Promise<void>;
 }
 
 export interface EdgeCredentialStoreContract {
   load(): Promise<EdgeCredential | null>;
-  save(credential: EdgeCredential): Promise<void>;
+  save(credential: EdgeCredential, options?: SaveEdgeCredentialOptions): Promise<void>;
   delete(): Promise<void>;
 }
 
 export interface EdgeCommandDependencies {
-  createClient(relayUrl: string): EdgePairingClient;
+  createClient(relayUrl: string): EdgeRelayClient;
   store: EdgeCredentialStoreContract;
   now(): Date;
   deviceName(): string;
+  collect(options: { providers: "all"; clientVersion: string }): Promise<unknown>;
 }
 
 export async function runEdgeCommand(
@@ -62,6 +77,13 @@ export async function runEdgeCommand(
     return await runUnpair(output, dependencies ?? defaultDependencies());
   }
 
+  if (subcommand === "report") {
+    if (args.length !== 1) {
+      return usageError("The edge report command does not accept options.", output);
+    }
+    return await runReport(output, dependencies ?? defaultDependencies());
+  }
+
   return usageError(
     subcommand ? `Unknown edge command: ${subcommand}` : "Missing edge command.",
     output,
@@ -69,14 +91,16 @@ export async function runEdgeCommand(
 }
 
 export function edgeUsage(): string {
-  return `QuotaCLI edge pairing
+  return `QuotaCLI edge
 
 Usage:
   quotacli edge pair [--relay <url>]
+  quotacli edge report
   quotacli edge unpair
   quotacli edge --help
 
-Pairing stores a Relay-bound device credential but does not start recurring quota reporting.`;
+Pairing stores a Relay-bound device credential. Report performs one collection and upload; it does
+not start recurring quota reporting.`;
 }
 
 async function runPair(
@@ -145,6 +169,76 @@ async function runUnpair(
   }
 }
 
+async function runReport(
+  output: EdgeCommandOutput,
+  dependencies: EdgeCommandDependencies,
+): Promise<number> {
+  try {
+    const credential = await dependencies.store.load();
+    if (!credential) {
+      output.stderr("This machine is not paired. Run `quotacli edge pair` first.");
+      return 1;
+    }
+
+    const client = dependencies.createClient(credential.relay_url);
+    const relay = await client.discover();
+    if (relay.instance_id !== credential.instance_id) {
+      output.stderr("The paired Relay identity does not match the discovered Relay.");
+      return 1;
+    }
+
+    const collected = await dependencies.collect({
+      providers: "all",
+      clientVersion: packageMetadata.version,
+    });
+    const parsedReport = QuotaCollectionReportSchema.safeParse(collected);
+    if (!parsedReport.success) {
+      throw new EdgeCommandError("QuotaCLI produced an invalid normalized quota report.");
+    }
+    const report = parsedReport.data;
+    const sequence = credential.last_sequence + 1;
+    const parsedEnvelope = QuotaSnapshotEnvelopeSchema.safeParse({
+      schema_version: PROTOCOL_VERSION,
+      device_id: credential.device_id,
+      sequence,
+      captured_at: report.captured_at,
+      snapshots: successSnapshots(report),
+    });
+    if (!parsedEnvelope.success) {
+      throw new EdgeCommandError("QuotaCLI could not create a valid snapshot envelope.");
+    }
+
+    await client.uploadSnapshot(credential.device_token, parsedEnvelope.data);
+    try {
+      await dependencies.store.save(
+        { ...credential, last_sequence: sequence },
+        { overwrite: true },
+      );
+    } catch {
+      throw new EdgeCommandError(
+        "The snapshot was uploaded, but QuotaCLI could not save the local sequence.",
+      );
+    }
+
+    const snapshotCount = parsedEnvelope.data.snapshots.length;
+    output.stdout(
+      `Uploaded ${snapshotCount} ${snapshotCount === 1 ? "snapshot" : "snapshots"} with sequence ${sequence}.`,
+    );
+    if (collectionExitCode(report) !== 0) {
+      output.stderr("The snapshot was uploaded, but provider collection was incomplete.");
+      return 1;
+    }
+    return 0;
+  } catch (error) {
+    output.stderr(safeReportErrorMessage(error));
+    return 1;
+  }
+}
+
+function successSnapshots(report: QuotaCollectionReport) {
+  return report.results.flatMap((result) => (result.outcome === "success" ? result.snapshots : []));
+}
+
 interface ParsedPairArguments {
   ok: true;
   relayUrl: string;
@@ -192,6 +286,13 @@ function safeErrorMessage(error: unknown): string {
   return "QuotaCLI could not complete edge pairing.";
 }
 
+function safeReportErrorMessage(error: unknown): string {
+  if (error instanceof RelayClientError || error instanceof EdgeCommandError) {
+    return error.message;
+  }
+  return "QuotaCLI could not complete the edge report.";
+}
+
 class EdgeCommandError extends Error {}
 
 function defaultDependencies(): EdgeCommandDependencies {
@@ -200,5 +301,6 @@ function defaultDependencies(): EdgeCommandDependencies {
     store: new EdgeCredentialStore(),
     now: () => new Date(),
     deviceName: () => hostname(),
+    collect: collectQuotaReport,
   };
 }
