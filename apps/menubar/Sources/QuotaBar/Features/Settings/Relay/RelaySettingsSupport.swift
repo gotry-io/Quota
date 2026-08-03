@@ -169,6 +169,21 @@ extension RelayMode {
   }
 }
 
+extension RelayProfileState {
+  var refreshLabel: String {
+    if isRefreshing { return "Refreshing…" }
+    if refreshIssue != nil { return isStale ? "Stale" : "Unavailable" }
+    guard let lastSuccessfulRefreshAt else { return "Not refreshed" }
+    return "Updated \(lastSuccessfulRefreshAt.formatted(date: .omitted, time: .shortened))"
+  }
+
+  var refreshIcon: String? {
+    if isRefreshing { return "arrow.clockwise" }
+    if refreshIssue != nil { return isStale ? "clock" : "exclamationmark.circle" }
+    return lastSuccessfulRefreshAt == nil ? nil : "checkmark"
+  }
+}
+
 extension RelayDevice {
   var shortID: String {
     guard deviceID.count > 12 else { return deviceID }

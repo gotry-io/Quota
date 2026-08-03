@@ -97,7 +97,8 @@ struct RelayListView: View {
   }
 
   private func profileCard(_ profile: RelayProfile) -> some View {
-    RelayCard {
+    let state = model.state(for: profile.id)
+    return RelayCard {
       VStack(alignment: .leading, spacing: 9) {
         HStack(spacing: 6) {
           Text(profile.name)
@@ -124,27 +125,12 @@ struct RelayListView: View {
         HStack(spacing: 6) {
           RelayStatusTag(text: profile.mode.displayName)
           RelayStatusTag(
-            text: refreshLabel(for: profile.id),
-            systemImage: refreshIcon(for: profile.id)
+            text: state?.refreshLabel ?? "Not loaded",
+            systemImage: state?.refreshIcon
           )
         }
       }
     }
-  }
-
-  private func refreshLabel(for profileID: UUID) -> String {
-    guard let state = model.state(for: profileID) else { return "Not loaded" }
-    if state.isRefreshing { return "Refreshing…" }
-    if state.refreshIssue != nil { return state.isStale ? "Stale" : "Unavailable" }
-    guard let refreshedAt = state.lastSuccessfulRefreshAt else { return "Not refreshed" }
-    return "Updated \(refreshedAt.formatted(date: .omitted, time: .shortened))"
-  }
-
-  private func refreshIcon(for profileID: UUID) -> String? {
-    guard let state = model.state(for: profileID) else { return nil }
-    if state.isRefreshing { return "arrow.clockwise" }
-    if state.refreshIssue != nil { return state.isStale ? "clock" : "exclamationmark.circle" }
-    return state.lastSuccessfulRefreshAt == nil ? nil : "checkmark"
   }
 
   private func relayIssue(_ issue: RelayStateIssue) -> some View {

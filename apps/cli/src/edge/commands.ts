@@ -189,7 +189,7 @@ async function runPair(
     output.stdout("Pairing complete. Recurring edge reporting has not been started.");
     return 0;
   } catch (error) {
-    output.stderr(safeErrorMessage(error));
+    output.stderr(safeErrorMessage(error, "QuotaCLI could not complete edge pairing."));
     return 1;
   }
 }
@@ -376,7 +376,7 @@ async function runReport(
     }
     return 0;
   } catch (error) {
-    output.stderr(safeReportErrorMessage(error));
+    output.stderr(safeErrorMessage(error, "QuotaCLI could not complete the edge report."));
     return 1;
   }
 }
@@ -425,18 +425,11 @@ function usageError(message: string, output: EdgeCommandOutput): 2 {
   return 2;
 }
 
-function safeErrorMessage(error: unknown): string {
+function safeErrorMessage(error: unknown, fallback: string): string {
   if (error instanceof RelayClientError || error instanceof EdgeCommandError) {
     return error.message;
   }
-  return "QuotaCLI could not complete edge pairing.";
-}
-
-function safeReportErrorMessage(error: unknown): string {
-  if (error instanceof RelayClientError || error instanceof EdgeCommandError) {
-    return error.message;
-  }
-  return "QuotaCLI could not complete the edge report.";
+  return fallback;
 }
 
 class EdgeCommandError extends Error {}

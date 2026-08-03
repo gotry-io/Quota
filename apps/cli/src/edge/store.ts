@@ -217,7 +217,7 @@ export function decodeEdgeCredential(value: unknown): EdgeCredential {
     device_token.length === 0 ||
     device_token.trim() !== device_token ||
     typeof paired_at !== "string" ||
-    !isOffsetDateTime(paired_at) ||
+    !isCanonicalDateTime(paired_at) ||
     typeof last_sequence !== "number" ||
     !Number.isSafeInteger(last_sequence) ||
     last_sequence < -1
@@ -273,41 +273,11 @@ function hasOnlyCredentialKeys(value: Record<string, unknown>): boolean {
   return keys.length === expected.length && expected.every((key) => keys.includes(key));
 }
 
-function isOffsetDateTime(value: string): boolean {
-  const match =
-    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(Z|[+-](\d{2}):(\d{2}))$/.exec(
-      value,
-    );
-  if (!match) {
-    return false;
-  }
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-  const hour = Number(match[4]);
-  const minute = Number(match[5]);
-  const second = Number(match[6]);
-  const offsetHour = Number(match[8] ?? 0);
-  const offsetMinute = Number(match[9] ?? 0);
-  if (
-    year < 1 ||
-    month < 1 ||
-    month > 12 ||
-    hour > 23 ||
-    minute > 59 ||
-    second > 59 ||
-    offsetHour > 23 ||
-    offsetMinute > 59
-  ) {
-    return false;
-  }
-  const calendar = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
-  return (
-    calendar.getUTCFullYear() === year &&
-    calendar.getUTCMonth() === month - 1 &&
-    calendar.getUTCDate() === day &&
-    Number.isFinite(Date.parse(value))
-  );
+function isCanonicalDateTime(value: string): boolean {
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return false;
+  const canonical = new Date(timestamp).toISOString();
+  return value === canonical || value === canonical.replace(".000Z", "Z");
 }
 
 function isFileSystemError(error: unknown, code: string): error is NodeJS.ErrnoException {

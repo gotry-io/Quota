@@ -117,6 +117,9 @@ describe("EdgeCredentialStore", () => {
     expect(() =>
       decodeEdgeCredential({ ...credential, paired_at: "2026-02-31T10:00:00Z" }),
     ).toThrow("invalid");
+    expect(() =>
+      decodeEdgeCredential({ ...credential, paired_at: "2026-08-03T10:00:00+00:00" }),
+    ).toThrow("invalid");
 
     const path = join(temporaryDirectory, "edge.json");
     await writeFile(path, "not-json synthetic-device-token", { mode: 0o600 });

@@ -18,7 +18,7 @@ struct RelaySettingsUITests {
   }
 
   @Test
-  func currentRouteIsTheTopOfTheCustomPageStack() {
+  func customPageStackPushesAndPops() {
     var navigation = MenuBarNavigationState()
     #expect(navigation.currentRoute == nil)
     #expect(navigation.title == "QuotaBar")
@@ -26,19 +26,12 @@ struct RelaySettingsUITests {
 
     navigation.open(.settings)
     navigation.open(.relays)
+    navigation.open(.relays)
 
+    #expect(navigation.path == [.settings, .relays])
     #expect(navigation.currentRoute == .relays)
     #expect(navigation.title == "Relays")
     #expect(navigation.canNavigateBack)
-  }
-
-  @Test
-  func pushAndPopMutateOnlyTheCustomPageStack() {
-    var navigation = MenuBarNavigationState(path: [.settings])
-
-    navigation.open(.relays)
-    navigation.open(.relays)
-    #expect(navigation.path == [.settings, .relays])
 
     navigation.navigateBack()
     #expect(navigation.currentRoute == .settings)
@@ -55,56 +48,6 @@ struct RelaySettingsUITests {
 
     #expect(navigation.path == [.settings, .relays, .relayDetail(profileID)])
     #expect(navigation.currentRoute == .relayDetail(profileID))
-  }
-
-  @Test
-  func deletingRelayDropsItsDetailSubtreeAndReturnsToRelays() {
-    var navigation = MenuBarNavigationState(
-      path: [.settings, .relays, .relayDetail(profileID), .devices(profileID)]
-    )
-
-    navigation.finishDeletingRelay(profileID)
-
-    #expect(navigation.path == [.settings, .relays])
-    #expect(navigation.currentRoute == .relays)
-  }
-
-  @Test
-  func navigationCallbacksUseOneTypedPathAndReturnToRelaysAfterDeletion() {
-    var navigation = MenuBarNavigationState()
-
-    navigation.open(.settings)
-    navigation.open(.relays)
-    navigation.open(.relayDetail(profileID))
-    navigation.open(.pairing(profileID))
-    #expect(navigation.path == [
-      .settings, .relays, .relayDetail(profileID), .pairing(profileID),
-    ])
-    #expect(navigation.title == "Pair device")
-    #expect(navigation.canNavigateBack)
-
-    navigation.navigateBack()
-    #expect(navigation.path.last == .relayDetail(profileID))
-
-    navigation.finishDeletingRelay(profileID)
-    #expect(navigation.path == [.settings, .relays])
-    #expect(navigation.title == "Relays")
-
-    navigation.open(.addRelay)
-    navigation.replaceLast(with: .relayDetail(profileID))
-    #expect(navigation.path == [.settings, .relays, .relayDetail(profileID)])
-  }
-
-  @Test
-  func deletingAnUnrelatedRelayDoesNotRemoveTheCurrentDetail() {
-    let otherID = UUID(uuidString: "20806B70-D9D6-4F27-BDB9-2740E2380E3A")!
-    var navigation = MenuBarNavigationState(
-      path: [.settings, .relays, .relayDetail(profileID)]
-    )
-
-    navigation.finishDeletingRelay(otherID)
-
-    #expect(navigation.path == [.settings, .relays, .relayDetail(profileID)])
   }
 
   @Test

@@ -208,11 +208,7 @@ struct RelayDetailView: View {
   }
 
   private var refreshStatus: String {
-    guard let state = model.state(for: profileID) else { return "Not loaded" }
-    if state.isRefreshing { return "Refreshing…" }
-    if state.refreshIssue != nil { return state.isStale ? "Stale" : "Unavailable" }
-    guard let date = state.lastSuccessfulRefreshAt else { return "Not refreshed" }
-    return "Updated \(date.formatted(date: .omitted, time: .shortened))"
+    model.state(for: profileID)?.refreshLabel ?? "Not loaded"
   }
 
   private var canonicalRenameValue: String {
@@ -220,10 +216,7 @@ struct RelayDetailView: View {
   }
 
   private var refreshStatusIcon: String? {
-    guard let state = model.state(for: profileID) else { return nil }
-    if state.isRefreshing { return "arrow.clockwise" }
-    if state.refreshIssue != nil { return state.isStale ? "clock" : "exclamationmark.circle" }
-    return state.lastSuccessfulRefreshAt == nil ? nil : "checkmark"
+    model.state(for: profileID)?.refreshIcon
   }
 
   private func shortInstanceID(_ instanceID: String) -> String {

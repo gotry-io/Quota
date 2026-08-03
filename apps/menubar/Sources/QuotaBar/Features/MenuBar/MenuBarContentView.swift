@@ -70,7 +70,7 @@ struct MenuBarContentView: View {
         profileID: profileID,
         onOpenPairing: { navigation.open(.pairing(profileID)) },
         onOpenDevices: { navigation.open(.devices(profileID)) },
-        onDeleted: { navigation.finishDeletingRelay(profileID) }
+        onDeleted: { navigation.navigateBack() }
       )
     case .pairing(let profileID):
       RelayPairingView(model: model.relayStateModel, profileID: profileID)
@@ -142,27 +142,5 @@ struct MenuBarNavigationState: Equatable {
   mutating func navigateBack() {
     guard !path.isEmpty else { return }
     path.removeLast()
-  }
-
-  mutating func finishDeletingRelay(_ profileID: UUID) {
-    let containsDeletedRelay = path.contains { route in
-      switch route {
-      case .relayDetail(let id), .pairing(let id), .devices(let id): id == profileID
-      default: false
-      }
-    }
-    guard containsDeletedRelay else { return }
-
-    path.removeAll { route in
-      switch route {
-      case .relayDetail(let id), .pairing(let id), .devices(let id): id == profileID
-      default: false
-      }
-    }
-    guard let relaysIndex = path.lastIndex(of: .relays) else {
-      path = [.settings, .relays]
-      return
-    }
-    path.removeSubrange(path.index(after: relaysIndex)..<path.endIndex)
   }
 }
