@@ -6,6 +6,7 @@ import { ProviderCollectionError } from "../src/contracts.ts";
 import { CodexCollector } from "../src/providers/codex/collector.ts";
 import { parseCodexCredentials } from "../src/providers/codex/credentials.ts";
 import {
+  buildCodexSnapshot,
   CODEX_SOURCE_API,
   CODEX_SOURCE_RPC,
   CODEX_USAGE_URL,
@@ -158,6 +159,51 @@ describe("codex usage mapping", () => {
     expect(mapped.usable).toBe(false);
     expect(mapped.malformedSuccess).toBe(true);
   });
+
+  it("uses only account ID for global identity and keeps missing identity source-scoped", () => {
+    const window = {
+      id: "weekly",
+      title: "Weekly",
+      used_percent: 10,
+    };
+    const global = buildCodexSnapshot({
+      source: CODEX_SOURCE_API,
+      windows: [window],
+      accountId: "acct_owner",
+      email: "owner@example.com",
+      plan: "pro",
+      now: NOW,
+    });
+    const repeatedGlobal = buildCodexSnapshot({
+      source: CODEX_SOURCE_RPC,
+      windows: [window],
+      accountId: "acct_owner",
+      email: "changed@example.com",
+      plan: "team",
+      now: NOW,
+    });
+    const firstSource = buildCodexSnapshot({
+      source: CODEX_SOURCE_API,
+      windows: [window],
+      email: "first@example.com",
+      plan: "pro",
+      now: NOW,
+    });
+    const secondSource = buildCodexSnapshot({
+      source: CODEX_SOURCE_RPC,
+      windows: [window],
+      email: "second@example.com",
+      plan: "team",
+      now: NOW,
+    });
+
+    expect(global.account.fingerprint_scope).toBe("global");
+    expect(global.account.fingerprint).toBe(repeatedGlobal.account.fingerprint);
+    expect(firstSource.account.fingerprint_scope).toBe("source");
+    expect(firstSource.account.fingerprint).toBe(secondSource.account.fingerprint);
+    expect(JSON.stringify(global)).not.toContain("acct_owner");
+    expect(JSON.stringify(global)).not.toContain("owner@example.com");
+  });
 });
 
 describe("codex collector", () => {
@@ -206,6 +252,7 @@ describe("codex collector", () => {
     expect(seen[0]?.headers?.Authorization).toBe("Bearer test-access-token");
     expect(seen[0]?.headers?.["ChatGPT-Account-Id"]).toBe("acct_fixture");
     expect(snapshot.source).toBe(CODEX_SOURCE_API);
+    expect(snapshot.account.fingerprint_scope).toBe("global");
     expect(snapshot.account.plan).toBe("pro");
     expect(snapshot.windows).toHaveLength(2);
     expect(JSON.stringify(snapshot)).not.toContain("test-access-token");

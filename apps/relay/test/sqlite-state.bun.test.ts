@@ -43,6 +43,48 @@ describe("SQLiteRelayState", () => {
     expect(device?.last_seen_at).not.toBe("2026-08-02T01:00:00Z");
   });
 
+  it("keeps matching provider accounts from different devices as separate observations", async () => {
+    const state = await makeState();
+    await registerDevice(state, "device_02");
+
+    await state.recordSnapshot(envelopeForDevice("device_01", 1, 20, "2026-08-02T01:00:00Z"));
+    await state.recordSnapshot(envelopeForDevice("device_02", 1, 40, "2026-08-02T01:05:00Z"));
+
+    const snapshots = await state.listLatestSnapshots("owner_01");
+    expect(snapshots).toHaveLength(2);
+    expect(snapshots.map((snapshot) => snapshot.device_id).sort()).toEqual([
+      "device_01",
+      "device_02",
+    ]);
+    expect(
+      snapshots.every(
+        ({ snapshot }) =>
+          snapshot.provider === "codex" && snapshot.account.fingerprint === "account_01",
+      ),
+    ).toBe(true);
+  });
+
+  it("updates only the matching device observation", async () => {
+    const state = await makeState();
+    await registerDevice(state, "device_02");
+
+    await state.recordSnapshot(envelopeForDevice("device_01", 1, 20, "2026-08-02T01:00:00Z"));
+    await state.recordSnapshot(envelopeForDevice("device_02", 1, 40, "2026-08-02T01:05:00Z"));
+    await state.recordSnapshot(envelopeForDevice("device_01", 2, 30, "2026-08-02T02:00:00Z"));
+
+    const snapshots = await state.listLatestSnapshots("owner_01");
+    const firstDevice = snapshots.find((snapshot) => snapshot.device_id === "device_01");
+    const secondDevice = snapshots.find((snapshot) => snapshot.device_id === "device_02");
+
+    expect(snapshots).toHaveLength(2);
+    expect(firstDevice?.sequence).toBe(2);
+    expect(firstDevice?.captured_at).toBe("2026-08-02T02:00:00Z");
+    expect(firstDevice?.snapshot.windows[0]?.used_percent).toBe(30);
+    expect(secondDevice?.sequence).toBe(1);
+    expect(secondDevice?.captured_at).toBe("2026-08-02T01:05:00Z");
+    expect(secondDevice?.snapshot.windows[0]?.used_percent).toBe(40);
+  });
+
   it("rejects snapshots from a revoked device", async () => {
     const state = await makeState();
     await state.revokeDevice("owner_01", "device_01", "2026-08-02T00:30:00Z");
@@ -69,10 +111,29 @@ async function makeState(): Promise<SQLiteRelayState> {
   return state;
 }
 
+async function registerDevice(state: SQLiteRelayState, deviceId: string): Promise<void> {
+  await state.registerDevice({
+    id: deviceId,
+    owner_id: "owner_01",
+    display_name: "Second Edge Mac",
+    token_hash: `test-token-hash-${deviceId}`,
+    created_at: "2026-08-02T00:00:00Z",
+  });
+}
+
 function envelope(sequence: number, usedPercent: number, capturedAt: string) {
+  return envelopeForDevice("device_01", sequence, usedPercent, capturedAt);
+}
+
+function envelopeForDevice(
+  deviceId: string,
+  sequence: number,
+  usedPercent: number,
+  capturedAt: string,
+) {
   return {
     schema_version: 1 as const,
-    device_id: "device_01",
+    device_id: deviceId,
     sequence,
     captured_at: capturedAt,
     snapshots: [

@@ -1,19 +1,27 @@
 import { describe, expect, it } from "vitest";
 import { sanitizeMessage } from "../src/runtime/errors.ts";
-import { accountFingerprint, maskDisplayName, maskEmail } from "../src/runtime/identity.ts";
+import { accountIdentity, maskDisplayName, maskEmail } from "../src/runtime/identity.ts";
 
 describe("identity helpers", () => {
   it("keeps fingerprints stable for the same provider identity", () => {
-    const first = accountFingerprint("codex", "acct_stable_01");
-    const second = accountFingerprint("codex", "acct_stable_01");
-    expect(first).toBe(second);
-    expect(first).toHaveLength(64);
+    const first = accountIdentity("codex", "account_id", "acct_stable_01");
+    const second = accountIdentity("codex", "account_id", "acct_stable_01");
+    expect(first).toEqual(second);
+    expect(first.fingerprint).toHaveLength(64);
+    expect(first.scope).toBe("global");
   });
 
-  it("does not prefer empty identifiers", () => {
-    const withEmpty = accountFingerprint("claude", "   ", "fallback-seed");
-    const withFallback = accountFingerprint("claude", undefined, "fallback-seed");
-    expect(withEmpty).toBe(withFallback);
+  it("uses a source-scoped identity when the quota owner is missing", () => {
+    const withEmpty = accountIdentity("claude", "organization_id", "   ");
+    const withMissing = accountIdentity("claude", "organization_id", undefined);
+    expect(withEmpty).toEqual(withMissing);
+    expect(withMissing.scope).toBe("source");
+  });
+
+  it("namespaces stable identifiers before hashing", () => {
+    const account = accountIdentity("grok", "user_id", "owner_01");
+    const team = accountIdentity("grok", "team_id", "owner_01");
+    expect(account.fingerprint).not.toBe(team.fingerprint);
   });
 
   it("masks emails without emitting the local part", () => {

@@ -25,6 +25,7 @@
           "required": ["fingerprint"],
           "properties": {
             "fingerprint": { "type": "string", "minLength": 1 },
+            "fingerprint_scope": { "enum": ["global", "source"] },
             "label": { "type": "string", "minLength": 1 },
             "plan": { "type": "string", "minLength": 1 }
           },

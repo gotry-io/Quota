@@ -23,8 +23,12 @@ data requirements.
   provider responses, credential payloads, access tokens, refresh tokens, cookies, or headers.
 - Store QuotaBar Relay credentials in Keychain. Store edge credentials in the platform credential
   store or a user-only (`0600`) file.
-- Derive account fingerprints from stable non-secret identifiers, never from access tokens when a
-  stable identifier is available.
+- Only the provider-specific, stable quota-owner identifiers documented in
+  [`provider-collection.md`](provider-collection.md) may produce a globally scoped account
+  fingerprint. Namespace the identifier type before hashing it.
+- Plans, OAuth scopes, tokens, email addresses, and anonymous fallback values must not produce a
+  globally scoped fingerprint. When the quota owner is unavailable, emit a source-scoped
+  fingerprint; consumers must also treat a missing fingerprint scope as source-scoped.
 - Mask account labels. Do not emit raw account IDs, organization IDs, or full email addresses.
 
 ## Network, processes, and diagnostics

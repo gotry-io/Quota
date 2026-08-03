@@ -7,15 +7,33 @@
   @Test
   func visualTestConfigurationDefaultsAndRejectsInvalidArguments() throws {
     let defaults = try #require(VisualTestConfiguration(arguments: ["QuotaBar"]))
+    #expect(defaults.dataSource == .fixture)
     #expect(defaults.fixture == .content)
     #expect(defaults.route == .overview)
     #expect(defaults.appearance == .system)
     #expect(defaults.textSize == .standard)
+    #expect(defaults.performsInitialRefresh == false)
 
     #expect(
       VisualTestConfiguration(arguments: ["QuotaBar", "--fixture", "unknown"]) == nil
     )
+    #expect(
+      VisualTestConfiguration(arguments: ["QuotaBar", "--data-source", "unknown"]) == nil
+    )
     #expect(VisualTestConfiguration(arguments: ["QuotaBar", "--route"]) == nil)
+  }
+
+  @Test
+  func liveDataSourceEnablesOneViewDrivenRefresh() throws {
+    let configuration = try #require(
+      VisualTestConfiguration(
+        arguments: ["QuotaBar", "--data-source", "live", "--route", "settings"]
+      )
+    )
+
+    #expect(configuration.dataSource == .live)
+    #expect(configuration.initialPath == [.settings])
+    #expect(configuration.performsInitialRefresh)
   }
 
   @Test @MainActor

@@ -33,13 +33,32 @@ Do not create a second description of a canonical rule. Update its source and li
 ## Change requirements
 
 - Protocol changes start in `packages/protocol`. Keep runtime schemas, exported JSON Schemas, tests,
-  and Swift decoding compatible. Breaking behavior requires a new protocol version.
+  and Swift decoding aligned. An already released protocol version remains compatible; breaking
+  released behavior requires a new protocol version.
 - Provider changes must follow both `docs/provider-collection.md` and `docs/security.md`.
 - Persistence changes require a new explicit migration. Do not rewrite an applied migration.
 - Architecture, trust boundary, retention, provider strategy, layout, command, and current-status
   changes must update their canonical document in the same change.
 - Durable architecture decisions belong in `docs/decisions/`; temporary implementation plans do not
   belong in permanent documentation after completion.
+
+## Compatibility discipline
+
+- Do not add compatibility shims, legacy aliases, dual read/write paths, optional decoding defaults,
+  deprecation wrappers, or speculative fallbacks unless the user explicitly requests compatibility
+  or the relevant interface, artifact, or persisted schema has shipped in a production release or
+  deployment.
+- Verify release and deployment status from the canonical README and relevant release configuration
+  before preserving old behavior. Compatibility is scoped to the shipped boundary, not the entire
+  repository.
+- For unreleased code, change the canonical schema, model, callers, tests, and documentation together
+  and delete the replaced path. Prefer the final direct design over migration scaffolding.
+- When compatibility is required, document the concrete shipped constraint and cover it with a
+  focused test. Remove the compatibility path when the supported release or retained data no longer
+  requires it.
+- Provider API shape variants and documented provider-owned collection fallbacks are product input
+  handling, not repository-version compatibility. Keep only the variants required by
+  `docs/provider-collection.md` and observed supported provider behavior.
 
 ## Code conventions
 

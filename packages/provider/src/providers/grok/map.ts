@@ -1,6 +1,6 @@
 import type { QuotaSnapshot, QuotaWindow } from "@gotry-io/quota-protocol";
 import { asRecord, readNumber } from "../../runtime/files.ts";
-import { accountFingerprint, maskDisplayName, maskEmail } from "../../runtime/identity.ts";
+import { accountIdentity, maskDisplayName, maskEmail } from "../../runtime/identity.ts";
 import {
   clampPercent,
   dateToIso,
@@ -65,15 +65,16 @@ export function buildGrokSnapshot(input: {
 }): QuotaSnapshot {
   const now = input.now ?? new Date();
   const credentials = input.credentials;
-  const fingerprint = accountFingerprint(
-    "grok",
-    credentials?.userId ?? credentials?.email ?? credentials?.teamId,
-    credentials?.scope,
-  );
+  const quotaOwnerNamespace = credentials?.teamId ? "team_id" : "user_id";
+  const quotaOwnerID = credentials?.teamId ?? credentials?.userId;
+  const identity = accountIdentity("grok", quotaOwnerNamespace, quotaOwnerID);
   const label =
     maskEmail(credentials?.email) ??
     maskDisplayName(credentials ? grokDisplayName(credentials) : undefined);
-  const account: QuotaSnapshot["account"] = { fingerprint };
+  const account: QuotaSnapshot["account"] = {
+    fingerprint: identity.fingerprint,
+    fingerprint_scope: identity.scope,
+  };
   if (label) {
     account.label = label;
   }

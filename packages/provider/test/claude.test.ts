@@ -11,7 +11,7 @@ import {
   parseClaudeCredentials,
   shouldRefreshClaudeCredentials,
 } from "../src/providers/claude/credentials.ts";
-import { mapClaudeUsageResponse } from "../src/providers/claude/map.ts";
+import { buildClaudeSnapshot, mapClaudeUsageResponse } from "../src/providers/claude/map.ts";
 import type { HttpResponse } from "../src/runtime/http.ts";
 
 const NOW = new Date("2026-08-02T12:00:00.000Z");
@@ -151,6 +151,38 @@ describe("claude usage mapping", () => {
     expect(ids).not.toContain("five_hour");
     expect(mapped.windows.find((window) => window.id === "extra_usage")?.used_percent).toBe(12.5);
   });
+
+  it("uses organization ID as the only global identity", () => {
+    const windows = [{ id: "five_hour", title: "5 hour", used_percent: 4 }];
+    const organization = buildClaudeSnapshot({
+      windows,
+      organizationId: "org_owner",
+      email: "owner@example.com",
+      plan: "max",
+      now: NOW,
+    });
+    const repeatedOrganization = buildClaudeSnapshot({
+      windows,
+      organizationId: "org_owner",
+      email: "changed@example.com",
+      plan: "pro",
+      now: NOW,
+    });
+    const emailOnly = buildClaudeSnapshot({
+      windows,
+      email: "owner@example.com",
+      plan: "max",
+      now: NOW,
+    });
+    const noProfile = buildClaudeSnapshot({ windows, plan: "pro", now: NOW });
+
+    expect(organization.account.fingerprint_scope).toBe("global");
+    expect(organization.account.fingerprint).toBe(repeatedOrganization.account.fingerprint);
+    expect(emailOnly.account.fingerprint_scope).toBe("source");
+    expect(emailOnly.account.fingerprint).toBe(noProfile.account.fingerprint);
+    expect(JSON.stringify(organization)).not.toContain("org_owner");
+    expect(JSON.stringify(organization)).not.toContain("owner@example.com");
+  });
 });
 
 describe("claude collector", () => {
@@ -188,6 +220,7 @@ describe("claude collector", () => {
     const snapshot = await collector.collect(sessions[0]!, { now: NOW });
     expect(snapshot.provider).toBe("claude");
     expect(snapshot.account.plan).toBe("max");
+    expect(snapshot.account.fingerprint_scope).toBe("global");
     expect(snapshot.account.label).toBe("ad***@example.com");
     expect(snapshot.windows).toHaveLength(2);
     expect(JSON.stringify(snapshot)).not.toContain("claude-access");
@@ -224,6 +257,7 @@ describe("claude collector", () => {
       { now: NOW },
     );
     expect(snapshot.windows).toHaveLength(1);
+    expect(snapshot.account.fingerprint_scope).toBe("source");
   });
 
   it("classifies missing user:profile as auth_required", async () => {

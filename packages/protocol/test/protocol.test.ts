@@ -1,4 +1,4 @@
-import { readFile, readdir } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -18,7 +18,11 @@ describe("quota protocol", () => {
       snapshots: [
         {
           provider: "codex",
-          account: { fingerprint: "account_01", plan: "plus" },
+          account: {
+            fingerprint: "account_01",
+            fingerprint_scope: "global",
+            plan: "plus",
+          },
           windows: [
             {
               id: "five_hour",
@@ -48,7 +52,7 @@ describe("quota protocol", () => {
           snapshots: [
             {
               provider: "codex",
-              account: { fingerprint: "account_01" },
+              account: { fingerprint: "account_01", fingerprint_scope: "source" },
               windows: [{ id: "five_hour", title: "5 hour", used_percent: 10 }],
               source: "chatgpt_usage_api",
               status: "available",
@@ -73,6 +77,18 @@ describe("quota protocol", () => {
       ],
     });
     expect(result.success).toBe(true);
+  });
+
+  it("accepts an omitted fingerprint scope and rejects unknown scopes", () => {
+    expect(
+      QuotaSnapshotEnvelopeSchema.safeParse(envelopeWithAccount({ fingerprint: "v1-account" }))
+        .success,
+    ).toBe(true);
+    expect(
+      QuotaSnapshotEnvelopeSchema.safeParse(
+        envelopeWithAccount({ fingerprint: "account_01", fingerprint_scope: "provider" }),
+      ).success,
+    ).toBe(false);
   });
 
   it("rejects empty successes, failure snapshots, and cross-provider snapshots", () => {
@@ -185,6 +201,25 @@ function snapshot(provider: "codex" | "claude" | "grok") {
     source: "fixture",
     status: "available" as const,
     observed_at: "2026-08-02T12:00:00Z",
+  };
+}
+
+function envelopeWithAccount(account: Record<string, string>) {
+  return {
+    schema_version: 1,
+    device_id: "device_01",
+    sequence: 1,
+    captured_at: "2026-08-02T12:00:00Z",
+    snapshots: [
+      {
+        provider: "codex",
+        account,
+        windows: [],
+        source: "fixture",
+        status: "available",
+        observed_at: "2026-08-02T12:00:00Z",
+      },
+    ],
   };
 }
 

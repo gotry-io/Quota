@@ -40,8 +40,7 @@ final class MenuBarViewModel {
 
   init(
     collector: (any LocalQuotaCollecting)? = nil,
-    reportCache: LocalQuotaReportCache? = .live,
-    startsAutomatically: Bool = true
+    reportCache: LocalQuotaReportCache? = .live
   ) {
     self.reportCache = reportCache
     if let cached = reportCache?.load() {
@@ -59,12 +58,6 @@ final class MenuBarViewModel {
       } catch {
         self.collector = nil
         initializationError = Self.message(for: error)
-      }
-    }
-
-    if startsAutomatically {
-      Task { [weak self] in
-        await self?.refreshIfNeeded()
       }
     }
   }

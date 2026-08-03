@@ -1,6 +1,11 @@
 #if DEBUG
   import SwiftUI
 
+  enum VisualTestDataSource: String {
+    case fixture
+    case live
+  }
+
   enum VisualTestFixture: String {
     case loading
     case content
@@ -84,6 +89,7 @@
   }
 
   struct VisualTestConfiguration {
+    let dataSource: VisualTestDataSource
     let fixture: VisualTestFixture
     let route: VisualTestRoute
     let appearance: VisualTestAppearance
@@ -92,6 +98,11 @@
 
     init?(arguments: [String], referenceDate: Date = Date()) {
       guard
+        let dataSource: VisualTestDataSource = Self.argument(
+          "--data-source",
+          in: arguments,
+          default: .fixture
+        ),
         let fixture: VisualTestFixture = Self.argument(
           "--fixture",
           in: arguments,
@@ -116,6 +127,7 @@
         return nil
       }
 
+      self.dataSource = dataSource
       self.fixture = fixture
       self.route = route
       self.appearance = appearance
@@ -126,10 +138,16 @@
     var initialPath: [MenuBarRoute] { route.path }
     var colorScheme: ColorScheme? { appearance.colorScheme }
     var dynamicTypeSize: DynamicTypeSize { textSize.dynamicTypeSize }
+    var performsInitialRefresh: Bool { dataSource == .live }
 
     @MainActor
     func makeModel() -> MenuBarViewModel {
-      fixture.makeModel(referenceDate: referenceDate)
+      switch dataSource {
+      case .fixture:
+        fixture.makeModel(referenceDate: referenceDate)
+      case .live:
+        MenuBarViewModel(reportCache: nil)
+      }
     }
 
     func prepareEnvironment() {

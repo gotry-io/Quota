@@ -74,7 +74,13 @@ fallbacks are out of scope.
 
 ## Identity and normalization
 
-- `account.fingerprint` is SHA-256 over the provider and the most stable non-secret identifier.
+- A global `account.fingerprint` is SHA-256 over the provider, the identifier namespace, and the
+  stable quota-owner identifier: Codex uses account ID; Claude Code uses organization ID; Grok uses
+  team ID when present and otherwise user ID.
+- Email is display enrichment only and never a global deduplication identity. If the provider does
+  not expose its quota-owner identifier, collection still succeeds with a stable source-scoped
+  fingerprint. Consumers interpret an absent `fingerprint_scope` as source-scoped for version 1
+  compatibility.
 - Account labels use a masked email or a non-sensitive display name.
 - A collection attempt records its stable source identifier and an explicit outcome.
 - One provider failure does not discard successful results from other requested providers.

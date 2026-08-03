@@ -51,7 +51,10 @@ func decodesQuotaSnapshotEnvelope() throws {
       "captured_at": "2026-08-02T01:00:00Z",
       "snapshots": [{
         "provider": "codex",
-        "account": { "fingerprint": "account_01" },
+        "account": {
+          "fingerprint": "account_01",
+          "fingerprint_scope": "global"
+        },
         "windows": [{
           "id": "five_hour",
           "title": "5 hour",
@@ -69,6 +72,8 @@ func decodesQuotaSnapshotEnvelope() throws {
 
   #expect(envelope.deviceID == "device_01")
   #expect(envelope.snapshots.first?.provider == .codex)
+  #expect(envelope.snapshots.first?.account.fingerprintScope == .global)
+  #expect(envelope.snapshots.first?.account.effectiveFingerprintScope == .global)
 }
 
 @Test
@@ -113,6 +118,8 @@ func decodesCollectionReportAndCalculatesRemainingQuota() throws {
 
   #expect(report.schemaVersion == 1)
   #expect(report.results.first?.snapshots.first?.windows.first?.remainingPercent == 84)
+  #expect(report.results.first?.snapshots.first?.account.fingerprintScope == nil)
+  #expect(report.results.first?.snapshots.first?.account.effectiveFingerprintScope == .source)
   #expect(report.results.last?.outcome == .authRequired)
 }
 
@@ -141,8 +148,7 @@ func refreshesMenuBarModelFromLocalCollector() async throws {
   let report = sampleCollectionReport()
   let model = MenuBarViewModel(
     collector: StubLocalQuotaCollector(report: report),
-    reportCache: nil,
-    startsAutomatically: false
+    reportCache: nil
   )
 
   await model.refresh()
@@ -174,16 +180,14 @@ func restoresTheLastNormalizedReportBeforeRefreshing() async throws {
   let collector = StubLocalQuotaCollector(report: report)
   let firstModel = MenuBarViewModel(
     collector: collector,
-    reportCache: cache,
-    startsAutomatically: false
+    reportCache: cache
   )
 
   await firstModel.refresh()
 
   let restoredModel = MenuBarViewModel(
     collector: collector,
-    reportCache: cache,
-    startsAutomatically: false
+    reportCache: cache
   )
   #expect(restoredModel.report == report)
   #expect(restoredModel.refreshedAt != nil)
@@ -218,8 +222,7 @@ func overviewStateDisplaysEveryAccountAndDerivesExpiredSnapshotsAsStale() async 
   )
   let model = MenuBarViewModel(
     collector: StubLocalQuotaCollector(report: report),
-    reportCache: nil,
-    startsAutomatically: false
+    reportCache: nil
   )
 
   await model.refresh()
@@ -248,8 +251,7 @@ func emptyOverviewPreservesARefreshFailureWarning() async throws {
   cache.save(report: sampleCollectionReport(), refreshedAt: .distantPast)
   let model = MenuBarViewModel(
     collector: FailingLocalQuotaCollector(),
-    reportCache: cache,
-    startsAutomatically: false
+    reportCache: cache
   )
 
   await model.refresh()
@@ -265,8 +267,7 @@ func emptyOverviewPreservesARefreshFailureWarning() async throws {
 func refreshCancellationDoesNotBecomeAUserVisibleError() async {
   let model = MenuBarViewModel(
     collector: CancellingLocalQuotaCollector(),
-    reportCache: nil,
-    startsAutomatically: false
+    reportCache: nil
   )
 
   await model.refresh()

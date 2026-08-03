@@ -25,10 +25,32 @@ enum QuotaStatus: String, Codable, Sendable {
   case error
 }
 
+enum FingerprintScope: String, Codable, Sendable {
+  case global
+  case source
+}
+
 struct QuotaAccount: Codable, Equatable, Sendable {
   let fingerprint: String
   let label: String?
   let plan: String?
+  let fingerprintScope: FingerprintScope?
+
+  init(
+    fingerprint: String,
+    label: String?,
+    plan: String?,
+    fingerprintScope: FingerprintScope? = nil
+  ) {
+    self.fingerprint = fingerprint
+    self.label = label
+    self.plan = plan
+    self.fingerprintScope = fingerprintScope
+  }
+
+  var effectiveFingerprintScope: FingerprintScope {
+    fingerprintScope ?? .source
+  }
 }
 
 struct QuotaWindow: Codable, Equatable, Identifiable, Sendable {

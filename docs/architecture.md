@@ -36,6 +36,8 @@ normalized snapshots only after edge reporting is enabled. Relay persists accept
 serves authenticated QuotaBar clients. It never receives provider credentials or runs provider
 collectors. Pairing ownership and token generation are defined in
 [`decisions/0002-relay-device-code-pairing.md`](decisions/0002-relay-device-code-pairing.md).
+Relay observation retention and QuotaBar subscription presentation are defined in
+[`decisions/0003-observation-preserving-subscription-merge.md`](decisions/0003-observation-preserving-subscription-merge.md).
 
 Provider-specific collection order is defined only in
 [`provider-collection.md`](provider-collection.md). Credential handling, logging, transport, and

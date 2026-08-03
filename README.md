@@ -91,9 +91,11 @@ This repository contains the architecture foundation plus local provider quota c
 Claude Code, and Grok. Protocol validation, D1/SQLite storage, Relay discovery, local
 provider-session discovery, the initial public website, and the Swift wire models are implemented.
 QuotaBar now includes its first local quota panel, bundled-helper integration, and arm64 release
-automation. QuotaCLI 0.1.0 is published on npm and later tags publish through OIDC. Authenticated
-Relay APIs, device pairing, the first published Homebrew artifact, remote-device UI, and production
-settings remain subsequent milestones. Realtime delivery is optional and not part of v1.
+automation. Scoped account fingerprints and per-device Relay observation retention are implemented.
+QuotaCLI 0.1.0 is published on npm and later tags publish through OIDC. Authenticated Relay APIs,
+device pairing, subscription resolution, the first published Homebrew artifact, remote-device UI,
+and production settings remain subsequent milestones. Realtime delivery is optional and not part of
+v1.
 
 ## License
 

@@ -1,29 +1,39 @@
 import { createHash } from "node:crypto";
-import type { ProviderId } from "@gotry-io/quota-protocol";
+import type { FingerprintScope, ProviderId } from "@gotry-io/quota-protocol";
 
 export function sha256Hex(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
+export interface AccountIdentity {
+  fingerprint: string;
+  scope: FingerprintScope;
+}
+
+export type QuotaOwnerNamespace = "account_id" | "organization_id" | "team_id" | "user_id";
+
 /**
- * Stable non-secret account fingerprint. Prefer durable identifiers
- * (account id, user id, email). Never hash an access token as the preferred
- * identity because refresh would change account identity.
+ * Builds a redacted identity together with the scope in which it is safe to deduplicate.
+ * Only an explicit quota-owner identifier can produce a global fingerprint. Missing identity
+ * deliberately falls back to a source-scoped value that consumers must combine with source ID.
  */
-export function accountFingerprint(
+export function accountIdentity(
   provider: ProviderId,
-  stableId: string | undefined,
-  fallbackSeed?: string,
-): string {
-  const primary = normalizeIdentity(stableId);
-  if (primary) {
-    return sha256Hex(`${provider}:id:${primary}`);
+  namespace: QuotaOwnerNamespace,
+  quotaOwnerId: string | undefined,
+): AccountIdentity {
+  const globalValue = normalizeIdentity(quotaOwnerId);
+  if (globalValue) {
+    return {
+      fingerprint: sha256Hex(`${provider}:global:${namespace}:${globalValue}`),
+      scope: "global",
+    };
   }
-  const fallback = normalizeIdentity(fallbackSeed);
-  if (fallback) {
-    return sha256Hex(`${provider}:seed:${fallback}`);
-  }
-  return sha256Hex(`${provider}:anonymous`);
+
+  return {
+    fingerprint: sha256Hex(`${provider}:source`),
+    scope: "source",
+  };
 }
 
 export function maskEmail(email: string | undefined): string | undefined {

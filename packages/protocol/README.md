@@ -7,4 +7,4 @@ Swift `Codable` models.
 - Language-neutral, versioned JSON Schemas live in `schema` and are published by Quota Web under
   `/schema/`.
 - Published schema identifiers use `https://quota.gotry.io/schema/`.
-- Wire fields use `snake_case` and remain backward compatible within a schema version.
+- Wire fields use `snake_case`. Once a schema version is released, it remains backward compatible.

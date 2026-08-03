@@ -28,7 +28,7 @@ struct QuotaBarApp: App {
         MenuBarContentView(
           model: model,
           initialPath: visualTestConfiguration.initialPath,
-          performsInitialRefresh: false
+          performsInitialRefresh: visualTestConfiguration.performsInitialRefresh
         )
         .background(.regularMaterial)
         .preferredColorScheme(visualTestConfiguration.colorScheme)

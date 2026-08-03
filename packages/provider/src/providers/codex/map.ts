@@ -1,6 +1,6 @@
 import type { QuotaSnapshot, QuotaWindow } from "@gotry-io/quota-protocol";
 import { asRecord, readNumber, readString } from "../../runtime/files.ts";
-import { accountFingerprint, maskEmail } from "../../runtime/identity.ts";
+import { accountIdentity, maskEmail } from "../../runtime/identity.ts";
 import { clampPercent, toIsoOffset, unixSecondsToIso } from "../../runtime/time.ts";
 
 export const CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
@@ -94,9 +94,12 @@ export function buildCodexSnapshot(input: {
   now?: Date;
 }): QuotaSnapshot {
   const now = input.now ?? new Date();
-  const fingerprint = accountFingerprint("codex", input.accountId, input.email ?? input.plan);
+  const identity = accountIdentity("codex", "account_id", input.accountId);
   const label = maskEmail(input.email);
-  const account: QuotaSnapshot["account"] = { fingerprint };
+  const account: QuotaSnapshot["account"] = {
+    fingerprint: identity.fingerprint,
+    fingerprint_scope: identity.scope,
+  };
   if (label) {
     account.label = label;
   }

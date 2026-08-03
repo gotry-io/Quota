@@ -15,6 +15,9 @@ export const QuotaStatusSchema = z.enum([
 ]);
 export type QuotaStatus = z.infer<typeof QuotaStatusSchema>;
 
+export const FingerprintScopeSchema = z.enum(["global", "source"]);
+export type FingerprintScope = z.infer<typeof FingerprintScopeSchema>;
+
 export const QuotaWindowSchema = z
   .object({
     id: z.string().min(1),
@@ -29,6 +32,7 @@ export type QuotaWindow = z.infer<typeof QuotaWindowSchema>;
 export const QuotaAccountSchema = z
   .object({
     fingerprint: z.string().min(1),
+    fingerprint_scope: FingerprintScopeSchema.optional(),
     label: z.string().min(1).optional(),
     plan: z.string().min(1).optional(),
   })

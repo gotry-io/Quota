@@ -10,7 +10,7 @@ import {
   parseGrokCredentials,
 } from "../src/providers/grok/credentials.ts";
 import { refreshGrokAuthWithCli } from "../src/providers/grok/auth-refresh.ts";
-import { mapGrokBillingResponse } from "../src/providers/grok/map.ts";
+import { buildGrokSnapshot, mapGrokBillingResponse } from "../src/providers/grok/map.ts";
 import type { HttpRequest, HttpResponse } from "../src/runtime/http.ts";
 
 const NOW = new Date("2026-08-02T12:00:00.000Z");
@@ -156,6 +156,44 @@ describe("grok billing mapping", () => {
     expect(mapped.window?.duration_seconds).toBe(31 * 24 * 60 * 60);
     expect(mapped.window?.resets_at).toBe("2026-09-01T00:00:00Z");
   });
+
+  it("prefers team quota ownership, then user ID, and keeps missing identity source-scoped", () => {
+    const window = { id: "billing_cycle", title: "Monthly", used_percent: 8 };
+    const user = buildGrokSnapshot({
+      window,
+      credentials: grokCredentials({ userId: "user_owner" }),
+      now: NOW,
+    });
+    const teamA = buildGrokSnapshot({
+      window,
+      credentials: grokCredentials({ userId: "user_a", teamId: "team_owner" }),
+      now: NOW,
+    });
+    const teamB = buildGrokSnapshot({
+      window,
+      credentials: grokCredentials({ userId: "user_b", teamId: "team_owner" }),
+      now: NOW,
+    });
+    const missingA = buildGrokSnapshot({
+      window,
+      credentials: grokCredentials({ scope: `${GROK_OIDC_SCOPE_PREFIX}first` }),
+      now: NOW,
+    });
+    const missingB = buildGrokSnapshot({
+      window,
+      credentials: grokCredentials({ scope: `${GROK_OIDC_SCOPE_PREFIX}second` }),
+      now: NOW,
+    });
+
+    expect(user.account.fingerprint_scope).toBe("global");
+    expect(teamA.account.fingerprint_scope).toBe("global");
+    expect(teamA.account.fingerprint).toBe(teamB.account.fingerprint);
+    expect(teamA.account.fingerprint).not.toBe(user.account.fingerprint);
+    expect(missingA.account.fingerprint_scope).toBe("source");
+    expect(missingA.account.fingerprint).toBe(missingB.account.fingerprint);
+    expect(JSON.stringify(teamA)).not.toContain("team_owner");
+    expect(JSON.stringify(teamA)).not.toContain("user_a");
+  });
 });
 
 describe("grok collector", () => {
@@ -182,6 +220,7 @@ describe("grok collector", () => {
     const snapshot = await collector.collect(grokSession(), { now: NOW });
 
     expect(snapshot.source).toBe(GROK_SOURCE_API);
+    expect(snapshot.account.fingerprint_scope).toBe("global");
     expect(snapshot.windows[0]?.used_percent).toBe(8);
     expect(request?.url).toBe(GROK_BILLING_URL);
     expect(request?.headers).toMatchObject({
@@ -347,6 +386,22 @@ function grokSession() {
     session_id: "ambient",
     display_label: "Grok",
     credential_source: "/tmp/auth.json",
+  };
+}
+
+function grokCredentials(
+  overrides: Partial<{
+    scope: string;
+    userId: string;
+    teamId: string;
+  }>,
+) {
+  return {
+    scope: overrides.scope ?? `${GROK_OIDC_SCOPE_PREFIX}client`,
+    accessToken: "synthetic-token",
+    sourcePath: "/tmp/auth.json",
+    ...(overrides.userId ? { userId: overrides.userId } : {}),
+    ...(overrides.teamId ? { teamId: overrides.teamId } : {}),
   };
 }
 

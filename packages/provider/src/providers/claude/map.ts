@@ -1,6 +1,6 @@
 import type { QuotaSnapshot, QuotaWindow } from "@gotry-io/quota-protocol";
 import { asRecord, readNumber, readString } from "../../runtime/files.ts";
-import { accountFingerprint, maskEmail } from "../../runtime/identity.ts";
+import { accountIdentity, maskEmail } from "../../runtime/identity.ts";
 import { clampPercent, dateToIso, parseFlexibleDate, toIsoOffset } from "../../runtime/time.ts";
 import { CLAUDE_SOURCE_API } from "./credentials.ts";
 
@@ -82,9 +82,12 @@ export function buildClaudeSnapshot(input: {
   now?: Date;
 }): QuotaSnapshot {
   const now = input.now ?? new Date();
-  const fingerprint = accountFingerprint("claude", input.organizationId ?? input.email, input.plan);
+  const identity = accountIdentity("claude", "organization_id", input.organizationId);
   const label = maskEmail(input.email);
-  const account: QuotaSnapshot["account"] = { fingerprint };
+  const account: QuotaSnapshot["account"] = {
+    fingerprint: identity.fingerprint,
+    fingerprint_scope: identity.scope,
+  };
   if (label) {
     account.label = label;
   }

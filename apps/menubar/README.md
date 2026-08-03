@@ -41,17 +41,30 @@ pnpm build:menubar:visual
 ```
 
 `QuotaBarVisual.app` uses the real menu-panel views inside an independently identified, ordinary
-macOS window. It never invokes QuotaCLI, reads provider credentials, or writes the production app's
-preferences. Launch a deterministic fixture with:
+macOS window. Its default `fixture` data source is deterministic: it does not invoke QuotaCLI or read
+provider credentials, and the app does not write the production app's preferences. Launch a fixture
+with:
 
 ```bash
 open -n dist/menubar-visual/QuotaBarVisual.app --args \
-  --fixture content --route overview --appearance light
+  --data-source fixture --fixture content --route overview --appearance light
 ```
 
 Fixtures are `loading`, `content`, `cached-refresh-error`, `empty`, and `unavailable`. Routes are
 `overview` and `settings`; appearances are `system`, `light`, and `dark`. Text sizes are `standard`,
-`extra-large`, and `accessibility`, selected with `--text-size`. The visual app validates shared
-content, navigation, scrolling, accessibility, and appearance behavior. It does not reproduce the
+`extra-large`, and `accessibility`, selected with `--text-size`.
+
+The visual bundle also contains the same arm64 standalone QuotaCLI helper as the production app. An
+explicit live run invokes that bundled helper and may read local Codex, Claude Code, or Grok provider
+sessions according to [`docs/provider-collection.md`](../../docs/provider-collection.md):
+
+```bash
+open -n dist/menubar-visual/QuotaBarVisual.app --args \
+  --data-source live --route overview --appearance system
+```
+
+Live mode does not reuse a cached report: each app launch starts one view-driven collection through
+the production `LocalQuotaClient` boundary. The visual app therefore validates helper packaging,
+process execution, wire decoding, and the shared menu-panel UI together. It does not reproduce the
 menu-bar icon, popover anchor, click-outside dismissal, or other `MenuBarExtra` window chrome, which
 retain a small manual smoke test.
