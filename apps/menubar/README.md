@@ -87,3 +87,12 @@ the production `LocalQuotaClient` boundary. The visual app therefore validates h
 process execution, wire decoding, and the shared menu-panel UI together. It does not reproduce the
 menu-bar icon, popover anchor, click-outside dismissal, or other `MenuBarExtra` window chrome, which
 retain a small manual smoke test.
+
+Run `pnpm test:relay:owner-e2e` from the repository root for the real owner-path acceptance flow.
+It launches the signed Visual App through LaunchServices and uses the production URLSession,
+`RelayStateModel`, UserDefaults, and system Keychain boundaries against a temporary loopback Relay.
+A test-only CLI runner injects one normalized non-empty collection report at the existing command
+dependency boundary; pairing, credential persistence, upload sequencing, Relay storage, Overview
+resolution, device revocation, rejection, restart restoration, and cleanup remain real. The flow
+does not read ambient provider credentials or modify production QuotaBar preferences or Keychain
+items.

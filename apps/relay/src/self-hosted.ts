@@ -16,11 +16,12 @@ await bootstrapSelfHostedOwner(state, ownerToken, new Date());
 const relayInfo = selfHostedRelayInfo(process.env.QUOTA_RELAY_INSTANCE_ID ?? "self-hosted-primary");
 const app = createRelayApp({ state, relayInfo });
 const port = Number.parseInt(process.env.PORT ?? "8080", 10);
+const hostname = process.env.HOST ?? "0.0.0.0";
 
-Bun.serve({
-  hostname: process.env.HOST ?? "0.0.0.0",
+const server = Bun.serve({
+  hostname,
   port,
   fetch: app.fetch,
 });
 
-console.log(`QuotaRelay ${relayInfo.version} listening on port ${port}`);
+console.log(`QuotaRelay ${relayInfo.version} listening on ${server.hostname}:${server.port}`);

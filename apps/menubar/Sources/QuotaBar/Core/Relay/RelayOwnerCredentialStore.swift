@@ -118,9 +118,14 @@ struct RelayOwnerCredentialStore: Sendable {
   static let service = "io.gotry.quotabar.relay-owner"
 
   private let operations: any RelayKeychainOperating
+  private let service: String
 
-  init(operations: any RelayKeychainOperating = SystemRelayKeychainOperations()) {
+  init(
+    operations: any RelayKeychainOperating = SystemRelayKeychainOperations(),
+    service: String = RelayOwnerCredentialStore.service
+  ) {
     self.operations = operations
+    self.service = service
   }
 
   static func reference(for profileID: UUID) -> String {
@@ -180,7 +185,7 @@ struct RelayOwnerCredentialStore: Sendable {
 
   private func query(reference: String, forLoad: Bool = false) -> RelayKeychainQuery {
     RelayKeychainQuery(
-      service: Self.service,
+      service: service,
       account: reference,
       returnsData: forLoad,
       matchesOne: forLoad

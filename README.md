@@ -47,6 +47,7 @@ pnpm install
 pnpm check
 pnpm test
 pnpm build
+pnpm test:relay:owner-e2e
 ```
 
 Run the self-hosted Relay with persistent SQLite storage:
@@ -94,6 +95,10 @@ website. QuotaBar ships its bundled helper and now resolves local and remote obs
 stable Overview without accumulating conflicting quota values. One Relay state model is shared by
 five-minute app-lifecycle polling and the typed Settings stack for Relay profiles, pairing decisions,
 device listing, and revocation. Relay owner credentials remain in Keychain.
+The macOS owner-path acceptance test also exercises a real LaunchServices-started QuotaBar against
+an isolated self-hosted Relay: QuotaBar persists the owner bearer, approves a real QuotaCLI pairing,
+renders a non-empty remote snapshot, revokes the device, rejects its next report, restores state,
+and removes all test credentials.
 
 QuotaRelay implements its protocol-validated `/api/v1` server core for device-code pairing, scoped
 Bearer authentication, snapshot upload and reads, device management, and persistent rate limiting.

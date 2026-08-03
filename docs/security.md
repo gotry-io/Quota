@@ -32,6 +32,12 @@ data requirements.
   application preferences.
 - Relay setup failures, safe error presentation, fixtures, logs, and screenshots must never echo or
   persist the owner bearer or an Authorization header.
+- The `VISUAL_TEST` Relay owner-path acceptance flow uses a random Keychain service under the
+  `io.gotry.quotabar.relay-owner.e2e.*` prefix, a unique UserDefaults suite, a `0600` owner-token
+  handoff file, loopback networking, and isolated CLI storage. It must delete the handoff immediately
+  after Keychain persistence and remove the profile, Keychain item, defaults domain, CLI credential,
+  SQLite database, and child processes on completion or cooperative cancellation. Production builds
+  continue to use only the fixed Keychain service above.
 - Only the provider-specific, stable quota-owner identifiers documented in
   [`provider-collection.md`](provider-collection.md) may produce a globally scoped account
   fingerprint. Namespace the identifier type before hashing it.

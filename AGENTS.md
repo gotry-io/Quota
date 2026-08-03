@@ -101,6 +101,8 @@ SQLite files, logs, or local credentials.
   cases.
 - Protocol change: run protocol, model, provider, Relay, and Swift decoding tests.
 - Relay change: run Vitest, Bun SQLite tests, and the Cloudflare dry-run build.
+- QuotaBar Relay owner-path change: on macOS, run `pnpm test:relay:owner-e2e` in addition to the
+  affected Swift and Relay tests.
 - Web change: run its type check and production build; inspect desktop and mobile rendering when
   browser tooling is available.
 - Deployment change: validate Compose and build the complete Relay image.

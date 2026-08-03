@@ -9,18 +9,28 @@ struct QuotaBarApp: App {
   #if VISUAL_TEST
     @State private var model: MenuBarViewModel
     private let visualTestConfiguration: VisualTestConfiguration
+    private let relayAcceptanceConfiguration: RelayAcceptanceConfiguration?
 
     init() {
+      let arguments = ProcessInfo.processInfo.arguments
       guard
         let configuration = VisualTestConfiguration(
-          arguments: ProcessInfo.processInfo.arguments
+          arguments: arguments
         )
       else {
         fatalError("Invalid Visual QA arguments.")
       }
+      let relayAcceptanceRequested = arguments.contains(RelayAcceptanceConfiguration.flag)
+      let relayAcceptance = RelayAcceptanceConfiguration(arguments: arguments)
+      guard !relayAcceptanceRequested || relayAcceptance != nil else {
+        fatalError("Invalid Relay acceptance arguments.")
+      }
       visualTestConfiguration = configuration
+      relayAcceptanceConfiguration = relayAcceptance
       configuration.prepareEnvironment()
-      _model = State(initialValue: configuration.makeModel())
+      _model = State(
+        initialValue: relayAcceptance?.makeModel() ?? configuration.makeModel()
+      )
     }
 
     var body: some Scene {
@@ -37,7 +47,12 @@ struct QuotaBarApp: App {
         .onAppear {
           NSApplication.shared.setActivationPolicy(.regular)
           NSApplication.shared.activate(ignoringOtherApps: true)
-          if let screenshotOutputPath = visualTestConfiguration.screenshotOutputPath {
+          if let relayAcceptanceConfiguration {
+            RelayAcceptanceRunner.start(
+              configuration: relayAcceptanceConfiguration,
+              model: model
+            )
+          } else if let screenshotOutputPath = visualTestConfiguration.screenshotOutputPath {
             VisualTestWindowCapture.schedule(to: screenshotOutputPath)
           }
         }
@@ -66,7 +81,7 @@ struct QuotaBarApp: App {
 #if VISUAL_TEST
   /// Captures this process's own window contentView without Screen Recording.
   @MainActor
-  private enum VisualTestWindowCapture {
+  enum VisualTestWindowCapture {
     private static let maxAttempts = 25
     private static let retryDelay: TimeInterval = 0.2
     private static let initialDelay: TimeInterval = 0.5

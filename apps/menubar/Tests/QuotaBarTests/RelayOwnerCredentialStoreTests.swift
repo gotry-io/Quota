@@ -30,6 +30,23 @@ func addsOwnerCredentialWithThisDeviceOnlyAccessibility() throws {
 }
 
 @Test
+func scopesOwnerCredentialQueriesToTheConfiguredService() throws {
+  let operations = FakeRelayKeychainOperations([
+    RelayKeychainResult(status: errSecSuccess, data: nil)
+  ])
+  let service = "io.gotry.quotabar.relay-owner.e2e.synthetic"
+  let store = RelayOwnerCredentialStore(operations: operations, service: service)
+
+  try store.save("owner_synthetic_secret", reference: "relay-owner:profile")
+
+  guard case .add(let item) = try #require(operations.operations.first) else {
+    Issue.record("Expected a Keychain add operation.")
+    return
+  }
+  #expect(item.query.service == service)
+}
+
+@Test
 func updatesExistingOwnerCredentialWithThisDeviceOnlyAccessibility() throws {
   let operations = FakeRelayKeychainOperations([
     RelayKeychainResult(status: errSecDuplicateItem, data: nil),

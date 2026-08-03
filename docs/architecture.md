@@ -61,6 +61,9 @@ storage requirements are defined only in [`security.md`](security.md).
   covers pairing decisions, snapshot reads, device listing, and device revocation.
 - Shares one `RelayStateModel` between five-minute app-lifecycle polling, the Overview, and the
   panel's single typed Settings stack for Relay profiles, pairing decisions, and device management.
+- Its macOS owner-path acceptance flow launches the real app boundary and composes the same
+  `RelayStateModel`, stores, owner client, resolver, and Settings actions against an isolated
+  self-hosted Relay; no second test implementation of the Relay protocol is used.
 
 ### QuotaCLI
 

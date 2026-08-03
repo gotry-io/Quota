@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-08-03T12:00:00.000Z",
+  "results": [
+    {
+      "provider": "codex",
+      "outcome": "success",
+      "source": "relay_owner_e2e_fixture",
+      "snapshots": [
+        {
+          "provider": "codex",
+          "account": {
+            "fingerprint": "e2e-codex-account",
+            "fingerprint_scope": "global",
+            "label": "e2e***",
+            "plan": "Plus"
+          },
+          "windows": [
+            {
+              "id": "five_hour",
+              "title": "5 hour",
+              "used_percent": 42
+            }
+          ],
+          "source": "relay_owner_e2e_fixture",
+          "status": "available",
+          "observed_at": "2026-08-03T11:59:00.000Z"
+        }
+      ]
+    },
+    {
+      "provider": "claude",
+      "outcome": "auth_required",
+      "snapshots": [],
+      "message": "Synthetic missing session."
+    },
+    {
+      "provider": "grok",
+      "outcome": "auth_required",
+      "snapshots": [],
+      "message": "Synthetic missing session."
+    }
+  ]
+}
