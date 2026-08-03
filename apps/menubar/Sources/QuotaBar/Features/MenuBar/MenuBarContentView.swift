@@ -1,11 +1,18 @@
+import AppKit
 import SwiftUI
 
 struct MenuBarContentView: View {
   @Bindable var model: MenuBarViewModel
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @AppStorage("provider.codex.visible") private var showsCodex = true
   @AppStorage("provider.claude.visible") private var showsClaude = true
   @AppStorage("provider.grok.visible") private var showsGrok = true
   @State private var navigation: MenuBarNavigationState
+  @State private var navigationDirection: NavigationDirection = .forward
+  @State private var showsDeleteAllConfirmation = false
+  @State private var showsLocalDeleteConfirmation = false
+  @State private var isDeletingAllData = false
+  @State private var deleteAllErrorMessage: String?
   private let performsInitialRefresh: Bool
   private let performsRelayRefreshes: Bool
 
@@ -27,14 +34,131 @@ struct MenuBarContentView: View {
       title: navigation.title,
       canNavigateBack: navigation.canNavigateBack,
       onNavigateBack: navigateBack,
-      onOpenSettings: openSettings
+      panelMinHeight: navigation.panelMinHeight,
+      panelIdealHeight: navigation.panelIdealHeight,
+      trailing: { headerTrailing }
     ) {
-      currentPage
+      ZStack(alignment: .topLeading) {
+        currentPage
+          .id(navigation.pageIdentity)
+          .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+          .transition(pageTransition)
+      }
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+      .clipped()
+    }
+    .animation(panelAnimation, value: navigation.pageIdentity)
+    .animation(panelAnimation, value: navigation.panelIdealHeight)
+    .confirmationDialog(
+      "Delete all QuotaBar data?",
+      isPresented: $showsDeleteAllConfirmation,
+      titleVisibility: .visible
+    ) {
+      Button("Delete All Data", role: .destructive) {
+        deleteAllData()
+      }
+      Button("Cancel", role: .cancel) {}
+    } message: {
+      Text(
+        "QuotaBar will delete its managed controller and linked Relay data, then delete all controller credentials, Relay profiles, cached quota, and user preferences. Managed Relay will stay disconnected until you reconnect it."
+      )
+    }
+    .confirmationDialog(
+      "Finish by deleting local data?",
+      isPresented: $showsLocalDeleteConfirmation,
+      titleVisibility: .visible
+    ) {
+      Button("Delete Locally Anyway", role: .destructive) {
+        deleteAllDataLocally()
+      }
+      Button("Keep Data", role: .cancel) {}
+    } message: {
+      Text(
+        "QuotaBar could not confirm full cleanup. Deleting locally may leave the managed controller and Relay data behind while paired devices continue reporting. Use this only if you cannot retry while online."
+      )
     }
     .task {
       guard performsInitialRefresh else { return }
       await model.refreshIfNeeded()
     }
+  }
+
+  private var panelAnimation: Animation? {
+    reduceMotion ? nil : .snappy(duration: 0.28)
+  }
+
+  private var pageTransition: AnyTransition {
+    if reduceMotion {
+      return .opacity
+    }
+    switch navigationDirection {
+    case .forward:
+      return .asymmetric(
+        insertion: .move(edge: .trailing).combined(with: .opacity),
+        removal: .move(edge: .leading).combined(with: .opacity)
+      )
+    case .back:
+      return .asymmetric(
+        insertion: .move(edge: .leading).combined(with: .opacity),
+        removal: .move(edge: .trailing).combined(with: .opacity)
+      )
+    }
+  }
+
+  @ViewBuilder
+  private var headerTrailing: some View {
+    if navigation.showsSettingsMenu {
+      Menu {
+        Button("Delete All QuotaBar Data…", role: .destructive) {
+          showsDeleteAllConfirmation = true
+        }
+        .disabled(isDeletingAllData)
+
+        Divider()
+
+        Button("Quit QuotaBar") {
+          NSApplication.shared.terminate(nil)
+        }
+      } label: {
+        headerIcon("ellipsis", weight: .bold, pointSize: 16)
+      }
+      .menuStyle(.borderlessButton)
+      .menuIndicator(.hidden)
+      .fixedSize()
+      .accessibilityLabel("Settings menu")
+    } else if navigation.showsAddRelayAction {
+      Button {
+        navigate(to: .addRelay)
+      } label: {
+        headerIcon("plus", weight: .semibold, pointSize: 15)
+      }
+      .buttonStyle(.plain)
+      .fixedSize()
+      .accessibilityLabel("Add Relay")
+    } else if !navigation.canNavigateBack {
+      Button(action: openSettings) {
+        headerIcon("gearshape", weight: .medium, pointSize: 13)
+      }
+      .buttonStyle(.plain)
+      .fixedSize()
+      .accessibilityLabel("Open settings")
+    }
+  }
+
+  private func headerIcon(
+    _ systemName: String,
+    weight: Font.Weight,
+    pointSize: CGFloat
+  ) -> some View {
+    Image(systemName: systemName)
+      .font(.system(size: pointSize, weight: weight))
+      .foregroundStyle(QuotaPalette.body)
+      .frame(
+        width: QuotaDesign.Layout.navigationControlSize,
+        height: QuotaDesign.Layout.navigationControlSize,
+        alignment: .center
+      )
+      .contentShape(Rectangle())
   }
 
   @ViewBuilder
@@ -52,25 +176,24 @@ struct MenuBarContentView: View {
         showsCodex: $showsCodex,
         showsClaude: $showsClaude,
         showsGrok: $showsGrok,
-        onOpenRelays: { navigation.open(.relays) }
+        onOpenRelays: { navigate(to: .relays) },
+        deleteAllErrorMessage: deleteAllErrorMessage
       )
     case .relays:
       RelayListView(
         model: model.relayStateModel,
-        onAddRelay: { navigation.open(.addRelay) },
-        onOpenRelay: { navigation.open(.relayDetail($0)) }
+        onAddRelay: { navigate(to: .addRelay) },
+        onOpenRelay: { navigate(to: .relayDetail($0)) }
       )
     case .addRelay:
-      AddRelayView(model: model.relayStateModel) { profileID in
-        navigation.replaceLast(with: .relayDetail(profileID))
-      }
+      AddRelayView(model: model.relayStateModel, onFinished: navigateBack)
     case .relayDetail(let profileID):
       RelayDetailView(
         model: model.relayStateModel,
         profileID: profileID,
-        onOpenPairing: { navigation.open(.pairing(profileID)) },
-        onOpenDevices: { navigation.open(.devices(profileID)) },
-        onDeleted: { navigation.navigateBack() }
+        onOpenPairing: { navigate(to: .pairing(profileID)) },
+        onOpenDevices: { navigate(to: .devices(profileID)) },
+        onDeleted: navigateBack
       )
     case .pairing(let profileID):
       RelayPairingView(model: model.relayStateModel, profileID: profileID)
@@ -92,12 +215,70 @@ struct MenuBarContentView: View {
   }
 
   private func openSettings() {
-    navigation.open(.settings)
+    navigate(to: .settings)
+  }
+
+  private func navigate(to route: MenuBarRoute) {
+    navigationDirection = .forward
+    var next = navigation
+    next.open(route)
+    applyNavigation(next)
   }
 
   private func navigateBack() {
-    navigation.navigateBack()
+    navigationDirection = .back
+    var next = navigation
+    next.navigateBack()
+    applyNavigation(next)
   }
+
+  private func applyNavigation(_ next: MenuBarNavigationState) {
+    guard next != navigation else { return }
+    if let panelAnimation {
+      withAnimation(panelAnimation) {
+        navigation = next
+      }
+    } else {
+      navigation = next
+    }
+  }
+
+  private func deleteAllData() {
+    guard !isDeletingAllData else { return }
+    isDeletingAllData = true
+    deleteAllErrorMessage = nil
+    Task {
+      defer { isDeletingAllData = false }
+      do {
+        try await model.deleteAllQuotaBarData()
+      } catch {
+        deleteAllErrorMessage = RelaySettingsErrorPresentation.message(
+          for: error,
+          fallback: "QuotaBar could not delete all data."
+        )
+        if !(error is CancellationError) {
+          showsLocalDeleteConfirmation = true
+        }
+      }
+    }
+  }
+
+  private func deleteAllDataLocally() {
+    do {
+      try model.deleteAllQuotaBarDataLocally()
+      deleteAllErrorMessage = nil
+    } catch {
+      deleteAllErrorMessage = RelaySettingsErrorPresentation.message(
+        for: error,
+        fallback: "QuotaBar could not delete its local data."
+      )
+    }
+  }
+}
+
+private enum NavigationDirection {
+  case forward
+  case back
 }
 
 enum MenuBarRoute: Hashable {
@@ -112,7 +293,7 @@ enum MenuBarRoute: Hashable {
     switch self {
     case .settings: "Settings"
     case .relays: "Relays"
-    case .addRelay: "Add Relay"
+    case .addRelay: "Pair device"
     case .relayDetail: "Relay"
     case .pairing: "Pair device"
     case .devices: "Devices"
@@ -126,6 +307,29 @@ struct MenuBarNavigationState: Equatable {
   var currentRoute: MenuBarRoute? { path.last }
   var title: String { currentRoute?.title ?? "QuotaBar" }
   var canNavigateBack: Bool { !path.isEmpty }
+  var showsSettingsMenu: Bool { path == [.settings] }
+  var showsAddRelayAction: Bool { currentRoute == .relays }
+
+  /// Stable identity for page transitions (depth + route).
+  var pageIdentity: String {
+    if let currentRoute {
+      return "\(path.count):\(String(describing: currentRoute))"
+    }
+    return "overview"
+  }
+
+  /// Overview stays compact; Settings and deeper pages use the taller panel.
+  var panelMinHeight: CGFloat {
+    currentRoute == nil
+      ? QuotaDesign.Layout.overviewPanelMinHeight
+      : QuotaDesign.Layout.settingsPanelMinHeight
+  }
+
+  var panelIdealHeight: CGFloat {
+    currentRoute == nil
+      ? QuotaDesign.Layout.overviewPanelHeight
+      : QuotaDesign.Layout.settingsPanelHeight
+  }
 
   mutating func open(_ route: MenuBarRoute) {
     guard path.last != route else { return }

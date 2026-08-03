@@ -13,5 +13,6 @@ pnpm --filter @gotry-io/quota-web check
 pnpm --filter @gotry-io/quota-web build
 ```
 
-The initial site follows the repository's root [`DESIGN.md`](../../DESIGN.md) tokens and links to
-GitHub while product downloads and documentation are not yet published.
+The site follows [`DESIGN.md`](./DESIGN.md) in this package. QuotaBar has a separate design system at
+[`apps/menubar/DESIGN.md`](../menubar/DESIGN.md). The site links to GitHub while product downloads and
+documentation are not yet published.

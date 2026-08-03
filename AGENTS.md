@@ -16,7 +16,8 @@ Read the relevant source before changing that area:
 | Persistent Relay storage decision and rationale | `docs/decisions/0001-persistent-relay-storage.md` |
 | Relay pairing, code control, and credential issuance | `docs/decisions/0002-relay-device-code-pairing.md` |
 | Anonymous Relay controller lifecycle | `docs/decisions/0004-anonymous-relay-controllers.md` |
-| Visual tokens and UI behavior | `DESIGN.md` |
+| Website visual tokens and marketing UI | `apps/web/DESIGN.md` |
+| QuotaBar menu-panel visual tokens and UI behavior | `apps/menubar/DESIGN.md` |
 | App-specific usage | The corresponding `apps/*/README.md` |
 
 Do not create a second description of a canonical rule. Update its source and link to it.
@@ -73,7 +74,8 @@ Do not create a second description of a canonical rule. Update its source and li
   Bun lockfiles.
 - Avoid native Node addons in QuotaCLI.
 - Swift code targets macOS 14+ and Swift 6.2. Keep wire decoding and Relay access separate from views.
-- Web UI follows `DESIGN.md` and must remain keyboard-accessible and responsive.
+- Web UI follows `apps/web/DESIGN.md` and must remain keyboard-accessible and responsive.
+- QuotaBar UI follows `apps/menubar/DESIGN.md` (system material panel), not the website design file.
 - Wire JSON uses `snake_case`. Primary quota values and meters always represent remaining quota.
 - Product names are Quota, QuotaBar, QuotaCLI, and QuotaRelay.
 - Prefer direct implementations over redundant wrappers, retries, fallbacks, and defensive branches.

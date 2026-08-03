@@ -70,7 +70,7 @@
   func relayVisualRoutesParseIntoOneTypedStackWithMatchingTitles() throws {
     let routeExpectations: [(rawValue: String, title: String, depth: Int)] = [
       ("relays", "Relays", 2),
-      ("add", "Add Relay", 3),
+      ("add", "Pair device", 3),
       ("detail", "Relay", 3),
       ("pairing", "Pair device", 4),
       ("devices", "Devices", 4),

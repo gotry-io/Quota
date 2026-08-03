@@ -7,67 +7,69 @@ struct RelayListView: View {
 
   @State private var isEnablingManagedRelay = false
 
+  private var showsManagedReconnect: Bool {
+    model.managedEnrollmentDisabled
+      && !model.profiles.contains(where: { $0.mode == .managed })
+  }
+
+  private var isEmpty: Bool {
+    model.profiles.isEmpty && !showsManagedReconnect
+  }
+
   var body: some View {
-    ScrollView {
-      VStack(alignment: .leading, spacing: 16) {
-        if let issue = model.globalIssue {
-          relayIssue(issue)
-        }
-
-        if model.managedEnrollmentDisabled,
-          !model.profiles.contains(where: { $0.mode == .managed })
-        {
-          managedRelayDisabledState
-        }
-
-        if model.profiles.isEmpty {
-          emptyState
-        } else {
-          ForEach(model.profiles) { profile in
-            Button {
-              onOpenRelay(profile.id)
-            } label: {
-              profileCard(profile)
+    Group {
+      if isEmpty {
+        emptyState
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+          .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
+      } else {
+        ScrollView {
+          VStack(alignment: .leading, spacing: 16) {
+            if showsManagedReconnect {
+              managedRelayDisabledState
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Open \(profile.name) Relay")
+
+            ForEach(model.profiles) { profile in
+              Button {
+                onOpenRelay(profile.id)
+              } label: {
+                profileCard(profile)
+              }
+              .buttonStyle(.plain)
+              .accessibilityLabel("Open \(profile.name) Relay")
+            }
           }
+          .frame(maxWidth: .infinity, alignment: .topLeading)
+          .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
+          .padding(.vertical, 16)
         }
       }
-      .frame(maxWidth: .infinity, alignment: .topLeading)
-      .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
-      .padding(.vertical, 16)
     }
-    .safeAreaInset(edge: .bottom) {
-      HStack {
-        Spacer()
-        Button("Add Relay", action: onAddRelay)
-          .buttonStyle(QuotaPrimaryButtonStyle())
-      }
-      .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
-      .padding(.vertical, 12)
-      .overlay(alignment: .top) {
-        Divider().overlay(QuotaPalette.hairline)
-      }
-    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
   }
 
   private var emptyState: some View {
-    VStack(spacing: 12) {
+    VStack(spacing: 14) {
       Image(systemName: "network")
-        .font(.system(size: 24, weight: .regular))
+        .font(.system(size: 28, weight: .regular))
+        .foregroundStyle(QuotaPalette.ink)
+
       Text("No Relays configured")
         .font(.system(.headline, design: .rounded, weight: .semibold))
         .foregroundStyle(QuotaPalette.ink)
-      Text("Add a self-hosted Relay to read quota reported by remote QuotaCLI devices.")
+
+      Text("Add a self-hosted Relay to read quota from remote QuotaCLI devices.")
         .font(.subheadline)
         .foregroundStyle(QuotaPalette.body)
         .multilineTextAlignment(.center)
         .fixedSize(horizontal: false, vertical: true)
+
+      Button("Add Relay", action: onAddRelay)
+        .buttonStyle(QuotaPrimaryButtonStyle())
+        .padding(.top, 4)
     }
-    .frame(maxWidth: .infinity)
-    .padding(.horizontal, 24)
-    .padding(.vertical, 32)
+    .frame(maxWidth: 280)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
   }
 
   private var managedRelayDisabledState: some View {
@@ -124,23 +126,33 @@ struct RelayListView: View {
 
         HStack(spacing: 6) {
           RelayStatusTag(text: profile.mode.displayName)
-          RelayStatusTag(
-            text: state?.refreshLabel ?? "Not loaded",
-            systemImage: state?.refreshIcon
-          )
+          if let issue = state?.issue {
+            RelayStatusTag(text: shortIssueLabel(issue), systemImage: "exclamationmark.circle")
+          } else {
+            RelayStatusTag(
+              text: state?.refreshLabel ?? "Not loaded",
+              systemImage: state?.refreshIcon
+            )
+          }
+        }
+
+        if let issue = state?.issue {
+          Text(issue.message)
+            .font(.caption)
+            .foregroundStyle(QuotaPalette.body)
+            .fixedSize(horizontal: false, vertical: true)
         }
       }
     }
   }
 
-  private func relayIssue(_ issue: RelayStateIssue) -> some View {
-    HStack(alignment: .top, spacing: 8) {
-      Image(systemName: "exclamationmark.circle")
-      Text(issue.message)
-        .fixedSize(horizontal: false, vertical: true)
+  private func shortIssueLabel(_ issue: RelayStateIssue) -> String {
+    switch issue.category {
+    case .unsupported: "Unsupported"
+    case .authentication, .authorization, .credentialMissing: "Auth"
+    case .unavailable: "Unavailable"
+    case .configuration: "Config"
+    case .persistence, .malformedData: "Error"
     }
-    .font(.caption)
-    .foregroundStyle(QuotaPalette.body)
-    .accessibilityElement(children: .combine)
   }
 }

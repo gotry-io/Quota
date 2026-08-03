@@ -65,7 +65,6 @@ struct QuotaOverviewView: View {
 
         if index < providers.count - 1 {
           Divider()
-            .overlay(QuotaPalette.hairline)
         }
       }
     }
@@ -100,7 +99,7 @@ private struct OverviewEmptyStateView: View {
           .buttonStyle(QuotaPrimaryButtonStyle())
       }
     }
-    .frame(maxWidth: .infinity, minHeight: 320)
+    .frame(maxWidth: .infinity, minHeight: 260)
     .padding(.horizontal, 24)
   }
 }

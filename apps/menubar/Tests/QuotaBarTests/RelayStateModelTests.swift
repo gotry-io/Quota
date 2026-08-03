@@ -82,6 +82,32 @@ struct RelayStateModelTests {
   }
 
   @Test
+  func updateControllerCredentialReplacesStoredBearerForSelfHostedProfile() async throws {
+    let operations = RelayPersistenceRecorder()
+    let credentialStore = FakeRelayCredentialStore(operations: operations)
+    let model = RelayStateModel(
+      client: FakeRelayStateClient(discoveryResults: [.success(sampleRelayInfo())]),
+      profileStore: FakeRelayProfileStore(operations: operations),
+      credentialStore: credentialStore,
+      makeProfileID: { profileID1 }
+    )
+    let profile = try await model.addSelfHostedProfile(
+      name: "Primary",
+      origin: "https://relay.example",
+      controllerBearer: syntheticControllerBearer
+    )
+
+    let replacement = "replacement_controller_credential_0123456789"
+    try model.updateControllerCredential(
+      profileID: profile.id,
+      controllerBearer: replacement
+    )
+
+    #expect(credentialStore.token(reference: profile.credentialReference) == replacement)
+    #expect(operations.values.contains(.credentialSave(profile.credentialReference)))
+  }
+
+  @Test
   func rollsBackCredentialWhenAddedProfileMetadataCannotBeSaved() async throws {
     let operations = RelayPersistenceRecorder()
     let profileStore = FakeRelayProfileStore(

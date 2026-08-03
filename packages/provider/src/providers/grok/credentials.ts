@@ -17,6 +17,11 @@ export interface GrokCredentials {
   lastName?: string;
   teamId?: string;
   principalType?: string;
+  /**
+   * Local auth.json `auth_mode` when present (e.g. `oidc`).
+   * Used only as a CodexBar-compatible plan hint — billing does not return plan.
+   */
+  authMode?: string;
   expiresAt?: Date;
   sourcePath: string;
 }
@@ -80,6 +85,7 @@ export function parseGrokCredentials(
   const lastName = readString(entry, "last_name", "lastName");
   const teamId = readString(entry, "team_id", "teamId");
   const principalType = readString(entry, "principal_type", "principalType");
+  const authMode = readString(entry, "auth_mode", "authMode");
   const expiresAt = parseFlexibleDate(entry.expires_at ?? entry.expiresAt);
 
   return {
@@ -91,6 +97,7 @@ export function parseGrokCredentials(
     ...(lastName ? { lastName } : {}),
     ...(teamId ? { teamId } : {}),
     ...(principalType ? { principalType } : {}),
+    ...(authMode ? { authMode } : {}),
     ...(expiresAt ? { expiresAt } : {}),
     sourcePath,
   };
@@ -160,4 +167,34 @@ export function grokDisplayName(credentials: GrokCredentials): string | undefine
     return undefined;
   }
   return parts.join(" ");
+}
+
+/**
+ * Infer a display plan slug the way CodexBar does: billing has no plan field, so
+ * SuperGrok OIDC login (`https://auth.x.ai::…` / `auth_mode: oidc`) maps to
+ * `supergrok`. Other auth_mode values are kept as a weak plan hint when useful.
+ */
+export function grokPlanHint(credentials: GrokCredentials): string | undefined {
+  if (credentials.scope.startsWith(GROK_OIDC_SCOPE_PREFIX)) {
+    return "supergrok";
+  }
+
+  const mode = credentials.authMode?.trim().toLowerCase();
+  if (!mode) {
+    return undefined;
+  }
+  if (
+    mode === "oidc" ||
+    mode === "supergrok" ||
+    mode === "super_grok" ||
+    mode === "super-grok" ||
+    mode === "super"
+  ) {
+    return "supergrok";
+  }
+  // Generic session markers are not subscription names.
+  if (mode === "session" || mode === "legacy" || mode === "cached_token") {
+    return undefined;
+  }
+  return mode;
 }

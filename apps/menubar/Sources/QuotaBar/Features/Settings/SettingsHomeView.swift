@@ -1,4 +1,3 @@
-import AppKit
 import SwiftUI
 
 struct SettingsHomeView: View {
@@ -7,28 +6,25 @@ struct SettingsHomeView: View {
   @Binding var showsClaude: Bool
   @Binding var showsGrok: Bool
   let onOpenRelays: () -> Void
-
-  @State private var showsDeleteAllConfirmation = false
-  @State private var showsLocalDeleteConfirmation = false
-  @State private var isDeletingAllData = false
-  @State private var deleteAllErrorMessage: String?
+  var deleteAllErrorMessage: String? = nil
 
   var body: some View {
     ScrollView {
-      VStack(alignment: .leading, spacing: 24) {
+      VStack(alignment: .leading, spacing: 16) {
         settingsSection("Agents") {
-          providerToggle(.codex, isOn: $showsCodex)
-          providerToggle(.claude, isOn: $showsClaude)
-          providerToggle(.grok, isOn: $showsGrok)
+          VStack(alignment: .leading, spacing: 12) {
+            providerToggle(.codex, isOn: $showsCodex)
+            providerToggle(.claude, isOn: $showsClaude)
+            providerToggle(.grok, isOn: $showsGrok)
+          }
 
-          Text("Only signed-in agents with available or stale quota appear in the overview.")
-            .font(.caption)
+          Text("Turn on signed-in agents to show them in Overview.")
+            .font(QuotaDesign.Typography.resetTime)
             .foregroundStyle(QuotaPalette.body)
             .fixedSize(horizontal: false, vertical: true)
         }
 
         Divider()
-          .overlay(QuotaPalette.hairline)
 
         settingsSection("Remote quota") {
           Button(action: onOpenRelays) {
@@ -60,7 +56,6 @@ struct SettingsHomeView: View {
         }
 
         Divider()
-          .overlay(QuotaPalette.hairline)
 
         settingsSection("About") {
           HStack(alignment: .firstTextBaseline) {
@@ -85,54 +80,11 @@ struct SettingsHomeView: View {
               .foregroundStyle(QuotaPalette.body)
               .fixedSize(horizontal: false, vertical: true)
           }
-
-          Button("Delete all QuotaBar data") {
-            showsDeleteAllConfirmation = true
-          }
-          .buttonStyle(.plain)
-          .font(.system(.subheadline, weight: .medium))
-          .foregroundStyle(QuotaPalette.body)
-          .disabled(isDeletingAllData)
-
-          Button("Quit QuotaBar") {
-            NSApplication.shared.terminate(nil)
-          }
-          .buttonStyle(.plain)
-          .font(.system(.subheadline, weight: .medium))
-          .foregroundStyle(QuotaPalette.ink)
         }
       }
       .frame(maxWidth: .infinity, alignment: .topLeading)
       .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
-      .padding(.vertical, 16)
-    }
-    .confirmationDialog(
-      "Delete all QuotaBar data?",
-      isPresented: $showsDeleteAllConfirmation,
-      titleVisibility: .visible
-    ) {
-      Button("Delete All Data", role: .destructive) {
-        deleteAllData()
-      }
-      Button("Cancel", role: .cancel) {}
-    } message: {
-      Text(
-        "QuotaBar will delete its managed controller and linked Relay data, then delete all controller credentials, Relay profiles, cached quota, and user preferences. Managed Relay will stay disconnected until you reconnect it."
-      )
-    }
-    .confirmationDialog(
-      "Finish by deleting local data?",
-      isPresented: $showsLocalDeleteConfirmation,
-      titleVisibility: .visible
-    ) {
-      Button("Delete Locally Anyway", role: .destructive) {
-        deleteAllDataLocally()
-      }
-      Button("Keep Data", role: .cancel) {}
-    } message: {
-      Text(
-        "QuotaBar could not confirm full cleanup. Deleting locally may leave the managed controller and Relay data behind while paired devices continue reporting. Use this only if you cannot retry while online."
-      )
+      .padding(.vertical, 12)
     }
   }
 
@@ -142,60 +94,44 @@ struct SettingsHomeView: View {
   }
 
   private func providerToggle(_ provider: ProviderID, isOn: Binding<Bool>) -> some View {
-    VStack(alignment: .leading, spacing: 4) {
-      HStack(spacing: 12) {
-        HStack(spacing: 6) {
-          ProviderBrandIcon(provider: provider)
-          Text(provider.displayName)
+    let status = AgentStatusPresentation.resolve(
+      result: model.result(for: provider)
+    )
+
+    return HStack(alignment: .center, spacing: 12) {
+      ProviderBrandIcon(provider: provider, size: 16)
+
+      VStack(alignment: .leading, spacing: 3) {
+        Text(provider.displayName)
+          .font(QuotaDesign.Typography.providerTitle)
+          .foregroundStyle(status.canToggle ? QuotaPalette.ink : QuotaPalette.body)
+
+        if let detail = status.detail {
+          Text(detail)
+            .font(QuotaDesign.Typography.resetTime)
+            .foregroundStyle(QuotaPalette.mute)
+            .fixedSize(horizontal: false, vertical: true)
         }
-        .font(QuotaDesign.Typography.providerTitle)
-
-        Spacer()
-
-        Text(providerStatus(provider))
-          .font(QuotaDesign.Typography.resetTime)
-          .foregroundStyle(QuotaPalette.body)
-
-        Toggle("Show \(provider.displayName)", isOn: isOn)
-          .labelsHidden()
-          .controlSize(.small)
       }
 
-      if let message = providerMessage(provider) {
-        Text(message)
-          .font(QuotaDesign.Typography.resetTime)
-          .foregroundStyle(QuotaPalette.body)
-          .fixedSize(horizontal: false, vertical: true)
-      }
-    }
-    .frame(minHeight: 28)
-  }
+      Spacer(minLength: 8)
 
-  private func providerStatus(_ provider: ProviderID) -> String {
-    guard let result = model.result(for: provider) else {
-      return "Not checked"
+      // Keep stored preference even when disabled; only block interaction.
+      Toggle("Show \(provider.displayName)", isOn: isOn)
+        .labelsHidden()
+        .controlSize(.small)
+        .disabled(!status.canToggle)
+        .opacity(status.canToggle ? 1 : 0.45)
+        .accessibilityHint(status.accessibilityHint)
     }
-    return switch result.outcome {
-    case .success: "Signed in"
-    case .authRequired: "Not signed in"
-    case .unavailable: "Unavailable"
-    case .unsupported: "Unsupported"
-    case .error: "Error"
-    }
-  }
-
-  private func providerMessage(_ provider: ProviderID) -> String? {
-    guard let result = model.result(for: provider), result.outcome != .success else {
-      return nil
-    }
-    return result.message
+    .accessibilityElement(children: .combine)
   }
 
   private func settingsSection<Content: View>(
     _ title: String,
     @ViewBuilder content: () -> Content
   ) -> some View {
-    VStack(alignment: .leading, spacing: 12) {
+    VStack(alignment: .leading, spacing: 10) {
       Text(title)
         .font(.system(.subheadline, weight: .medium))
         .foregroundStyle(QuotaPalette.charcoal)
@@ -203,40 +139,100 @@ struct SettingsHomeView: View {
       content()
     }
   }
+}
 
-  private func deleteAllData() {
-    guard !isDeletingAllData else { return }
-    isDeletingAllData = true
-    deleteAllErrorMessage = nil
-    Task {
-      defer { isDeletingAllData = false }
-      do {
-        try await model.deleteAllQuotaBarData()
-      } catch {
-        deleteAllErrorMessage = RelaySettingsErrorPresentation.message(
-          for: error,
-          fallback: "QuotaBar could not delete all data."
-        )
-        if shouldOfferLocalDelete(after: error) {
-          showsLocalDeleteConfirmation = true
-        }
-      }
+/// Settings Agents row model: signed-in agents are toggleable with no status chrome;
+/// everything else shows a short recovery hint and a disabled toggle.
+struct AgentStatusPresentation: Equatable {
+  /// When true, the visibility toggle is interactive.
+  let canToggle: Bool
+  /// Optional secondary line. Nil for healthy signed-in agents.
+  let detail: String?
+  let accessibilityHint: String
+
+  static func resolve(result: QuotaCollectionResult?) -> AgentStatusPresentation {
+    guard let result else {
+      return AgentStatusPresentation(
+        canToggle: false,
+        detail: "Refresh to check access.",
+        accessibilityHint: "Not checked yet. Refresh quota, then sign in if needed."
+      )
     }
-  }
 
-  private func deleteAllDataLocally() {
-    do {
-      try model.deleteAllQuotaBarDataLocally()
-      deleteAllErrorMessage = nil
-    } catch {
-      deleteAllErrorMessage = RelaySettingsErrorPresentation.message(
-        for: error,
-        fallback: "QuotaBar could not delete its local data."
+    switch result.outcome {
+    case .success:
+      return AgentStatusPresentation(
+        canToggle: true,
+        detail: nil,
+        accessibilityHint: "Signed in. Toggle to show or hide in Overview."
+      )
+    case .authRequired:
+      return AgentStatusPresentation(
+        canToggle: false,
+        detail: authHint(for: result.provider, message: result.message),
+        accessibilityHint: "Not signed in. Sign in with the provider CLI to enable."
+      )
+    case .unavailable:
+      return AgentStatusPresentation(
+        canToggle: false,
+        detail: conciseMessage(result.message) ?? "Temporarily unavailable.",
+        accessibilityHint: "Provider unavailable."
+      )
+    case .unsupported:
+      return AgentStatusPresentation(
+        canToggle: false,
+        detail: conciseMessage(result.message) ?? "Not supported here.",
+        accessibilityHint: "Provider unsupported."
+      )
+    case .error:
+      return AgentStatusPresentation(
+        canToggle: false,
+        detail: conciseMessage(result.message) ?? "Could not read quota.",
+        accessibilityHint: "Provider error."
       )
     }
   }
 
-  private func shouldOfferLocalDelete(after error: Error) -> Bool {
-    !(error is CancellationError)
+  private static func authHint(for provider: ProviderID, message: String?) -> String {
+    if let command = loginCommand(in: message) {
+      return "Run \(command)"
+    }
+    switch provider {
+    case .codex:
+      return "Run `codex login`"
+    case .claude:
+      return "Run `claude auth login`"
+    case .grok:
+      return "Run `grok login`"
+    }
+  }
+
+  private static func loginCommand(in message: String?) -> String? {
+    guard let message else { return nil }
+    if let match = message.range(of: #"`([^`]+)`"#, options: .regularExpression) {
+      let full = String(message[match])
+      return String(full.dropFirst().dropLast())
+    }
+    return nil
+  }
+
+  private static func conciseMessage(_ message: String?) -> String? {
+    guard let trimmed = message?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty
+    else {
+      return nil
+    }
+    if let command = loginCommand(in: trimmed) {
+      return "Run \(command)"
+    }
+    if trimmed.count <= 96 {
+      return trimmed
+    }
+    if let period = trimmed.firstIndex(of: ".") {
+      let sentence = String(trimmed[...period]).trimmingCharacters(in: .whitespacesAndNewlines)
+      if sentence.count >= 12, sentence.count <= 96 {
+        return sentence
+      }
+    }
+    return String(trimmed.prefix(93)).trimmingCharacters(in: .whitespacesAndNewlines) + "…"
   }
 }

@@ -8,7 +8,12 @@ import {
   parseFlexibleDate,
   toIsoOffset,
 } from "../../runtime/time.ts";
-import { GROK_SOURCE_API, type GrokCredentials, grokDisplayName } from "./credentials.ts";
+import {
+  GROK_SOURCE_API,
+  type GrokCredentials,
+  grokDisplayName,
+  grokPlanHint,
+} from "./credentials.ts";
 
 export function mapGrokBillingResponse(json: unknown): {
   window?: QuotaWindow;
@@ -71,12 +76,16 @@ export function buildGrokSnapshot(input: {
   const label =
     maskEmail(credentials?.email) ??
     maskDisplayName(credentials ? grokDisplayName(credentials) : undefined);
+  const plan = credentials ? grokPlanHint(credentials) : undefined;
   const account: QuotaSnapshot["account"] = {
     fingerprint: identity.fingerprint,
     fingerprint_scope: identity.scope,
   };
   if (label) {
     account.label = label;
+  }
+  if (plan) {
+    account.plan = plan;
   }
 
   return {

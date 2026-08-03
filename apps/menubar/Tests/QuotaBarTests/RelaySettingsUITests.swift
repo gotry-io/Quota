@@ -11,7 +11,7 @@ struct RelaySettingsUITests {
   func relayRoutesHaveStableTitles() {
     #expect(MenuBarRoute.settings.title == "Settings")
     #expect(MenuBarRoute.relays.title == "Relays")
-    #expect(MenuBarRoute.addRelay.title == "Add Relay")
+    #expect(MenuBarRoute.addRelay.title == "Pair device")
     #expect(MenuBarRoute.relayDetail(profileID).title == "Relay")
     #expect(MenuBarRoute.pairing(profileID).title == "Pair device")
     #expect(MenuBarRoute.devices(profileID).title == "Devices")
@@ -95,10 +95,20 @@ struct RelaySettingsUITests {
   }
 
   @Test
-  func pairingCodeValidationTrimsInputAndRejectsEmptyValues() throws {
-    #expect(try RelayPairingCodeValidation.validate("  ABCD-EFGH  ") == "ABCD-EFGH")
+  func pairingCodeValidationNormalizesEightCharacterCodes() throws {
+    #expect(try RelayPairingCodeValidation.validate("  abcd-efgh  ") == "ABCD-EFGH")
+    #expect(try RelayPairingCodeValidation.validate("abcdefgh") == "ABCD-EFGH")
+    #expect(RelayPairingCodeValidation.normalize("ab-cd ef_gh") == "ABCDEFGH")
+    #expect(RelayPairingCodeValidation.isComplete("ABCD-EFGH"))
     #expect(throws: RelayFormValidationError.missingPairingCode) {
       try RelayPairingCodeValidation.validate("  ")
+    }
+    #expect(throws: RelayFormValidationError.missingPairingCode) {
+      try RelayPairingCodeValidation.validate("ABC")
+    }
+    #expect(throws: RelayFormValidationError.missingPairingCode) {
+      // I and O are outside the Relay alphabet.
+      try RelayPairingCodeValidation.validate("ABCDIO12")
     }
   }
 

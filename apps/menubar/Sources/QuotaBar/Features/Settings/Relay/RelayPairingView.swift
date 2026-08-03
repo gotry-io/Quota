@@ -4,112 +4,102 @@ struct RelayPairingView: View {
   let model: RelayStateModel
   let profileID: UUID
 
-  @State private var userCode = ""
+  @State private var pairingCode = ""
   @State private var statusMessage: String?
   @State private var errorMessage: String?
   @State private var isSubmitting = false
+  @State private var lastAttemptedCode: String?
+  @State private var retryToken = 0
 
   var body: some View {
     ScrollView {
-      VStack(alignment: .leading, spacing: 20) {
-        VStack(alignment: .leading, spacing: 6) {
-          Text("Review a pairing request")
+      VStack(alignment: .center, spacing: 18) {
+        VStack(spacing: 6) {
+          Text("Pair a device")
             .font(.system(.headline, design: .rounded, weight: .semibold))
             .foregroundStyle(QuotaPalette.ink)
-          Text("Enter the user code displayed by QuotaCLI on the device you want to connect.")
+          Text("Enter the 8-character code shown by QuotaCLI on the device you trust.")
             .font(.caption)
             .foregroundStyle(QuotaPalette.body)
+            .multilineTextAlignment(.center)
             .fixedSize(horizontal: false, vertical: true)
         }
+        .frame(maxWidth: 300)
 
-        RelayCard {
-          VStack(alignment: .leading, spacing: 8) {
-            Text("User code")
-              .font(.system(.subheadline, weight: .medium))
-              .foregroundStyle(QuotaPalette.charcoal)
-            TextField("ABCD-EFGH", text: $userCode)
-              .textFieldStyle(RelayPillTextFieldStyle())
-              .font(.system(.title3, design: .monospaced, weight: .medium))
-              .accessibilityLabel("Pairing user code")
-          }
-        }
-
-        if let statusMessage {
-          Label(statusMessage, systemImage: "checkmark.circle")
-            .font(.caption)
-            .foregroundStyle(QuotaPalette.body)
-            .accessibilityLabel(statusMessage)
-        }
-        if let errorMessage {
-          Label(errorMessage, systemImage: "exclamationmark.circle")
-            .font(.caption)
-            .foregroundStyle(QuotaPalette.body)
-            .fixedSize(horizontal: false, vertical: true)
-            .accessibilityLabel("Pairing failed. \(errorMessage)")
-        }
-
-        HStack(spacing: 8) {
-          Button("Approve") {
-            decide(approve: true)
-          }
-          .buttonStyle(QuotaPrimaryButtonStyle())
-          .disabled(isSubmitting)
-
-          Button("Deny") {
-            decide(approve: false)
-          }
-          .buttonStyle(RelaySecondaryButtonStyle())
-          .disabled(isSubmitting)
+        VStack(spacing: 10) {
+          PairingCodeEntryView(
+            code: $pairingCode,
+            isDisabled: isSubmitting,
+            showsError: errorMessage != nil,
+            retryToken: retryToken,
+            onComplete: { canonical in
+              submit(canonicalCode: canonical)
+            }
+          )
 
           if isSubmitting {
-            ProgressView()
-              .controlSize(.small)
-              .accessibilityLabel("Submitting pairing decision")
+            HStack(spacing: 8) {
+              ProgressView()
+                .controlSize(.small)
+              Text("Pairing…")
+                .font(.caption)
+                .foregroundStyle(QuotaPalette.body)
+            }
+          }
+
+          if let statusMessage {
+            Label(statusMessage, systemImage: "checkmark.circle")
+              .font(.caption)
+              .foregroundStyle(QuotaPalette.body)
+          }
+
+          if let errorMessage {
+            Label(errorMessage, systemImage: "exclamationmark.circle")
+              .font(.caption)
+              .foregroundStyle(QuotaPalette.body)
+              .multilineTextAlignment(.center)
+              .fixedSize(horizontal: false, vertical: true)
+              .accessibilityLabel("Pairing failed. \(errorMessage)")
           }
         }
 
-        Text("Approve only when the same code is visible on a device you recognize.")
+        Text("Pairing starts automatically when all eight characters are entered.")
           .font(.caption2)
-          .foregroundStyle(QuotaPalette.body)
-          .fixedSize(horizontal: false, vertical: true)
+          .foregroundStyle(QuotaPalette.mute)
+          .multilineTextAlignment(.center)
+          .frame(maxWidth: 280)
       }
-      .frame(maxWidth: .infinity, alignment: .topLeading)
+      .frame(maxWidth: .infinity)
       .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
-      .padding(.vertical, 16)
+      .padding(.vertical, 20)
     }
   }
 
-  private func decide(approve: Bool) {
+  private func submit(canonicalCode: String) {
     guard !isSubmitting else { return }
-    let canonicalCode: String
-    do {
-      canonicalCode = try RelayPairingCodeValidation.validate(userCode)
-    } catch {
-      errorMessage = RelaySettingsErrorPresentation.message(
-        for: error,
-        fallback: "Enter a valid pairing code."
-      )
+    if lastAttemptedCode == canonicalCode, errorMessage == nil, statusMessage != nil {
       return
     }
 
     isSubmitting = true
     statusMessage = nil
     errorMessage = nil
+    lastAttemptedCode = canonicalCode
+
     Task {
       defer { isSubmitting = false }
       do {
-        if approve {
-          try await model.approvePairing(profileID: profileID, userCode: canonicalCode)
-        } else {
-          try await model.denyPairing(profileID: profileID, userCode: canonicalCode)
-        }
-        userCode = ""
-        statusMessage = approve ? "Pairing approved." : "Pairing denied."
+        try await model.approvePairing(profileID: profileID, userCode: canonicalCode)
+        pairingCode = ""
+        lastAttemptedCode = nil
+        statusMessage = "Device paired."
       } catch {
         errorMessage = RelaySettingsErrorPresentation.message(
           for: error,
-          fallback: "QuotaBar could not submit the pairing decision."
+          fallback: "QuotaBar could not complete pairing."
         )
+        lastAttemptedCode = nil
+        retryToken += 1
       }
     }
   }

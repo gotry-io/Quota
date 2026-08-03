@@ -155,7 +155,7 @@ struct RelayDetailView: View {
           }
         }
 
-        Divider().overlay(QuotaPalette.hairline)
+        Divider()
 
         Button("Pair device", action: onOpenPairing)
           .buttonStyle(QuotaPrimaryButtonStyle())

@@ -1,132 +1,297 @@
+import AppKit
 import SwiftUI
 
 struct AddRelayView: View {
   let model: RelayStateModel
-  let onAdded: (UUID) -> Void
+  let onFinished: () -> Void
 
+  @State private var pairingCode = ""
+  @State private var showsDeviceHelp = false
+  @State private var showsAdvanced = false
   @State private var name = ""
-  @State private var origin = ""
+  @State private var origin = ManagedRelayConfiguration.production.baseURL.absoluteString
   @State private var controllerBearer = ""
   @State private var errorMessage: String?
   @State private var isSubmitting = false
+  @State private var lastAttemptedCode: String?
+  @State private var retryToken = 0
+  @State private var installCopied = false
+  @State private var pairCopied = false
+
+  private var usesOfficialRelay: Bool {
+    guard let url = try? RelayOrigin.canonicalURL(from: origin) else { return false }
+    return url == ManagedRelayConfiguration.production.baseURL
+  }
+
+  private var pairCommand: String {
+    if usesOfficialRelay {
+      return "quotacli relay pair"
+    }
+    let trimmed = origin.trimmingCharacters(in: .whitespacesAndNewlines)
+    return "quotacli relay pair --relay \(trimmed.isEmpty ? "https://relay.example" : trimmed)"
+  }
+
+  private let installCommand = "npm install -g @gotry-io/quotacli"
 
   var body: some View {
     ScrollView {
-      VStack(alignment: .leading, spacing: 20) {
-        VStack(alignment: .leading, spacing: 6) {
-          Text("Connect a self-hosted Relay")
+      VStack(alignment: .center, spacing: 18) {
+        VStack(spacing: 6) {
+          Text("Pair a device")
             .font(.system(.headline, design: .rounded, weight: .semibold))
             .foregroundStyle(QuotaPalette.ink)
-          Text("QuotaBar verifies the Relay before storing its controller credential in Keychain.")
+          Text("Enter the 8-character code shown by QuotaCLI. Pairing starts automatically.")
             .font(.caption)
             .foregroundStyle(QuotaPalette.body)
+            .multilineTextAlignment(.center)
             .fixedSize(horizontal: false, vertical: true)
         }
+        .frame(maxWidth: 300)
 
-        formField("Name") {
-          TextField("Home Relay", text: $name)
-            .textFieldStyle(RelayPillTextFieldStyle())
-            .accessibilityLabel("Relay profile name")
-        }
+        VStack(spacing: 10) {
+          PairingCodeEntryView(
+            code: $pairingCode,
+            isDisabled: isSubmitting,
+            showsError: errorMessage != nil,
+            retryToken: retryToken,
+            onComplete: { canonical in
+              submit(canonicalCode: canonical)
+            }
+          )
 
-        formField("Origin") {
-          TextField("https://relay.example.com", text: $origin)
-            .textFieldStyle(RelayPillTextFieldStyle())
-            .font(.system(.body, design: .monospaced))
-            .accessibilityLabel("Relay origin")
-        }
-
-        formField("Controller credential") {
-          SecureField("Controller bearer", text: $controllerBearer)
-            .textFieldStyle(RelayPillTextFieldStyle())
-            .accessibilityLabel("Relay controller credential")
-
-          Text("Used only for authenticated requests to the verified Relay and stored in Keychain.")
-            .font(.caption2)
-            .foregroundStyle(QuotaPalette.body)
-            .fixedSize(horizontal: false, vertical: true)
-        }
-
-        if let errorMessage {
-          Label(errorMessage, systemImage: "exclamationmark.circle")
-            .font(.caption)
-            .foregroundStyle(QuotaPalette.body)
-            .fixedSize(horizontal: false, vertical: true)
-            .accessibilityLabel("Could not add Relay. \(errorMessage)")
-        }
-
-        HStack {
-          Spacer()
-          Button {
-            submit()
-          } label: {
-            if isSubmitting {
+          if isSubmitting {
+            HStack(spacing: 8) {
               ProgressView()
                 .controlSize(.small)
-                .frame(minWidth: 64)
-                .accessibilityLabel("Adding Relay")
-            } else {
-              Text("Add Relay")
+              Text("Pairing…")
+                .font(.caption)
+                .foregroundStyle(QuotaPalette.body)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Pairing")
+          }
+
+          if let errorMessage {
+            Label(errorMessage, systemImage: "exclamationmark.circle")
+              .font(.caption)
+              .foregroundStyle(QuotaPalette.body)
+              .multilineTextAlignment(.center)
+              .fixedSize(horizontal: false, vertical: true)
+              .accessibilityLabel("Pairing failed. \(errorMessage)")
+          }
+        }
+
+        VStack(alignment: .leading, spacing: 8) {
+          collapsibleSection(title: "On the device", isExpanded: $showsDeviceHelp) {
+            VStack(alignment: .leading, spacing: 10) {
+              commandRow(
+                title: "Install",
+                command: installCommand,
+                copied: installCopied,
+                copyLabel: "Copy install command",
+                action: copyInstallCommand
+              )
+              commandRow(
+                title: "Pair",
+                command: pairCommand,
+                copied: pairCopied,
+                copyLabel: "Copy pair command",
+                action: copyPairCommand
+              )
             }
           }
-          .buttonStyle(QuotaPrimaryButtonStyle())
-          .disabled(isSubmitting)
+
+          collapsibleSection(title: "Advanced", isExpanded: $showsAdvanced) {
+            VStack(alignment: .leading, spacing: 8) {
+              TextField("Name (optional)", text: $name)
+                .textFieldStyle(RelayRoundedTextFieldStyle())
+                .disabled(isSubmitting)
+
+              TextField("https://quota.gotry.io", text: $origin)
+                .textFieldStyle(RelayRoundedTextFieldStyle())
+                .font(.system(.body, design: .monospaced))
+                .disabled(isSubmitting)
+
+              if !usesOfficialRelay {
+                SecureField("Controller credential", text: $controllerBearer)
+                  .textFieldStyle(RelayRoundedTextFieldStyle())
+                  .disabled(isSubmitting)
+              }
+            }
+          }
         }
+        .frame(maxWidth: 320, alignment: .leading)
       }
-      .frame(maxWidth: .infinity, alignment: .topLeading)
+      .frame(maxWidth: .infinity)
       .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
-      .padding(.vertical, 16)
+      .padding(.vertical, 20)
     }
   }
 
-  @ViewBuilder
-  private func formField<Content: View>(
-    _ label: String,
+  private func collapsibleSection<Content: View>(
+    title: String,
+    isExpanded: Binding<Bool>,
     @ViewBuilder content: () -> Content
   ) -> some View {
     VStack(alignment: .leading, spacing: 8) {
-      Text(label)
-        .font(.system(.subheadline, weight: .medium))
+      Button {
+        withAnimation(.snappy(duration: 0.2)) {
+          isExpanded.wrappedValue.toggle()
+        }
+      } label: {
+        HStack(spacing: 6) {
+          Image(systemName: "chevron.right")
+            .font(.system(size: 11, weight: .semibold))
+            .rotationEffect(.degrees(isExpanded.wrappedValue ? 90 : 0))
+          Text(title)
+            .font(.system(.subheadline, weight: .medium))
+          Spacer(minLength: 0)
+        }
         .foregroundStyle(QuotaPalette.charcoal)
-      content()
+        .contentShape(Rectangle())
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 4)
+      }
+      .buttonStyle(.plain)
+      .accessibilityLabel(title)
+      .accessibilityHint(isExpanded.wrappedValue ? "Collapse" : "Expand")
+
+      if isExpanded.wrappedValue {
+        content()
+          .padding(.leading, 2)
+      }
     }
   }
 
-  private func submit() {
+  private func commandRow(
+    title: String,
+    command: String,
+    copied: Bool,
+    copyLabel: String,
+    action: @escaping () -> Void
+  ) -> some View {
+    VStack(alignment: .leading, spacing: 4) {
+      Text(title)
+        .font(QuotaDesign.Typography.resetTime)
+        .foregroundStyle(QuotaPalette.mute)
+
+      HStack(spacing: 8) {
+        Text(command)
+          .font(.system(.caption, design: .monospaced))
+          .foregroundStyle(QuotaPalette.ink)
+          .lineLimit(2)
+          .frame(maxWidth: .infinity, alignment: .leading)
+
+        Button(copied ? "Copied" : "Copy", action: action)
+          .buttonStyle(.plain)
+          .font(.system(.caption, weight: .medium))
+          .foregroundStyle(QuotaPalette.body)
+          .accessibilityLabel(copyLabel)
+      }
+      .padding(.horizontal, 10)
+      .padding(.vertical, 8)
+      .background(QuotaPalette.soft)
+      .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+      .overlay {
+        RoundedRectangle(cornerRadius: 8, style: .continuous)
+          .stroke(QuotaPalette.hairline.opacity(0.75), lineWidth: 1)
+      }
+    }
+  }
+
+  private func copyInstallCommand() {
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString(installCommand, forType: .string)
+    installCopied = true
+    Task {
+      try? await Task.sleep(for: .seconds(1.5))
+      installCopied = false
+    }
+  }
+
+  private func copyPairCommand() {
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString(pairCommand, forType: .string)
+    pairCopied = true
+    Task {
+      try? await Task.sleep(for: .seconds(1.5))
+      pairCopied = false
+    }
+  }
+
+  private func submit(canonicalCode: String) {
     guard !isSubmitting else { return }
-    let validated: ValidatedRelayAddForm
-    do {
-      validated = try RelayAddFormValidation.validate(
-        name: name,
-        origin: origin,
-        controllerBearer: controllerBearer
-      )
-    } catch {
-      errorMessage = RelaySettingsErrorPresentation.message(
-        for: error,
-        fallback: "Check the Relay details and try again."
-      )
+    // Same complete code only auto-fires once until failure clears the lock.
+    if lastAttemptedCode == canonicalCode, errorMessage == nil {
       return
     }
 
-    isSubmitting = true
     errorMessage = nil
+    lastAttemptedCode = canonicalCode
+    isSubmitting = true
+
     Task {
       defer { isSubmitting = false }
       do {
-        let profile = try await model.addSelfHostedProfile(
-          name: validated.name,
-          origin: validated.origin,
-          controllerBearer: validated.controllerBearer
-        )
-        controllerBearer = ""
-        onAdded(profile.id)
+        let profileID = try await resolveProfileIDForPairing()
+        try await model.approvePairing(profileID: profileID, userCode: canonicalCode)
+
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        // ponytail: only rename when user typed a name; guessing newest device is wrong multi-device
+        if !trimmedName.isEmpty {
+          try? model.renameProfile(profileID, to: trimmedName)
+        }
+
+        onFinished()
       } catch {
         errorMessage = RelaySettingsErrorPresentation.message(
           for: error,
-          fallback: "QuotaBar could not add the Relay."
+          fallback: "QuotaBar could not complete pairing."
         )
+        lastAttemptedCode = nil
+        retryToken += 1
       }
     }
+  }
+
+  private func resolveProfileIDForPairing() async throws -> UUID {
+    if usesOfficialRelay {
+      await model.ensureManagedControllerProfile()
+      if let existing = model.profiles.first(where: { $0.mode == .managed })?.id {
+        return existing
+      }
+      throw RelayStateModelError(
+        issue: RelayStateIssue(
+          category: .unavailable,
+          message: "QuotaBar could not prepare the official Relay controller."
+        )
+      )
+    }
+
+    let validated = try RelayAddFormValidation.validate(
+      name: name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        ? "Relay"
+        : name,
+      origin: origin,
+      controllerBearer: controllerBearer
+    )
+
+    if let existing = model.profiles.first(where: {
+      $0.baseURL.absoluteString == validated.origin
+    }) {
+      // Keep the bearer the user just entered; don't silently reuse a stale Keychain value.
+      try model.updateControllerCredential(
+        profileID: existing.id,
+        controllerBearer: validated.controllerBearer
+      )
+      return existing.id
+    }
+
+    let profile = try await model.addSelfHostedProfile(
+      name: validated.name,
+      origin: validated.origin,
+      controllerBearer: validated.controllerBearer
+    )
+    return profile.id
   }
 }

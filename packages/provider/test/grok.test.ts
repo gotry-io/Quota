@@ -7,6 +7,7 @@ import {
   GROK_LEGACY_SESSION_SCOPE,
   GROK_OIDC_SCOPE_PREFIX,
   GROK_SOURCE_API,
+  grokPlanHint,
   parseGrokCredentials,
 } from "../src/providers/grok/credentials.ts";
 import { refreshGrokAuthWithCli } from "../src/providers/grok/auth-refresh.ts";
@@ -25,6 +26,7 @@ describe("grok credentials", () => {
           email: "grok@example.com",
           first_name: "Grok",
           last_name: "User",
+          auth_mode: "oidc",
         },
         [GROK_LEGACY_SESSION_SCOPE]: {
           key: "legacy-key",
@@ -35,7 +37,33 @@ describe("grok credentials", () => {
     );
     expect(credentials?.userId).toBe("user_1");
     expect(credentials?.accessToken).toBe("oidc-key");
+    expect(credentials?.authMode).toBe("oidc");
     expect(credentials?.scope.startsWith(GROK_OIDC_SCOPE_PREFIX)).toBe(true);
+  });
+
+  it("infers SuperGrok plan from OIDC login the way CodexBar does", () => {
+    const oidc = parseGrokCredentials(
+      {
+        [`${GROK_OIDC_SCOPE_PREFIX}client`]: {
+          key: "oidc-key",
+          user_id: "user_1",
+          auth_mode: "oidc",
+        },
+      },
+      "/tmp/grok/auth.json",
+    );
+    expect(oidc && grokPlanHint(oidc)).toBe("supergrok");
+
+    const legacy = parseGrokCredentials(
+      {
+        [GROK_LEGACY_SESSION_SCOPE]: {
+          key: "legacy-key",
+          user_id: "legacy_user",
+        },
+      },
+      "/tmp/grok/auth.json",
+    );
+    expect(legacy && grokPlanHint(legacy)).toBeUndefined();
   });
 
   it("falls back to legacy sign-in when OIDC key is empty", () => {
@@ -186,13 +214,25 @@ describe("grok billing mapping", () => {
     });
 
     expect(user.account.fingerprint_scope).toBe("global");
+    expect(user.account.plan).toBe("supergrok");
     expect(teamA.account.fingerprint_scope).toBe("global");
     expect(teamA.account.fingerprint).toBe(teamB.account.fingerprint);
     expect(teamA.account.fingerprint).not.toBe(user.account.fingerprint);
+    expect(teamA.account.plan).toBe("supergrok");
     expect(missingA.account.fingerprint_scope).toBe("source");
     expect(missingA.account.fingerprint).toBe(missingB.account.fingerprint);
+    expect(missingA.account.plan).toBe("supergrok");
     expect(JSON.stringify(teamA)).not.toContain("team_owner");
     expect(JSON.stringify(teamA)).not.toContain("user_a");
+  });
+
+  it("omits plan for legacy non-OIDC credentials without an auth_mode hint", () => {
+    const snapshot = buildGrokSnapshot({
+      window: { id: "billing_cycle", title: "Monthly", used_percent: 8 },
+      credentials: grokCredentials({ scope: GROK_LEGACY_SESSION_SCOPE, userId: "legacy_user" }),
+      now: NOW,
+    });
+    expect(snapshot.account.plan).toBeUndefined();
   });
 });
 
@@ -221,6 +261,7 @@ describe("grok collector", () => {
 
     expect(snapshot.source).toBe(GROK_SOURCE_API);
     expect(snapshot.account.fingerprint_scope).toBe("global");
+    expect(snapshot.account.plan).toBe("supergrok");
     expect(snapshot.windows[0]?.used_percent).toBe(8);
     expect(request?.url).toBe(GROK_BILLING_URL);
     expect(request?.headers).toMatchObject({

@@ -61,7 +61,11 @@ direct usage collection and report `auth_required` if Claude rejects the cached 
    exactly once. A valid cached token remains usable without the `grok` executable.
 5. Prefer `config.creditUsagePercent` and `config.currentPeriod`. For non-unified accounts, retain the
    deprecated `config.used.val / config.monthlyLimit.val * 100` fields documented by Grok Build.
-6. If the provider-owned refresh is unavailable or the retried request is unauthorized, report
+6. Billing does not expose a subscription plan field. Infer a CodexBar-compatible plan hint from local
+   credentials only: OIDC scopes under `https://auth.x.ai::` (and `auth_mode: oidc`) map to
+   `supergrok`; other `auth_mode` values may be kept as a weak plan slug when they look like a plan
+   name. Do not invent a plan when neither signal is present.
+7. If the provider-owned refresh is unavailable or the retried request is unauthorized, report
    `auth_required` and require `grok login`.
 
 QuotaCLI never submits the refresh token itself and never starts Grok's interactive browser login.

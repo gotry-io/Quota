@@ -20,7 +20,8 @@ The canonical system description is in [architecture](docs/architecture.md). See
 [persistent storage decision](docs/decisions/0001-persistent-relay-storage.md),
 [device pairing decision](docs/decisions/0002-relay-device-code-pairing.md),
 [anonymous controller decision](docs/decisions/0004-anonymous-relay-controllers.md), and
-[product design system](DESIGN.md) for their respective concerns.
+[website design system](apps/web/DESIGN.md) and
+[QuotaBar design system](apps/menubar/DESIGN.md) for their respective concerns.
 
 ## Repository layout
 

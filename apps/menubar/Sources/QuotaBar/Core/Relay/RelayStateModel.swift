@@ -355,6 +355,40 @@ final class RelayStateModel {
     return profile
   }
 
+  /// Replaces the Keychain controller bearer for an existing self-hosted profile.
+  func updateControllerCredential(profileID: UUID, controllerBearer: String) throws {
+    guard let profile = profiles.first(where: { $0.id == profileID }) else {
+      throw Self.profileNotFoundError
+    }
+    guard profile.mode == .selfHosted else {
+      throw Self.modelError(
+        category: .unsupported,
+        message: "Only self-hosted Relays store a controller bearer."
+      )
+    }
+    guard !controllerBearer.isEmpty,
+      controllerBearer == controllerBearer.trimmingCharacters(in: .whitespacesAndNewlines),
+      controllerBearer.unicodeScalars.allSatisfy({ $0.value >= 0x20 && $0.value != 0x7f })
+    else {
+      throw Self.modelError(
+        category: .configuration,
+        message: "Enter a valid Relay controller credential."
+      )
+    }
+    do {
+      try credentialStore.save(controllerBearer, reference: profile.credentialReference)
+      if var state = profileStates[profileID] {
+        state.operationIssue = nil
+        profileStates[profileID] = state
+      }
+      globalIssue = nil
+    } catch {
+      let issue = Self.issue(for: error)
+      setOperationIssue(issue, for: profileID)
+      throw RelayStateModelError(issue: issue)
+    }
+  }
+
   func ensureManagedControllerProfile() async {
     guard let configuration = managedRelayConfiguration,
       !managedEnrollmentDisabled,

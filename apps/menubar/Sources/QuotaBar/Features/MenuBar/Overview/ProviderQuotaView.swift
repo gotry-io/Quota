@@ -4,7 +4,7 @@ struct ProviderQuotaView: View {
   let presentation: ProviderQuotaPresentation
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 8) {
+    VStack(alignment: .leading, spacing: 5) {
       providerHeader
 
       ForEach(Array(presentation.accounts.enumerated()), id: \.element.id) { index, account in
@@ -16,8 +16,7 @@ struct ProviderQuotaView: View {
 
         if index < presentation.accounts.count - 1 {
           Divider()
-            .overlay(QuotaPalette.hairline)
-            .padding(.vertical, 4)
+            .padding(.vertical, 2)
         }
       }
     }
@@ -26,7 +25,7 @@ struct ProviderQuotaView: View {
   }
 
   private var providerHeader: some View {
-    HStack(alignment: .firstTextBaseline, spacing: 8) {
+    HStack(alignment: .center, spacing: 8) {
       HStack(spacing: 6) {
         ProviderBrandIcon(provider: presentation.provider)
         Text(presentation.provider.displayName)
@@ -35,18 +34,18 @@ struct ProviderQuotaView: View {
       .foregroundStyle(QuotaPalette.ink)
 
       if presentation.accounts.count == 1,
-        let account = presentation.accounts.first
-      {
-        SourceTag(summary: account.sourceSummary)
-      }
-
-      if presentation.accounts.count == 1,
         presentation.accounts.first?.isStale == true
       {
         StaleTag()
       }
 
-      Spacer()
+      Spacer(minLength: 8)
+
+      if presentation.accounts.count == 1,
+        let account = presentation.accounts.first
+      {
+        SourceLabel(summary: account.sourceSummary)
+      }
     }
   }
 }
@@ -58,12 +57,17 @@ private struct AccountQuotaView: View {
 
   private var snapshot: QuotaSnapshot { presentation.snapshot }
 
+  private var identitySummary: String? {
+    PlanDisplay.accountSummary(
+      plan: snapshot.account.plan,
+      label: snapshot.account.label
+    )
+  }
+
   var body: some View {
-    VStack(alignment: .leading, spacing: 8) {
-      if let accountSummary = accountSummary(snapshot.account) {
-        accountHeader(title: accountSummary)
-      } else if showsAccountStatus {
-        accountHeader(title: "Account \(accountIndex + 1)")
+    VStack(alignment: .leading, spacing: 6) {
+      if showsAccountMetadata {
+        accountHeader
       }
 
       ForEach(snapshot.windows) { window in
@@ -76,21 +80,53 @@ private struct AccountQuotaView: View {
     }
   }
 
-  private func accountHeader(title: String) -> some View {
+  private var showsAccountMetadata: Bool {
+    if showsAccountStatus {
+      return true
+    }
+    return identitySummary != nil
+  }
+
+  private var accountHeader: some View {
     HStack(alignment: .firstTextBaseline, spacing: 6) {
-      Text(title)
-        .lineLimit(1)
-        .truncationMode(.middle)
+      if let identitySummary {
+        Text(identitySummary)
+          .font(QuotaDesign.Typography.metadata.weight(.medium))
+          .foregroundStyle(QuotaPalette.body)
+          .lineLimit(1)
+          .truncationMode(.middle)
+          .accessibilityLabel(accessibilityIdentityLabel)
+      } else if showsAccountStatus {
+        Text("Account \(accountIndex + 1)")
+          .font(QuotaDesign.Typography.metadata)
+          .foregroundStyle(QuotaPalette.body)
+      }
+
+      if showsAccountStatus, presentation.isStale {
+        StaleTag()
+      }
+
+      Spacer(minLength: 8)
 
       if showsAccountStatus {
-        SourceTag(summary: presentation.sourceSummary)
-        if presentation.isStale {
-          StaleTag()
-        }
+        SourceLabel(summary: presentation.sourceSummary)
       }
     }
-    .font(QuotaDesign.Typography.metadata)
-    .foregroundStyle(QuotaPalette.body)
+  }
+
+  private var accessibilityIdentityLabel: String {
+    let plan = PlanDisplay.planBadge(snapshot.account.plan)
+    let label = PlanDisplay.accountLabel(snapshot.account.label)
+    switch (plan, label) {
+    case let (plan?, label?):
+      return "Plan: \(plan), Account: \(label)"
+    case let (plan?, nil):
+      return "Plan: \(plan)"
+    case let (nil, label?):
+      return "Account: \(label)"
+    case (nil, nil):
+      return "Account"
+    }
   }
 }
 
@@ -99,66 +135,93 @@ private struct QuotaWindowRow: View {
   let observedAt: Date
   let isStale: Bool
 
+  private var usageColor: Color {
+    let color = QuotaPalette.usageColor(remainingPercent: window.remainingPercent)
+    return isStale ? color.opacity(0.55) : color
+  }
+
   var body: some View {
-    VStack(alignment: .leading, spacing: 7) {
-      HStack(alignment: .firstTextBaseline) {
+    VStack(alignment: .leading, spacing: 4) {
+      HStack(alignment: .firstTextBaseline, spacing: 8) {
         Text(window.title)
           .font(QuotaDesign.Typography.quotaLabel)
           .foregroundStyle(QuotaPalette.charcoal)
-        Spacer()
-        Text("\(percent(window.remainingPercent)) left")
-          .font(QuotaDesign.Typography.quotaLabel)
+        Spacer(minLength: 8)
+        Text(percent(window.remainingPercent))
+          .font(QuotaDesign.Typography.remainingValue)
           .monospacedDigit()
-          .foregroundStyle(QuotaPalette.ink)
+          .foregroundStyle(usageColor)
+          .accessibilityLabel("\(percent(window.remainingPercent)) left")
       }
 
-      QuotaProgressBar(value: window.remainingPercent)
-      VStack(alignment: .leading, spacing: 2) {
+      QuotaProgressBar(value: window.remainingPercent, fill: usageColor)
+
+      HStack(alignment: .firstTextBaseline, spacing: 8) {
         if let resetsAt = window.resetsAt {
-          Text("Resets \(resetsAt, style: .relative)")
+          Text("Resets \(formatResetDate(resetsAt))")
         } else {
           Text("Reset time unavailable")
         }
 
         if isStale {
-          Text("Observed \(observedAt, style: .relative) ago")
+          Text("· Observed \(observedAt, style: .relative) ago")
         }
       }
       .font(QuotaDesign.Typography.resetTime)
       .foregroundStyle(QuotaPalette.body)
+      .lineLimit(1)
     }
-    .padding(.top, 6)
+    .padding(.top, 2)
   }
 }
 
-private struct SourceTag: View {
+/// Provenance as quiet meta (icon + text), not a bordered chip.
+private struct SourceLabel: View {
   let summary: String
 
   var body: some View {
-    Text(summary)
-      .font(QuotaDesign.Typography.sourceTag)
-      .foregroundStyle(QuotaPalette.charcoal)
-      .padding(.horizontal, 5)
-      .padding(.vertical, 1)
-      .overlay {
-        RoundedRectangle(cornerRadius: QuotaDesign.Layout.tagCornerRadius)
-          .stroke(QuotaPalette.hairline.opacity(0.5))
-      }
-      .fixedSize()
-      .accessibilityLabel("Sources: \(summary)")
+    Label {
+      Text(summary)
+    } icon: {
+      Image(systemName: symbolName)
+    }
+    .labelStyle(.titleAndIcon)
+    .font(QuotaDesign.Typography.sourceTag)
+    .foregroundStyle(QuotaPalette.mute)
+    .symbolRenderingMode(.monochrome)
+    .fixedSize()
+    .accessibilityLabel("Sources: \(summary)")
+  }
+
+  private var symbolName: String {
+    let normalized = summary.lowercased()
+    if normalized == "local" {
+      return "laptopcomputer"
+    }
+    if normalized == "remote" {
+      return "network"
+    }
+    if normalized.hasPrefix("local") {
+      return "laptopcomputer.and.iphone"
+    }
+    if normalized.contains("remote") {
+      return "network"
+    }
+    return "circle.grid.2x1"
   }
 }
 
 private struct QuotaProgressBar: View {
   let value: Double
+  let fill: Color
 
   var body: some View {
     GeometryReader { geometry in
       ZStack(alignment: .leading) {
         Capsule()
-          .fill(QuotaPalette.hairline)
+          .fill(QuotaPalette.progressTrack)
         Capsule()
-          .fill(QuotaPalette.ink)
+          .fill(fill)
           .frame(width: geometry.size.width * min(max(value / 100, 0), 1))
       }
     }
@@ -177,18 +240,10 @@ private struct StaleTag: View {
       .padding(.vertical, 2)
       .overlay {
         RoundedRectangle(cornerRadius: QuotaDesign.Layout.tagCornerRadius)
-          .stroke(QuotaPalette.hairline.opacity(0.55))
+          .stroke(QuotaPalette.hairline.opacity(0.7))
       }
       .fixedSize()
   }
-}
-
-private func accountSummary(_ account: QuotaAccount) -> String? {
-  let summary = [account.plan, account.label]
-    .compactMap { $0 }
-    .filter { !$0.isEmpty }
-    .joined(separator: " · ")
-  return summary.isEmpty ? nil : summary
 }
 
 private func percent(_ value: Double) -> String {
@@ -196,4 +251,17 @@ private func percent(_ value: Double) -> String {
     return "\(Int(value.rounded()))%"
   }
   return String(format: "%.1f%%", value)
+}
+
+private let resetDateFormatter: DateFormatter = {
+  let formatter = DateFormatter()
+  formatter.locale = Locale.current
+  formatter.timeZone = .current
+  // Compact absolute time: keeps second precision without a long gray line.
+  formatter.dateFormat = "MM-dd HH:mm:ss"
+  return formatter
+}()
+
+private func formatResetDate(_ date: Date) -> String {
+  resetDateFormatter.string(from: date)
 }
