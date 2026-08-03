@@ -157,18 +157,20 @@ private struct TemporaryHelper {
     try? FileManager.default.removeItem(at: directoryURL)
   }
 
-  func processIdentifier() throws -> Int32 {
-    let contents = try String(contentsOf: pidFileURL, encoding: .utf8)
-      .trimmingCharacters(in: .whitespacesAndNewlines)
-    return try #require(Int32(contents))
-  }
-
   func waitForProcessIdentifier() async throws -> Int32 {
     let clock = ContinuousClock()
     let deadline = clock.now.advanced(by: .seconds(3))
     while clock.now < deadline {
-      if FileManager.default.fileExists(atPath: pidFileURL.path) {
-        return try processIdentifier()
+      do {
+        let contents = try String(contentsOf: pidFileURL, encoding: .utf8)
+        if contents.hasSuffix("\n") {
+          let processIdentifier = contents.trimmingCharacters(in: .whitespacesAndNewlines)
+          if !processIdentifier.isEmpty {
+            return try #require(Int32(processIdentifier))
+          }
+        }
+      } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+        // The helper has not created the file yet.
       }
       try await Task.sleep(for: .milliseconds(10))
     }
