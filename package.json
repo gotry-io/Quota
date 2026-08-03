@@ -22,6 +22,7 @@
     "test": "pnpm -r --if-present test && swift test --package-path apps/menubar",
     "build:menubar:app": "./scripts/package-menubar.sh",
     "build:menubar:visual": "./scripts/package-menubar-visual.sh",
+    "test:menubar:visual": "./scripts/accept-menubar-visual.sh",
     "deploy:cloudflare": "pnpm --filter @gotry-io/quota-relay deploy:cloudflare",
     "dev:web": "pnpm --filter @gotry-io/quota-web dev",
     "dev:relay": "pnpm --filter @gotry-io/quota-relay dev",
