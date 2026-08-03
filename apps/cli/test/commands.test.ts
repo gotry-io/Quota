@@ -146,6 +146,9 @@ describe("QuotaCLI", () => {
     expect(code).toBe(0);
     expect(capture.stdout.join("\n")).toContain("quotacli quota");
     expect(capture.stdout.join("\n")).toContain("quotacli edge report");
+    expect(capture.stdout.join("\n")).toContain("quotacli edge start");
+    expect(capture.stdout.join("\n")).toContain("quotacli edge status");
+    expect(capture.stdout.join("\n")).toContain("quotacli edge stop");
   });
 
   it("returns quota help successfully", async () => {
@@ -161,6 +164,7 @@ describe("QuotaCLI", () => {
     const code = await runCli(["edge", "--help"], capture.output);
     expect(code).toBe(0);
     expect(capture.stdout.join("\n")).toContain("quotacli edge pair");
+    expect(capture.stdout.join("\n")).toContain("quotacli edge start");
     expect(capture.stderr).toHaveLength(0);
   });
 

@@ -14,6 +14,7 @@ import {
 import { collectionExitCode, collectQuotaReport } from "@gotry-io/quota-provider";
 import packageMetadata from "../../package.json" with { type: "json" };
 import { RelayClient, RelayClientError } from "./client.ts";
+import { type EdgeReportService, MacOSLaunchAgent } from "./launch-agent.ts";
 import {
   type EdgeCredential,
   EdgeCredentialStore,
@@ -43,6 +44,8 @@ export interface EdgeCredentialStoreContract {
 export interface EdgeCommandDependencies {
   createClient(relayUrl: string): EdgeRelayClient;
   store: EdgeCredentialStoreContract;
+  platform: NodeJS.Platform;
+  service: EdgeReportService;
   now(): Date;
   deviceName(): string;
   collect(options: { providers: "all"; clientVersion: string }): Promise<unknown>;
@@ -67,21 +70,63 @@ export async function runEdgeCommand(
     if (!parsed.ok) {
       return usageError(parsed.error, output);
     }
-    return await runPair(parsed.relayUrl, output, dependencies ?? defaultDependencies());
+    let relayUrl: string;
+    try {
+      relayUrl = canonicalRelayUrl(parsed.relayUrl);
+    } catch {
+      return usageError("The --relay value must be a valid Relay origin.", output);
+    }
+    const resolved = resolveDependencies(dependencies, output);
+    return resolved ? await runPair(relayUrl, output, resolved) : 1;
   }
 
   if (subcommand === "unpair") {
     if (args.length !== 1) {
       return usageError("The edge unpair command does not accept options.", output);
     }
-    return await runUnpair(output, dependencies ?? defaultDependencies());
+    const resolved = resolveDependencies(dependencies, output);
+    return resolved ? await runUnpair(output, resolved) : 1;
+  }
+
+  if (subcommand === "start") {
+    if (args.length !== 1) {
+      return usageError("The edge start command does not accept options.", output);
+    }
+    if ((dependencies?.platform ?? process.platform) !== "darwin") {
+      return unsupportedBackgroundReporting(output);
+    }
+    const resolved = resolveDependencies(dependencies, output);
+    return resolved ? await runStart(output, resolved) : 1;
+  }
+
+  if (subcommand === "status") {
+    if (args.length !== 1) {
+      return usageError("The edge status command does not accept options.", output);
+    }
+    if ((dependencies?.platform ?? process.platform) !== "darwin") {
+      return unsupportedBackgroundReporting(output);
+    }
+    const resolved = resolveDependencies(dependencies, output);
+    return resolved ? await runStatus(output, resolved) : 1;
+  }
+
+  if (subcommand === "stop") {
+    if (args.length !== 1) {
+      return usageError("The edge stop command does not accept options.", output);
+    }
+    if ((dependencies?.platform ?? process.platform) !== "darwin") {
+      return unsupportedBackgroundReporting(output);
+    }
+    const resolved = resolveDependencies(dependencies, output);
+    return resolved ? await runStop(output, resolved) : 1;
   }
 
   if (subcommand === "report") {
     if (args.length !== 1) {
       return usageError("The edge report command does not accept options.", output);
     }
-    return await runReport(output, dependencies ?? defaultDependencies());
+    const resolved = resolveDependencies(dependencies, output);
+    return resolved ? await runReport(output, resolved) : 1;
   }
 
   return usageError(
@@ -96,26 +141,22 @@ export function edgeUsage(): string {
 Usage:
   quotacli edge pair [--relay <url>]
   quotacli edge report
+  quotacli edge start
+  quotacli edge status
+  quotacli edge stop
   quotacli edge unpair
   quotacli edge --help
 
 Pairing stores a Relay-bound device credential. Report performs one collection and upload; it does
-not start recurring quota reporting.`;
+not start recurring quota reporting. Start, status, and stop manage recurring reporting on macOS.`;
 }
 
 async function runPair(
-  requestedRelayUrl: string,
+  relayUrl: string,
   output: EdgeCommandOutput,
   dependencies: EdgeCommandDependencies,
 ): Promise<number> {
   try {
-    let relayUrl: string;
-    try {
-      relayUrl = canonicalRelayUrl(requestedRelayUrl);
-    } catch {
-      return usageError("The --relay value must be a valid Relay origin.", output);
-    }
-
     if (await dependencies.store.load()) {
       output.stderr(
         "This machine is already paired. Run `quotacli edge unpair` before pairing again.",
@@ -156,17 +197,99 @@ async function runUnpair(
   output: EdgeCommandOutput,
   dependencies: EdgeCommandDependencies,
 ): Promise<number> {
+  let serviceStopFailed = false;
+  if (dependencies.platform === "darwin") {
+    try {
+      await dependencies.service.stop();
+    } catch {
+      serviceStopFailed = true;
+    }
+  }
+
   try {
     await dependencies.store.delete();
     output.stdout("The local edge credential was removed if it existed.");
     output.stdout(
       "The remote device was not revoked. Revoke it in QuotaBar or Relay device management.",
     );
+    if (serviceStopFailed) {
+      output.stderr(
+        "QuotaCLI could not stop background edge reporting, but the local credential was removed.",
+      );
+      return 1;
+    }
     return 0;
   } catch {
     output.stderr("QuotaCLI could not remove the local edge credential.");
     return 1;
   }
+}
+
+async function runStart(
+  output: EdgeCommandOutput,
+  dependencies: EdgeCommandDependencies,
+): Promise<number> {
+  if (dependencies.platform !== "darwin") {
+    return unsupportedBackgroundReporting(output);
+  }
+  try {
+    if (!(await dependencies.store.load())) {
+      output.stderr("This machine is not paired. Run `quotacli edge pair` first.");
+      return 1;
+    }
+    await dependencies.service.start();
+    output.stdout("Background edge reporting is loaded and scheduled every 5 minutes.");
+    return 0;
+  } catch {
+    output.stderr("QuotaCLI could not start background edge reporting.");
+    return 1;
+  }
+}
+
+async function runStatus(
+  output: EdgeCommandOutput,
+  dependencies: EdgeCommandDependencies,
+): Promise<number> {
+  if (dependencies.platform !== "darwin") {
+    return unsupportedBackgroundReporting(output);
+  }
+  try {
+    const credential = await dependencies.store.load();
+    const serviceStatus = await dependencies.service.status();
+    output.stdout(`Pairing: ${credential ? "paired" : "unpaired"}`);
+    if (credential) {
+      output.stdout(`Relay URL: ${credential.relay_url}`);
+      output.stdout(`Device ID: ${credential.device_id}`);
+      output.stdout(`Last sequence: ${credential.last_sequence}`);
+    }
+    output.stdout(`Service: ${serviceStatus}`);
+    return credential && serviceStatus === "loaded" ? 0 : 1;
+  } catch {
+    output.stderr("QuotaCLI could not inspect background edge reporting.");
+    return 1;
+  }
+}
+
+async function runStop(
+  output: EdgeCommandOutput,
+  dependencies: EdgeCommandDependencies,
+): Promise<number> {
+  if (dependencies.platform !== "darwin") {
+    return unsupportedBackgroundReporting(output);
+  }
+  try {
+    await dependencies.service.stop();
+    output.stdout("Background edge reporting is stopped. Pairing was retained.");
+    return 0;
+  } catch {
+    output.stderr("QuotaCLI could not stop background edge reporting.");
+    return 1;
+  }
+}
+
+function unsupportedBackgroundReporting(output: EdgeCommandOutput): 1 {
+  output.stderr("Background edge reporting is supported only on macOS.");
+  return 1;
 }
 
 async function runReport(
@@ -295,10 +418,24 @@ function safeReportErrorMessage(error: unknown): string {
 
 class EdgeCommandError extends Error {}
 
+function resolveDependencies(
+  dependencies: EdgeCommandDependencies | undefined,
+  output: EdgeCommandOutput,
+): EdgeCommandDependencies | null {
+  try {
+    return dependencies ?? defaultDependencies();
+  } catch {
+    output.stderr("QuotaCLI could not initialize edge commands.");
+    return null;
+  }
+}
+
 function defaultDependencies(): EdgeCommandDependencies {
   return {
     createClient: (relayUrl) => new RelayClient(relayUrl),
     store: new EdgeCredentialStore(),
+    platform: process.platform,
+    service: new MacOSLaunchAgent(),
     now: () => new Date(),
     deviceName: () => hostname(),
     collect: collectQuotaReport,

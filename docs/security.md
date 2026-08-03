@@ -66,6 +66,11 @@ data requirements.
   directory. Its containing QuotaCLI directory is `0700`, its credential file is `0600`, writes use
   a same-directory temporary file and atomic rename, and POSIX reads reject group/other-accessible
   directories or files.
+- QuotaCLI's macOS edge LaunchAgent plist is written atomically as `0600`, contains no Relay or
+  provider credential, and invokes a resolved executable with a fixed argument array rather than a
+  shell command. It inherits only `PATH`, `XDG_CONFIG_HOME`, `CODEX_HOME`, `CLAUDE_CONFIG_DIR`,
+  `GROK_HOME`, and the three provider CLI path overrides; launchctl output is bounded and never
+  rendered to users.
 - QuotaCLI persists the next device snapshot sequence only after Relay acceptance. Retrying after a
   local persistence failure reuses the prior sequence and relies on Relay's idempotent `204`
   response for that device sequence.

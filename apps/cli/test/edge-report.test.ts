@@ -16,6 +16,7 @@ import {
   type EdgeRelayClient,
   runEdgeCommand,
 } from "../src/edge/commands.ts";
+import type { EdgeReportService } from "../src/edge/launch-agent.ts";
 import type { EdgeCredential } from "../src/edge/store.ts";
 
 const boundCredential: EdgeCredential = {
@@ -112,6 +113,9 @@ describe("edge report", () => {
     );
     expect(capture.stdout).toEqual(["Uploaded 3 snapshots with sequence 5."]);
     expect(capture.stderr).toEqual([]);
+    expect(dependencies.service.start).not.toHaveBeenCalled();
+    expect(dependencies.service.status).not.toHaveBeenCalled();
+    expect(dependencies.service.stop).not.toHaveBeenCalled();
   });
 
   it("uploads an empty heartbeat and reports incomplete collection", async () => {
@@ -269,6 +273,7 @@ function reportDependencies(options: ReportDependencyOptions = {}): EdgeCommandD
     save: ReturnType<typeof vi.fn<EdgeCredentialStoreContract["save"]>>;
     delete: ReturnType<typeof vi.fn<EdgeCredentialStoreContract["delete"]>>;
   };
+  service: ReturnType<typeof fakeService>;
 } {
   const client = relayClient(options.upload);
   const createClient = vi.fn<(relayUrl: string) => EdgeRelayClient>(
@@ -289,9 +294,23 @@ function reportDependencies(options: ReportDependencyOptions = {}): EdgeCommandD
       save: vi.fn(options.save ?? (async () => undefined)),
       delete: vi.fn(async () => undefined),
     },
+    platform: "darwin",
+    service: fakeService(),
     now: () => new Date("2026-08-03T10:00:00Z"),
     deviceName: () => "synthetic-edge",
     collect,
+  };
+}
+
+function fakeService(): EdgeReportService & {
+  start: ReturnType<typeof vi.fn<EdgeReportService["start"]>>;
+  status: ReturnType<typeof vi.fn<EdgeReportService["status"]>>;
+  stop: ReturnType<typeof vi.fn<EdgeReportService["stop"]>>;
+} {
+  return {
+    start: vi.fn(async () => undefined),
+    status: vi.fn(async () => "stopped"),
+    stop: vi.fn(async () => undefined),
   };
 }
 

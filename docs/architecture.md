@@ -64,6 +64,9 @@ storage requirements are defined only in [`security.md`](security.md).
   Pairing never enables recurring reporting by itself.
 - Provides an explicit one-shot report path that validates the bound Relay instance, collects all
   providers, uploads one normalized envelope, and commits its local sequence after acceptance.
+- On macOS, manages one user LaunchAgent that invokes that same `edge report` path at load and every
+  300 seconds. Pairing does not load it, stopping retains pairing, and no background-service runtime
+  is provided on other platforms.
 - Avoids native Node addons so standalone cross-platform builds remain possible.
 
 ### QuotaRelay

@@ -12,6 +12,7 @@ import {
   type EdgeRelayClient,
   runEdgeCommand,
 } from "../src/edge/commands.ts";
+import type { EdgeReportService } from "../src/edge/launch-agent.ts";
 import type { EdgeCredential } from "../src/edge/store.ts";
 
 const relayInfo: RelayInfo = {
@@ -48,6 +49,9 @@ describe("edge command arguments", () => {
 
     expect(await runEdgeCommand(["--help"], capture.output, dependencies)).toBe(0);
     expect(capture.stdout.join("\n")).toContain("quotacli edge pair");
+    expect(capture.stdout.join("\n")).toContain("quotacli edge start");
+    expect(capture.stdout.join("\n")).toContain("quotacli edge status");
+    expect(capture.stdout.join("\n")).toContain("quotacli edge stop");
     expect(dependencies.createClient).not.toHaveBeenCalled();
     expect(dependencies.store.load).not.toHaveBeenCalled();
   });
@@ -63,6 +67,9 @@ describe("edge command arguments", () => {
     },
     { args: ["unpair", "extra"] },
     { args: ["report", "extra"] },
+    { args: ["start", "extra"] },
+    { args: ["status", "extra"] },
+    { args: ["stop", "extra"] },
     { args: ["--help", "extra"] },
   ])("rejects invalid arguments %#", async ({ args }) => {
     const capture = captureOutput();
@@ -139,6 +146,8 @@ describe("edge pair", () => {
     const dependencies: EdgeCommandDependencies = {
       createClient,
       store,
+      platform: "darwin",
+      service: fakeService(),
       now: () => new Date(now),
       deviceName: () => longHostname,
       collect: vi.fn(async () => syntheticReport()),
@@ -175,6 +184,9 @@ describe("edge pair", () => {
     expect(rendered).not.toContain(pairing.device_code);
     expect(rendered).not.toContain(issued.device_token);
     expect(rendered).not.toContain("Authorization");
+    expect(dependencies.service.start).not.toHaveBeenCalled();
+    expect(dependencies.service.status).not.toHaveBeenCalled();
+    expect(dependencies.service.stop).not.toHaveBeenCalled();
   });
 
   it("prints only a fixed RelayClientError message", async () => {
@@ -222,6 +234,7 @@ function fakeDependencies(
     save: ReturnType<typeof vi.fn<EdgeCredentialStoreContract["save"]>>;
     delete: ReturnType<typeof vi.fn<EdgeCredentialStoreContract["delete"]>>;
   };
+  service: ReturnType<typeof fakeService>;
 } {
   const client: EdgeRelayClient = {
     relayUrl: "https://quota.gotry.io",
@@ -246,9 +259,23 @@ function fakeDependencies(
       save: vi.fn(async () => undefined),
       delete: vi.fn(async () => undefined),
     },
+    platform: "darwin",
+    service: fakeService(),
     now: () => new Date("2026-08-03T10:00:00Z"),
     deviceName: () => "synthetic-edge",
     collect: vi.fn(async () => syntheticReport()),
+  };
+}
+
+function fakeService(): EdgeReportService & {
+  start: ReturnType<typeof vi.fn<EdgeReportService["start"]>>;
+  status: ReturnType<typeof vi.fn<EdgeReportService["status"]>>;
+  stop: ReturnType<typeof vi.fn<EdgeReportService["stop"]>>;
+} {
+  return {
+    start: vi.fn(async () => undefined),
+    status: vi.fn(async () => "stopped"),
+    stop: vi.fn(async () => undefined),
   };
 }
 

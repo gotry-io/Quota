@@ -214,6 +214,9 @@ Usage:
   quotacli quota [--provider codex|claude|grok|all] [--format text|json] [--pretty]
   quotacli edge pair [--relay <url>]
   quotacli edge report
+  quotacli edge start
+  quotacli edge status
+  quotacli edge stop
   quotacli edge unpair
   quotacli help
 

@@ -23,6 +23,9 @@ quotacli doctor
 quotacli quota [--provider codex|claude|grok|all] [--format text|json] [--pretty]
 quotacli edge pair [--relay <url>]
 quotacli edge report
+quotacli edge start
+quotacli edge status
+quotacli edge stop
 quotacli edge unpair
 quotacli edge --help
 quotacli help
@@ -63,6 +66,9 @@ Pair an edge machine with the managed Relay origin or a selected self-hosted Rel
 quotacli edge pair                         # defaults to https://quota.gotry.io
 quotacli edge pair --relay https://relay.example.com
 quotacli edge report
+quotacli edge start
+quotacli edge status
+quotacli edge stop
 quotacli edge unpair
 ```
 
@@ -72,9 +78,10 @@ manually created token and does not start recurring reporting. The managed Relay
 owner authentication disabled, so managed pairing fails safely until that identity path is
 available; a bootstrapped self-hosted Relay advertises the required capabilities.
 
-`unpair` removes only the local credential. It cannot prove possession of owner authorization, so
-the remote device must still be revoked through QuotaBar or Relay device management. Pairing and
-credential ownership are defined in
+`unpair` stops and removes the macOS background service before deleting the local credential. On
+other platforms it deletes the local credential directly. It cannot prove possession of owner
+authorization, so the remote device must still be revoked through QuotaBar or Relay device
+management. Pairing and credential ownership are defined in
 [`ADR 0002`](../../docs/decisions/0002-relay-device-code-pairing.md); storage requirements are in the
 [`security baseline`](../../docs/security.md).
 
@@ -84,4 +91,15 @@ sent when every provider fails so the Relay can record a device heartbeat withou
 observations. The local sequence advances only after the Relay returns `204`. A partial collection
 is uploaded but returns exit code `1` with an explicit notice.
 
-Recurring `start`, `status`, and `stop` service commands remain a subsequent milestone.
+## Recurring edge reporting
+
+On macOS, `start` installs and loads the user LaunchAgent `io.gotry.quotacli.edge`. The agent runs
+the same executable's `edge report` command when loaded and every five minutes. `pair` never starts
+the service automatically. `start` requires an existing valid pairing; `status` reports pairing,
+Relay, device, sequence, and loaded/stopped service state without displaying the device token;
+`stop` removes the LaunchAgent but retains pairing.
+
+The LaunchAgent preserves only the allowlisted path and provider-location settings needed for the
+same collection behavior outside an interactive shell. It does not contain Relay or provider
+credentials. `start`, `status`, and `stop` return a fixed unsupported-platform error outside macOS;
+one-shot `pair`, `report`, and `unpair` remain cross-platform.

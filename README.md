@@ -98,11 +98,11 @@ scoped Bearer authentication, snapshot upload and reads, device management, and 
 limiting across D1 and SQLite. Self-hosted Relay owner bootstrap and its authenticated discovery
 capabilities are implemented; managed owner authentication remains disabled. QuotaCLI now implements
 Relay discovery, Device Code pairing, Relay-bound local credential storage, explicit one-shot
-snapshot reporting, and local unpairing; pairing does not enable recurring uploads. QuotaCLI 0.1.0
-is published on npm and later tags publish through OIDC. QuotaBar Relay integration, recurring
-QuotaCLI reporting services, subscription resolution, the first published Homebrew artifact,
-remote-device UI, and production settings remain subsequent milestones. Realtime delivery is
-optional and not part of v1.
+snapshot reporting, local unpairing, and an explicit macOS LaunchAgent lifecycle for five-minute
+reporting; pairing does not enable recurring uploads. QuotaCLI 0.1.0 is published on npm and later
+tags publish through OIDC. QuotaBar Relay integration, background-service support outside macOS,
+subscription resolution, the first published Homebrew artifact, remote-device UI, and production
+settings remain subsequent milestones. Realtime delivery is optional and not part of v1.
 
 ## License
 
