@@ -6,7 +6,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_PATH="${ROOT_DIR}/dist/menubar-visual/QuotaBarVisual.app"
 APP_BINARY="${APP_PATH}/Contents/MacOS/QuotaBar"
 REPORT_FIXTURE="${ROOT_DIR}/apps/cli/test/fixtures/relay-controller-e2e-report.json"
-REPORT_RUNNER="${ROOT_DIR}/apps/cli/test/support/edge-report-e2e.ts"
+REPORT_RUNNER="${ROOT_DIR}/apps/cli/test/support/relay-push-e2e.ts"
 MANAGED_RELAY_SERVER="${ROOT_DIR}/apps/relay/test/support/managed-relay-e2e.ts"
 OUTPUT_DIR="${ROOT_DIR}/dist/menubar-relay-e2e"
 TIMEOUT_SECONDS=30
@@ -21,7 +21,7 @@ usage() {
 Usage: test-relay-controller-e2e.sh [--mode self-hosted|managed]
 
 Runs the real QuotaBar controller path against loopback QuotaRelay instances and
-isolated QuotaCLI edge state. With no --mode, self-hosted and managed run in order.
+isolated QuotaCLI relay state. With no --mode, self-hosted and managed run in order.
 The LaunchServices-started Visual App uses production URLSession, Relay state,
 Defaults, and Keychain boundaries. No provider credentials are read. Screenshots
 are written to dist/menubar-relay-e2e.
@@ -77,6 +77,16 @@ cleanup() {
     fi
   fi
   stop_process "$RELAY_PID"
+  # pair installs a user LaunchAgent; always boot it out so a failed run cannot leave
+  # a five-minute push scheduled against the deleted worktree paths.
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    local uid
+    uid="$(id -u)"
+    /bin/launchctl bootout "gui/${uid}/io.gotry.quotacli.relay" >/dev/null 2>&1 || true
+    if [[ -n "$WORK_DIR" ]]; then
+      rm -f "${WORK_DIR}/home/Library/LaunchAgents/io.gotry.quotacli.relay.plist" 2>/dev/null || true
+    fi
+  fi
   if [[ -n "$WORK_DIR" && -d "$WORK_DIR" ]]; then
     rm -rf "$WORK_DIR"
   fi
@@ -266,7 +276,7 @@ run_mode() {
   ' "${coordination_dir}/ready.json" "$CURRENT_MODE" || fail "QuotaBar registered the wrong Relay mode"
 
   cli_environment \
-    "$BUN_PATH" apps/cli/src/main.ts edge pair --relay "$relay_origin" \
+    "$BUN_PATH" apps/cli/src/main.ts relay pair --relay "$relay_origin" \
     >"${WORK_DIR}/pair.stdout.log" 2>"${WORK_DIR}/pair.stderr.log" &
   CLI_PID=$!
 
@@ -298,12 +308,19 @@ run_mode() {
   fi
   CLI_PID=""
   [[ $pair_status -eq 0 ]] || fail "QuotaCLI pairing failed"
-  rg -F "Pairing complete." "${WORK_DIR}/pair.stdout.log" >/dev/null \
-    || fail "QuotaCLI did not confirm pairing"
+  [[ -f "${WORK_DIR}/config/quotacli/device.json" ]] || fail "QuotaCLI did not save a pairing credential"
+  rg -F "Background relay push is loaded, runs immediately, and every 5 minutes." \
+    "${WORK_DIR}/pair.stdout.log" >/dev/null \
+    || fail "QuotaCLI did not enable background relay push"
   if [[ -n "$controller_token" ]] && \
     rg -F "$controller_token" "${WORK_DIR}/pair.stdout.log" "${WORK_DIR}/pair.stderr.log" >/dev/null; then
     fail "QuotaCLI pairing output exposed the controller credential"
   fi
+
+  # Stop the just-installed agent so RunAtLoad cannot race the deterministic fixture push.
+  local uid
+  uid="$(id -u)"
+  /bin/launchctl bootout "gui/${uid}/io.gotry.quotacli.relay" >/dev/null 2>&1 || true
 
   local report_status
   if cli_environment \
@@ -313,7 +330,7 @@ run_mode() {
   else
     report_status=$?
   fi
-  [[ $report_status -eq 1 ]] || fail "QuotaCLI report returned an unexpected status"
+  [[ $report_status -eq 1 ]] || fail "QuotaCLI push returned an unexpected status"
   rg -F "Uploaded 1 snapshot with sequence 0." "${WORK_DIR}/report.stdout.log" >/dev/null \
     || fail "QuotaCLI did not upload the deterministic non-empty snapshot"
   write_marker "${coordination_dir}/report-ready"
@@ -359,7 +376,7 @@ run_mode() {
   else
     rejected_status=$?
   fi
-  [[ $rejected_status -eq 1 ]] || fail "revoked QuotaCLI report returned an unexpected status"
+  [[ $rejected_status -eq 1 ]] || fail "revoked QuotaCLI push returned an unexpected status"
   if rg -F "Uploaded" "${WORK_DIR}/rejected.stdout.log" >/dev/null; then
     fail "revoked QuotaCLI credential still uploaded a snapshot"
   fi
@@ -368,13 +385,13 @@ run_mode() {
     const fs = require("node:fs");
     const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
     process.stdout.write(String(value.last_sequence));
-  ' "${WORK_DIR}/config/quotacli/edge.json")"
-  [[ "$last_sequence" == "0" ]] || fail "rejected report advanced the local sequence"
+  ' "${WORK_DIR}/config/quotacli/device.json")"
+  [[ "$last_sequence" == "0" ]] || fail "rejected push advanced the local sequence"
 
   cli_environment \
-    "$BUN_PATH" apps/cli/src/main.ts edge unpair \
+    "$BUN_PATH" apps/cli/src/main.ts relay unpair \
     >"${WORK_DIR}/unpair.stdout.log" 2>"${WORK_DIR}/unpair.stderr.log"
-  [[ ! -e "${WORK_DIR}/config/quotacli/edge.json" ]] || fail "QuotaCLI credential remained after unpair"
+  [[ ! -e "${WORK_DIR}/config/quotacli/device.json" ]] || fail "QuotaCLI credential remained after unpair"
   write_marker "${coordination_dir}/rejection-confirmed"
   wait_for_file "${coordination_dir}/completed.json" "QuotaBar local and remote cleanup"
   "$NODE_PATH" -e '

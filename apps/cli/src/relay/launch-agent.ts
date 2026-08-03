@@ -4,10 +4,10 @@ import { chmod, lstat, mkdir, open, rename, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, normalize, resolve } from "node:path";
 
-export const EDGE_LAUNCH_AGENT_LABEL = "io.gotry.quotacli.edge";
+export const RELAY_LAUNCH_AGENT_LABEL = "io.gotry.quotacli.relay";
 export const LAUNCHCTL_PATH = "/bin/launchctl";
 
-const reportIntervalSeconds = 300;
+const pushIntervalSeconds = 300;
 const launchctlTimeoutMilliseconds = 10_000;
 const launchctlOutputLimitBytes = 16 * 1024;
 const bunCompiledMainPrefix = "/$bunfs/root/";
@@ -22,15 +22,15 @@ const inheritedEnvironmentKeys = [
   "GROK_CLI_PATH",
 ] as const;
 
-export type EdgeServiceStatus = "loaded" | "stopped";
+export type RelayServiceStatus = "loaded" | "stopped";
 
-export interface EdgeReportService {
+export interface RelayPushService {
   start(): Promise<void>;
-  status(): Promise<EdgeServiceStatus>;
+  status(): Promise<RelayServiceStatus>;
   stop(): Promise<void>;
 }
 
-export interface EdgeReportInvocationInput {
+export interface RelayPushInvocationInput {
   execPath: string;
   argv1?: string;
   cwd: string;
@@ -63,7 +63,7 @@ export interface LaunchAgentFileSystem {
 export interface MacOSLaunchAgentOptions {
   plistPath?: string;
   uid?: number;
-  invocation?: EdgeReportInvocationInput;
+  invocation?: RelayPushInvocationInput;
   environment?: NodeJS.ProcessEnv;
   runner?: LaunchctlRunner;
   filesystem?: LaunchAgentFileSystem;
@@ -76,10 +76,10 @@ export class LaunchAgentError extends Error {
   }
 }
 
-export class MacOSLaunchAgent implements EdgeReportService {
+export class MacOSLaunchAgent implements RelayPushService {
   readonly #plistPath: string;
   readonly #uid: number | undefined;
-  readonly #invocation: EdgeReportInvocationInput | undefined;
+  readonly #invocation: RelayPushInvocationInput | undefined;
   readonly #environment: NodeJS.ProcessEnv;
   readonly #runner: LaunchctlRunner;
   readonly #filesystem: LaunchAgentFileSystem;
@@ -87,7 +87,7 @@ export class MacOSLaunchAgent implements EdgeReportService {
   constructor(options: MacOSLaunchAgentOptions = {}) {
     this.#plistPath =
       options.plistPath ??
-      join(homedir(), "Library", "LaunchAgents", `${EDGE_LAUNCH_AGENT_LABEL}.plist`);
+      join(homedir(), "Library", "LaunchAgents", `${RELAY_LAUNCH_AGENT_LABEL}.plist`);
     this.#uid = options.uid;
     this.#invocation = options.invocation;
     this.#environment = options.environment ?? process.env;
@@ -99,7 +99,7 @@ export class MacOSLaunchAgent implements EdgeReportService {
     try {
       const context = this.#context();
       const plist = renderLaunchAgentPlist(
-        resolveEdgeReportProgramArguments(context.invocation),
+        resolveRelayPushProgramArguments(context.invocation),
         this.#environment,
       );
       await preflightPlistTarget(context.plistPath, this.#filesystem);
@@ -123,7 +123,7 @@ export class MacOSLaunchAgent implements EdgeReportService {
     }
   }
 
-  async status(): Promise<EdgeServiceStatus> {
+  async status(): Promise<RelayServiceStatus> {
     try {
       const context = this.#context();
       const result = await this.#run(["print", context.serviceTarget]);
@@ -180,7 +180,7 @@ export class MacOSLaunchAgent implements EdgeReportService {
     return {
       plistPath: normalize(this.#plistPath),
       domainTarget,
-      serviceTarget: `${domainTarget}/${EDGE_LAUNCH_AGENT_LABEL}`,
+      serviceTarget: `${domainTarget}/${RELAY_LAUNCH_AGENT_LABEL}`,
       invocation: this.#invocation ?? {
         execPath: process.execPath,
         cwd: process.cwd(),
@@ -194,16 +194,16 @@ interface LaunchAgentContext {
   plistPath: string;
   domainTarget: string;
   serviceTarget: string;
-  invocation: EdgeReportInvocationInput;
+  invocation: RelayPushInvocationInput;
 }
 
-export function resolveEdgeReportProgramArguments(input: EdgeReportInvocationInput): string[] {
+export function resolveRelayPushProgramArguments(input: RelayPushInvocationInput): string[] {
   if (!isAbsolute(input.execPath) || !input.argv1) {
     throw new LaunchAgentError("QuotaCLI could not resolve its executable path.");
   }
   const executable = normalize(input.execPath);
   if (input.argv1.startsWith(bunCompiledMainPrefix)) {
-    return [executable, "edge", "report"];
+    return [executable, "relay", "push"];
   }
   const entry = isAbsolute(input.argv1)
     ? normalize(input.argv1)
@@ -214,8 +214,8 @@ export function resolveEdgeReportProgramArguments(input: EdgeReportInvocationInp
     throw new LaunchAgentError("QuotaCLI could not resolve its entry path.");
   }
   return entry === executable
-    ? [executable, "edge", "report"]
-    : [executable, entry, "edge", "report"];
+    ? [executable, "relay", "push"]
+    : [executable, entry, "relay", "push"];
 }
 
 export function renderLaunchAgentPlist(
@@ -244,15 +244,15 @@ export function renderLaunchAgentPlist(
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>${EDGE_LAUNCH_AGENT_LABEL}</string>
+  <string>${RELAY_LAUNCH_AGENT_LABEL}</string>
   <key>ProgramArguments</key>
   <array>
 ${argumentElements}
   </array>
-${environmentSection}  <key>StartInterval</key>
-  <integer>${reportIntervalSeconds}</integer>
-  <key>RunAtLoad</key>
+${environmentSection}  <key>RunAtLoad</key>
   <true/>
+  <key>StartInterval</key>
+  <integer>${pushIntervalSeconds}</integer>
   <key>StandardOutPath</key>
   <string>/dev/null</string>
   <key>StandardErrorPath</key>

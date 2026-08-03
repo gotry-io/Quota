@@ -2,14 +2,15 @@
 
 - Status: accepted
 - Date: 2026-08-02
+- Updated: 2026-08-03
 
 ## Decision
 
-QuotaCLI uses an explicit OAuth-style Device Code flow to pair an edge machine with QuotaRelay.
+QuotaCLI uses an explicit OAuth-style Device Code flow to pair a machine with QuotaRelay.
 Pairing is initiated with:
 
 ```text
-quotacli edge pair [--relay <url>]
+quotacli relay pair [--relay <url>]
 ```
 
 When `--relay` is omitted, the command uses `https://quota.gotry.io`. A custom URL selects a
@@ -27,9 +28,12 @@ The flow is:
 6. Relay generates a high-entropy opaque bearer credential scoped to `quota:write:self`, stores only
    its hash, and returns the plaintext credential once.
 7. QuotaCLI stores the credential in the platform credential store or a user-only file.
+8. On macOS, QuotaCLI installs the background LaunchAgent that runs `relay push` immediately on load
+   and every five minutes thereafter.
 
-Pairing stores device and authorization material only. It does not start recurring quota uploads;
-edge reporting requires a separate explicit start or service-install action.
+Pairing therefore both authorizes the device and enables recurring uploads on platforms that support
+background push. Operators stop reporting by unpairing; there is no separate start/stop lifecycle.
+Manual `quotacli relay push` remains available for one-shot uploads and non-macOS machines.
 
 ## Credential control
 
@@ -57,7 +61,9 @@ edge reporting requires a separate explicit start or service-install action.
 - Official-service pairing needs no Relay argument, account, or manually copied token.
 - Self-hosted operators specify `--relay` and first configure QuotaBar with the deployment's
   controller credential.
-- Headless edge machines need only outbound HTTPS access and a way for the operator to approve the
+- Headless machines need only outbound HTTPS access and a way for the operator to approve the
   code from QuotaBar.
 - Relay persistence must represent pending, approved, denied, consumed, and expired pairing
   states.
+- macOS pairing leaves a user LaunchAgent installed until `relay unpair`; failed background-service
+  installation keeps the local credential so the operator can unpair and retry.

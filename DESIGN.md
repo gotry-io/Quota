@@ -9,7 +9,7 @@ description: |
   custom shadows. The palette is pure black, pure white, and three neutral grays; interactive
   elements use fully rounded pill geometry (`{rounded.full}`), while the few containing surfaces
   use `{rounded.lg}`. SF Pro Rounded carries headings, the system sans carries interface text, and
-  ui-monospace identifies commands, device IDs, and pairing codes. Local providers, remote edge
+  ui-monospace identifies commands, device IDs, and pairing codes. Local providers, remote Relay
   devices, Relay configuration, empty states, and diagnostics all use the same flat visual grammar.
 
 colors:
@@ -766,7 +766,7 @@ new default shapes.
 
 - `{colors.surface-soft}` background, `{colors.ink}` in `{typography.code-md}`, padding
   `12px 20px`, height `48px`, rounded `{rounded.full}`.
-- Contains a short command such as `quotacli edge pair` and a right-aligned
+- Contains a short command such as `quotacli relay pair` and a right-aligned
   copy control.
 - If the command cannot fit without losing essential text, use a terminal card instead.
 

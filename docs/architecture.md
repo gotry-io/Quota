@@ -25,16 +25,17 @@ collects quota, and returns a validated normalized report. Provider credentials 
 QuotaCLI process boundary. QuotaBar retains one last normalized local report so it can render
 immediately after launch, then replaces that cache after a successful background collection.
 
-### Remote edge
+### Remote Relay agent
 
 ```text
 Remote QuotaCLI ── outbound HTTPS ── QuotaRelay ── QuotaBar
 ```
 
-QuotaCLI explicitly pairs with a selected Relay, receives a Relay-bound device credential, and sends
-normalized snapshots only after edge reporting is enabled. Relay persists accepted snapshots and
-serves QuotaBar instances authenticated by anonymous controller capabilities. It never receives
-provider credentials or runs provider collectors. Pairing and token generation are defined in
+QuotaCLI explicitly pairs with a selected Relay, receives a Relay-bound device credential, and on
+macOS enables a LaunchAgent that uploads normalized snapshots immediately and every five minutes.
+Relay persists accepted snapshots and serves QuotaBar instances authenticated by anonymous controller
+capabilities. It never receives provider credentials or runs provider collectors. Pairing and token
+generation are defined in
 [`decisions/0002-relay-device-code-pairing.md`](decisions/0002-relay-device-code-pairing.md).
 The account-free control boundary is defined in
 [`decisions/0004-anonymous-relay-controllers.md`](decisions/0004-anonymous-relay-controllers.md).
@@ -76,16 +77,18 @@ storage requirements are defined only in [`security.md`](security.md).
 - TypeScript bundled as a Node ESM npm package and as a standalone Bun executable from the same
   entry point.
 - Owns all provider credential discovery and quota collection.
-- Uses the same normalized schemas for local output and edge uploads.
-- Owns Relay discovery, Device Code pairing, and the single Relay-bound local edge credential.
-  Pairing never enables recurring reporting by itself.
-- Provides an explicit one-shot report path that validates the bound Relay instance, collects all
-  providers, uploads one normalized envelope, and commits its local sequence after acceptance.
-- On macOS, manages one user LaunchAgent that invokes that same `edge report` path at load and every
-  300 seconds. Pairing does not load it, stopping retains pairing, and no background-service runtime
-  is provided on other platforms.
+- Uses the same normalized schemas for local output and Relay uploads.
+- Owns Relay discovery, Device Code pairing, and the single Relay-bound local device credential.
+  Successful pairing enables recurring push on macOS.
+- Provides an explicit one-shot `relay push` path that validates the bound Relay instance, collects
+  all providers, uploads one normalized envelope, and commits its local sequence after acceptance.
+- On macOS, manages one user LaunchAgent that invokes that same `relay push` path at load and every
+  300 seconds. Pairing installs it, unpairing removes it, and no background-service runtime is
+  provided on other platforms.
 - Unpairing stops that service, uses the device capability to revoke the remote device, and removes
   the local credential only after the Relay reaches a terminal revoked state.
+- Exposes `status` as a read-only summary of local provider readiness and Relay pairing/background
+  state without performing collection or upload.
 - Avoids native Node addons so standalone cross-platform builds remain possible.
 
 ### QuotaRelay

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { canonicalRelayUrl, DEFAULT_RELAY_URL } from "../src/edge/url.ts";
+import { canonicalRelayUrl, DEFAULT_RELAY_URL } from "../src/relay/url.ts";
 
-describe("edge Relay URL", () => {
+describe("relay Relay URL", () => {
   it("uses and canonicalizes the managed Relay origin", () => {
     expect(canonicalRelayUrl()).toBe(DEFAULT_RELAY_URL);
     expect(canonicalRelayUrl("https://relay.example.com/")).toBe("https://relay.example.com");

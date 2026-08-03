@@ -1,6 +1,6 @@
 import type { PairingCreateResponse, QuotaSnapshotEnvelope } from "@gotry-io/quota-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { RelayClient, RelayClientError, type RelayFetch } from "../src/edge/client.ts";
+import { RelayClient, RelayClientError, type RelayFetch } from "../src/relay/client.ts";
 
 const discovery = {
   instance_id: "relay_test",

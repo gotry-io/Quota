@@ -11,23 +11,27 @@ import {
   QuotaCollectionReportSchema,
   QuotaSnapshotEnvelopeSchema,
 } from "@gotry-io/quota-protocol";
-import { collectionExitCode, collectQuotaReport } from "@gotry-io/quota-provider";
+import {
+  collectionExitCode,
+  collectQuotaReport,
+  diagnoseProviderSessions,
+} from "@gotry-io/quota-provider";
 import packageMetadata from "../../package.json" with { type: "json" };
 import { RelayClient, RelayClientError } from "./client.ts";
-import { type EdgeReportService, MacOSLaunchAgent } from "./launch-agent.ts";
+import { MacOSLaunchAgent, type RelayPushService } from "./launch-agent.ts";
 import {
-  type EdgeCredential,
-  EdgeCredentialStore,
-  type SaveEdgeCredentialOptions,
+  type RelayCredential,
+  RelayCredentialStore,
+  type SaveRelayCredentialOptions,
 } from "./store.ts";
 import { canonicalRelayUrl, DEFAULT_RELAY_URL } from "./url.ts";
 
-export interface EdgeCommandOutput {
+export interface RelayCommandOutput {
   stdout(message: string): void;
   stderr(message: string): void;
 }
 
-export interface EdgeRelayClient {
+export interface RelayCommandClient {
   readonly relayUrl: string;
   discover(): Promise<RelayInfo>;
   createPairing(deviceDisplayName: string): Promise<PairingCreateResponse>;
@@ -36,33 +40,41 @@ export interface EdgeRelayClient {
   revokeSelf(deviceToken: string): Promise<void>;
 }
 
-export interface EdgeCredentialStoreContract {
-  load(): Promise<EdgeCredential | null>;
-  save(credential: EdgeCredential, options?: SaveEdgeCredentialOptions): Promise<void>;
+export interface RelayCredentialStoreContract {
+  load(): Promise<RelayCredential | null>;
+  save(credential: RelayCredential, options?: SaveRelayCredentialOptions): Promise<void>;
   delete(): Promise<void>;
 }
 
-export interface EdgeCommandDependencies {
-  createClient(relayUrl: string): EdgeRelayClient;
-  store: EdgeCredentialStoreContract;
+export interface StatusProviderDiagnostic {
+  provider: string;
+  available: boolean;
+  credential_source: string;
+  detail: string;
+}
+
+export interface RelayCommandDependencies {
+  createClient(relayUrl: string): RelayCommandClient;
+  store: RelayCredentialStoreContract;
   platform: NodeJS.Platform;
-  service: EdgeReportService;
+  service: RelayPushService;
   now(): Date;
   deviceName(): string;
   collect(options: { providers: "all"; clientVersion: string }): Promise<unknown>;
+  diagnoseProviders(): Promise<StatusProviderDiagnostic[]>;
 }
 
-export async function runEdgeCommand(
+export async function runRelayCommand(
   args: readonly string[],
-  output: EdgeCommandOutput,
-  dependencies?: EdgeCommandDependencies,
+  output: RelayCommandOutput,
+  dependencies?: RelayCommandDependencies,
 ): Promise<number> {
   const subcommand = args[0];
   if (subcommand === "--help" || subcommand === "-h") {
     if (args.length !== 1) {
-      return usageError("Edge help does not accept options.", output);
+      return usageError("Relay help does not accept options.", output);
     }
-    output.stdout(edgeUsage());
+    output.stdout(relayUsage());
     return 0;
   }
 
@@ -83,91 +95,126 @@ export async function runEdgeCommand(
 
   if (subcommand === "unpair") {
     if (args.length !== 1) {
-      return usageError("The edge unpair command does not accept options.", output);
+      return usageError("The relay unpair command does not accept options.", output);
     }
     const resolved = resolveDependencies(dependencies, output);
     return resolved ? await runUnpair(output, resolved) : 1;
   }
 
-  if (subcommand === "start") {
+  if (subcommand === "push") {
     if (args.length !== 1) {
-      return usageError("The edge start command does not accept options.", output);
-    }
-    if ((dependencies?.platform ?? process.platform) !== "darwin") {
-      return unsupportedBackgroundReporting(output);
+      return usageError("The relay push command does not accept options.", output);
     }
     const resolved = resolveDependencies(dependencies, output);
-    return resolved ? await runStart(output, resolved) : 1;
-  }
-
-  if (subcommand === "status") {
-    if (args.length !== 1) {
-      return usageError("The edge status command does not accept options.", output);
-    }
-    if ((dependencies?.platform ?? process.platform) !== "darwin") {
-      return unsupportedBackgroundReporting(output);
-    }
-    const resolved = resolveDependencies(dependencies, output);
-    return resolved ? await runStatus(output, resolved) : 1;
-  }
-
-  if (subcommand === "stop") {
-    if (args.length !== 1) {
-      return usageError("The edge stop command does not accept options.", output);
-    }
-    if ((dependencies?.platform ?? process.platform) !== "darwin") {
-      return unsupportedBackgroundReporting(output);
-    }
-    const resolved = resolveDependencies(dependencies, output);
-    return resolved ? await runStop(output, resolved) : 1;
-  }
-
-  if (subcommand === "report") {
-    if (args.length !== 1) {
-      return usageError("The edge report command does not accept options.", output);
-    }
-    const resolved = resolveDependencies(dependencies, output);
-    return resolved ? await runReport(output, resolved) : 1;
+    return resolved ? await runPush(output, resolved) : 1;
   }
 
   return usageError(
-    subcommand ? `Unknown edge command: ${subcommand}` : "Missing edge command.",
+    subcommand ? `Unknown relay command: ${subcommand}` : "Missing relay command.",
     output,
   );
 }
 
-export function edgeUsage(): string {
-  return `QuotaCLI edge
+export function relayUsage(): string {
+  return `QuotaCLI relay
 
 Usage:
-  quotacli edge pair [--relay <url>]
-  quotacli edge report
-  quotacli edge start
-  quotacli edge status
-  quotacli edge stop
-  quotacli edge unpair
-  quotacli edge --help
+  quotacli relay pair [--relay <url>]
+  quotacli relay push
+  quotacli relay unpair
+  quotacli relay --help
 
-Pairing stores a Relay-bound device credential. Report performs one collection and upload; it does
-not start recurring quota reporting. Start, status, and stop manage recurring reporting on macOS.`;
+pair stores a Relay-bound device credential and enables macOS background push (immediate on load,
+then every 5 minutes). push performs one collection and upload. unpair stops background push,
+revokes the remote device, and removes the local credential.`;
+}
+
+export async function runStatusCommand(
+  output: RelayCommandOutput,
+  dependencies?: RelayCommandDependencies,
+): Promise<number> {
+  const resolved = resolveDependencies(dependencies, output);
+  if (!resolved) {
+    return 1;
+  }
+
+  try {
+    const diagnostics = await resolved.diagnoseProviders();
+    const credential = await resolved.store.load();
+    let background: "loaded" | "stopped" | "unsupported" | "error" = "unsupported";
+    if (resolved.platform === "darwin") {
+      try {
+        background = await resolved.service.status();
+      } catch {
+        background = "error";
+      }
+    }
+
+    output.stdout(`CLI version: ${packageMetadata.version}`);
+    output.stdout("Providers:");
+    if (diagnostics.length === 0) {
+      output.stdout("  none");
+    } else {
+      for (const diagnostic of diagnostics) {
+        const marker = diagnostic.available ? "found" : "missing";
+        output.stdout(
+          `  ${diagnostic.provider}\t${marker}\t${diagnostic.credential_source}\t${diagnostic.detail}`,
+        );
+      }
+    }
+
+    output.stdout("Relay:");
+    output.stdout(`  Pairing: ${credential ? "paired" : "unpaired"}`);
+    if (credential) {
+      output.stdout(`  Relay URL: ${credential.relay_url}`);
+      output.stdout(`  Device ID: ${credential.device_id}`);
+      output.stdout(`  Last sequence: ${credential.last_sequence}`);
+    }
+    output.stdout(`  Background: ${backgroundLabel(background)}`);
+
+    const providerReady = diagnostics.some((diagnostic) => diagnostic.available);
+    // Healthy means: at least one local provider credential, no launchd probe error,
+    // and background state matches pairing (loaded iff paired on macOS).
+    const backgroundHealthy =
+      background !== "error" &&
+      (resolved.platform !== "darwin" ||
+        (credential ? background === "loaded" : background === "stopped"));
+    return providerReady && backgroundHealthy ? 0 : 1;
+  } catch {
+    output.stderr("QuotaCLI could not inspect local status.");
+    return 1;
+  }
+}
+
+function backgroundLabel(status: "loaded" | "stopped" | "unsupported" | "error"): string {
+  switch (status) {
+    case "loaded":
+      return "loaded (every 5 minutes)";
+    case "stopped":
+      return "stopped";
+    case "unsupported":
+      return "unsupported on this platform";
+    case "error":
+      return "unavailable";
+  }
 }
 
 async function runPair(
   relayUrl: string,
-  output: EdgeCommandOutput,
-  dependencies: EdgeCommandDependencies,
+  output: RelayCommandOutput,
+  dependencies: RelayCommandDependencies,
 ): Promise<number> {
   try {
     if (await dependencies.store.load()) {
       output.stderr(
-        "This machine is already paired. Run `quotacli edge unpair` before pairing again.",
+        "This machine is already paired. Run `quotacli relay unpair` before pairing again.",
       );
       return 1;
     }
 
     const displayName = dependencies.deviceName().trim().slice(0, 128);
     if (displayName.length === 0) {
-      throw new EdgeCommandError("QuotaCLI could not determine a device name for pairing.");
+      throw new RelayCommandError("QuotaCLI could not determine a device name for pairing.");
     }
 
     const client = dependencies.createClient(relayUrl);
@@ -186,32 +233,50 @@ async function runPair(
       paired_at: dependencies.now().toISOString(),
       last_sequence: -1,
     });
-    output.stdout("Pairing complete. Recurring edge reporting has not been started.");
-    return 0;
   } catch (error) {
-    output.stderr(safeErrorMessage(error, "QuotaCLI could not complete edge pairing."));
+    output.stderr(safeErrorMessage(error, "QuotaCLI could not complete relay pairing."));
     return 1;
   }
+
+  if (dependencies.platform === "darwin") {
+    try {
+      await dependencies.service.start();
+      output.stdout(
+        "Pairing complete. Background relay push is loaded, runs immediately, and every 5 minutes.",
+      );
+      return 0;
+    } catch {
+      output.stderr(
+        "Pairing was saved, but QuotaCLI could not start background relay push. Run `quotacli relay unpair` before retrying.",
+      );
+      return 1;
+    }
+  }
+
+  output.stdout(
+    "Pairing complete. Background relay push is supported only on macOS; use `quotacli relay push` to upload manually.",
+  );
+  return 0;
 }
 
 async function runUnpair(
-  output: EdgeCommandOutput,
-  dependencies: EdgeCommandDependencies,
+  output: RelayCommandOutput,
+  dependencies: RelayCommandDependencies,
 ): Promise<number> {
   if (dependencies.platform === "darwin") {
     try {
       await dependencies.service.stop();
     } catch {
-      output.stderr("QuotaCLI could not stop background edge reporting. Pairing was retained.");
+      output.stderr("QuotaCLI could not stop background relay push. Pairing was retained.");
       return 1;
     }
   }
 
-  let credential: EdgeCredential | null;
+  let credential: RelayCredential | null;
   try {
     credential = await dependencies.store.load();
   } catch {
-    output.stderr("QuotaCLI could not read the local edge credential.");
+    output.stderr("QuotaCLI could not read the local relay credential.");
     return 1;
   }
   if (!credential) {
@@ -240,89 +305,22 @@ async function runUnpair(
     await dependencies.store.delete();
   } catch {
     output.stderr(
-      "The remote device was revoked, but QuotaCLI could not remove the local edge credential.",
+      "The remote device was revoked, but QuotaCLI could not remove the local relay credential.",
     );
     return 1;
   }
-  output.stdout("The remote device was revoked and the local edge credential was removed.");
+  output.stdout("The remote device was revoked and the local relay credential was removed.");
   return 0;
 }
 
-async function runStart(
-  output: EdgeCommandOutput,
-  dependencies: EdgeCommandDependencies,
-): Promise<number> {
-  if (dependencies.platform !== "darwin") {
-    return unsupportedBackgroundReporting(output);
-  }
-  try {
-    if (!(await dependencies.store.load())) {
-      output.stderr("This machine is not paired. Run `quotacli edge pair` first.");
-      return 1;
-    }
-    await dependencies.service.start();
-    output.stdout("Background edge reporting is loaded and scheduled every 5 minutes.");
-    return 0;
-  } catch {
-    output.stderr("QuotaCLI could not start background edge reporting.");
-    return 1;
-  }
-}
-
-async function runStatus(
-  output: EdgeCommandOutput,
-  dependencies: EdgeCommandDependencies,
-): Promise<number> {
-  if (dependencies.platform !== "darwin") {
-    return unsupportedBackgroundReporting(output);
-  }
-  try {
-    const credential = await dependencies.store.load();
-    const serviceStatus = await dependencies.service.status();
-    output.stdout(`Pairing: ${credential ? "paired" : "unpaired"}`);
-    if (credential) {
-      output.stdout(`Relay URL: ${credential.relay_url}`);
-      output.stdout(`Device ID: ${credential.device_id}`);
-      output.stdout(`Last sequence: ${credential.last_sequence}`);
-    }
-    output.stdout(`Service: ${serviceStatus}`);
-    return credential && serviceStatus === "loaded" ? 0 : 1;
-  } catch {
-    output.stderr("QuotaCLI could not inspect background edge reporting.");
-    return 1;
-  }
-}
-
-async function runStop(
-  output: EdgeCommandOutput,
-  dependencies: EdgeCommandDependencies,
-): Promise<number> {
-  if (dependencies.platform !== "darwin") {
-    return unsupportedBackgroundReporting(output);
-  }
-  try {
-    await dependencies.service.stop();
-    output.stdout("Background edge reporting is stopped. Pairing was retained.");
-    return 0;
-  } catch {
-    output.stderr("QuotaCLI could not stop background edge reporting.");
-    return 1;
-  }
-}
-
-function unsupportedBackgroundReporting(output: EdgeCommandOutput): 1 {
-  output.stderr("Background edge reporting is supported only on macOS.");
-  return 1;
-}
-
-async function runReport(
-  output: EdgeCommandOutput,
-  dependencies: EdgeCommandDependencies,
+async function runPush(
+  output: RelayCommandOutput,
+  dependencies: RelayCommandDependencies,
 ): Promise<number> {
   try {
     const credential = await dependencies.store.load();
     if (!credential) {
-      output.stderr("This machine is not paired. Run `quotacli edge pair` first.");
+      output.stderr("This machine is not paired. Run `quotacli relay pair` first.");
       return 1;
     }
 
@@ -339,7 +337,7 @@ async function runReport(
     });
     const parsedReport = QuotaCollectionReportSchema.safeParse(collected);
     if (!parsedReport.success) {
-      throw new EdgeCommandError("QuotaCLI produced an invalid normalized quota report.");
+      throw new RelayCommandError("QuotaCLI produced an invalid normalized quota report.");
     }
     const report = parsedReport.data;
     const sequence = credential.last_sequence + 1;
@@ -351,7 +349,7 @@ async function runReport(
       snapshots: successSnapshots(report),
     });
     if (!parsedEnvelope.success) {
-      throw new EdgeCommandError("QuotaCLI could not create a valid snapshot envelope.");
+      throw new RelayCommandError("QuotaCLI could not create a valid snapshot envelope.");
     }
 
     await client.uploadSnapshot(credential.device_token, parsedEnvelope.data);
@@ -361,7 +359,7 @@ async function runReport(
         { overwrite: true },
       );
     } catch {
-      throw new EdgeCommandError(
+      throw new RelayCommandError(
         "The snapshot was uploaded, but QuotaCLI could not save the local sequence.",
       );
     }
@@ -376,7 +374,7 @@ async function runReport(
     }
     return 0;
   } catch (error) {
-    output.stderr(safeErrorMessage(error, "QuotaCLI could not complete the edge report."));
+    output.stderr(safeErrorMessage(error, "QuotaCLI could not complete the relay push."));
     return 1;
   }
 }
@@ -404,7 +402,7 @@ function parsePairArguments(
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index];
     if (argument !== "--relay") {
-      return { ok: false, error: `Unknown edge pair option: ${argument ?? ""}` };
+      return { ok: false, error: `Unknown relay pair option: ${argument ?? ""}` };
     }
     if (hasRelayOption) {
       return { ok: false, error: "The --relay option may be provided only once." };
@@ -420,40 +418,41 @@ function parsePairArguments(
   return { ok: true, relayUrl };
 }
 
-function usageError(message: string, output: EdgeCommandOutput): 2 {
-  output.stderr(`${message}\n\n${edgeUsage()}`);
+function usageError(message: string, output: RelayCommandOutput): 2 {
+  output.stderr(`${message}\n\n${relayUsage()}`);
   return 2;
 }
 
 function safeErrorMessage(error: unknown, fallback: string): string {
-  if (error instanceof RelayClientError || error instanceof EdgeCommandError) {
+  if (error instanceof RelayClientError || error instanceof RelayCommandError) {
     return error.message;
   }
   return fallback;
 }
 
-class EdgeCommandError extends Error {}
+class RelayCommandError extends Error {}
 
 function resolveDependencies(
-  dependencies: EdgeCommandDependencies | undefined,
-  output: EdgeCommandOutput,
-): EdgeCommandDependencies | null {
+  dependencies: RelayCommandDependencies | undefined,
+  output: RelayCommandOutput,
+): RelayCommandDependencies | null {
   try {
     return dependencies ?? defaultDependencies();
   } catch {
-    output.stderr("QuotaCLI could not initialize edge commands.");
+    output.stderr("QuotaCLI could not initialize relay commands.");
     return null;
   }
 }
 
-function defaultDependencies(): EdgeCommandDependencies {
+function defaultDependencies(): RelayCommandDependencies {
   return {
     createClient: (relayUrl) => new RelayClient(relayUrl),
-    store: new EdgeCredentialStore(),
+    store: new RelayCredentialStore(),
     platform: process.platform,
     service: new MacOSLaunchAgent(),
     now: () => new Date(),
     deviceName: () => hostname(),
     collect: collectQuotaReport,
+    diagnoseProviders: () => diagnoseProviderSessions({ probeKeychain: true }),
   };
 }

@@ -1,11 +1,11 @@
-import { constants } from "node:fs";
 import type { Stats } from "node:fs";
+import { constants } from "node:fs";
 import { chmod, lstat, mkdir, open, rename, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { canonicalRelayUrl } from "./url.ts";
 
-export interface EdgeCredential {
+export interface RelayCredential {
   relay_url: string;
   instance_id: string;
   device_id: string;
@@ -14,57 +14,57 @@ export interface EdgeCredential {
   last_sequence: number;
 }
 
-export interface EdgeCredentialStoreOptions {
+export interface RelayCredentialStoreOptions {
   path?: string;
 }
 
-export interface SaveEdgeCredentialOptions {
+export interface SaveRelayCredentialOptions {
   overwrite?: boolean;
 }
 
-export class EdgeCredentialStoreError extends Error {
+export class RelayCredentialStoreError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = "EdgeCredentialStoreError";
+    this.name = "RelayCredentialStoreError";
   }
 }
 
-export class EdgeCredentialStore {
+export class RelayCredentialStore {
   readonly path: string;
 
-  constructor(options: EdgeCredentialStoreOptions = {}) {
-    this.path = options.path ?? defaultEdgeCredentialPath();
+  constructor(options: RelayCredentialStoreOptions = {}) {
+    this.path = options.path ?? defaultRelayCredentialPath();
     if (!isAbsolute(this.path)) {
-      throw new EdgeCredentialStoreError("The edge credential path must be absolute.");
+      throw new RelayCredentialStoreError("The relay credential path must be absolute.");
     }
   }
 
-  async load(): Promise<EdgeCredential | null> {
+  async load(): Promise<RelayCredential | null> {
     try {
       return await this.#load();
     } catch (error) {
-      if (error instanceof EdgeCredentialStoreError) {
+      if (error instanceof RelayCredentialStoreError) {
         throw error;
       }
-      throw new EdgeCredentialStoreError("Could not read the edge credential file.");
+      throw new RelayCredentialStoreError("Could not read the relay credential file.");
     }
   }
 
-  async #load(): Promise<EdgeCredential | null> {
+  async #load(): Promise<RelayCredential | null> {
     const directory = await existingTarget(dirname(this.path));
     if (!directory) {
       return null;
     }
     if (!directory.isDirectory()) {
-      throw new EdgeCredentialStoreError("The edge credential directory is invalid.");
+      throw new RelayCredentialStoreError("The relay credential directory is invalid.");
     }
     if (process.platform !== "win32" && (directory.mode & 0o077) !== 0) {
-      throw new EdgeCredentialStoreError(
-        "The edge credential directory must be accessible only by its owner.",
+      throw new RelayCredentialStoreError(
+        "The relay credential directory must be accessible only by its owner.",
       );
     }
 
-    let handle;
+    let handle: Awaited<ReturnType<typeof open>>;
     try {
       handle = await open(
         this.path,
@@ -74,17 +74,17 @@ export class EdgeCredentialStore {
       if (isFileSystemError(error, "ENOENT")) {
         return null;
       }
-      throw new EdgeCredentialStoreError("Could not open the edge credential file.");
+      throw new RelayCredentialStoreError("Could not open the relay credential file.");
     }
 
     try {
       const metadata = await handle.stat();
       if (!metadata.isFile()) {
-        throw new EdgeCredentialStoreError("The edge credential path is not a regular file.");
+        throw new RelayCredentialStoreError("The relay credential path is not a regular file.");
       }
       if (process.platform !== "win32" && (metadata.mode & 0o077) !== 0) {
-        throw new EdgeCredentialStoreError(
-          "The edge credential file must be readable only by its owner.",
+        throw new RelayCredentialStoreError(
+          "The relay credential file must be readable only by its owner.",
         );
       }
       const contents = await handle.readFile("utf8");
@@ -92,32 +92,32 @@ export class EdgeCredentialStore {
       try {
         value = JSON.parse(contents);
       } catch {
-        throw new EdgeCredentialStoreError("The edge credential file is invalid.");
+        throw new RelayCredentialStoreError("The relay credential file is invalid.");
       }
-      return decodeEdgeCredential(value);
+      return decodeRelayCredential(value);
     } finally {
       await handle.close();
     }
   }
 
-  async save(credential: EdgeCredential, options: SaveEdgeCredentialOptions = {}): Promise<void> {
+  async save(credential: RelayCredential, options: SaveRelayCredentialOptions = {}): Promise<void> {
     try {
       await this.#save(credential, options);
     } catch (error) {
-      if (error instanceof EdgeCredentialStoreError) {
+      if (error instanceof RelayCredentialStoreError) {
         throw error;
       }
-      throw new EdgeCredentialStoreError("Could not save the edge credential file.");
+      throw new RelayCredentialStoreError("Could not save the relay credential file.");
     }
   }
 
-  async #save(credential: EdgeCredential, options: SaveEdgeCredentialOptions): Promise<void> {
-    const validated = decodeEdgeCredential(credential);
+  async #save(credential: RelayCredential, options: SaveRelayCredentialOptions): Promise<void> {
+    const validated = decodeRelayCredential(credential);
     const directory = dirname(this.path);
     await mkdir(directory, { recursive: true, mode: 0o700 });
     const directoryMetadata = await existingTarget(directory);
     if (!directoryMetadata?.isDirectory()) {
-      throw new EdgeCredentialStoreError("The edge credential directory is invalid.");
+      throw new RelayCredentialStoreError("The relay credential directory is invalid.");
     }
     if (process.platform !== "win32") {
       await chmod(directory, 0o700);
@@ -125,14 +125,14 @@ export class EdgeCredentialStore {
 
     const existing = await existingTarget(this.path);
     if (existing && !options.overwrite) {
-      throw new EdgeCredentialStoreError("An edge credential already exists.");
+      throw new RelayCredentialStoreError("An relay credential already exists.");
     }
     if (existing && !existing.isFile()) {
-      throw new EdgeCredentialStoreError("The edge credential path is not a regular file.");
+      throw new RelayCredentialStoreError("The relay credential path is not a regular file.");
     }
     if (existing && process.platform !== "win32" && (existing.mode & 0o077) !== 0) {
-      throw new EdgeCredentialStoreError(
-        "The edge credential file must be readable only by its owner.",
+      throw new RelayCredentialStoreError(
+        "The relay credential file must be readable only by its owner.",
       );
     }
 
@@ -156,7 +156,7 @@ export class EdgeCredentialStore {
       await rename(temporaryPath, this.path);
       temporaryExists = false;
     } catch {
-      throw new EdgeCredentialStoreError("Could not save the edge credential file.");
+      throw new RelayCredentialStoreError("Could not save the relay credential file.");
     } finally {
       if (temporaryExists) {
         await unlink(temporaryPath).catch(() => undefined);
@@ -170,24 +170,24 @@ export class EdgeCredentialStore {
       return;
     }
     if (!directory.isDirectory()) {
-      throw new EdgeCredentialStoreError("The edge credential directory is invalid.");
+      throw new RelayCredentialStoreError("The relay credential directory is invalid.");
     }
     if (process.platform !== "win32" && (directory.mode & 0o077) !== 0) {
-      throw new EdgeCredentialStoreError(
-        "The edge credential directory must be accessible only by its owner.",
+      throw new RelayCredentialStoreError(
+        "The relay credential directory must be accessible only by its owner.",
       );
     }
     try {
       await unlink(this.path);
     } catch (error) {
       if (!isFileSystemError(error, "ENOENT")) {
-        throw new EdgeCredentialStoreError("Could not delete the edge credential file.");
+        throw new RelayCredentialStoreError("Could not delete the relay credential file.");
       }
     }
   }
 }
 
-export function defaultEdgeCredentialPath(
+export function defaultRelayCredentialPath(
   environment: NodeJS.ProcessEnv = process.env,
   homeDirectory = homedir(),
 ): string {
@@ -195,14 +195,14 @@ export function defaultEdgeCredentialPath(
   const configHome =
     xdgConfigHome && xdgConfigHome.length > 0 ? xdgConfigHome : join(homeDirectory, ".config");
   if (!isAbsolute(configHome)) {
-    throw new EdgeCredentialStoreError("XDG_CONFIG_HOME must be an absolute path.");
+    throw new RelayCredentialStoreError("XDG_CONFIG_HOME must be an absolute path.");
   }
-  return join(configHome, "quotacli", "edge.json");
+  return join(configHome, "quotacli", "device.json");
 }
 
-export function decodeEdgeCredential(value: unknown): EdgeCredential {
+export function decodeRelayCredential(value: unknown): RelayCredential {
   if (!isRecord(value) || !hasOnlyCredentialKeys(value)) {
-    throw new EdgeCredentialStoreError("The edge credential file is invalid.");
+    throw new RelayCredentialStoreError("The relay credential file is invalid.");
   }
   const { relay_url, instance_id, device_id, device_token, paired_at, last_sequence } = value;
   if (
@@ -222,17 +222,17 @@ export function decodeEdgeCredential(value: unknown): EdgeCredential {
     !Number.isSafeInteger(last_sequence) ||
     last_sequence < -1
   ) {
-    throw new EdgeCredentialStoreError("The edge credential file is invalid.");
+    throw new RelayCredentialStoreError("The relay credential file is invalid.");
   }
 
   let canonicalUrl: string;
   try {
     canonicalUrl = canonicalRelayUrl(relay_url);
   } catch {
-    throw new EdgeCredentialStoreError("The edge credential file is invalid.");
+    throw new RelayCredentialStoreError("The relay credential file is invalid.");
   }
   if (canonicalUrl !== relay_url) {
-    throw new EdgeCredentialStoreError("The edge credential file is invalid.");
+    throw new RelayCredentialStoreError("The relay credential file is invalid.");
   }
 
   return {
@@ -252,7 +252,7 @@ async function existingTarget(path: string): Promise<Stats | null> {
     if (isFileSystemError(error, "ENOENT")) {
       return null;
     }
-    throw new EdgeCredentialStoreError("Could not inspect the edge credential path.");
+    throw new RelayCredentialStoreError("Could not inspect the relay credential path.");
   }
 }
 

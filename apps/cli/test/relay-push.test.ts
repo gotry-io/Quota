@@ -8,18 +8,18 @@ import type {
 } from "@gotry-io/quota-protocol";
 import { describe, expect, it, vi } from "vitest";
 import packageMetadata from "../package.json" with { type: "json" };
-import { RelayClient, RelayClientError, type RelayFetch } from "../src/edge/client.ts";
+import { RelayClient, RelayClientError, type RelayFetch } from "../src/relay/client.ts";
 import {
-  type EdgeCommandDependencies,
-  type EdgeCommandOutput,
-  type EdgeCredentialStoreContract,
-  type EdgeRelayClient,
-  runEdgeCommand,
-} from "../src/edge/commands.ts";
-import type { EdgeReportService } from "../src/edge/launch-agent.ts";
-import type { EdgeCredential } from "../src/edge/store.ts";
+  type RelayCommandClient,
+  type RelayCommandDependencies,
+  type RelayCommandOutput,
+  type RelayCredentialStoreContract,
+  runRelayCommand,
+} from "../src/relay/commands.ts";
+import type { RelayPushService } from "../src/relay/launch-agent.ts";
+import type { RelayCredential } from "../src/relay/store.ts";
 
-const boundCredential: EdgeCredential = {
+const boundCredential: RelayCredential = {
   relay_url: "https://relay.example.com",
   instance_id: "relay_bound",
   device_id: "device_test",
@@ -43,16 +43,18 @@ const boundRelay: RelayInfo = {
   },
 };
 
-describe("edge report", () => {
+describe("relay push", () => {
   it("does no discovery, collection, or upload when the machine is not paired", async () => {
     const capture = captureOutput();
     const dependencies = reportDependencies({ credential: null });
 
-    expect(await runEdgeCommand(["report"], capture.output, dependencies)).toBe(1);
+    expect(await runRelayCommand(["push"], capture.output, dependencies)).toBe(1);
     expect(dependencies.createClient).not.toHaveBeenCalled();
     expect(dependencies.collect).not.toHaveBeenCalled();
     expect(dependencies.store.save).not.toHaveBeenCalled();
-    expect(capture.stderr).toEqual(["This machine is not paired. Run `quotacli edge pair` first."]);
+    expect(capture.stderr).toEqual([
+      "This machine is not paired. Run `quotacli relay pair` first.",
+    ]);
   });
 
   it("discovers without Authorization and stops before collection on instance mismatch", async () => {
@@ -65,7 +67,7 @@ describe("edge report", () => {
     });
     const capture = captureOutput();
 
-    expect(await runEdgeCommand(["report"], capture.output, dependencies)).toBe(1);
+    expect(await runRelayCommand(["push"], capture.output, dependencies)).toBe(1);
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(dependencies.collect).not.toHaveBeenCalled();
     expect(dependencies.store.save).not.toHaveBeenCalled();
@@ -91,7 +93,7 @@ describe("edge report", () => {
     });
     const capture = captureOutput();
 
-    expect(await runEdgeCommand(["report"], capture.output, dependencies)).toBe(0);
+    expect(await runRelayCommand(["push"], capture.output, dependencies)).toBe(0);
     expect(dependencies.collect).toHaveBeenCalledWith({
       providers: "all",
       clientVersion: packageMetadata.version,
@@ -128,7 +130,7 @@ describe("edge report", () => {
     });
     const capture = captureOutput();
 
-    expect(await runEdgeCommand(["report"], capture.output, dependencies)).toBe(1);
+    expect(await runRelayCommand(["push"], capture.output, dependencies)).toBe(1);
     expect(uploaded?.snapshots).toEqual([]);
     expect(uploaded?.sequence).toBe(5);
     expect(capture.stdout).toEqual(["Uploaded 0 snapshots with sequence 5."]);
@@ -148,7 +150,7 @@ describe("edge report", () => {
     });
     const capture = captureOutput();
 
-    expect(await runEdgeCommand(["report"], capture.output, dependencies)).toBe(1);
+    expect(await runRelayCommand(["push"], capture.output, dependencies)).toBe(1);
     expect(uploaded?.snapshots.map((snapshot) => snapshot.provider)).toEqual(["codex", "grok"]);
     expect(dependencies.store.save).toHaveBeenCalledWith(
       { ...boundCredential, last_sequence: 5 },
@@ -166,7 +168,7 @@ describe("edge report", () => {
     });
     const capture = captureOutput();
 
-    expect(await runEdgeCommand(["report"], capture.output, dependencies)).toBe(1);
+    expect(await runRelayCommand(["push"], capture.output, dependencies)).toBe(1);
     expect(dependencies.store.save).not.toHaveBeenCalled();
     expect(capture.stderr).toEqual(["The Relay rejected the request."]);
   });
@@ -181,9 +183,9 @@ describe("edge report", () => {
     });
     const capture = captureOutput();
 
-    expect(await runEdgeCommand(["report"], capture.output, dependencies)).toBe(1);
+    expect(await runRelayCommand(["push"], capture.output, dependencies)).toBe(1);
     expect(dependencies.store.save).not.toHaveBeenCalled();
-    expect(capture.stderr).toEqual(["QuotaCLI could not complete the edge report."]);
+    expect(capture.stderr).toEqual(["QuotaCLI could not complete the relay push."]);
     expect(capture.stderr.join("\n")).not.toMatch(/Authorization|raw Relay|synthetic-device-token/);
   });
 
@@ -195,7 +197,7 @@ describe("edge report", () => {
     });
     const capture = captureOutput();
 
-    expect(await runEdgeCommand(["report"], capture.output, dependencies)).toBe(1);
+    expect(await runRelayCommand(["push"], capture.output, dependencies)).toBe(1);
     expect(capture.stderr).toEqual([
       "The snapshot was uploaded, but QuotaCLI could not save the local sequence.",
     ]);
@@ -217,8 +219,8 @@ describe("edge report", () => {
       },
     });
 
-    expect(await runEdgeCommand(["report"], captureOutput().output, dependencies)).toBe(1);
-    expect(await runEdgeCommand(["report"], captureOutput().output, dependencies)).toBe(0);
+    expect(await runRelayCommand(["push"], captureOutput().output, dependencies)).toBe(1);
+    expect(await runRelayCommand(["push"], captureOutput().output, dependencies)).toBe(0);
     expect(uploadedSequences).toEqual([5, 5]);
     expect(dependencies.store.save).toHaveBeenNthCalledWith(
       2,
@@ -228,7 +230,7 @@ describe("edge report", () => {
   });
 
   it("rejects a malformed report before upload with a fixed error", async () => {
-    const upload = vi.fn<EdgeRelayClient["uploadSnapshot"]>(async () => undefined);
+    const upload = vi.fn<RelayCommandClient["uploadSnapshot"]>(async () => undefined);
     const dependencies = reportDependencies({
       report: {
         ...completeReport(),
@@ -238,7 +240,7 @@ describe("edge report", () => {
     });
     const capture = captureOutput();
 
-    expect(await runEdgeCommand(["report"], capture.output, dependencies)).toBe(1);
+    expect(await runRelayCommand(["push"], capture.output, dependencies)).toBe(1);
     expect(upload).not.toHaveBeenCalled();
     expect(capture.stderr).toEqual(["QuotaCLI produced an invalid normalized quota report."]);
     expect(capture.stderr.join("\n")).not.toContain(boundCredential.device_token);
@@ -250,36 +252,36 @@ describe("edge report", () => {
     });
     const capture = captureOutput();
 
-    expect(await runEdgeCommand(["report"], capture.output, dependencies)).toBe(1);
-    expect(capture.stderr).toEqual(["QuotaCLI could not complete the edge report."]);
+    expect(await runRelayCommand(["push"], capture.output, dependencies)).toBe(1);
+    expect(capture.stderr).toEqual(["QuotaCLI could not complete the relay push."]);
     expect(capture.stderr.join("\n")).not.toContain(boundCredential.device_token);
   });
 });
 
 interface ReportDependencyOptions {
-  credential?: EdgeCredential | null;
+  credential?: RelayCredential | null;
   report?: unknown;
   collectError?: Error;
-  createClient?: (relayUrl: string) => EdgeRelayClient;
+  createClient?: (relayUrl: string) => RelayCommandClient;
   upload?: (token: string, envelope: QuotaSnapshotEnvelope) => Promise<void>;
-  save?: EdgeCredentialStoreContract["save"];
+  save?: RelayCredentialStoreContract["save"];
 }
 
-function reportDependencies(options: ReportDependencyOptions = {}): EdgeCommandDependencies & {
-  createClient: ReturnType<typeof vi.fn<(relayUrl: string) => EdgeRelayClient>>;
-  collect: ReturnType<typeof vi.fn<EdgeCommandDependencies["collect"]>>;
+function reportDependencies(options: ReportDependencyOptions = {}): RelayCommandDependencies & {
+  createClient: ReturnType<typeof vi.fn<(relayUrl: string) => RelayCommandClient>>;
+  collect: ReturnType<typeof vi.fn<RelayCommandDependencies["collect"]>>;
   store: {
-    load: ReturnType<typeof vi.fn<EdgeCredentialStoreContract["load"]>>;
-    save: ReturnType<typeof vi.fn<EdgeCredentialStoreContract["save"]>>;
-    delete: ReturnType<typeof vi.fn<EdgeCredentialStoreContract["delete"]>>;
+    load: ReturnType<typeof vi.fn<RelayCredentialStoreContract["load"]>>;
+    save: ReturnType<typeof vi.fn<RelayCredentialStoreContract["save"]>>;
+    delete: ReturnType<typeof vi.fn<RelayCredentialStoreContract["delete"]>>;
   };
   service: ReturnType<typeof fakeService>;
 } {
   const client = relayClient(options.upload);
-  const createClient = vi.fn<(relayUrl: string) => EdgeRelayClient>(
+  const createClient = vi.fn<(relayUrl: string) => RelayCommandClient>(
     options.createClient ?? (() => client),
   );
-  const collect = vi.fn<EdgeCommandDependencies["collect"]>(async () => {
+  const collect = vi.fn<RelayCommandDependencies["collect"]>(async () => {
     if (options.collectError) {
       throw options.collectError;
     }
@@ -297,15 +299,16 @@ function reportDependencies(options: ReportDependencyOptions = {}): EdgeCommandD
     platform: "darwin",
     service: fakeService(),
     now: () => new Date("2026-08-03T10:00:00Z"),
-    deviceName: () => "synthetic-edge",
+    deviceName: () => "synthetic-relay",
     collect,
+    diagnoseProviders: vi.fn(async () => []),
   };
 }
 
-function fakeService(): EdgeReportService & {
-  start: ReturnType<typeof vi.fn<EdgeReportService["start"]>>;
-  status: ReturnType<typeof vi.fn<EdgeReportService["status"]>>;
-  stop: ReturnType<typeof vi.fn<EdgeReportService["stop"]>>;
+function fakeService(): RelayPushService & {
+  start: ReturnType<typeof vi.fn<RelayPushService["start"]>>;
+  status: ReturnType<typeof vi.fn<RelayPushService["status"]>>;
+  stop: ReturnType<typeof vi.fn<RelayPushService["stop"]>>;
 } {
   return {
     start: vi.fn(async () => undefined),
@@ -314,8 +317,8 @@ function fakeService(): EdgeReportService & {
   };
 }
 
-function relayClient(upload: ReportDependencyOptions["upload"]): EdgeRelayClient & {
-  uploadSnapshot: ReturnType<typeof vi.fn<EdgeRelayClient["uploadSnapshot"]>>;
+function relayClient(upload: ReportDependencyOptions["upload"]): RelayCommandClient & {
+  uploadSnapshot: ReturnType<typeof vi.fn<RelayCommandClient["uploadSnapshot"]>>;
 } {
   return {
     relayUrl: boundCredential.relay_url,
@@ -401,7 +404,7 @@ function issued(): PairingTokenIssuedResponse {
 function captureOutput(): {
   stdout: string[];
   stderr: string[];
-  output: EdgeCommandOutput;
+  output: RelayCommandOutput;
 } {
   const stdout: string[] = [];
   const stderr: string[] = [];

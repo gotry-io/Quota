@@ -40,7 +40,7 @@ const relayInfo: RelayInfo = {
 describe("QuotaRelay HTTP v1 API", () => {
   it("pairs, authorizes, stores snapshots, lists devices, and revokes credentials", async () => {
     const fixture = await makeFixture();
-    const pairing = await createPairing(fixture.app, "Edge Mac");
+    const pairing = await createPairing(fixture.app, "Relay Mac");
 
     const pendingResponse = await postJSON(fixture.app, "/api/v1/pairings/token", {
       device_code: pairing.device_code,
@@ -191,7 +191,7 @@ describe("QuotaRelay HTTP v1 API", () => {
 
   it("returns explicit denied and expired pairing states and rejects oversized JSON", async () => {
     const fixture = await makeFixture();
-    const deniedPairing = await createPairing(fixture.app, "Denied Edge");
+    const deniedPairing = await createPairing(fixture.app, "Denied Device");
 
     const denialResponse = await postJSON(
       fixture.app,
@@ -208,7 +208,7 @@ describe("QuotaRelay HTTP v1 API", () => {
     expect(deniedPoll.status).toBe(409);
     expect(await errorCode(deniedPoll)).toBe("pairing_denied");
 
-    const expiredPairing = await createPairing(fixture.app, "Expired Edge");
+    const expiredPairing = await createPairing(fixture.app, "Expired Device");
     fixture.setNow("2026-08-03T01:10:00Z");
     const expiredPoll = await postJSON(fixture.app, "/api/v1/pairings/token", {
       device_code: expiredPairing.device_code,
@@ -238,7 +238,7 @@ describe("QuotaRelay HTTP v1 API", () => {
           "X-Real-IP": `203.0.113.${index % 255}`,
           "CF-Connecting-IP": `192.0.2.${index % 255}`,
         },
-        body: JSON.stringify({ device_display_name: `Edge ${index}` }),
+        body: JSON.stringify({ device_display_name: `Relay ` }),
       });
       expect(response.status).toBe(201);
     }
@@ -249,7 +249,7 @@ describe("QuotaRelay HTTP v1 API", () => {
         "Content-Type": "application/json",
         "X-Forwarded-For": "192.0.2.200",
       },
-      body: JSON.stringify({ device_display_name: "Rate-limited edge" }),
+      body: JSON.stringify({ device_display_name: "Rate-limited device" }),
     });
     expect(response.status).toBe(429);
     expect(response.headers.get("Retry-After")).toBe("600");
@@ -265,7 +265,7 @@ describe("QuotaRelay HTTP v1 API", () => {
           "Content-Type": "application/json",
           "CF-Connecting-IP": "192.0.2.10",
         },
-        body: JSON.stringify({ device_display_name: `Managed edge ${index}` }),
+        body: JSON.stringify({ device_display_name: `Managed device ${index}` }),
       });
       expect(response.status).toBe(201);
     }
@@ -278,7 +278,7 @@ describe("QuotaRelay HTTP v1 API", () => {
             "Content-Type": "application/json",
             "CF-Connecting-IP": "192.0.2.10",
           },
-          body: JSON.stringify({ device_display_name: "Limited edge" }),
+          body: JSON.stringify({ device_display_name: "Limited device" }),
         })
       ).status,
     ).toBe(429);
@@ -290,7 +290,7 @@ describe("QuotaRelay HTTP v1 API", () => {
             "Content-Type": "application/json",
             "CF-Connecting-IP": "192.0.2.11",
           },
-          body: JSON.stringify({ device_display_name: "Other client edge" }),
+          body: JSON.stringify({ device_display_name: "Other client device" }),
         })
       ).status,
     ).toBe(201);
@@ -323,7 +323,7 @@ describe("QuotaRelay HTTP v1 API", () => {
     await fixture.state.registerDevice({
       id: "device_managed_delete",
       controller_id: persisted?.id ?? "",
-      display_name: "Managed deletable edge",
+      display_name: "Managed deletable device",
       token_hash: "managed-device-token-hash",
       created_at: "2026-08-03T01:00:00Z",
     });
@@ -397,14 +397,14 @@ describe("QuotaRelay HTTP v1 API", () => {
     await fixture.state.registerDevice({
       id: "device_self",
       controller_id: "controller_http",
-      display_name: "Self-revoking edge",
+      display_name: "Self-revoking device",
       token_hash: await sha256Hex(selfToken),
       created_at: "2026-08-03T01:00:00Z",
     });
     await fixture.state.registerDevice({
       id: "device_other",
       controller_id: "controller_http",
-      display_name: "Other edge",
+      display_name: "Other device",
       token_hash: await sha256Hex(otherToken),
       created_at: "2026-08-03T01:00:00Z",
     });
@@ -447,14 +447,14 @@ describe("QuotaRelay HTTP v1 API", () => {
     await fixture.state.registerDevice({
       id: "device_stale",
       controller_id: "controller_http",
-      display_name: "Stale edge",
+      display_name: "Stale device",
       token_hash: await sha256Hex(staleToken),
       created_at: "2026-07-04T01:00:00Z",
     });
     await fixture.state.registerDevice({
       id: "device_other_stale",
       controller_id: "controller_other",
-      display_name: "Other stale edge",
+      display_name: "Other stale device",
       token_hash: await sha256Hex(otherStaleToken),
       created_at: "2026-07-04T01:00:00Z",
     });

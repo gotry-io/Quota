@@ -1,13 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  type EdgeCommandDependencies,
-  type EdgeCommandOutput,
-  runEdgeCommand,
-} from "../src/edge/commands.ts";
-import type { EdgeReportService } from "../src/edge/launch-agent.ts";
-import type { EdgeCredential } from "../src/edge/store.ts";
+  type RelayCommandDependencies,
+  type RelayCommandOutput,
+  runRelayCommand,
+  runStatusCommand,
+} from "../src/relay/commands.ts";
+import type { RelayPushService } from "../src/relay/launch-agent.ts";
+import type { RelayCredential } from "../src/relay/store.ts";
 
-const pairedCredential: EdgeCredential = {
+const pairedCredential: RelayCredential = {
   relay_url: "https://relay.example.com",
   instance_id: "relay_test",
   device_id: "device_test",
@@ -20,52 +21,40 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-describe("edge background service commands", () => {
-  it("starts only after confirming a paired credential", async () => {
-    const dependencies = serviceDependencies();
-    const capture = captureOutput();
-
-    expect(await runEdgeCommand(["start"], capture.output, dependencies)).toBe(0);
-    expect(dependencies.store.load).toHaveBeenCalledOnce();
-    expect(dependencies.service.start).toHaveBeenCalledOnce();
-    expect(capture.stdout).toEqual([
-      "Background edge reporting is loaded and scheduled every 5 minutes.",
-    ]);
-  });
-
-  it("does not touch launchd or files when start is unpaired", async () => {
+describe("relay background lifecycle", () => {
+  it("starts background push as part of pair, not as a separate command", async () => {
     const dependencies = serviceDependencies({ credential: null });
     const capture = captureOutput();
 
-    expect(await runEdgeCommand(["start"], capture.output, dependencies)).toBe(1);
+    expect(await runRelayCommand(["start"], capture.output, dependencies)).toBe(2);
     expect(dependencies.service.start).not.toHaveBeenCalled();
-    expect(dependencies.service.status).not.toHaveBeenCalled();
-    expect(dependencies.service.stop).not.toHaveBeenCalled();
-    expect(capture.stderr).toEqual(["This machine is not paired. Run `quotacli edge pair` first."]);
+    expect(capture.stderr.join("\n")).toContain("Unknown relay command: start");
   });
 
-  it("hides unexpected start errors", async () => {
-    const dependencies = serviceDependencies({
-      startError: new Error(`launchctl output ${pairedCredential.device_token}`),
-    });
+  it("removes the stop command from the relay surface", async () => {
+    const dependencies = serviceDependencies();
     const capture = captureOutput();
 
-    expect(await runEdgeCommand(["start"], capture.output, dependencies)).toBe(1);
-    expect(capture.stderr).toEqual(["QuotaCLI could not start background edge reporting."]);
-    expect(capture.stderr.join("\n")).not.toContain(pairedCredential.device_token);
+    expect(await runRelayCommand(["stop"], capture.output, dependencies)).toBe(2);
+    expect(dependencies.service.stop).not.toHaveBeenCalled();
+    expect(capture.stderr.join("\n")).toContain("Unknown relay command: stop");
   });
 
-  it("shows paired identity and returns zero only for a loaded service", async () => {
+  it("shows paired identity through top-level status and hides the device token", async () => {
     const dependencies = serviceDependencies({ status: "loaded" });
     const capture = captureOutput();
 
-    expect(await runEdgeCommand(["status"], capture.output, dependencies)).toBe(0);
+    expect(await runStatusCommand(capture.output, dependencies)).toBe(0);
     expect(capture.stdout).toEqual([
-      "Pairing: paired",
-      `Relay URL: ${pairedCredential.relay_url}`,
-      `Device ID: ${pairedCredential.device_id}`,
-      `Last sequence: ${pairedCredential.last_sequence}`,
-      "Service: loaded",
+      "CLI version: 0.1.0",
+      "Providers:",
+      "  codex\tfound\t~/.codex/auth.json\tCodex auth file",
+      "Relay:",
+      "  Pairing: paired",
+      `  Relay URL: ${pairedCredential.relay_url}`,
+      `  Device ID: ${pairedCredential.device_id}`,
+      `  Last sequence: ${pairedCredential.last_sequence}`,
+      "  Background: loaded (every 5 minutes)",
     ]);
     expect([...capture.stdout, ...capture.stderr].join("\n")).not.toContain(
       pairedCredential.device_token,
@@ -73,16 +62,21 @@ describe("edge background service commands", () => {
   });
 
   it.each([
-    { credential: pairedCredential, status: "stopped" as const, pairing: "paired" },
-    { credential: null, status: "loaded" as const, pairing: "unpaired" },
-  ])("returns one unless both paired and loaded %#", async ({ credential, status, pairing }) => {
-    const dependencies = serviceDependencies({ credential, status });
-    const capture = captureOutput();
+    { credential: pairedCredential, status: "stopped" as const, pairing: "paired", code: 1 },
+    { credential: null, status: "loaded" as const, pairing: "unpaired", code: 1 },
+    { credential: null, status: "stopped" as const, pairing: "unpaired", code: 0 },
+    { credential: pairedCredential, status: "loaded" as const, pairing: "paired", code: 0 },
+  ])(
+    "returns health based on providers and expected background state %#",
+    async ({ credential, status, pairing, code }) => {
+      const dependencies = serviceDependencies({ credential, status });
+      const capture = captureOutput();
 
-    expect(await runEdgeCommand(["status"], capture.output, dependencies)).toBe(1);
-    expect(capture.stdout).toContain(`Pairing: ${pairing}`);
-    expect(capture.stdout).toContain(`Service: ${status}`);
-  });
+      expect(await runStatusCommand(capture.output, dependencies)).toBe(code);
+      expect(capture.stdout).toContain(`  Pairing: ${pairing}`);
+      expect(capture.stdout.join("\n")).toContain(`Background: ${status}`);
+    },
+  );
 
   it("hides unexpected status errors", async () => {
     const dependencies = serviceDependencies({
@@ -90,31 +84,8 @@ describe("edge background service commands", () => {
     });
     const capture = captureOutput();
 
-    expect(await runEdgeCommand(["status"], capture.output, dependencies)).toBe(1);
-    expect(capture.stderr).toEqual(["QuotaCLI could not inspect background edge reporting."]);
-    expect(capture.stderr.join("\n")).not.toContain(pairedCredential.device_token);
-  });
-
-  it("stops the service without reading or deleting pairing", async () => {
-    const dependencies = serviceDependencies();
-    const capture = captureOutput();
-
-    expect(await runEdgeCommand(["stop"], capture.output, dependencies)).toBe(0);
-    expect(dependencies.service.stop).toHaveBeenCalledOnce();
-    expect(dependencies.store.load).not.toHaveBeenCalled();
-    expect(dependencies.store.delete).not.toHaveBeenCalled();
-    expect(capture.stdout).toEqual(["Background edge reporting is stopped. Pairing was retained."]);
-  });
-
-  it("hides unexpected stop errors and retains pairing", async () => {
-    const dependencies = serviceDependencies({
-      stopError: new Error(`raw bootout output ${pairedCredential.device_token}`),
-    });
-    const capture = captureOutput();
-
-    expect(await runEdgeCommand(["stop"], capture.output, dependencies)).toBe(1);
-    expect(dependencies.store.delete).not.toHaveBeenCalled();
-    expect(capture.stderr).toEqual(["QuotaCLI could not stop background edge reporting."]);
+    expect(await runStatusCommand(capture.output, dependencies)).toBe(1);
+    expect(capture.stdout.join("\n")).toContain("Background: unavailable");
     expect(capture.stderr.join("\n")).not.toContain(pairedCredential.device_token);
   });
 
@@ -122,7 +93,7 @@ describe("edge background service commands", () => {
     const events: string[] = [];
     const dependencies = serviceDependencies({ events });
 
-    expect(await runEdgeCommand(["unpair"], captureOutput().output, dependencies)).toBe(0);
+    expect(await runRelayCommand(["unpair"], captureOutput().output, dependencies)).toBe(0);
     expect(events).toEqual(["stop", "load", "discover", "revoke", "delete"]);
   });
 
@@ -134,12 +105,12 @@ describe("edge background service commands", () => {
     });
     const capture = captureOutput();
 
-    expect(await runEdgeCommand(["unpair"], capture.output, dependencies)).toBe(1);
+    expect(await runRelayCommand(["unpair"], capture.output, dependencies)).toBe(1);
     expect(events).toEqual(["stop"]);
     expect(dependencies.store.load).not.toHaveBeenCalled();
     expect(dependencies.store.delete).not.toHaveBeenCalled();
     expect(capture.stderr).toEqual([
-      "QuotaCLI could not stop background edge reporting. Pairing was retained.",
+      "QuotaCLI could not stop background relay push. Pairing was retained.",
     ]);
     expect(capture.stderr.join("\n")).not.toContain(pairedCredential.device_token);
   });
@@ -148,7 +119,7 @@ describe("edge background service commands", () => {
     const events: string[] = [];
     const dependencies = serviceDependencies({ platform: "linux", events });
 
-    expect(await runEdgeCommand(["unpair"], captureOutput().output, dependencies)).toBe(0);
+    expect(await runRelayCommand(["unpair"], captureOutput().output, dependencies)).toBe(0);
     expect(dependencies.service.stop).not.toHaveBeenCalled();
     expect(events).toEqual(["load", "discover", "revoke", "delete"]);
     expect(dependencies.store.delete).toHaveBeenCalledOnce();
@@ -162,7 +133,7 @@ describe("edge background service commands", () => {
     });
     const capture = captureOutput();
 
-    expect(await runEdgeCommand(["unpair"], capture.output, dependencies)).toBe(1);
+    expect(await runRelayCommand(["unpair"], capture.output, dependencies)).toBe(1);
     expect(events).toEqual(["stop", "load", "discover"]);
     expect(dependencies.store.delete).not.toHaveBeenCalled();
     expect(capture.stderr).toEqual([
@@ -176,7 +147,7 @@ describe("edge background service commands", () => {
     const dependencies = serviceDependencies({ events, relayInstanceID: "relay_other" });
     const capture = captureOutput();
 
-    expect(await runEdgeCommand(["unpair"], capture.output, dependencies)).toBe(1);
+    expect(await runRelayCommand(["unpair"], capture.output, dependencies)).toBe(1);
     expect(events).toEqual(["stop", "load", "discover"]);
     expect(dependencies.store.delete).not.toHaveBeenCalled();
     expect(capture.stderr).toEqual([
@@ -192,7 +163,7 @@ describe("edge background service commands", () => {
     });
     const capture = captureOutput();
 
-    expect(await runEdgeCommand(["unpair"], capture.output, dependencies)).toBe(1);
+    expect(await runRelayCommand(["unpair"], capture.output, dependencies)).toBe(1);
     expect(events).toEqual(["stop", "load", "discover", "revoke"]);
     expect(dependencies.store.delete).not.toHaveBeenCalled();
     expect(capture.stderr).toEqual([
@@ -209,36 +180,20 @@ describe("edge background service commands", () => {
     });
     const capture = captureOutput();
 
-    expect(await runEdgeCommand(["unpair"], capture.output, dependencies)).toBe(1);
+    expect(await runRelayCommand(["unpair"], capture.output, dependencies)).toBe(1);
     expect(events).toEqual(["stop", "load", "discover", "revoke", "delete"]);
     expect(capture.stderr).toEqual([
-      "The remote device was revoked, but QuotaCLI could not remove the local edge credential.",
+      "The remote device was revoked, but QuotaCLI could not remove the local relay credential.",
     ]);
     expect(capture.stderr.join("\n")).not.toContain(pairedCredential.device_token);
   });
-
-  it.each(["start", "status", "stop"])(
-    "returns a safe unsupported-platform error for %s",
-    async (command) => {
-      const dependencies = serviceDependencies({ platform: "linux" });
-      const capture = captureOutput();
-
-      expect(await runEdgeCommand([command], capture.output, dependencies)).toBe(1);
-      expect(capture.stderr).toEqual(["Background edge reporting is supported only on macOS."]);
-      expect(dependencies.store.load).not.toHaveBeenCalled();
-      expect(dependencies.store.delete).not.toHaveBeenCalled();
-      expect(dependencies.service.start).not.toHaveBeenCalled();
-      expect(dependencies.service.status).not.toHaveBeenCalled();
-      expect(dependencies.service.stop).not.toHaveBeenCalled();
-    },
-  );
 
   it("reports default dependency construction failures without throwing", async () => {
     vi.stubEnv("XDG_CONFIG_HOME", "relative/config");
     const capture = captureOutput();
 
-    expect(await runEdgeCommand(["report"], capture.output)).toBe(1);
-    expect(capture.stderr).toEqual(["QuotaCLI could not initialize edge commands."]);
+    expect(await runRelayCommand(["push"], capture.output)).toBe(1);
+    expect(capture.stderr).toEqual(["QuotaCLI could not initialize relay commands."]);
   });
 
   it("keeps invalid Relay URLs as usage errors before dependency construction", async () => {
@@ -246,19 +201,19 @@ describe("edge background service commands", () => {
     const capture = captureOutput();
 
     expect(
-      await runEdgeCommand(
+      await runRelayCommand(
         ["pair", "--relay", "https://relay.example.com/path?secret=value"],
         capture.output,
       ),
     ).toBe(2);
     expect(capture.stderr.join("\n")).toContain("The --relay value must be a valid Relay origin.");
     expect(capture.stderr.join("\n")).not.toContain("secret=value");
-    expect(capture.stderr).not.toContain("QuotaCLI could not initialize edge commands.");
+    expect(capture.stderr).not.toContain("QuotaCLI could not initialize relay commands.");
   });
 });
 
 interface ServiceDependencyOptions {
-  credential?: EdgeCredential | null;
+  credential?: RelayCredential | null;
   platform?: NodeJS.Platform;
   status?: "loaded" | "stopped";
   startError?: Error;
@@ -271,16 +226,16 @@ interface ServiceDependencyOptions {
   events?: string[];
 }
 
-function serviceDependencies(options: ServiceDependencyOptions = {}): EdgeCommandDependencies & {
+function serviceDependencies(options: ServiceDependencyOptions = {}): RelayCommandDependencies & {
   store: {
-    load: ReturnType<typeof vi.fn<EdgeCommandDependencies["store"]["load"]>>;
-    save: ReturnType<typeof vi.fn<EdgeCommandDependencies["store"]["save"]>>;
-    delete: ReturnType<typeof vi.fn<EdgeCommandDependencies["store"]["delete"]>>;
+    load: ReturnType<typeof vi.fn<RelayCommandDependencies["store"]["load"]>>;
+    save: ReturnType<typeof vi.fn<RelayCommandDependencies["store"]["save"]>>;
+    delete: ReturnType<typeof vi.fn<RelayCommandDependencies["store"]["delete"]>>;
   };
   service: {
-    start: ReturnType<typeof vi.fn<EdgeReportService["start"]>>;
-    status: ReturnType<typeof vi.fn<EdgeReportService["status"]>>;
-    stop: ReturnType<typeof vi.fn<EdgeReportService["stop"]>>;
+    start: ReturnType<typeof vi.fn<RelayPushService["start"]>>;
+    status: ReturnType<typeof vi.fn<RelayPushService["status"]>>;
+    stop: ReturnType<typeof vi.fn<RelayPushService["stop"]>>;
   };
 } {
   const events = options.events;
@@ -356,14 +311,22 @@ function serviceDependencies(options: ServiceDependencyOptions = {}): EdgeComman
       }),
     },
     now: () => new Date("2026-08-03T10:00:00Z"),
-    deviceName: () => "synthetic-edge",
+    deviceName: () => "synthetic-relay",
     collect: vi.fn(async () => undefined),
+    diagnoseProviders: vi.fn(async () => [
+      {
+        provider: "codex" as const,
+        available: true,
+        credential_source: "~/.codex/auth.json",
+        detail: "Codex auth file",
+      },
+    ]),
   };
 }
 function captureOutput(): {
   stdout: string[];
   stderr: string[];
-  output: EdgeCommandOutput;
+  output: RelayCommandOutput;
 } {
   const stdout: string[] = [];
   const stderr: string[] = [];

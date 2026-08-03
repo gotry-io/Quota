@@ -1,14 +1,14 @@
 import { readFile } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 import { QuotaCollectionReportSchema } from "@gotry-io/quota-protocol";
+import { RelayClient } from "../../src/relay/client.ts";
 import {
-  type EdgeCommandDependencies,
-  type EdgeCommandOutput,
-  runEdgeCommand,
-} from "../../src/edge/commands.ts";
-import { RelayClient } from "../../src/edge/client.ts";
-import type { EdgeReportService } from "../../src/edge/launch-agent.ts";
-import { EdgeCredentialStore } from "../../src/edge/store.ts";
+  type RelayCommandDependencies,
+  type RelayCommandOutput,
+  runRelayCommand,
+} from "../../src/relay/commands.ts";
+import type { RelayPushService } from "../../src/relay/launch-agent.ts";
+import { RelayCredentialStore } from "../../src/relay/store.ts";
 
 const reportPath = process.argv[2];
 if (!reportPath || !isAbsolute(reportPath)) {
@@ -29,7 +29,7 @@ if (!parsedReport.success) {
   process.exit(2);
 }
 
-const unusedService: EdgeReportService = {
+const unusedService: RelayPushService = {
   async start() {
     throw new Error("The E2E report runner does not manage a background service.");
   },
@@ -38,18 +38,19 @@ const unusedService: EdgeReportService = {
   },
   async stop() {},
 };
-const dependencies: EdgeCommandDependencies = {
+const dependencies: RelayCommandDependencies = {
   createClient: (relayUrl) => new RelayClient(relayUrl),
-  store: new EdgeCredentialStore(),
+  store: new RelayCredentialStore(),
   platform: process.platform,
   service: unusedService,
   now: () => new Date(),
   deviceName: () => "Quota E2E",
   collect: async () => parsedReport.data,
+  diagnoseProviders: async () => [],
 };
-const output: EdgeCommandOutput = {
+const output: RelayCommandOutput = {
   stdout: (message) => process.stdout.write(message.endsWith("\n") ? message : `${message}\n`),
   stderr: (message) => process.stderr.write(message.endsWith("\n") ? message : `${message}\n`),
 };
 
-process.exitCode = await runEdgeCommand(["report"], output, dependencies);
+process.exitCode = await runRelayCommand(["push"], output, dependencies);

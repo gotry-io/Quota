@@ -8,7 +8,7 @@ data requirements.
 - Provider credentials remain on the machine running QuotaCLI.
 - Relay accepts normalized quota snapshots and device/authentication material only. It must not run
   provider collectors or expose arbitrary command execution.
-- The edge agent is outbound-only.
+- The Relay agent is outbound-only.
 
 ## Credentials and identity
 
@@ -24,7 +24,7 @@ data requirements.
 - Store each QuotaBar Relay controller bearer only in Keychain under the fixed
   `io.gotry.quotabar.relay-controller` service with
   `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`. Relay profile metadata in UserDefaults stores
-  only its derived Keychain reference, never the bearer. Store edge credentials in the platform
+  only its derived Keychain reference, never the bearer. Store Relay device credentials in the platform
   credential store or a user-only (`0600`) file.
 - QuotaBar registers its anonymous managed controller without an account and moves the returned
   bearer directly into Keychain. Self-hosted Settings accepts a controller bearer only through
@@ -87,15 +87,15 @@ data requirements.
 - Before every authenticated controller request, QuotaBar discovers the profile's canonical Relay
   origin without Authorization and requires the advertised instance ID to match the bound profile.
   It refuses redirects and sends no controller bearer after a mismatch.
-- QuotaCLI's file-backed edge credential lives under `XDG_CONFIG_HOME` or the user's `.config`
-  directory. Its containing QuotaCLI directory is `0700`, its credential file is `0600`, writes use
-  a same-directory temporary file and atomic rename, and POSIX reads reject group/other-accessible
-  directories or files.
-- QuotaCLI's macOS edge LaunchAgent plist is written atomically as `0600`, contains no Relay or
-  provider credential, and invokes a resolved executable with a fixed argument array rather than a
-  shell command. It inherits only `PATH`, `XDG_CONFIG_HOME`, `CODEX_HOME`, `CLAUDE_CONFIG_DIR`,
-  `GROK_HOME`, and the three provider CLI path overrides; launchctl output is bounded and never
-  rendered to users.
+- QuotaCLI's file-backed Relay device credential lives at
+  `$XDG_CONFIG_HOME/quotacli/device.json` or `~/.config/quotacli/device.json`. Its containing
+  QuotaCLI directory is `0700`, its credential file is `0600`, writes use a same-directory temporary
+  file and atomic rename, and POSIX reads reject group/other-accessible directories or files.
+- QuotaCLI's macOS Relay LaunchAgent plist is written atomically as `0600`, contains no Relay or
+  provider credential, and invokes a resolved executable with a fixed `relay push` argument array
+  rather than a shell command. It inherits only `PATH`, `XDG_CONFIG_HOME`, `CODEX_HOME`,
+  `CLAUDE_CONFIG_DIR`, `GROK_HOME`, and the three provider CLI path overrides; launchctl output is
+  bounded and never rendered to users. Pairing installs the agent; unpairing removes it.
 - QuotaCLI persists the next device snapshot sequence only after Relay acceptance. Retrying after a
   local persistence failure reuses the prior sequence and relies on Relay's idempotent `204`
   response for that device sequence.

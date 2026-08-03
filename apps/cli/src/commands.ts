@@ -3,14 +3,9 @@ import {
   ProviderIdSchema,
   QuotaCollectionReportSchema,
 } from "@gotry-io/quota-protocol";
-import {
-  collectionExitCode,
-  collectQuotaReport,
-  diagnoseProviderSessions,
-  providerDescriptors,
-} from "@gotry-io/quota-provider";
+import { collectionExitCode, collectQuotaReport } from "@gotry-io/quota-provider";
 import packageMetadata from "../package.json" with { type: "json" };
-import { runEdgeCommand } from "./edge/commands.ts";
+import { runRelayCommand, runStatusCommand } from "./relay/commands.ts";
 import { renderJson, renderText } from "./render.ts";
 
 export const QUOTA_CLI_VERSION = packageMetadata.version;
@@ -48,22 +43,12 @@ export async function runCli(
       output.stdout(`QuotaCLI ${QUOTA_CLI_VERSION}`);
       return 0;
 
-    case "providers":
-      for (const provider of providerDescriptors) {
-        output.stdout(`${provider.id}\t${provider.display_name}`);
+    case "status":
+      if (args.length !== 1) {
+        output.stderr(`The status command does not accept options.\n\n${usage()}`);
+        return 2;
       }
-      return 0;
-
-    case "doctor": {
-      const diagnostics = await diagnoseProviderSessions({ probeKeychain: true });
-      for (const diagnostic of diagnostics) {
-        const marker = diagnostic.available ? "found" : "missing";
-        output.stdout(
-          `${diagnostic.provider}\t${marker}\t${diagnostic.credential_source}\t${diagnostic.detail}`,
-        );
-      }
-      return 0;
-    }
+      return await runStatusCommand(output);
 
     case "quota":
       if (args.slice(1).some((arg) => arg === "--help" || arg === "-h")) {
@@ -72,8 +57,8 @@ export async function runCli(
       }
       return await runQuotaCommand(args.slice(1), output, runtime);
 
-    case "edge":
-      return await runEdgeCommand(args.slice(1), output);
+    case "relay":
+      return await runRelayCommand(args.slice(1), output);
 
     case "help":
     case "--help":
@@ -209,20 +194,20 @@ function usage(): string {
 
 Usage:
   quotacli version
-  quotacli providers
-  quotacli doctor
+  quotacli status
   quotacli quota [--provider codex|claude|grok|all] [--format text|json] [--pretty]
-  quotacli edge pair [--relay <url>]
-  quotacli edge report
-  quotacli edge start
-  quotacli edge status
-  quotacli edge stop
-  quotacli edge unpair
+  quotacli relay pair [--relay <url>]
+  quotacli relay push
+  quotacli relay unpair
   quotacli help
 
 Defaults:
   --provider all
   --format text when attached to a terminal, otherwise json
+
+relay pair enables macOS background push (immediate on load, then every 5 minutes).
+relay push collects local quota and uploads one snapshot to the paired Relay.
+status summarizes local provider readiness and Relay pairing/background state.
 
 Exit codes for quota:
   0  every requested provider returned at least one fresh snapshot

@@ -102,7 +102,7 @@ class ActivityRaceRelayState extends TestRelayState {
   device: DeviceRecord = {
     id: "device_race",
     controller_id: "controller_race",
-    display_name: "Racing edge",
+    display_name: "Racing device",
     created_at: "2026-07-04T01:00:00Z",
     last_seen_at: null,
     last_sequence: -1,
@@ -217,7 +217,7 @@ describe("QuotaRelay app", () => {
               "Content-Type": "application/json",
               "CF-Connecting-IP": clientAddress,
             },
-            body: JSON.stringify({ device_display_name: "Managed edge" }),
+            body: JSON.stringify({ device_display_name: "Managed device" }),
           })
         ).status,
       ).toBe(201);

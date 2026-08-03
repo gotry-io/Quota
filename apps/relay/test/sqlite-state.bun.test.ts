@@ -120,7 +120,7 @@ describe("SQLiteRelayState", () => {
       id: "pairing_01",
       device_code_hash: "device-code-hash-01",
       user_code_hash: "user-code-hash-01",
-      device_display_name: "Paired Edge Mac",
+      device_display_name: "Paired Relay Mac",
       expires_at: "2026-08-02T01:10:00Z",
       created_at: "2026-08-02T01:00:00Z",
     });
@@ -178,7 +178,7 @@ describe("SQLiteRelayState", () => {
       id: "pairing_denied",
       device_code_hash: "device-code-hash-denied",
       user_code_hash: "user-code-hash-denied",
-      device_display_name: "Denied Edge",
+      device_display_name: "Denied Device",
       expires_at: "2026-08-02T01:10:00Z",
       created_at: "2026-08-02T01:00:00Z",
     });
@@ -186,7 +186,7 @@ describe("SQLiteRelayState", () => {
       id: "pairing_expired",
       device_code_hash: "device-code-hash-expired",
       user_code_hash: "user-code-hash-expired",
-      device_display_name: "Expired Edge",
+      device_display_name: "Expired Device",
       expires_at: "2026-08-02T01:05:00Z",
       created_at: "2026-08-02T01:00:00Z",
     });
@@ -344,7 +344,7 @@ describe("SQLiteRelayState", () => {
     await state.registerDevice({
       id: "device_deletable",
       controller_id: "controller_deletable",
-      display_name: "Deletable Edge",
+      display_name: "Deletable Device",
       token_hash: "device-token-hash-deletable",
       created_at: "2026-08-02T00:00:00Z",
     });
@@ -371,7 +371,7 @@ describe("SQLiteRelayState", () => {
     await state.registerDevice({
       id: "device_02",
       controller_id: "controller_02",
-      display_name: "Other controller edge",
+      display_name: "Other controller device",
       token_hash: "other-controller-device-token-hash",
       created_at: "2026-08-02T00:00:00Z",
     });
@@ -442,7 +442,7 @@ describe("SQLiteRelayState", () => {
     await state.registerDevice({
       id: "device_active",
       controller_id: "controller_active",
-      display_name: "Recently active edge",
+      display_name: "Recently active device",
       token_hash: "device-token-hash-active",
       created_at: "2026-07-01T00:00:00Z",
     });
@@ -453,7 +453,7 @@ describe("SQLiteRelayState", () => {
     await state.registerDevice({
       id: "device_recently_active",
       controller_id: "controller_recently_active",
-      display_name: "Recently revoked edge",
+      display_name: "Recently revoked device",
       token_hash: "device-token-hash-recently-active",
       created_at: "2026-07-01T00:00:00Z",
     });
@@ -707,7 +707,7 @@ async function makeStateWithPath(): Promise<{ path: string; state: SQLiteRelaySt
   await state.registerDevice({
     id: "device_01",
     controller_id: "controller_01",
-    display_name: "Edge Mac",
+    display_name: "Relay Mac",
     token_hash: "test-token-hash",
     created_at: "2026-08-02T00:00:00Z",
   });
@@ -718,7 +718,7 @@ async function registerDevice(state: SQLiteRelayState, deviceId: string): Promis
   await state.registerDevice({
     id: deviceId,
     controller_id: "controller_01",
-    display_name: "Second Edge Mac",
+    display_name: "Second Relay Mac",
     token_hash: `test-token-hash-${deviceId}`,
     created_at: "2026-08-02T00:00:00Z",
   });

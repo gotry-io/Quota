@@ -4,7 +4,7 @@ Quota is the monorepo behind [quota.gotry.io](https://quota.gotry.io), monitorin
 subscription quotas.
 
 - **QuotaBar** — native macOS menu bar app for local and remote quotas.
-- **QuotaCLI** — standalone local collector and installable edge agent.
+- **QuotaCLI** — standalone local collector and installable Relay agent.
 - **QuotaRelay** — persistent device registry and normalized snapshot relay.
 
 The initial providers are Codex, Claude Code, and Grok.
@@ -81,7 +81,7 @@ collection report. Credentials never leave the local machine and are never print
 - QuotaBar is distributed as a Homebrew Cask from `gotry-io/homebrew-tap`. Its signed app bundle
   includes a private QuotaCLI helper, so desktop users do not install the CLI separately.
 - QuotaCLI is published as `@gotry-io/quotacli`; `npm install -g @gotry-io/quotacli` installs the
-  `quotacli` command for developers and edge machines.
+  `quotacli` command for developers and relay machines.
 - The same CLI source also produces a Bun standalone executable for the QuotaBar helper and release
   artifacts.
 
@@ -109,10 +109,10 @@ The managed runtime issues anonymous controller capabilities without a user acco
 self-hosted runtime bootstraps one controller from its environment. Controllers can revoke devices
 or delete their managed data, devices can revoke themselves, and devices inactive for 30 days are
 automatically revoked. Abandoned managed controllers and expired pairing state are reclaimed by
-scheduled maintenance, while self-hosted controllers remain permanent. QuotaCLI implements Relay
-pairing, one-shot reporting, remote unpairing, and an explicit macOS LaunchAgent lifecycle for
-five-minute reporting; pairing never enables recurring uploads. QuotaCLI 0.1.0 is published on npm
-and later tags publish through OIDC.
+scheduled maintenance, while self-hosted controllers remain permanent. QuotaCLI implements Relay pairing, one-shot `relay push`, remote unpairing, and a macOS LaunchAgent
+that runs push at load and every five minutes after pairing. Top-level `status` summarizes local
+provider readiness and Relay background state. QuotaCLI 0.1.0 is published on npm and later tags
+publish through OIDC.
 
 The deterministic Visual App captures its own window without Screen Recording permission, and its
 automated acceptance harness validates twelve Overview and Settings scenes across appearance and

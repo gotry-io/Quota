@@ -1,5 +1,5 @@
-import type { QuotaCollectionReport, QuotaCollectionResult } from "@gotry-io/quota-protocol";
 import { remainingPercent } from "@gotry-io/quota-model";
+import type { QuotaCollectionReport, QuotaCollectionResult } from "@gotry-io/quota-protocol";
 
 export function renderJson(report: QuotaCollectionReport, pretty: boolean): string {
   return `${JSON.stringify(report, null, pretty ? 2 : undefined)}\n`;

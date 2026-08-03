@@ -44,7 +44,14 @@ const { collectQuotaReport, diagnoseProviderSessions } = vi.hoisted(() => ({
       }),
     };
   }),
-  diagnoseProviderSessions: vi.fn(async () => []),
+  diagnoseProviderSessions: vi.fn(async () => [
+    {
+      provider: "codex" as const,
+      available: true,
+      credential_source: "~/.codex/auth.json",
+      detail: "Codex auth file",
+    },
+  ]),
 }));
 
 vi.mock("@gotry-io/quota-provider", async () => {
@@ -82,24 +89,6 @@ describe("QuotaCLI", () => {
     const capture = captureOutput();
     expect(await runCli(["version"], capture.output)).toBe(0);
     expect(capture.stdout).toEqual([`QuotaCLI ${packageMetadata.version}`]);
-  });
-
-  it("probes Keychain during doctor diagnostics", async () => {
-    const capture = captureOutput();
-    const code = await runCli(["doctor"], capture.output);
-
-    expect(code).toBe(0);
-    expect(diagnoseProviderSessions).toHaveBeenCalledWith({ probeKeychain: true });
-  });
-
-  it("lists the initial providers", async () => {
-    const capture = captureOutput();
-    const code = await runCli(["providers"], capture.output);
-
-    expect(code).toBe(0);
-    expect(capture.stdout.join("\n")).toContain("codex");
-    expect(capture.stdout.join("\n")).toContain("claude");
-    expect(capture.stdout.join("\n")).toContain("grok");
   });
 
   it("returns a usage error for an unknown command", async () => {
@@ -140,15 +129,22 @@ describe("QuotaCLI", () => {
     expect(capture.stderr.join("\n")).toContain("Invalid --provider");
   });
 
-  it("includes quota in help text", async () => {
+  it("includes the simplified command surface in help text", async () => {
     const capture = captureOutput();
     const code = await runCli(["help"], capture.output);
     expect(code).toBe(0);
-    expect(capture.stdout.join("\n")).toContain("quotacli quota");
-    expect(capture.stdout.join("\n")).toContain("quotacli edge report");
-    expect(capture.stdout.join("\n")).toContain("quotacli edge start");
-    expect(capture.stdout.join("\n")).toContain("quotacli edge status");
-    expect(capture.stdout.join("\n")).toContain("quotacli edge stop");
+    const text = capture.stdout.join("\n");
+    expect(text).toContain("quotacli status");
+    expect(text).toContain("quotacli quota");
+    expect(text).toContain("quotacli relay pair");
+    expect(text).toContain("quotacli relay push");
+    expect(text).toContain("quotacli relay unpair");
+    expect(text).not.toContain("quotacli edge");
+    expect(text).not.toContain("quotacli doctor");
+    expect(text).not.toContain("quotacli providers");
+    expect(text).not.toContain("relay start");
+    expect(text).not.toContain("relay stop");
+    expect(text).not.toContain("relay report");
   });
 
   it("returns quota help successfully", async () => {
@@ -159,19 +155,27 @@ describe("QuotaCLI", () => {
     expect(capture.stderr).toHaveLength(0);
   });
 
-  it("routes edge help without starting pairing", async () => {
+  it("routes relay help without starting pairing", async () => {
     const capture = captureOutput();
-    const code = await runCli(["edge", "--help"], capture.output);
+    const code = await runCli(["relay", "--help"], capture.output);
     expect(code).toBe(0);
-    expect(capture.stdout.join("\n")).toContain("quotacli edge pair");
-    expect(capture.stdout.join("\n")).toContain("quotacli edge start");
+    expect(capture.stdout.join("\n")).toContain("quotacli relay pair");
+    expect(capture.stdout.join("\n")).toContain("quotacli relay push");
     expect(capture.stderr).toHaveLength(0);
   });
 
-  it("routes unknown edge commands to an edge usage error", async () => {
+  it("routes unknown relay commands to a relay usage error", async () => {
     const capture = captureOutput();
-    const code = await runCli(["edge", "unknown"], capture.output);
+    const code = await runCli(["relay", "unknown"], capture.output);
     expect(code).toBe(2);
-    expect(capture.stderr.join("\n")).toContain("Unknown edge command");
+    expect(capture.stderr.join("\n")).toContain("Unknown relay command");
+  });
+
+  it("rejects removed top-level commands", async () => {
+    for (const command of ["doctor", "providers", "edge"]) {
+      const capture = captureOutput();
+      expect(await runCli([command], capture.output)).toBe(2);
+      expect(capture.stderr.join("\n")).toContain("Unknown command");
+    }
   });
 });

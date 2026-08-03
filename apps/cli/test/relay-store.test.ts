@@ -3,13 +3,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  decodeEdgeCredential,
-  defaultEdgeCredentialPath,
-  type EdgeCredential,
-  EdgeCredentialStore,
-} from "../src/edge/store.ts";
+  decodeRelayCredential,
+  defaultRelayCredentialPath,
+  type RelayCredential,
+  RelayCredentialStore,
+} from "../src/relay/store.ts";
 
-const credential: EdgeCredential = {
+const credential: RelayCredential = {
   relay_url: "https://relay.example.com",
   instance_id: "relay_test",
   device_id: "device_test",
@@ -21,29 +21,29 @@ const credential: EdgeCredential = {
 let temporaryDirectory: string;
 
 beforeEach(async () => {
-  temporaryDirectory = await mkdtemp(join(tmpdir(), "quota-cli-edge-test-"));
+  temporaryDirectory = await mkdtemp(join(tmpdir(), "quota-cli-relay-test-"));
 });
 
 afterEach(async () => {
   await rm(temporaryDirectory, { recursive: true, force: true });
 });
 
-describe("EdgeCredentialStore", () => {
+describe("RelayCredentialStore", () => {
   it("uses XDG_CONFIG_HOME with a home config fallback", () => {
-    expect(defaultEdgeCredentialPath({ XDG_CONFIG_HOME: "/xdg" }, "/home/test")).toBe(
-      "/xdg/quotacli/edge.json",
+    expect(defaultRelayCredentialPath({ XDG_CONFIG_HOME: "/xdg" }, "/home/test")).toBe(
+      "/xdg/quotacli/device.json",
     );
-    expect(defaultEdgeCredentialPath({}, "/home/test")).toBe(
-      "/home/test/.config/quotacli/edge.json",
+    expect(defaultRelayCredentialPath({}, "/home/test")).toBe(
+      "/home/test/.config/quotacli/device.json",
     );
-    expect(() => defaultEdgeCredentialPath({ XDG_CONFIG_HOME: "relative" }, "/home/test")).toThrow(
+    expect(() => defaultRelayCredentialPath({ XDG_CONFIG_HOME: "relative" }, "/home/test")).toThrow(
       "absolute",
     );
   });
 
   it("atomically saves and strictly loads a user-only credential", async () => {
-    const path = join(temporaryDirectory, "nested", "edge.json");
-    const store = new EdgeCredentialStore({ path });
+    const path = join(temporaryDirectory, "nested", "device.json");
+    const store = new RelayCredentialStore({ path });
     await store.save(credential);
 
     expect(await store.load()).toEqual(credential);
@@ -51,12 +51,12 @@ describe("EdgeCredentialStore", () => {
       expect((await stat(join(temporaryDirectory, "nested"))).mode & 0o777).toBe(0o700);
       expect((await stat(path)).mode & 0o777).toBe(0o600);
     }
-    expect(await readdir(join(temporaryDirectory, "nested"))).toEqual(["edge.json"]);
+    expect(await readdir(join(temporaryDirectory, "nested"))).toEqual(["device.json"]);
   });
 
   it("refuses to overwrite by default and supports an atomic explicit replacement", async () => {
-    const path = join(temporaryDirectory, "edge.json");
-    const store = new EdgeCredentialStore({ path });
+    const path = join(temporaryDirectory, "device.json");
+    const store = new RelayCredentialStore({ path });
     await store.save(credential);
 
     await expect(store.save({ ...credential, last_sequence: 0 })).rejects.toThrow("already exists");
@@ -64,18 +64,18 @@ describe("EdgeCredentialStore", () => {
 
     await store.save({ ...credential, last_sequence: 0 }, { overwrite: true });
     expect(await store.load()).toEqual({ ...credential, last_sequence: 0 });
-    expect(await readdir(temporaryDirectory)).toEqual(["edge.json"]);
+    expect(await readdir(temporaryDirectory)).toEqual(["device.json"]);
   });
 
   it("fails closed for group- or other-readable credentials on POSIX", async () => {
     if (process.platform === "win32") {
       return;
     }
-    const path = join(temporaryDirectory, "edge.json");
+    const path = join(temporaryDirectory, "device.json");
     await writeFile(path, JSON.stringify(credential), { mode: 0o600 });
     await chmod(path, 0o640);
 
-    await expect(new EdgeCredentialStore({ path }).load()).rejects.toThrow("only by its owner");
+    await expect(new RelayCredentialStore({ path }).load()).rejects.toThrow("only by its owner");
   });
 
   it("fails closed for a group- or other-accessible credential directory on POSIX", async () => {
@@ -83,8 +83,8 @@ describe("EdgeCredentialStore", () => {
       return;
     }
     const directory = join(temporaryDirectory, "insecure");
-    const path = join(directory, "edge.json");
-    const store = new EdgeCredentialStore({ path });
+    const path = join(directory, "device.json");
+    const store = new RelayCredentialStore({ path });
     await store.save(credential);
     await chmod(directory, 0o750);
 
@@ -100,36 +100,36 @@ describe("EdgeCredentialStore", () => {
     await mkdir(target, { mode: 0o700 });
     await symlink(target, linkedDirectory);
 
-    const store = new EdgeCredentialStore({ path: join(linkedDirectory, "edge.json") });
+    const store = new RelayCredentialStore({ path: join(linkedDirectory, "device.json") });
     await expect(store.save(credential)).rejects.toThrow("directory is invalid");
     expect(await readdir(target)).toEqual([]);
   });
 
   it("strictly rejects malformed, extra, and non-canonical fields", async () => {
-    expect(() => decodeEdgeCredential({ ...credential, extra: true })).toThrow("invalid");
-    expect(() => decodeEdgeCredential({ ...credential, last_sequence: -2 })).toThrow("invalid");
+    expect(() => decodeRelayCredential({ ...credential, extra: true })).toThrow("invalid");
+    expect(() => decodeRelayCredential({ ...credential, last_sequence: -2 })).toThrow("invalid");
     expect(() =>
-      decodeEdgeCredential({ ...credential, relay_url: "https://relay.example.com/" }),
+      decodeRelayCredential({ ...credential, relay_url: "https://relay.example.com/" }),
     ).toThrow("invalid");
-    expect(() => decodeEdgeCredential({ ...credential, paired_at: "yesterday" })).toThrow(
+    expect(() => decodeRelayCredential({ ...credential, paired_at: "yesterday" })).toThrow(
       "invalid",
     );
     expect(() =>
-      decodeEdgeCredential({ ...credential, paired_at: "2026-02-31T10:00:00Z" }),
+      decodeRelayCredential({ ...credential, paired_at: "2026-02-31T10:00:00Z" }),
     ).toThrow("invalid");
     expect(() =>
-      decodeEdgeCredential({ ...credential, paired_at: "2026-08-03T10:00:00+00:00" }),
+      decodeRelayCredential({ ...credential, paired_at: "2026-08-03T10:00:00+00:00" }),
     ).toThrow("invalid");
 
-    const path = join(temporaryDirectory, "edge.json");
+    const path = join(temporaryDirectory, "device.json");
     await writeFile(path, "not-json synthetic-device-token", { mode: 0o600 });
-    const error = await captureError(new EdgeCredentialStore({ path }).load());
-    expect(error.message).toBe("The edge credential file is invalid.");
+    const error = await captureError(new RelayCredentialStore({ path }).load());
+    expect(error.message).toBe("The relay credential file is invalid.");
     expect(error.message).not.toContain("synthetic-device-token");
   });
 
   it("returns null when absent and deletes idempotently", async () => {
-    const store = new EdgeCredentialStore({ path: join(temporaryDirectory, "edge.json") });
+    const store = new RelayCredentialStore({ path: join(temporaryDirectory, "device.json") });
     await expect(store.load()).resolves.toBeNull();
     await store.save(credential);
     await store.delete();

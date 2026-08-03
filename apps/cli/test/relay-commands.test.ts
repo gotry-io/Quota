@@ -4,16 +4,17 @@ import type {
   RelayInfo,
 } from "@gotry-io/quota-protocol";
 import { describe, expect, it, vi } from "vitest";
-import { RelayClient, RelayClientError, type RelayFetch } from "../src/edge/client.ts";
+import { RelayClient, RelayClientError, type RelayFetch } from "../src/relay/client.ts";
 import {
-  type EdgeCommandDependencies,
-  type EdgeCommandOutput,
-  type EdgeCredentialStoreContract,
-  type EdgeRelayClient,
-  runEdgeCommand,
-} from "../src/edge/commands.ts";
-import type { EdgeReportService } from "../src/edge/launch-agent.ts";
-import type { EdgeCredential } from "../src/edge/store.ts";
+  type RelayCommandClient,
+  type RelayCommandDependencies,
+  type RelayCommandOutput,
+  type RelayCredentialStoreContract,
+  runRelayCommand,
+  runStatusCommand,
+} from "../src/relay/commands.ts";
+import type { RelayPushService } from "../src/relay/launch-agent.ts";
+import type { RelayCredential } from "../src/relay/store.ts";
 
 const relayInfo: RelayInfo = {
   instance_id: "relay_test",
@@ -42,16 +43,17 @@ const issued: PairingTokenIssuedResponse = {
   device_token: "synthetic-issued-token",
 };
 
-describe("edge command arguments", () => {
-  it("renders edge help without using runtime dependencies", async () => {
+describe("relay command arguments", () => {
+  it("renders relay help without using runtime dependencies", async () => {
     const capture = captureOutput();
     const dependencies = fakeDependencies();
 
-    expect(await runEdgeCommand(["--help"], capture.output, dependencies)).toBe(0);
-    expect(capture.stdout.join("\n")).toContain("quotacli edge pair");
-    expect(capture.stdout.join("\n")).toContain("quotacli edge start");
-    expect(capture.stdout.join("\n")).toContain("quotacli edge status");
-    expect(capture.stdout.join("\n")).toContain("quotacli edge stop");
+    expect(await runRelayCommand(["--help"], capture.output, dependencies)).toBe(0);
+    expect(capture.stdout.join("\n")).toContain("quotacli relay pair");
+    expect(capture.stdout.join("\n")).toContain("quotacli relay push");
+    expect(capture.stdout.join("\n")).toContain("quotacli relay unpair");
+    expect(capture.stdout.join("\n")).not.toContain("relay start");
+    expect(capture.stdout.join("\n")).not.toContain("relay stop");
     expect(dependencies.createClient).not.toHaveBeenCalled();
     expect(dependencies.store.load).not.toHaveBeenCalled();
   });
@@ -66,17 +68,18 @@ describe("edge command arguments", () => {
       args: ["pair", "--relay", "https://one.example", "--relay", "https://two.example"],
     },
     { args: ["unpair", "extra"] },
-    { args: ["report", "extra"] },
-    { args: ["start", "extra"] },
-    { args: ["status", "extra"] },
-    { args: ["stop", "extra"] },
+    { args: ["push", "extra"] },
+    { args: ["start"] },
+    { args: ["stop"] },
+    { args: ["status"] },
+    { args: ["report"] },
     { args: ["--help", "extra"] },
   ])("rejects invalid arguments %#", async ({ args }) => {
     const capture = captureOutput();
     const dependencies = fakeDependencies();
 
-    expect(await runEdgeCommand(args, capture.output, dependencies)).toBe(2);
-    expect(capture.stderr.join("\n")).toContain("QuotaCLI edge");
+    expect(await runRelayCommand(args, capture.output, dependencies)).toBe(2);
+    expect(capture.stderr.join("\n")).toContain("QuotaCLI relay");
     expect(dependencies.createClient).not.toHaveBeenCalled();
   });
 
@@ -85,7 +88,7 @@ describe("edge command arguments", () => {
     const dependencies = fakeDependencies();
 
     expect(
-      await runEdgeCommand(
+      await runRelayCommand(
         ["pair", "--relay", "https://relay.example.com/path?secret=value"],
         capture.output,
         dependencies,
@@ -97,36 +100,42 @@ describe("edge command arguments", () => {
   });
 });
 
-describe("edge pair", () => {
-  it("uses the default Relay URL", async () => {
+describe("relay pair", () => {
+  it("uses the default Relay URL and starts background push without an in-process upload", async () => {
     const capture = captureOutput();
     const dependencies = fakeDependencies();
 
-    expect(await runEdgeCommand(["pair"], capture.output, dependencies)).toBe(0);
+    expect(await runRelayCommand(["pair"], capture.output, dependencies)).toBe(0);
     expect(dependencies.createClient).toHaveBeenCalledWith("https://quota.gotry.io");
+    expect(dependencies.service.start).toHaveBeenCalledOnce();
+    expect(dependencies.collect).not.toHaveBeenCalled();
+    expect(capture.stdout.join("\n")).toContain(
+      "Background relay push is loaded, runs immediately, and every 5 minutes.",
+    );
   });
 
   it("does no network work when a local credential already exists", async () => {
     const capture = captureOutput();
     const dependencies = fakeDependencies({ existing: credential() });
 
-    expect(await runEdgeCommand(["pair"], capture.output, dependencies)).toBe(1);
+    expect(await runRelayCommand(["pair"], capture.output, dependencies)).toBe(1);
     expect(dependencies.createClient).not.toHaveBeenCalled();
     expect(dependencies.store.save).not.toHaveBeenCalled();
-    expect(capture.stderr.join("\n")).toContain("quotacli edge unpair");
+    expect(dependencies.service.start).not.toHaveBeenCalled();
+    expect(capture.stderr.join("\n")).toContain("quotacli relay unpair");
   });
 
   it("completes pending pairing and saves a Relay-bound credential without printing secrets", async () => {
     let now = Date.parse("2026-08-03T10:00:00Z");
-    let saved: EdgeCredential | undefined;
+    let saved: RelayCredential | undefined;
     const fetchMock = vi
       .fn<RelayFetch>()
       .mockResolvedValueOnce(jsonResponse(relayInfo))
       .mockResolvedValueOnce(jsonResponse(pairing, 201))
       .mockResolvedValueOnce(jsonResponse({ status: "pending", poll_interval_seconds: 7 }, 202))
       .mockResolvedValueOnce(jsonResponse(issued));
-    const store: EdgeCredentialStoreContract = {
-      load: vi.fn(async () => null),
+    const store: RelayCredentialStoreContract = {
+      load: vi.fn(async () => (saved ? { ...saved } : null)),
       save: vi.fn(async (value) => {
         saved = value;
       }),
@@ -142,8 +151,8 @@ describe("edge pair", () => {
           },
         }),
     );
-    const longHostname = `  remote-edge-${"x".repeat(200)}  `;
-    const dependencies: EdgeCommandDependencies = {
+    const longHostname = `  remote-relay-${"x".repeat(200)}  `;
+    const dependencies: RelayCommandDependencies = {
       createClient,
       store,
       platform: "darwin",
@@ -151,11 +160,12 @@ describe("edge pair", () => {
       now: () => new Date(now),
       deviceName: () => longHostname,
       collect: vi.fn(async () => syntheticReport()),
+      diagnoseProviders: vi.fn(async () => []),
     };
     const capture = captureOutput();
 
     expect(
-      await runEdgeCommand(
+      await runRelayCommand(
         ["pair", "--relay", "https://relay.example.com/"],
         capture.output,
         dependencies,
@@ -184,9 +194,32 @@ describe("edge pair", () => {
     expect(rendered).not.toContain(pairing.device_code);
     expect(rendered).not.toContain(issued.device_token);
     expect(rendered).not.toContain("Authorization");
-    expect(dependencies.service.start).not.toHaveBeenCalled();
-    expect(dependencies.service.status).not.toHaveBeenCalled();
+    expect(dependencies.service.start).toHaveBeenCalledOnce();
+    expect(dependencies.collect).not.toHaveBeenCalled();
     expect(dependencies.service.stop).not.toHaveBeenCalled();
+  });
+
+  it("keeps the credential when background start fails after pairing", async () => {
+    const capture = captureOutput();
+    const dependencies = fakeDependencies({
+      startError: new Error("launchctl failed"),
+    });
+
+    expect(await runRelayCommand(["pair"], capture.output, dependencies)).toBe(1);
+    expect(dependencies.store.save).toHaveBeenCalledOnce();
+    expect(dependencies.collect).not.toHaveBeenCalled();
+    expect(capture.stderr.join("\n")).toContain("could not start background relay push");
+    expect(capture.stderr.join("\n")).toContain("quotacli relay unpair");
+  });
+
+  it("pairs without background support outside macOS and does not push automatically", async () => {
+    const capture = captureOutput();
+    const dependencies = fakeDependencies({ platform: "linux" });
+
+    expect(await runRelayCommand(["pair"], capture.output, dependencies)).toBe(0);
+    expect(dependencies.service.start).not.toHaveBeenCalled();
+    expect(dependencies.collect).not.toHaveBeenCalled();
+    expect(capture.stdout.join("\n")).toContain("Background relay push is supported only on macOS");
   });
 
   it("prints only a fixed RelayClientError message", async () => {
@@ -195,7 +228,7 @@ describe("edge pair", () => {
       discoverError: new RelayClientError("unavailable", "The Relay request failed."),
     });
 
-    expect(await runEdgeCommand(["pair"], capture.output, dependencies)).toBe(1);
+    expect(await runRelayCommand(["pair"], capture.output, dependencies)).toBe(1);
     expect(capture.stderr).toEqual(["The Relay request failed."]);
     expect(capture.stderr.join("\n")).not.toMatch(/synthetic-device-code|synthetic-issued-token/);
   });
@@ -206,23 +239,23 @@ describe("edge pair", () => {
       discoverError: new Error("Bearer synthetic-issued-token raw Relay body"),
     });
 
-    expect(await runEdgeCommand(["pair"], capture.output, dependencies)).toBe(1);
-    expect(capture.stderr).toEqual(["QuotaCLI could not complete edge pairing."]);
+    expect(await runRelayCommand(["pair"], capture.output, dependencies)).toBe(1);
+    expect(capture.stderr).toEqual(["QuotaCLI could not complete relay pairing."]);
   });
 });
 
-describe("edge unpair", () => {
+describe("relay unpair", () => {
   it("revokes the bound remote device before deleting its local credential", async () => {
     const capture = captureOutput();
     const existing = credential();
     const dependencies = fakeDependencies({ existing });
 
-    expect(await runEdgeCommand(["unpair"], capture.output, dependencies)).toBe(0);
+    expect(await runRelayCommand(["unpair"], capture.output, dependencies)).toBe(0);
     expect(dependencies.store.load).toHaveBeenCalledOnce();
     expect(dependencies.createClient).toHaveBeenCalledWith(existing.relay_url);
     expect(dependencies.store.delete).toHaveBeenCalledOnce();
     expect(capture.stdout).toEqual([
-      "The remote device was revoked and the local edge credential was removed.",
+      "The remote device was revoked and the local relay credential was removed.",
     ]);
     expect([...capture.stdout, ...capture.stderr].join("\n")).not.toContain(existing.device_token);
   });
@@ -231,25 +264,83 @@ describe("edge unpair", () => {
     const capture = captureOutput();
     const dependencies = fakeDependencies({ existing: null });
 
-    expect(await runEdgeCommand(["unpair"], capture.output, dependencies)).toBe(0);
+    expect(await runRelayCommand(["unpair"], capture.output, dependencies)).toBe(0);
     expect(dependencies.createClient).not.toHaveBeenCalled();
     expect(dependencies.store.delete).not.toHaveBeenCalled();
     expect(capture.stdout).toEqual(["This machine is already unpaired."]);
   });
 });
 
+describe("status", () => {
+  it("summarizes providers and unpaired relay state", async () => {
+    const capture = captureOutput();
+    const dependencies = fakeDependencies({ existing: null, status: "stopped" });
+
+    expect(await runStatusCommand(capture.output, dependencies)).toBe(0);
+    expect(capture.stdout).toEqual([
+      `CLI version: 0.1.0`,
+      "Providers:",
+      "  codex\tfound\t~/.codex/auth.json\tCodex auth file",
+      "Relay:",
+      "  Pairing: unpaired",
+      "  Background: stopped",
+    ]);
+    expect(dependencies.diagnoseProviders).toHaveBeenCalledOnce();
+  });
+
+  it("returns non-zero when paired but background reporting is stopped", async () => {
+    const capture = captureOutput();
+    const dependencies = fakeDependencies({ existing: credential(), status: "stopped" });
+
+    expect(await runStatusCommand(capture.output, dependencies)).toBe(1);
+    expect(capture.stdout.join("\n")).toContain("Pairing: paired");
+    expect(capture.stdout.join("\n")).toContain("Background: stopped");
+    expect(capture.stdout.join("\n")).not.toContain(credential().device_token);
+  });
+
+  it("returns non-zero when unpaired but a background agent is still loaded", async () => {
+    const capture = captureOutput();
+    const dependencies = fakeDependencies({ existing: null, status: "loaded" });
+
+    expect(await runStatusCommand(capture.output, dependencies)).toBe(1);
+    expect(capture.stdout.join("\n")).toContain("Pairing: unpaired");
+    expect(capture.stdout.join("\n")).toContain("Background: loaded (every 5 minutes)");
+  });
+
+  it("marks background support as unsupported outside macOS", async () => {
+    const capture = captureOutput();
+    const dependencies = fakeDependencies({
+      existing: credential(),
+      platform: "linux",
+    });
+
+    expect(await runStatusCommand(capture.output, dependencies)).toBe(0);
+    expect(capture.stdout.join("\n")).toContain("Background: unsupported on this platform");
+    expect(dependencies.service.status).not.toHaveBeenCalled();
+  });
+});
+
 function fakeDependencies(
-  options: { existing?: EdgeCredential | null; discoverError?: Error } = {},
-): EdgeCommandDependencies & {
-  createClient: ReturnType<typeof vi.fn<(relayUrl: string) => EdgeRelayClient>>;
+  options: {
+    existing?: RelayCredential | null;
+    discoverError?: Error;
+    startError?: Error;
+    platform?: NodeJS.Platform;
+    status?: "loaded" | "stopped";
+  } = {},
+): RelayCommandDependencies & {
+  createClient: ReturnType<typeof vi.fn<(relayUrl: string) => RelayCommandClient>>;
   store: {
-    load: ReturnType<typeof vi.fn<EdgeCredentialStoreContract["load"]>>;
-    save: ReturnType<typeof vi.fn<EdgeCredentialStoreContract["save"]>>;
-    delete: ReturnType<typeof vi.fn<EdgeCredentialStoreContract["delete"]>>;
+    load: ReturnType<typeof vi.fn<RelayCredentialStoreContract["load"]>>;
+    save: ReturnType<typeof vi.fn<RelayCredentialStoreContract["save"]>>;
+    delete: ReturnType<typeof vi.fn<RelayCredentialStoreContract["delete"]>>;
   };
   service: ReturnType<typeof fakeService>;
+  collect: ReturnType<typeof vi.fn<RelayCommandDependencies["collect"]>>;
+  diagnoseProviders: ReturnType<typeof vi.fn<RelayCommandDependencies["diagnoseProviders"]>>;
 } {
-  const client: EdgeRelayClient = {
+  let saved: RelayCredential | null = options.existing === undefined ? null : options.existing;
+  const client: RelayCommandClient = {
     relayUrl: "https://quota.gotry.io",
     discover: vi.fn(async () => {
       if (options.discoverError) {
@@ -262,33 +353,59 @@ function fakeDependencies(
     uploadSnapshot: vi.fn(async () => undefined),
     revokeSelf: vi.fn(async () => undefined),
   };
-  const createClient = vi.fn<(relayUrl: string) => EdgeRelayClient>((relayUrl) => ({
+  const createClient = vi.fn<(relayUrl: string) => RelayCommandClient>((relayUrl) => ({
     ...client,
     relayUrl,
   }));
   return {
     createClient,
     store: {
-      load: vi.fn(async () => options.existing ?? null),
-      save: vi.fn(async () => undefined),
-      delete: vi.fn(async () => undefined),
+      load: vi.fn(async () => saved),
+      save: vi.fn(async (value) => {
+        saved = value;
+      }),
+      delete: vi.fn(async () => {
+        saved = null;
+      }),
     },
-    platform: "darwin",
-    service: fakeService(),
+    platform: options.platform ?? "darwin",
+    service: fakeService(
+      options.startError === undefined
+        ? options.status === undefined
+          ? {}
+          : { status: options.status }
+        : options.status === undefined
+          ? { startError: options.startError }
+          : { startError: options.startError, status: options.status },
+    ),
     now: () => new Date("2026-08-03T10:00:00Z"),
-    deviceName: () => "synthetic-edge",
+    deviceName: () => "synthetic-relay",
     collect: vi.fn(async () => syntheticReport()),
+    diagnoseProviders: vi.fn(async () => [
+      {
+        provider: "codex",
+        available: true,
+        credential_source: "~/.codex/auth.json",
+        detail: "Codex auth file",
+      },
+    ]),
   };
 }
 
-function fakeService(): EdgeReportService & {
-  start: ReturnType<typeof vi.fn<EdgeReportService["start"]>>;
-  status: ReturnType<typeof vi.fn<EdgeReportService["status"]>>;
-  stop: ReturnType<typeof vi.fn<EdgeReportService["stop"]>>;
+function fakeService(
+  options: { startError?: Error; status?: "loaded" | "stopped" } = {},
+): RelayPushService & {
+  start: ReturnType<typeof vi.fn<RelayPushService["start"]>>;
+  status: ReturnType<typeof vi.fn<RelayPushService["status"]>>;
+  stop: ReturnType<typeof vi.fn<RelayPushService["stop"]>>;
 } {
   return {
-    start: vi.fn(async () => undefined),
-    status: vi.fn(async () => "stopped"),
+    start: vi.fn(async () => {
+      if (options.startError) {
+        throw options.startError;
+      }
+    }),
+    status: vi.fn(async () => options.status ?? "stopped"),
     stop: vi.fn(async () => undefined),
   };
 }
@@ -316,7 +433,7 @@ function syntheticReport() {
   };
 }
 
-function credential(): EdgeCredential {
+function credential(): RelayCredential {
   return {
     relay_url: "https://relay.example.com",
     instance_id: "relay_test",
@@ -330,7 +447,7 @@ function credential(): EdgeCredential {
 function captureOutput(): {
   stdout: string[];
   stderr: string[];
-  output: EdgeCommandOutput;
+  output: RelayCommandOutput;
 } {
   const stdout: string[] = [];
   const stderr: string[] = [];

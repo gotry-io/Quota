@@ -28,7 +28,7 @@ interface CLIResult {
   stderr: string;
 }
 
-interface StoredEdgeCredential {
+interface StoredRelayCredential {
   relay_url: string;
   instance_id: string;
   device_id: string;
@@ -36,8 +36,8 @@ interface StoredEdgeCredential {
   last_sequence: number;
 }
 
-describe("QuotaCLI edge against self-hosted QuotaRelay", () => {
-  it("pairs, uploads an empty heartbeat, and unpairs through real HTTP", async () => {
+describe("QuotaCLI relay against self-hosted QuotaRelay", () => {
+  it("pairs with an initial empty heartbeat push and unpairs through real HTTP", async () => {
     const temporaryDirectory = await mkdtemp(join(tmpdir(), "quota-cli-relay-e2e-"));
     const databasePath = join(temporaryDirectory, "relay.db");
     const xdgConfigHome = join(temporaryDirectory, "config");
@@ -87,7 +87,7 @@ describe("QuotaCLI edge against self-hosted QuotaRelay", () => {
         resolveUserCode = resolvePromise;
       });
       const pairProcess = spawnCLI(
-        ["edge", "pair", "--relay", relayOrigin],
+        ["relay", "pair", "--relay", relayOrigin],
         environment,
         platformPreload,
         activeProcesses,
@@ -120,37 +120,38 @@ describe("QuotaCLI edge against self-hosted QuotaRelay", () => {
       expect(pairOutput.exitCode).toBe(0);
       assertBearerMaterialAbsent(pairOutput, [controllerToken]);
 
-      const credentialPath = join(xdgConfigHome, "quotacli", "edge.json");
+      const credentialPath = join(xdgConfigHome, "quotacli", "device.json");
       const pairedCredential = await readCredential(credentialPath);
       assertBearerMaterialAbsent(pairOutput, [controllerToken, pairedCredential.device_token]);
-      expect(pairOutput.stdout).toContain("Pairing complete.");
+      expect(pairOutput.stdout).toContain("Background relay push is supported only on macOS");
+      expect(pairOutput.stdout).not.toContain("Uploaded");
       expect(pairedCredential.relay_url).toBe(relayOrigin);
       expect(pairedCredential.instance_id).toBe(instanceID);
       expect(pairedCredential.last_sequence).toBe(-1);
 
-      const devicesBeforeReport = await controllerDevices(relayOrigin, controllerToken);
-      expect(devicesBeforeReport.devices).toHaveLength(1);
-      const pairedDevice = devicesBeforeReport.devices[0];
+      const devicesAfterPair = await controllerDevices(relayOrigin, controllerToken);
+      expect(devicesAfterPair.devices).toHaveLength(1);
+      const pairedDevice = devicesAfterPair.devices[0];
       expect(pairedDevice?.device_id).toBe(pairedCredential.device_id);
       expect(pairedDevice?.last_sequence).toBe(-1);
       expect(pairedDevice?.last_seen_at).toBeNull();
 
-      const reportOutput = await runCLI(
-        ["edge", "report"],
+      const pushOutput = await runCLI(
+        ["relay", "push"],
         environment,
         platformPreload,
         activeProcesses,
       );
-      expect(reportOutput.exitCode).toBe(1);
-      assertBearerMaterialAbsent(reportOutput, [controllerToken, pairedCredential.device_token]);
-      expect(reportOutput.stdout).toContain("Uploaded 0 snapshots with sequence 0.");
-      expect(reportOutput.stderr).toContain("provider collection was incomplete");
+      expect(pushOutput.exitCode).toBe(1);
+      assertBearerMaterialAbsent(pushOutput, [controllerToken, pairedCredential.device_token]);
+      expect(pushOutput.stdout).toContain("Uploaded 0 snapshots with sequence 0.");
+      expect(pushOutput.stderr).toContain("provider collection was incomplete");
 
       const reportedCredential = await readCredential(credentialPath);
       expect(reportedCredential.last_sequence).toBe(0);
-      const devicesAfterReport = await controllerDevices(relayOrigin, controllerToken);
-      expect(devicesAfterReport.devices).toHaveLength(1);
-      const reportedDevice = devicesAfterReport.devices[0];
+      const devicesAfterPush = await controllerDevices(relayOrigin, controllerToken);
+      expect(devicesAfterPush.devices).toHaveLength(1);
+      const reportedDevice = devicesAfterPush.devices[0];
       expect(reportedDevice?.device_id).toBe(pairedCredential.device_id);
       expect(reportedDevice?.last_sequence).toBe(0);
       expect(typeof reportedDevice?.last_seen_at).toBe("string");
@@ -163,14 +164,14 @@ describe("QuotaCLI edge against self-hosted QuotaRelay", () => {
       expect(snapshots.observations).toEqual([]);
 
       const unpairOutput = await runCLI(
-        ["edge", "unpair"],
+        ["relay", "unpair"],
         environment,
         platformPreload,
         activeProcesses,
       );
       expect(unpairOutput.exitCode).toBe(0);
       assertBearerMaterialAbsent(unpairOutput, [controllerToken, pairedCredential.device_token]);
-      expect(unpairOutput.stdout).toContain("local edge credential was removed");
+      expect(unpairOutput.stdout).toContain("local relay credential was removed");
       expect(await pathExists(credentialPath)).toBe(false);
 
       const devicesAfterUnpair = await controllerDevices(relayOrigin, controllerToken);
@@ -313,15 +314,15 @@ function bearerJSONHeaders(token: string): Record<string, string> {
   return { ...bearerHeaders(token), "Content-Type": "application/json" };
 }
 
-async function readCredential(path: string): Promise<StoredEdgeCredential> {
+async function readCredential(path: string): Promise<StoredRelayCredential> {
   let value: unknown;
   try {
     value = JSON.parse(await readFile(path, "utf8"));
   } catch {
-    throw new Error("QuotaCLI did not write a valid edge credential.");
+    throw new Error("QuotaCLI did not write a valid relay credential.");
   }
   if (!isRecord(value)) {
-    throw new Error("QuotaCLI did not write a valid edge credential.");
+    throw new Error("QuotaCLI did not write a valid relay credential.");
   }
   const { relay_url, instance_id, device_id, device_token, last_sequence } = value;
   if (
@@ -332,7 +333,7 @@ async function readCredential(path: string): Promise<StoredEdgeCredential> {
     device_token.length === 0 ||
     typeof last_sequence !== "number"
   ) {
-    throw new Error("QuotaCLI did not write a valid edge credential.");
+    throw new Error("QuotaCLI did not write a valid relay credential.");
   }
   return { relay_url, instance_id, device_id, device_token, last_sequence };
 }

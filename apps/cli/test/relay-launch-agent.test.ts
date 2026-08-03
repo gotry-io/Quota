@@ -4,19 +4,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  EDGE_LAUNCH_AGENT_LABEL,
   LAUNCHCTL_PATH,
   type LaunchAgentFileSystem,
   type LaunchctlRunner,
   MacOSLaunchAgent,
+  RELAY_LAUNCH_AGENT_LABEL,
   renderLaunchAgentPlist,
-  resolveEdgeReportProgramArguments,
-} from "../src/edge/launch-agent.ts";
+  resolveRelayPushProgramArguments,
+} from "../src/relay/launch-agent.ts";
 
 const temporaryDirectories: string[] = [];
 const uid = 501;
 const domainTarget = `gui/${uid}`;
-const serviceTarget = `${domainTarget}/${EDGE_LAUNCH_AGENT_LABEL}`;
+const serviceTarget = `${domainTarget}/${RELAY_LAUNCH_AGENT_LABEL}`;
 
 afterEach(async () => {
   await Promise.all(
@@ -26,45 +26,45 @@ afterEach(async () => {
   );
 });
 
-describe("edge report invocation resolution", () => {
+describe("relay push invocation resolution", () => {
   it("uses the current executable directly for a standalone binary", () => {
     expect(
-      resolveEdgeReportProgramArguments({
+      resolveRelayPushProgramArguments({
         execPath: "/opt/quota/quotacli",
         argv1: "/opt/quota/quotacli",
         cwd: "/tmp",
       }),
-    ).toEqual(["/opt/quota/quotacli", "edge", "report"]);
+    ).toEqual(["/opt/quota/quotacli", "relay", "push"]);
   });
 
   it("recognizes Bun's compiled virtual main path", () => {
     expect(
-      resolveEdgeReportProgramArguments({
+      resolveRelayPushProgramArguments({
         execPath: "/private/tmp/quota-argv-probe",
         argv1: "/$bunfs/root/quota-argv-probe",
         cwd: "/private/tmp",
       }),
-    ).toEqual(["/private/tmp/quota-argv-probe", "edge", "report"]);
+    ).toEqual(["/private/tmp/quota-argv-probe", "relay", "push"]);
   });
 
   it("preserves an absolute Node entry module", () => {
     expect(
-      resolveEdgeReportProgramArguments({
+      resolveRelayPushProgramArguments({
         execPath: "/usr/local/bin/node",
         argv1: "/opt/quota/quotacli.js",
         cwd: "/tmp",
       }),
-    ).toEqual(["/usr/local/bin/node", "/opt/quota/quotacli.js", "edge", "report"]);
+    ).toEqual(["/usr/local/bin/node", "/opt/quota/quotacli.js", "relay", "push"]);
   });
 
   it("resolves a relative development entry from an absolute cwd", () => {
     expect(
-      resolveEdgeReportProgramArguments({
+      resolveRelayPushProgramArguments({
         execPath: "/usr/local/bin/bun",
         argv1: "src/main.ts",
         cwd: "/opt/quota/apps/cli",
       }),
-    ).toEqual(["/usr/local/bin/bun", "/opt/quota/apps/cli/src/main.ts", "edge", "report"]);
+    ).toEqual(["/usr/local/bin/bun", "/opt/quota/apps/cli/src/main.ts", "relay", "push"]);
   });
 
   it.each([
@@ -72,32 +72,32 @@ describe("edge report invocation resolution", () => {
     { execPath: "/usr/bin/node", cwd: "/tmp" },
     { execPath: "/usr/bin/node", argv1: "quotacli.js", cwd: "relative" },
   ])("rejects unresolved invocation paths %#", (invocation) => {
-    expect(() => resolveEdgeReportProgramArguments(invocation)).toThrow(
+    expect(() => resolveRelayPushProgramArguments(invocation)).toThrow(
       /^QuotaCLI could not resolve/,
     );
   });
 });
 
 describe("LaunchAgent plist", () => {
-  it("escapes arguments and configures one RunAtLoad report every 300 seconds", () => {
+  it("escapes arguments and configures RunAtLoad plus a push every 300 seconds", () => {
     const plist = renderLaunchAgentPlist([
       "/opt/a&b/node",
       "/opt/<quota>/main\"'.js",
-      "edge",
-      "report",
+      "relay",
+      "push",
     ]);
 
-    expect(plist).toContain(`<string>${EDGE_LAUNCH_AGENT_LABEL}</string>`);
+    expect(plist).toContain(`<string>${RELAY_LAUNCH_AGENT_LABEL}</string>`);
     expect(plist).toContain("<string>/opt/a&amp;b/node</string>");
     expect(plist).toContain("<string>/opt/&lt;quota&gt;/main&quot;&apos;.js</string>");
-    expect(plist).toContain("<key>StartInterval</key>\n  <integer>300</integer>");
     expect(plist).toContain("<key>RunAtLoad</key>\n  <true/>");
+    expect(plist).toContain("<key>StartInterval</key>\n  <integer>300</integer>");
     expect(plist.match(/<string>\/dev\/null<\/string>/g)).toHaveLength(2);
     expect(plist).not.toContain("EnvironmentVariables");
   });
 
   it("inherits only allowlisted nonempty environment values", () => {
-    const plist = renderLaunchAgentPlist(["/opt/quotacli", "edge", "report"], {
+    const plist = renderLaunchAgentPlist(["/opt/quotacli", "relay", "push"], {
       PATH: "/opt/bin:/usr/bin",
       XDG_CONFIG_HOME: "/Users/test/config&a",
       CODEX_HOME: "/Users/test/.codex",
@@ -129,7 +129,7 @@ describe("LaunchAgent plist", () => {
   });
 
   it("does not inherit a relative XDG_CONFIG_HOME", () => {
-    const plist = renderLaunchAgentPlist(["/opt/quotacli", "edge", "report"], {
+    const plist = renderLaunchAgentPlist(["/opt/quotacli", "relay", "push"], {
       XDG_CONFIG_HOME: "relative/config",
     });
 
@@ -141,7 +141,7 @@ describe("LaunchAgent plist", () => {
 describe("macOS LaunchAgent lifecycle", () => {
   it("bootouts, writes a private plist atomically, then bootstraps", async () => {
     const root = await temporaryDirectory();
-    const plistPath = join(root, "Library", "LaunchAgents", "edge.plist");
+    const plistPath = join(root, "Library", "LaunchAgents", "relay.plist");
     const { runner, calls } = runnerWithExitCodes(3, 0);
     const service = launchAgent(plistPath, runner, {
       XDG_CONFIG_HOME: "/private/config",
@@ -168,7 +168,7 @@ describe("macOS LaunchAgent lifecycle", () => {
 
   it("accepts an existing loaded service during restart", async () => {
     const root = await temporaryDirectory();
-    const plistPath = join(root, "LaunchAgents", "edge.plist");
+    const plistPath = join(root, "LaunchAgents", "relay.plist");
     const { runner, calls } = runnerWithExitCodes(0, 0);
 
     await launchAgent(plistPath, runner).start();
@@ -180,7 +180,7 @@ describe("macOS LaunchAgent lifecycle", () => {
     const runner = vi.fn<LaunchctlRunner>(async () => ({ exitCode: 0 }));
     const filesystem = unusedFileSystem();
     const service = new MacOSLaunchAgent({
-      plistPath: "/tmp/io.gotry.quotacli.edge.plist",
+      plistPath: "/tmp/io.gotry.quotacli.relay.plist",
       uid,
       invocation: { execPath: "relative", argv1: "main.js", cwd: "/tmp" },
       runner,
@@ -198,7 +198,7 @@ describe("macOS LaunchAgent lifecycle", () => {
 
   it("cleans up the new plist when bootstrap fails", async () => {
     const root = await temporaryDirectory();
-    const plistPath = join(root, "LaunchAgents", "edge.plist");
+    const plistPath = join(root, "LaunchAgents", "relay.plist");
     const { runner, calls } = runnerWithExitCodes(3, 1, 0);
     const service = launchAgent(plistPath, runner);
 
@@ -209,7 +209,7 @@ describe("macOS LaunchAgent lifecycle", () => {
 
   it("does not write when the initial bootout fails", async () => {
     const root = await temporaryDirectory();
-    const plistPath = join(root, "LaunchAgents", "edge.plist");
+    const plistPath = join(root, "LaunchAgents", "relay.plist");
     const { runner, calls } = runnerWithExitCodes(1);
 
     await expect(launchAgent(plistPath, runner).start()).rejects.toThrow(
@@ -225,7 +225,7 @@ describe("macOS LaunchAgent lifecycle", () => {
   ])("maps launchctl print exit $exitCode to $expected", async ({ exitCode, expected }) => {
     const root = await temporaryDirectory();
     const { runner, calls } = runnerWithExitCodes(exitCode);
-    const service = launchAgent(join(root, "edge.plist"), runner);
+    const service = launchAgent(join(root, "relay.plist"), runner);
 
     await expect(service.status()).resolves.toBe(expected);
     expect(calls).toEqual([{ executable: LAUNCHCTL_PATH, args: ["print", serviceTarget] }]);
@@ -235,14 +235,14 @@ describe("macOS LaunchAgent lifecycle", () => {
     const root = await temporaryDirectory();
     const { runner } = runnerWithExitCodes(42);
 
-    await expect(launchAgent(join(root, "edge.plist"), runner).status()).rejects.toThrow(
+    await expect(launchAgent(join(root, "relay.plist"), runner).status()).rejects.toThrow(
       "QuotaCLI could not inspect the LaunchAgent.",
     );
   });
 
   it.each([0, 3])("removes the plist when bootout exits %s", async (exitCode) => {
     const root = await temporaryDirectory();
-    const plistPath = join(root, "LaunchAgents", "edge.plist");
+    const plistPath = join(root, "LaunchAgents", "relay.plist");
     await mkdir(join(root, "LaunchAgents"), { recursive: true, mode: 0o700 });
     await writeFile(plistPath, "synthetic plist", { mode: 0o600 });
     const { runner } = runnerWithExitCodes(exitCode);
@@ -254,7 +254,7 @@ describe("macOS LaunchAgent lifecycle", () => {
 
   it("leaves the plist in place when bootout fails", async () => {
     const root = await temporaryDirectory();
-    const plistPath = join(root, "LaunchAgents", "edge.plist");
+    const plistPath = join(root, "LaunchAgents", "relay.plist");
     await mkdir(join(root, "LaunchAgents"), { recursive: true, mode: 0o700 });
     await writeFile(plistPath, "synthetic plist", { mode: 0o600 });
     const { runner } = runnerWithExitCodes(1);
@@ -273,18 +273,18 @@ describe("macOS LaunchAgent lifecycle", () => {
     await symlink(target, link);
     const { runner, calls } = runnerWithExitCodes(3);
 
-    await expect(launchAgent(join(link, "edge.plist"), runner).start()).rejects.toThrow(
+    await expect(launchAgent(join(link, "relay.plist"), runner).start()).rejects.toThrow(
       "The LaunchAgent directory is invalid.",
     );
     expect(calls).toEqual([]);
-    await expect(lstat(join(target, "edge.plist"))).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(lstat(join(target, "relay.plist"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("rejects a symlink LaunchAgent file", async () => {
     const root = await temporaryDirectory();
     const directory = join(root, "LaunchAgents");
     const target = join(root, "target.plist");
-    const plistPath = join(directory, "edge.plist");
+    const plistPath = join(directory, "relay.plist");
     await mkdir(directory, { mode: 0o700 });
     await writeFile(target, "target", { mode: 0o600 });
     await symlink(target, plistPath);

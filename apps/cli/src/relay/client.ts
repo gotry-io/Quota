@@ -89,7 +89,7 @@ export class RelayClient {
     ) {
       throw new RelayClientError(
         "unsupported_relay",
-        "The Relay does not support the required Quota edge capabilities.",
+        "The Relay does not support the required Quota relay capabilities.",
       );
     }
     return info;
