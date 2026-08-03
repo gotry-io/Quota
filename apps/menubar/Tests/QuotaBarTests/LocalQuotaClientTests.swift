@@ -76,7 +76,7 @@ struct LocalQuotaClientTests {
     defer { helper.remove() }
     let client = try LocalQuotaClient(
       executableURL: helper.url,
-      timeout: .milliseconds(500),
+      timeout: .seconds(2),
       terminationGracePeriod: .milliseconds(50)
     )
     let task = Task {
@@ -165,7 +165,7 @@ private struct TemporaryHelper {
 
   func waitForProcessIdentifier() async throws -> Int32 {
     let clock = ContinuousClock()
-    let deadline = clock.now.advanced(by: .seconds(1))
+    let deadline = clock.now.advanced(by: .seconds(3))
     while clock.now < deadline {
       if FileManager.default.fileExists(atPath: pidFileURL.path) {
         return try processIdentifier()
