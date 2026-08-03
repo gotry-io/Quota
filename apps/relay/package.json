@@ -15,7 +15,7 @@
     "dev:self-hosted": "bun run src/self-hosted.ts",
     "d1:migrate:local": "wrangler d1 migrations apply quota --local",
     "d1:migrate:remote": "wrangler d1 migrations apply quota --remote",
-    "test": "vitest run test/app.test.ts && bun test test/sqlite-state.bun.test.ts test/http-api.bun.test.ts test/self-hosted-bootstrap.bun.test.ts"
+    "test": "vitest run test/app.test.ts && bun test test/sqlite-state.bun.test.ts test/http-api.bun.test.ts test/self-hosted-bootstrap.bun.test.ts test/cli-edge-e2e.bun.test.ts"
   },
   "dependencies": {
     "@gotry-io/quota-protocol": "workspace:*",
