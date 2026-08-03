@@ -15,7 +15,8 @@ usage() {
   cat <<'EOF'
 Usage: accept-menubar-visual.sh [--no-build] [--output-dir <directory>]
 
-Builds and launches the deterministic QuotaBar Visual QA app, then captures each fixture window.
+Builds and launches the deterministic QuotaBar Visual QA app, then waits for each
+fixture window's self-captured PNG (no Screen Recording permission required).
 EOF
 }
 
@@ -45,7 +46,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-for tool in /usr/bin/swiftc /usr/sbin/screencapture /usr/bin/sips; do
+for tool in /usr/bin/swiftc /usr/bin/sips; do
   [[ -x "$tool" ]] || fail "required macOS tool is unavailable: $tool"
 done
 
@@ -121,7 +122,6 @@ capture_scenario() {
   local fixed_user_home="${WORK_DIR}/home-${name}"
   local stdout_log="${WORK_DIR}/${name}.stdout.log"
   local stderr_log="${WORK_DIR}/${name}.stderr.log"
-  local capture_log="${WORK_DIR}/${name}.capture.log"
   local screenshot="${OUTPUT_DIR}/${name}.png"
   mkdir -p "$fixed_user_home"
   rm -f "$screenshot"
@@ -134,22 +134,44 @@ capture_scenario() {
       --route "$route" \
       --appearance "$appearance" \
       --text-size "$text_size" \
+      --screenshot-output "$screenshot" \
       >"$stdout_log" 2>"$stderr_log" &
   APP_PID=$!
 
   local deadline=$((SECONDS + WINDOW_TIMEOUT_SECONDS))
   local window_info=""
+  local saw_png=0
   while [[ $SECONDS -lt $deadline ]]; do
     if ! kill -0 "$APP_PID" 2>/dev/null; then
+      if [[ -s "$screenshot" ]]; then
+        saw_png=1
+        if [[ -n "$window_info" ]]; then
+          break
+        fi
+      fi
       tail -n 20 "$stderr_log" >&2 || true
-      fail "${name}: app exited before its visual QA window appeared"
+      fail "${name}: app exited before visual acceptance completed"
     fi
-    if window_info="$($WINDOW_FINDER "$APP_PID" "$WINDOW_TITLE" 2>/dev/null)"; then
+    if [[ -z "$window_info" ]]; then
+      if window_info="$($WINDOW_FINDER "$APP_PID" "$WINDOW_TITLE" 2>/dev/null)"; then
+        :
+      else
+        window_info=""
+      fi
+    fi
+    if [[ -s "$screenshot" ]]; then
+      saw_png=1
+    fi
+    if [[ -n "$window_info" && $saw_png -eq 1 ]]; then
       break
     fi
     sleep 0.2
   done
-  [[ -n "$window_info" ]] || fail "${name}: window '${WINDOW_TITLE}' did not appear within ${WINDOW_TIMEOUT_SECONDS}s"
+
+  [[ -n "$window_info" ]] \
+    || fail "${name}: window '${WINDOW_TITLE}' did not appear within ${WINDOW_TIMEOUT_SECONDS}s"
+  [[ $saw_png -eq 1 ]] \
+    || fail "${name}: self-captured screenshot was not written within ${WINDOW_TIMEOUT_SECONDS}s"
 
   local window_id window_width window_height
   IFS=$'\t' read -r window_id window_width window_height <<<"$window_info"
@@ -157,11 +179,6 @@ capture_scenario() {
   [[ "$window_width" -ge 300 && "$window_height" -ge 300 ]] \
     || fail "${name}: window bounds are unexpectedly small (${window_width}x${window_height})"
 
-  sleep 0.5
-  if ! /usr/sbin/screencapture -x -o -l "$window_id" "$screenshot" 2>"$capture_log"; then
-    cat "$capture_log" >&2 || true
-    fail "${name}: screenshot capture failed; grant Screen Recording permission to the invoking terminal"
-  fi
   [[ -s "$screenshot" ]] || fail "${name}: screenshot is missing or empty"
 
   local pixel_width pixel_height byte_count

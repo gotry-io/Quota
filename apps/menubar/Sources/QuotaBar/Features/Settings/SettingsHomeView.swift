@@ -6,6 +6,7 @@ struct SettingsHomeView: View {
   @Binding var showsCodex: Bool
   @Binding var showsClaude: Bool
   @Binding var showsGrok: Bool
+  let onOpenRelays: () -> Void
 
   var body: some View {
     ScrollView {
@@ -19,6 +20,38 @@ struct SettingsHomeView: View {
             .font(.caption)
             .foregroundStyle(QuotaPalette.body)
             .fixedSize(horizontal: false, vertical: true)
+        }
+
+        Divider()
+          .overlay(QuotaPalette.hairline)
+
+        settingsSection("Remote quota") {
+          Button(action: onOpenRelays) {
+            HStack(spacing: 12) {
+              Image(systemName: "network")
+                .frame(width: 18)
+
+              VStack(alignment: .leading, spacing: 3) {
+                Text("Relays")
+                  .font(QuotaDesign.Typography.providerTitle)
+                  .foregroundStyle(QuotaPalette.ink)
+                Text(relaySummary)
+                  .font(QuotaDesign.Typography.resetTime)
+                  .foregroundStyle(QuotaPalette.body)
+                  .lineLimit(2)
+              }
+
+              Spacer()
+
+              Image(systemName: "chevron.right")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(QuotaPalette.body)
+            }
+            .contentShape(Rectangle())
+          }
+          .buttonStyle(.plain)
+          .accessibilityLabel("Manage Relays")
+          .accessibilityHint(relaySummary)
         }
 
         Divider()
@@ -53,6 +86,11 @@ struct SettingsHomeView: View {
       .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
       .padding(.vertical, 16)
     }
+  }
+
+  private var relaySummary: String {
+    let count = model.relayStateModel.profiles.count
+    return count == 1 ? "1 configured Relay" : "\(count) configured Relays"
   }
 
   private func providerToggle(_ provider: ProviderID, isOn: Binding<Bool>) -> some View {

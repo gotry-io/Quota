@@ -97,9 +97,7 @@ private struct OverviewEmptyStateView: View {
 
       if let actionTitle, let action {
         Button(actionTitle, action: action)
-          .buttonStyle(.borderedProminent)
-          .buttonBorderShape(.capsule)
-          .tint(QuotaPalette.ink)
+          .buttonStyle(QuotaPrimaryButtonStyle())
       }
     }
     .frame(maxWidth: .infinity, minHeight: 320)

@@ -28,7 +28,8 @@ struct QuotaBarApp: App {
         MenuBarContentView(
           model: model,
           initialPath: visualTestConfiguration.initialPath,
-          performsInitialRefresh: visualTestConfiguration.performsInitialRefresh
+          performsInitialRefresh: visualTestConfiguration.performsInitialRefresh,
+          performsRelayRefreshes: visualTestConfiguration.performsRelayRefreshes
         )
         .background(.regularMaterial)
         .preferredColorScheme(visualTestConfiguration.colorScheme)
@@ -36,13 +37,22 @@ struct QuotaBarApp: App {
         .onAppear {
           NSApplication.shared.setActivationPolicy(.regular)
           NSApplication.shared.activate(ignoringOtherApps: true)
+          if let screenshotOutputPath = visualTestConfiguration.screenshotOutputPath {
+            VisualTestWindowCapture.schedule(to: screenshotOutputPath)
+          }
         }
       }
       .windowResizability(.contentSize)
       .windowStyle(.hiddenTitleBar)
     }
   #else
-    @State private var model = MenuBarViewModel()
+    @State private var model: MenuBarViewModel
+
+    init() {
+      let model = MenuBarViewModel()
+      model.relayStateModel.startPolling()
+      _model = State(initialValue: model)
+    }
 
     var body: some Scene {
       MenuBarExtra("QuotaBar", systemImage: "gauge.with.dots.needle.50percent") {
@@ -52,3 +62,77 @@ struct QuotaBarApp: App {
     }
   #endif
 }
+
+#if VISUAL_TEST
+  /// Captures this process's own window contentView without Screen Recording.
+  @MainActor
+  private enum VisualTestWindowCapture {
+    private static let maxAttempts = 25
+    private static let retryDelay: TimeInterval = 0.2
+    private static let initialDelay: TimeInterval = 0.5
+    private static let minimumEdge: CGFloat = 300
+
+    static func schedule(to url: URL, attempt: Int = 0) {
+      let delay = attempt == 0 ? initialDelay : retryDelay
+      Task { @MainActor in
+        try? await Task.sleep(for: .seconds(delay))
+        switch capture(to: url) {
+        case .succeeded, .failed:
+          return
+        case .notReady:
+          if attempt + 1 < maxAttempts {
+            schedule(to: url, attempt: attempt + 1)
+          } else {
+            reportFailure()
+          }
+        }
+      }
+    }
+
+    private enum CaptureResult {
+      case succeeded
+      case failed
+      case notReady
+    }
+
+    private static func capture(to url: URL) -> CaptureResult {
+      guard let contentView = targetContentView() else { return .notReady }
+      let bounds = contentView.bounds
+      guard bounds.width >= minimumEdge, bounds.height >= minimumEdge else {
+        return .notReady
+      }
+      guard let rep = contentView.bitmapImageRepForCachingDisplay(in: bounds) else {
+        reportFailure()
+        return .failed
+      }
+      contentView.cacheDisplay(in: bounds, to: rep)
+      guard let pngData = rep.representation(using: .png, properties: [:]), !pngData.isEmpty else {
+        reportFailure()
+        return .failed
+      }
+
+      do {
+        try FileManager.default.createDirectory(
+          at: url.deletingLastPathComponent(),
+          withIntermediateDirectories: true
+        )
+        // Atomic same-directory write: the final path appears only after a complete PNG.
+        try pngData.write(to: url, options: .atomic)
+        return .succeeded
+      } catch {
+        reportFailure()
+        return .failed
+      }
+    }
+
+    private static func targetContentView() -> NSView? {
+      NSApplication.shared.windows
+        .first { $0.isVisible && $0.title == "QuotaBar Visual QA" }?
+        .contentView
+    }
+
+    private static func reportFailure() {
+      fputs("visual screenshot capture failed\n", stderr)
+    }
+  }
+#endif

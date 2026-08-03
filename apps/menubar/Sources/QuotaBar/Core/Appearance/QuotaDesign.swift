@@ -23,3 +23,21 @@ enum QuotaDesign {
     static let sourceTag = Font.system(.caption2, weight: .medium)
   }
 }
+
+struct QuotaPrimaryButtonStyle: ButtonStyle {
+  @Environment(\.isEnabled) private var isEnabled
+
+  func makeBody(configuration: Configuration) -> some View {
+    configuration.label
+      .font(.system(.subheadline, weight: .medium))
+      .foregroundStyle(isEnabled ? Color.white : QuotaPalette.body)
+      .padding(.horizontal, 18)
+      .frame(minHeight: 36)
+      .background(
+        isEnabled
+          ? Color.black.opacity(configuration.isPressed ? 0.82 : 1)
+          : QuotaPalette.soft
+      )
+      .clipShape(Capsule())
+  }
+}

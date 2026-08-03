@@ -15,12 +15,23 @@
 
     @MainActor
     fileprivate func makeModel(referenceDate: Date) -> MenuBarViewModel {
-      switch self {
+      let relayRefreshAt: Date? = switch self {
+      case .loading, .unavailable: nil
+      case .content, .cachedRefreshError, .empty:
+        referenceDate.addingTimeInterval(-45)
+      }
+      let relayStateModel = VisualRelayFixture.makeStateModel(
+        referenceDate: referenceDate,
+        lastSuccessfulRefreshAt: relayRefreshAt,
+        includesQuotaObservations: self == .content || self == .cachedRefreshError
+      )
+      return switch self {
       case .loading:
         MenuBarViewModel(
           visualTestReport: nil,
           errorMessage: nil,
-          refreshedAt: nil
+          refreshedAt: nil,
+          relayStateModel: relayStateModel
         )
       case .content, .cachedRefreshError:
         MenuBarViewModel(
@@ -30,19 +41,22 @@
             : nil,
           refreshedAt: referenceDate.addingTimeInterval(
             self == .cachedRefreshError ? -180 : -30
-          )
+          ),
+          relayStateModel: relayStateModel
         )
       case .empty:
         MenuBarViewModel(
           visualTestReport: emptyReport(at: referenceDate),
           errorMessage: nil,
-          refreshedAt: referenceDate.addingTimeInterval(-30)
+          refreshedAt: referenceDate.addingTimeInterval(-30),
+          relayStateModel: relayStateModel
         )
       case .unavailable:
         MenuBarViewModel(
           visualTestReport: nil,
           errorMessage: "The bundled QuotaCLI helper could not be started.",
-          refreshedAt: nil
+          refreshedAt: nil,
+          relayStateModel: relayStateModel
         )
       }
     }
@@ -51,11 +65,30 @@
   enum VisualTestRoute: String {
     case overview
     case settings
+    case relays
+    case add
+    case detail
+    case pairing
+    case devices
 
     fileprivate var path: [MenuBarRoute] {
       switch self {
       case .overview: []
       case .settings: [.settings]
+      case .relays: [.settings, .relays]
+      case .add: [.settings, .relays, .addRelay]
+      case .detail:
+        [.settings, .relays, .relayDetail(VisualRelayFixture.profileID)]
+      case .pairing:
+        [
+          .settings, .relays, .relayDetail(VisualRelayFixture.profileID),
+          .pairing(VisualRelayFixture.profileID),
+        ]
+      case .devices:
+        [
+          .settings, .relays, .relayDetail(VisualRelayFixture.profileID),
+          .devices(VisualRelayFixture.profileID),
+        ]
       }
     }
   }
@@ -94,6 +127,8 @@
     let route: VisualTestRoute
     let appearance: VisualTestAppearance
     let textSize: VisualTestTextSize
+    /// Absolute file URL for an optional self-captured window PNG. `nil` means no screenshot.
+    let screenshotOutputPath: URL?
     let referenceDate: Date
 
     init?(arguments: [String], referenceDate: Date = Date()) {
@@ -127,11 +162,22 @@
         return nil
       }
 
+      let parsedScreenshotOutput: URL?
+      switch Self.absoluteScreenshotOutputPath(in: arguments) {
+      case .absent:
+        parsedScreenshotOutput = nil
+      case .value(let url):
+        parsedScreenshotOutput = url
+      case .invalid:
+        return nil
+      }
+
       self.dataSource = dataSource
       self.fixture = fixture
       self.route = route
       self.appearance = appearance
       self.textSize = textSize
+      self.screenshotOutputPath = parsedScreenshotOutput
       self.referenceDate = referenceDate
     }
 
@@ -139,6 +185,7 @@
     var colorScheme: ColorScheme? { appearance.colorScheme }
     var dynamicTypeSize: DynamicTypeSize { textSize.dynamicTypeSize }
     var performsInitialRefresh: Bool { dataSource == .live }
+    var performsRelayRefreshes: Bool { false }
 
     @MainActor
     func makeModel() -> MenuBarViewModel {
@@ -146,7 +193,10 @@
       case .fixture:
         fixture.makeModel(referenceDate: referenceDate)
       case .live:
-        MenuBarViewModel(reportCache: nil)
+        MenuBarViewModel(
+          reportCache: nil,
+          relayStateModel: RelayStateModel.visualFixture(profiles: [], profileStates: [:])
+        )
       }
     }
 
@@ -166,6 +216,150 @@
       guard valueIndex < arguments.endIndex else { return nil }
       return Value(rawValue: arguments[valueIndex])
     }
+
+    private enum ScreenshotOutputArgument {
+      case absent
+      case value(URL)
+      case invalid
+    }
+
+    /// Parses optional `--screenshot-output <absolute path>`.
+    /// Absent means no screenshot. A missing value or relative path is invalid.
+    private static func absoluteScreenshotOutputPath(
+      in arguments: [String]
+    ) -> ScreenshotOutputArgument {
+      guard let index = arguments.firstIndex(of: "--screenshot-output") else {
+        return .absent
+      }
+      let valueIndex = arguments.index(after: index)
+      guard valueIndex < arguments.endIndex else { return .invalid }
+      let path = arguments[valueIndex]
+      guard !path.isEmpty, (path as NSString).isAbsolutePath else { return .invalid }
+      return .value(URL(fileURLWithPath: path, isDirectory: false))
+    }
+  }
+
+  private enum VisualRelayFixture {
+    static let profileID = UUID(uuidString: "7A926551-3832-4E39-A931-695563D96541")!
+
+    @MainActor
+    static func makeStateModel(
+      referenceDate: Date,
+      lastSuccessfulRefreshAt: Date?,
+      includesQuotaObservations: Bool
+    ) -> RelayStateModel {
+      do {
+        let profile = try RelayProfile(
+          id: profileID,
+          name: "Studio Relay",
+          baseURL: URL(string: "https://relay.visual.example")!,
+          instanceID: "visual-relay-instance-01",
+          mode: .selfHosted,
+          capabilities: RelayCapabilities(
+            realtime: false,
+            persistentSnapshots: true,
+            instantDeviceRevocation: true,
+            history: false,
+            multiTenant: false
+          ),
+          isDefault: true
+        )
+        let deviceResponse = try QuotaWireCodec.makeDecoder().decode(
+          DeviceListResponse.self,
+          from: Data(deviceJSON.utf8)
+        )
+        let observations = includesQuotaObservations
+          ? try makeObservations(referenceDate: referenceDate)
+          : []
+        return RelayStateModel.visualFixture(
+          profiles: [profile],
+          profileStates: [
+            profileID: RelayProfileState(
+              observations: observations,
+              devices: deviceResponse.devices,
+              lastSuccessfulRefreshAt: lastSuccessfulRefreshAt
+            )
+          ]
+        )
+      } catch {
+        preconditionFailure("Invalid visual Relay fixture.")
+      }
+    }
+
+    private static func makeObservations(referenceDate: Date) throws
+      -> [OwnerSnapshotObservation]
+    {
+      let snapshots = [
+        snapshot(
+          provider: .codex,
+          fingerprint: "visual_personal",
+          label: "pe***@example.com",
+          plan: "Plus",
+          windows: [
+            window(
+              id: "five_hour",
+              title: "5 hour",
+              usedPercent: 34,
+              resetsAt: referenceDate.addingTimeInterval(2_700)
+            )
+          ],
+          observedAt: referenceDate.addingTimeInterval(-120),
+          validUntil: referenceDate.addingTimeInterval(300)
+        ),
+        snapshot(
+          provider: .grok,
+          fingerprint: "visual_remote_grok",
+          label: "Remote workstation",
+          plan: "SuperGrok",
+          windows: [
+            window(
+              id: "monthly",
+              title: "Monthly",
+              usedPercent: 41,
+              resetsAt: referenceDate.addingTimeInterval(9 * 86_400)
+            )
+          ],
+          observedAt: referenceDate.addingTimeInterval(-60),
+          validUntil: referenceDate.addingTimeInterval(300)
+        ),
+      ]
+      let encoder = QuotaWireCodec.makeEncoder()
+      let encodedSnapshots = try snapshots.map { snapshot in
+        String(decoding: try encoder.encode(snapshot), as: UTF8.self)
+      }
+      let dateFormatter = ISO8601DateFormatter()
+      let capturedAt = dateFormatter.string(from: referenceDate)
+      let updatedAt = dateFormatter.string(from: referenceDate.addingTimeInterval(1))
+      let responseJSON =
+        #"{"observations":[{"device_id":"device_visual_studio_mac_01","sequence":42,"captured_at":"\#(capturedAt)","snapshot":\#(encodedSnapshots[0]),"updated_at":"\#(updatedAt)"},{"device_id":"device_visual_studio_mac_01","sequence":42,"captured_at":"\#(capturedAt)","snapshot":\#(encodedSnapshots[1]),"updated_at":"\#(updatedAt)"}]}"#
+      return try QuotaWireCodec.makeDecoder()
+        .decode(OwnerSnapshotListResponse.self, from: Data(responseJSON.utf8))
+        .observations
+    }
+
+    private static let deviceJSON =
+      #"""
+      {
+        "devices": [
+          {
+            "device_id": "device_visual_studio_mac_01",
+            "display_name": "Studio Mac",
+            "created_at": "2026-08-03T08:00:00Z",
+            "last_seen_at": "2026-08-03T10:20:30Z",
+            "last_sequence": 42,
+            "revoked_at": null
+          },
+          {
+            "device_id": "device_visual_build_host_02",
+            "display_name": "Old build host",
+            "created_at": "2026-07-20T08:00:00Z",
+            "last_seen_at": "2026-07-31T18:15:00Z",
+            "last_sequence": 18,
+            "revoked_at": "2026-08-01T09:30:00Z"
+          }
+        ]
+      }
+      """#
   }
 
   private func contentReport(at date: Date) -> QuotaCollectionReport {
@@ -324,7 +518,12 @@
   ) -> QuotaSnapshot {
     QuotaSnapshot(
       provider: provider,
-      account: QuotaAccount(fingerprint: fingerprint, label: label, plan: plan),
+      account: QuotaAccount(
+        fingerprint: fingerprint,
+        label: label,
+        plan: plan,
+        fingerprintScope: .global
+      ),
       windows: windows,
       source: "visual_test_fixture",
       status: .available,

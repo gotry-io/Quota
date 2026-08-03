@@ -543,3 +543,84 @@ final class RelayStateModel {
     )
   }
 }
+
+#if DEBUG
+  extension RelayStateModel {
+    static func visualFixture(
+      profiles: [RelayProfile],
+      profileStates: [UUID: RelayProfileState]
+    ) -> RelayStateModel {
+      let model = RelayStateModel(
+        client: VisualFixtureRelayClient(),
+        profileStore: VisualFixtureRelayProfileStore(profiles: profiles),
+        credentialStore: VisualFixtureRelayCredentialStore()
+      )
+      model.profileStates = profileStates
+      return model
+    }
+  }
+
+  private struct VisualFixtureRelayClient: RelayOwnerClientServing {
+    func discover(baseURL: URL) async throws -> RelayInfo { throw RelayClientError.unavailable }
+
+    func approvePairing(
+      userCode: String,
+      profile: RelayProfile,
+      ownerBearer: String
+    ) async throws {
+      throw RelayClientError.unavailable
+    }
+
+    func denyPairing(
+      userCode: String,
+      profile: RelayProfile,
+      ownerBearer: String
+    ) async throws {
+      throw RelayClientError.unavailable
+    }
+
+    func fetchLatestSnapshots(
+      profile: RelayProfile,
+      ownerBearer: String
+    ) async throws -> OwnerSnapshotListResponse {
+      throw RelayClientError.unavailable
+    }
+
+    func listDevices(
+      profile: RelayProfile,
+      ownerBearer: String
+    ) async throws -> DeviceListResponse {
+      throw RelayClientError.unavailable
+    }
+
+    func revokeDevice(
+      deviceID: String,
+      profile: RelayProfile,
+      ownerBearer: String
+    ) async throws {
+      throw RelayClientError.unavailable
+    }
+  }
+
+  @MainActor
+  private struct VisualFixtureRelayProfileStore: RelayProfilePersisting {
+    let profiles: [RelayProfile]
+
+    func load() throws -> [RelayProfile] { profiles }
+    func save(_ profiles: [RelayProfile]) throws { throw RelayProfileStoreError.couldNotSave }
+  }
+
+  private struct VisualFixtureRelayCredentialStore: RelayOwnerCredentialPersisting {
+    func save(_ ownerBearer: String, reference: String) throws {
+      throw RelayOwnerCredentialStoreError.couldNotStore
+    }
+
+    func load(reference: String) throws -> String {
+      throw RelayOwnerCredentialStoreError.missingCredential
+    }
+
+    func delete(reference: String) throws {
+      throw RelayOwnerCredentialStoreError.couldNotDelete
+    }
+  }
+#endif

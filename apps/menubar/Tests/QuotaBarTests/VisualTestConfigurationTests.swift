@@ -13,6 +13,7 @@
     #expect(defaults.appearance == .system)
     #expect(defaults.textSize == .standard)
     #expect(defaults.performsInitialRefresh == false)
+    #expect(defaults.screenshotOutputPath == nil)
 
     #expect(
       VisualTestConfiguration(arguments: ["QuotaBar", "--fixture", "unknown"]) == nil
@@ -21,10 +22,26 @@
       VisualTestConfiguration(arguments: ["QuotaBar", "--data-source", "unknown"]) == nil
     )
     #expect(VisualTestConfiguration(arguments: ["QuotaBar", "--route"]) == nil)
+    #expect(VisualTestConfiguration(arguments: ["QuotaBar", "--screenshot-output"]) == nil)
+    #expect(
+      VisualTestConfiguration(
+        arguments: ["QuotaBar", "--screenshot-output", "relative/path.png"]
+      ) == nil
+    )
+    #expect(
+      VisualTestConfiguration(arguments: ["QuotaBar", "--screenshot-output", ""]) == nil
+    )
+
+    let withScreenshot = try #require(
+      VisualTestConfiguration(
+        arguments: ["QuotaBar", "--screenshot-output", "/tmp/quotabar-visual.png"]
+      )
+    )
+    #expect(withScreenshot.screenshotOutputPath?.path == "/tmp/quotabar-visual.png")
   }
 
   @Test
-  func liveDataSourceEnablesOneViewDrivenRefresh() throws {
+  func liveDataSourceEnablesOnlyLocalViewDrivenRefresh() throws {
     let configuration = try #require(
       VisualTestConfiguration(
         arguments: ["QuotaBar", "--data-source", "live", "--route", "settings"]
@@ -34,6 +51,43 @@
     #expect(configuration.dataSource == .live)
     #expect(configuration.initialPath == [.settings])
     #expect(configuration.performsInitialRefresh)
+    #expect(!configuration.performsRelayRefreshes)
+  }
+
+  @Test @MainActor
+  func liveDataSourceDoesNotInjectRelayFixturesOrCredentials() throws {
+    let configuration = try #require(
+      VisualTestConfiguration(arguments: ["QuotaBar", "--data-source", "live"])
+    )
+    let menuModel = configuration.makeModel()
+    let relayModel = menuModel.relayStateModel
+
+    #expect(relayModel.profiles.isEmpty)
+    #expect(!relayModel.isPolling)
+  }
+
+  @Test
+  func relayVisualRoutesParseIntoOneTypedStackWithMatchingTitles() throws {
+    let routeExpectations: [(rawValue: String, title: String, depth: Int)] = [
+      ("relays", "Relays", 2),
+      ("add", "Add Relay", 3),
+      ("detail", "Relay", 3),
+      ("pairing", "Pair device", 4),
+      ("devices", "Devices", 4),
+    ]
+
+    for expectation in routeExpectations {
+      let configuration = try #require(
+        VisualTestConfiguration(
+          arguments: ["QuotaBar", "--route", expectation.rawValue]
+        )
+      )
+      #expect(configuration.initialPath.count == expectation.depth)
+      #expect(configuration.initialPath.first == .settings)
+      #expect(configuration.initialPath.last?.title == expectation.title)
+      #expect(!configuration.performsInitialRefresh)
+      #expect(!configuration.performsRelayRefreshes)
+    }
   }
 
   @Test @MainActor
@@ -101,6 +155,51 @@
         .overviewState(enabledProviders: Set(ProviderID.allCases), now: referenceDate)
         == .unavailable(message: "The bundled QuotaCLI helper could not be started.")
     )
+  }
+
+  @Test @MainActor
+  func relayFixtureIsDeterministicSecretFreeAndDoesNotStartExternalWork() throws {
+    let referenceDate = Date(timeIntervalSince1970: 1_785_752_430)
+    let configuration = try #require(
+      VisualTestConfiguration(
+        arguments: ["QuotaBar", "--route", "devices"],
+        referenceDate: referenceDate
+      )
+    )
+
+    let menuModel = configuration.makeModel()
+    let relayModel = menuModel.relayStateModel
+    let profile = try #require(relayModel.profiles.first)
+    let state = try #require(relayModel.state(for: profile.id))
+    let accounts = menuModel.overviewState(
+      enabledProviders: Set(ProviderID.allCases),
+      now: referenceDate
+    )
+    let encodedProfiles = try QuotaWireCodec.makeEncoder().encode(relayModel.profiles)
+    let encodedText = try #require(String(data: encodedProfiles, encoding: .utf8)).lowercased()
+
+    #expect(profile.name == "Studio Relay")
+    #expect(profile.baseURL.absoluteString == "https://relay.visual.example")
+    #expect(state.observations.count == 2)
+    #expect(state.devices.map(\.displayName) == ["Studio Mac", "Old build host"])
+    #expect(state.lastSuccessfulRefreshAt == referenceDate.addingTimeInterval(-45))
+    #expect(!relayModel.isPolling)
+    #expect(!configuration.performsRelayRefreshes)
+    #expect(!encodedText.contains("bearer"))
+    #expect(!encodedText.contains("token"))
+    #expect(!encodedText.contains("secret"))
+
+    guard case .content(let providers, _) = accounts else {
+      Issue.record("Expected local and remote visual quota content.")
+      return
+    }
+    let summaries: [String: String] = Dictionary(
+      uniqueKeysWithValues: providers.flatMap(\.accounts).map {
+        ($0.identity.fingerprint, $0.sourceSummary)
+      }
+    )
+    #expect(summaries["visual_personal"] == "Local + Remote")
+    #expect(summaries["visual_remote_grok"] == "Remote")
   }
 
   private func configuration(
