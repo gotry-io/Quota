@@ -59,6 +59,12 @@ data requirements.
   snapshots only for its own device ID.
 - Store each device credential together with its Relay URL and instance ID; never send it to a
   different Relay.
+- QuotaCLI's file-backed edge credential lives under `XDG_CONFIG_HOME` or the user's `.config`
+  directory. Its containing QuotaCLI directory is `0700`, its credential file is `0600`, writes use
+  a same-directory temporary file and atomic rename, and POSIX reads reject group/other-accessible
+  directories or files.
+- Local unpairing deletes only the local credential and must state that the owner still needs to
+  revoke the remote device through QuotaBar or Relay device management.
 - Persist only hashes of device and owner-session bearer tokens and pairing device/user codes, never
   their plaintext values. Return a generated device bearer credential only once when pairing is
   consumed.

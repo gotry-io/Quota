@@ -96,10 +96,12 @@ automation. Scoped account fingerprints and per-device Relay observation retenti
 QuotaRelay now implements its protocol-validated `/api/v1` server core for device-code pairing,
 scoped Bearer authentication, snapshot upload and reads, device management, and persistent rate
 limiting across D1 and SQLite. Self-hosted Relay owner bootstrap and its authenticated discovery
-capabilities are implemented; managed owner authentication remains disabled. QuotaCLI 0.1.0 is
-published on npm and later tags publish through OIDC. The QuotaCLI and QuotaBar Relay integrations,
-subscription resolution, the first published Homebrew artifact, remote-device UI, and production
-settings remain subsequent milestones. Realtime delivery is optional and not part of v1.
+capabilities are implemented; managed owner authentication remains disabled. QuotaCLI now implements
+Relay discovery, Device Code pairing, Relay-bound local credential storage, and local unpairing;
+recurring edge uploads are not enabled by pairing. QuotaCLI 0.1.0 is published on npm and later tags
+publish through OIDC. QuotaBar Relay integration, recurring QuotaCLI reporting, subscription
+resolution, the first published Homebrew artifact, remote-device UI, and production settings remain
+subsequent milestones. Realtime delivery is optional and not part of v1.
 
 ## License
 

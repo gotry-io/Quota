@@ -10,6 +10,7 @@ import {
   type ProviderId,
 } from "@gotry-io/quota-protocol";
 import packageMetadata from "../package.json" with { type: "json" };
+import { runEdgeCommand } from "./edge/commands.ts";
 import { renderJson, renderText } from "./render.ts";
 
 export const QUOTA_CLI_VERSION = packageMetadata.version;
@@ -70,6 +71,9 @@ export async function runCli(
         return 0;
       }
       return await runQuotaCommand(args.slice(1), output, runtime);
+
+    case "edge":
+      return await runEdgeCommand(args.slice(1), output);
 
     case "help":
     case "--help":
@@ -208,6 +212,8 @@ Usage:
   quotacli providers
   quotacli doctor
   quotacli quota [--provider codex|claude|grok|all] [--format text|json] [--pretty]
+  quotacli edge pair [--relay <url>]
+  quotacli edge unpair
   quotacli help
 
 Defaults:

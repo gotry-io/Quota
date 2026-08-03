@@ -10,6 +10,7 @@ normalized quota snapshots from `@gotry-io/quota-protocol`.
 pnpm --filter @gotry-io/quotacli dev -- providers
 pnpm --filter @gotry-io/quotacli dev -- doctor
 pnpm --filter @gotry-io/quotacli dev -- quota --format json --pretty
+pnpm --filter @gotry-io/quotacli dev -- edge --help
 pnpm --filter @gotry-io/quotacli build
 ```
 
@@ -20,6 +21,9 @@ quotacli version
 quotacli providers
 quotacli doctor
 quotacli quota [--provider codex|claude|grok|all] [--format text|json] [--pretty]
+quotacli edge pair [--relay <url>]
+quotacli edge unpair
+quotacli edge --help
 quotacli help
 ```
 
@@ -35,6 +39,9 @@ Exit codes for `quota`:
 - `1`: collection completed with one or more provider failures
 - `2`: invalid CLI arguments
 
+Edge commands return `0` on success, `1` for pairing or credential-store failures, and `2` for
+invalid commands or arguments.
+
 JSON output is one versioned `QuotaCollectionReport`. Provider failures stay inside the report.
 QuotaCLI never prints credentials, authorization headers, cookies, raw JWTs, or unredacted response
 bodies.
@@ -47,19 +54,26 @@ bundle and direct release downloads. The npm package installs the same `quotacli
 not require Bun at runtime. A `v*` Git tag publishes the package from `release-cli.yml` through npm
 Trusted Publishing; the release workflow stores no long-lived npm credential.
 
-## Planned edge pairing
+## Edge pairing
 
-Edge reporting is not implemented yet. Its accepted command shape is:
+Pair an edge machine with the managed Relay origin or a selected self-hosted Relay:
 
 ```text
 quotacli edge pair                         # defaults to https://quota.gotry.io
 quotacli edge pair --relay https://relay.example.com
-quotacli edge start
-quotacli edge status
-quotacli edge stop
 quotacli edge unpair
 ```
 
-`pair` uses a Relay-generated Device Code approved in QuotaBar. It does not accept a manually
-created long-lived token and does not start reporting by itself. See
-[`ADR 0002`](../../docs/decisions/0002-relay-device-code-pairing.md).
+`pair` discovers and validates Relay capabilities, displays a Relay-generated user code for
+approval in QuotaBar, and stores the issued Relay-bound device credential. It does not accept a
+manually created token and does not start recurring reporting. The managed Relay currently keeps
+owner authentication disabled, so managed pairing fails safely until that identity path is
+available; a bootstrapped self-hosted Relay advertises the required capabilities.
+
+`unpair` removes only the local credential. It cannot prove possession of owner authorization, so
+the remote device must still be revoked through QuotaBar or Relay device management. Pairing and
+credential ownership are defined in
+[`ADR 0002`](../../docs/decisions/0002-relay-device-code-pairing.md); storage requirements are in the
+[`security baseline`](../../docs/security.md).
+
+Recurring edge upload commands remain a subsequent milestone.

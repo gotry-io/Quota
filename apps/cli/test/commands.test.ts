@@ -154,4 +154,19 @@ describe("QuotaCLI", () => {
     expect(capture.stdout.join("\n")).toContain("quotacli quota");
     expect(capture.stderr).toHaveLength(0);
   });
+
+  it("routes edge help without starting pairing", async () => {
+    const capture = captureOutput();
+    const code = await runCli(["edge", "--help"], capture.output);
+    expect(code).toBe(0);
+    expect(capture.stdout.join("\n")).toContain("quotacli edge pair");
+    expect(capture.stderr).toHaveLength(0);
+  });
+
+  it("routes unknown edge commands to an edge usage error", async () => {
+    const capture = captureOutput();
+    const code = await runCli(["edge", "unknown"], capture.output);
+    expect(code).toBe(2);
+    expect(capture.stderr.join("\n")).toContain("Unknown edge command");
+  });
 });

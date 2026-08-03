@@ -60,6 +60,8 @@ storage requirements are defined only in [`security.md`](security.md).
   entry point.
 - Owns all provider credential discovery and quota collection.
 - Uses the same normalized schemas for local output and edge uploads.
+- Owns Relay discovery, Device Code pairing, and the single Relay-bound local edge credential.
+  Pairing never enables recurring reporting by itself.
 - Avoids native Node addons so standalone cross-platform builds remain possible.
 
 ### QuotaRelay
