@@ -544,6 +544,16 @@ Inter may substitute for body text, while JetBrains Mono or Fira Code may substi
 - Visible-agent controls, About information, and Quit are grouped as flat sections.
 - Relay profile listing, setup, detail, pairing decisions, and device management use deeper
   destinations in the same typed stack.
+- The managed Relay is enrolled automatically with an anonymous controller capability; do not add
+  account, sign-in, or manually copied managed-token UI. Self-hosted Relay setup asks for its URL
+  and controller token in a secure field.
+- `Delete all QuotaBar data` is a destructive Settings action. It deletes managed controllers while
+  online before clearing local profiles, cached quota, preferences, and QuotaBar Keychain entries.
+  When remote deletion fails, require a separate `Delete Locally Anyway` confirmation and explain
+  that the managed controller and Relay data may remain while paired devices continue reporting.
+- Removing the managed Relay or deleting all data persists a disconnected state across app
+  restarts. `Reconnect Quota Relay` is the only UI action that clears it and creates a new anonymous
+  controller; ordinary polling must not silently undo a destructive user action.
 - Provider switches list all supported agents and describe unsigned or unavailable sessions as
   quiet secondary text.
 - A provider enters the quota overview only when collection succeeds and at least one `available`

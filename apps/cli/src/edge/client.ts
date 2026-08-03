@@ -174,6 +174,16 @@ export class RelayClient {
     }
   }
 
+  async revokeSelf(deviceToken: string): Promise<void> {
+    if (deviceToken.length === 0 || deviceToken.trim() !== deviceToken) {
+      throw new RelayClientError("invalid_request", "The device credential is invalid.");
+    }
+    const response = await this.#request("/api/v1/devices/self", "DELETE", undefined, deviceToken);
+    if (response.status !== 204) {
+      throw this.#responseError(response);
+    }
+  }
+
   async #waitWithinPairingDeadline(delayMilliseconds: number, expiresAt: number): Promise<void> {
     const remaining = expiresAt - this.#now().getTime();
     if (remaining <= 0) {
@@ -184,7 +194,7 @@ export class RelayClient {
 
   async #request(
     path: string,
-    method: "GET" | "POST",
+    method: "GET" | "POST" | "DELETE",
     body?: unknown,
     deviceToken?: string,
   ): Promise<RelayResponse> {

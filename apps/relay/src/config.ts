@@ -4,30 +4,26 @@ import packageMetadata from "../package.json" with { type: "json" };
 export const QUOTA_RELAY_VERSION = packageMetadata.version;
 
 export function managedRelayInfo(instanceId: string): RelayInfo {
-  return relayInfo(instanceId, "managed", false);
+  return relayInfo(instanceId, "managed", true);
 }
 
 export function selfHostedRelayInfo(instanceId: string): RelayInfo {
-  return relayInfo(instanceId, "self_hosted", true);
+  return relayInfo(instanceId, "self_hosted", false);
 }
 
-function relayInfo(
-  instanceId: string,
-  mode: RelayInfo["mode"],
-  ownerBootstrapEnabled: boolean,
-): RelayInfo {
+function relayInfo(instanceId: string, mode: RelayInfo["mode"], multiTenant: boolean): RelayInfo {
   return {
     instance_id: instanceId,
     mode,
     version: QUOTA_RELAY_VERSION,
     api_versions: [1],
-    auth_methods: ownerBootstrapEnabled ? ["bearer"] : [],
+    auth_methods: ["bearer"],
     capabilities: {
       realtime: false,
-      persistent_snapshots: ownerBootstrapEnabled,
-      instant_device_revocation: ownerBootstrapEnabled,
+      persistent_snapshots: true,
+      instant_device_revocation: true,
       history: false,
-      multi_tenant: false,
+      multi_tenant: multiTenant,
     },
   };
 }

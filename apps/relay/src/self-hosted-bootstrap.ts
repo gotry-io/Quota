@@ -1,33 +1,33 @@
-import { OWNER_AUTH_SCOPES, type RelayState } from "@gotry-io/relay-core";
+import { CONTROLLER_AUTH_SCOPES, type RelayState } from "@gotry-io/relay-core";
 import { sha256Hex } from "./security.ts";
 
-export const SELF_HOSTED_OWNER_ID = "self-hosted-owner";
-export const SELF_HOSTED_OWNER_SESSION_ID = "self-hosted-owner-bootstrap";
-export const SELF_HOSTED_OWNER_SESSION_EXPIRES_AT = "9999-12-31T23:59:59.999Z";
+export const SELF_HOSTED_CONTROLLER_ID = "self-hosted-controller";
+export const SELF_HOSTED_CONTROLLER_SESSION_ID = "self-hosted-controller-bootstrap";
+export const SELF_HOSTED_CONTROLLER_SESSION_EXPIRES_AT = "9999-12-31T23:59:59.999Z";
 
-export function requireSelfHostedOwnerToken(value: string | undefined): string {
+export function requireSelfHostedControllerToken(value: string | undefined): string {
   if (!value || [...value].length < 32 || value.trim() !== value) {
     throw new Error(
-      "QUOTA_RELAY_OWNER_TOKEN must be set to at least 32 characters without surrounding whitespace.",
+      "QUOTA_RELAY_CONTROLLER_TOKEN must be set to at least 32 characters without surrounding whitespace.",
     );
   }
   return value;
 }
 
-export async function bootstrapSelfHostedOwner(
+export async function bootstrapSelfHostedController(
   state: RelayState,
-  ownerToken: string,
+  controllerToken: string,
   startedAt: Date,
 ): Promise<void> {
-  const tokenHash = await sha256Hex(ownerToken);
+  const tokenHash = await sha256Hex(controllerToken);
   const createdAt = startedAt.toISOString();
-  await state.ensureOwner(SELF_HOSTED_OWNER_ID, createdAt);
-  await state.replaceAuthSession({
-    id: SELF_HOSTED_OWNER_SESSION_ID,
-    owner_id: SELF_HOSTED_OWNER_ID,
+  await state.ensureController(SELF_HOSTED_CONTROLLER_ID, "permanent", createdAt);
+  await state.replaceControllerSession({
+    id: SELF_HOSTED_CONTROLLER_SESSION_ID,
+    controller_id: SELF_HOSTED_CONTROLLER_ID,
     token_hash: tokenHash,
-    scopes: [...OWNER_AUTH_SCOPES],
-    expires_at: SELF_HOSTED_OWNER_SESSION_EXPIRES_AT,
+    scopes: [...CONTROLLER_AUTH_SCOPES],
+    expires_at: SELF_HOSTED_CONTROLLER_SESSION_EXPIRES_AT,
     created_at: createdAt,
   });
 }

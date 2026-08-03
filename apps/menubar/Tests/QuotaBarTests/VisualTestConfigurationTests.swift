@@ -178,8 +178,10 @@
     let encodedProfiles = try QuotaWireCodec.makeEncoder().encode(relayModel.profiles)
     let encodedText = try #require(String(data: encodedProfiles, encoding: .utf8)).lowercased()
 
-    #expect(profile.name == "Studio Relay")
-    #expect(profile.baseURL.absoluteString == "https://relay.visual.example")
+    #expect(profile.name == "Quota Relay")
+    #expect(profile.baseURL.absoluteString == "https://quota.gotry.io")
+    #expect(profile.mode == .managed)
+    #expect(profile.capabilities.multiTenant)
     #expect(state.observations.count == 2)
     #expect(state.devices.map(\.displayName) == ["Studio Mac", "Old build host"])
     #expect(state.lastSuccessfulRefreshAt == referenceDate.addingTimeInterval(-45))

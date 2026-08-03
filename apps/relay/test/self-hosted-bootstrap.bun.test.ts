@@ -1,25 +1,25 @@
 import { Database } from "bun:sqlite";
-import type { RelayInfo } from "@gotry-io/quota-protocol";
 import { describe, expect, it } from "bun:test";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { RelayInfo } from "@gotry-io/quota-protocol";
 import { createRelayApp } from "../src/app.ts";
 import { selfHostedRelayInfo } from "../src/config.ts";
-import {
-  bootstrapSelfHostedOwner,
-  requireSelfHostedOwnerToken,
-  SELF_HOSTED_OWNER_ID,
-  SELF_HOSTED_OWNER_SESSION_EXPIRES_AT,
-  SELF_HOSTED_OWNER_SESSION_ID,
-} from "../src/self-hosted-bootstrap.ts";
 import { sha256Hex } from "../src/security.ts";
+import {
+  bootstrapSelfHostedController,
+  requireSelfHostedControllerToken,
+  SELF_HOSTED_CONTROLLER_ID,
+  SELF_HOSTED_CONTROLLER_SESSION_EXPIRES_AT,
+  SELF_HOSTED_CONTROLLER_SESSION_ID,
+} from "../src/self-hosted-bootstrap.ts";
 import { SQLiteRelayState } from "../src/state/sqlite-state.ts";
 
-const firstOwnerToken = "synthetic-self-hosted-owner-token-0001";
-const rotatedOwnerToken = "synthetic-self-hosted-owner-token-0002";
+const firstControllerToken = "synthetic-self-hosted-controller-token-0001";
+const rotatedControllerToken = "synthetic-self-hosted-controller-token-0002";
 
-describe("self-hosted owner bootstrap", () => {
+describe("self-hosted controller bootstrap", () => {
   it("rejects missing, weak, and surrounding-whitespace tokens without echoing them", () => {
     const invalidTokens = [
       undefined,
@@ -33,54 +33,54 @@ describe("self-hosted owner bootstrap", () => {
     for (const invalidToken of invalidTokens) {
       let error: unknown;
       try {
-        requireSelfHostedOwnerToken(invalidToken);
+        requireSelfHostedControllerToken(invalidToken);
       } catch (caught) {
         error = caught;
       }
       expect(error).toBeInstanceOf(Error);
       const message = (error as Error).message;
-      expect(message).toContain("QUOTA_RELAY_OWNER_TOKEN");
+      expect(message).toContain("QUOTA_RELAY_CONTROLLER_TOKEN");
       if (invalidToken) {
         expect(message).not.toContain(invalidToken);
       }
     }
 
-    expect(requireSelfHostedOwnerToken("x".repeat(32))).toBe("x".repeat(32));
+    expect(requireSelfHostedControllerToken("x".repeat(32))).toBe("x".repeat(32));
   });
 
   it("stores one hash-only scoped session, supports idempotent restart and rotates immediately", async () => {
-    const directory = mkdtempSync(join(tmpdir(), "quota-relay-owner-bootstrap-test-"));
+    const directory = mkdtempSync(join(tmpdir(), "quota-relay-controller-bootstrap-test-"));
     const databasePath = join(directory, "relay.db");
     const state = new SQLiteRelayState(databasePath);
     await state.initialize();
 
-    await bootstrapSelfHostedOwner(
+    await bootstrapSelfHostedController(
       state,
-      requireSelfHostedOwnerToken(firstOwnerToken),
+      requireSelfHostedControllerToken(firstControllerToken),
       new Date("2026-08-03T01:00:00Z"),
     );
-    const firstTokenHash = await sha256Hex(firstOwnerToken);
+    const firstTokenHash = await sha256Hex(firstControllerToken);
     expect(
-      await state.getActiveAuthSessionByTokenHash(firstTokenHash, "2026-08-03T01:01:00Z"),
+      await state.getActiveControllerSessionByTokenHash(firstTokenHash, "2026-08-03T01:01:00Z"),
     ).toEqual({
-      owner_id: SELF_HOSTED_OWNER_ID,
+      controller_id: SELF_HOSTED_CONTROLLER_ID,
       scopes: ["quota:read", "device:manage"],
     });
 
     const mutator = new Database(databasePath, { strict: true });
     mutator
       .query(
-        `UPDATE auth_sessions
+        `UPDATE controller_sessions
          SET scopes_json = '[]', expires_at = '2026-08-03T01:30:00Z',
              revoked_at = '2026-08-03T01:15:00Z'
          WHERE id = ?1`,
       )
-      .run(SELF_HOSTED_OWNER_SESSION_ID);
+      .run(SELF_HOSTED_CONTROLLER_SESSION_ID);
     mutator.close();
 
-    await bootstrapSelfHostedOwner(
+    await bootstrapSelfHostedController(
       state,
-      requireSelfHostedOwnerToken(firstOwnerToken),
+      requireSelfHostedControllerToken(firstControllerToken),
       new Date("2026-08-03T02:00:00Z"),
     );
 
@@ -89,7 +89,7 @@ describe("self-hosted owner bootstrap", () => {
       .query<
         {
           id: string;
-          owner_id: string;
+          controller_id: string;
           token_hash: string;
           scopes_json: string;
           expires_at: string;
@@ -98,49 +98,50 @@ describe("self-hosted owner bootstrap", () => {
         },
         []
       >(
-        `SELECT id, owner_id, token_hash, scopes_json, expires_at, revoked_at, created_at
-         FROM auth_sessions`,
+        `SELECT id, controller_id, token_hash, scopes_json, expires_at, revoked_at, created_at
+         FROM controller_sessions`,
       )
       .get();
     expect(
-      database.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM auth_sessions").get()
-        ?.count,
+      database
+        .query<{ count: number }, []>("SELECT COUNT(*) AS count FROM controller_sessions")
+        .get()?.count,
     ).toBe(1);
     expect(row).toEqual({
-      id: SELF_HOSTED_OWNER_SESSION_ID,
-      owner_id: SELF_HOSTED_OWNER_ID,
+      id: SELF_HOSTED_CONTROLLER_SESSION_ID,
+      controller_id: SELF_HOSTED_CONTROLLER_ID,
       token_hash: firstTokenHash,
       scopes_json: '["quota:read","device:manage"]',
-      expires_at: SELF_HOSTED_OWNER_SESSION_EXPIRES_AT,
+      expires_at: SELF_HOSTED_CONTROLLER_SESSION_EXPIRES_AT,
       revoked_at: null,
       created_at: "2026-08-03T01:00:00.000Z",
     });
-    expect(row?.token_hash).not.toBe(firstOwnerToken);
+    expect(row?.token_hash).not.toBe(firstControllerToken);
     database.close();
 
-    await bootstrapSelfHostedOwner(
+    await bootstrapSelfHostedController(
       state,
-      requireSelfHostedOwnerToken(rotatedOwnerToken),
+      requireSelfHostedControllerToken(rotatedControllerToken),
       new Date("2026-08-03T03:00:00Z"),
     );
-    const rotatedTokenHash = await sha256Hex(rotatedOwnerToken);
+    const rotatedTokenHash = await sha256Hex(rotatedControllerToken);
     expect(
-      await state.getActiveAuthSessionByTokenHash(firstTokenHash, "2026-08-03T03:01:00Z"),
+      await state.getActiveControllerSessionByTokenHash(firstTokenHash, "2026-08-03T03:01:00Z"),
     ).toBeNull();
     expect(
-      await state.getActiveAuthSessionByTokenHash(rotatedTokenHash, "2026-08-03T03:01:00Z"),
+      await state.getActiveControllerSessionByTokenHash(rotatedTokenHash, "2026-08-03T03:01:00Z"),
     ).toEqual({
-      owner_id: SELF_HOSTED_OWNER_ID,
+      controller_id: SELF_HOSTED_CONTROLLER_ID,
       scopes: ["quota:read", "device:manage"],
     });
 
     const app = createRelayApp({ state, relayInfo: selfHostedRelayInfo("self-hosted-test") });
     const oldCredentialResponse = await app.request("/api/v1/devices", {
-      headers: { Authorization: `Bearer ${firstOwnerToken}` },
+      headers: { Authorization: `Bearer ${firstControllerToken}` },
     });
     expect(oldCredentialResponse.status).toBe(401);
     const rotatedCredentialResponse = await app.request("/api/v1/devices", {
-      headers: { Authorization: `Bearer ${rotatedOwnerToken}` },
+      headers: { Authorization: `Bearer ${rotatedControllerToken}` },
     });
     expect(rotatedCredentialResponse.status).toBe(200);
 
@@ -161,7 +162,7 @@ describe("self-hosted owner bootstrap", () => {
       },
     });
     const databaseBytes = readFileSync(databasePath);
-    expect(databaseBytes.includes(firstOwnerToken)).toBe(false);
-    expect(databaseBytes.includes(rotatedOwnerToken)).toBe(false);
+    expect(databaseBytes.includes(firstControllerToken)).toBe(false);
+    expect(databaseBytes.includes(rotatedControllerToken)).toBe(false);
   });
 });

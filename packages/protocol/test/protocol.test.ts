@@ -3,8 +3,10 @@ import { basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
+  ControllerCreateResponseSchema,
+  ControllerSnapshotListResponseSchema,
   DeviceListResponseSchema,
-  OwnerSnapshotListResponseSchema,
+  MAXIMUM_SNAPSHOTS_PER_ENVELOPE,
   PairingApprovalRequestSchema,
   PairingCreateRequestSchema,
   PairingCreateResponseSchema,
@@ -19,6 +21,21 @@ import {
 } from "../src/index.ts";
 
 describe("quota protocol", () => {
+  it("validates the one-time anonymous controller credential response", () => {
+    expect(
+      ControllerCreateResponseSchema.safeParse({
+        controller_token: "synthetic-controller-token",
+      }).success,
+    ).toBe(true);
+    expect(
+      ControllerCreateResponseSchema.safeParse({
+        controller_token: "synthetic-controller-token",
+        controller_id: "controller_01",
+      }).success,
+    ).toBe(false);
+    expect(ControllerCreateResponseSchema.safeParse({ controller_token: "" }).success).toBe(false);
+  });
+
   it("accepts a normalized quota envelope", () => {
     const result = QuotaSnapshotEnvelopeSchema.safeParse({
       schema_version: 1,
@@ -49,6 +66,24 @@ describe("quota protocol", () => {
     });
 
     expect(result.success).toBe(true);
+  });
+
+  it("bounds a snapshot envelope to the D1 request query budget", () => {
+    const envelope = envelopeWithAccount({ fingerprint: "account_01" });
+    const item = envelope.snapshots[0];
+    expect(item).toBeDefined();
+    expect(
+      QuotaSnapshotEnvelopeSchema.safeParse({
+        ...envelope,
+        snapshots: Array.from({ length: MAXIMUM_SNAPSHOTS_PER_ENVELOPE }, () => item),
+      }).success,
+    ).toBe(true);
+    expect(
+      QuotaSnapshotEnvelopeSchema.safeParse({
+        ...envelope,
+        snapshots: Array.from({ length: MAXIMUM_SNAPSHOTS_PER_ENVELOPE + 1 }, () => item),
+      }).success,
+    ).toBe(false);
   });
 
   it("accepts a collection report with mixed outcomes", () => {
@@ -267,9 +302,9 @@ describe("quota protocol", () => {
     ).toBe(false);
   });
 
-  it("validates owner observations and device lists without leaking owner fields", () => {
+  it("validates controller observations and device lists without leaking controller fields", () => {
     expect(
-      OwnerSnapshotListResponseSchema.safeParse({
+      ControllerSnapshotListResponseSchema.safeParse({
         observations: [
           {
             device_id: "device_01",
@@ -282,7 +317,7 @@ describe("quota protocol", () => {
       }).success,
     ).toBe(true);
     expect(
-      OwnerSnapshotListResponseSchema.safeParse({
+      ControllerSnapshotListResponseSchema.safeParse({
         observations: [
           {
             device_id: "device_01",
@@ -315,7 +350,7 @@ describe("quota protocol", () => {
         devices: [
           {
             device_id: "device_01",
-            owner_id: "owner_01",
+            controller_id: "controller_01",
             display_name: "Kitchen Mac",
             created_at: "2026-08-02T12:00:00Z",
             last_seen_at: null,

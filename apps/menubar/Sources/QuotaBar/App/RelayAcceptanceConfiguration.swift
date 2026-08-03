@@ -5,8 +5,14 @@
   struct RelayAcceptanceConfiguration {
     static let flag = "--relay-acceptance-origin"
 
+    enum Mode: String {
+      case selfHosted = "self-hosted"
+      case managed
+    }
+
+    let mode: Mode
     let relayOrigin: String
-    let ownerTokenPath: URL
+    let controllerTokenPath: URL?
     let coordinationDirectory: URL
     let defaultsSuite: String
     let keychainService: String
@@ -14,11 +20,10 @@
 
     init?(arguments: [String]) {
       guard
-        let relayOrigin = Self.value(for: Self.flag, in: arguments),
-        let ownerTokenPath = Self.absolutePath(
-          for: "--relay-acceptance-owner-token-file",
-          in: arguments
-        ),
+        let relayOriginInput = Self.value(for: Self.flag, in: arguments),
+        let relayURL = try? RelayOrigin.canonicalURL(from: relayOriginInput),
+        let mode = Self.value(for: "--relay-acceptance-mode", in: arguments)
+          .flatMap(Mode.init(rawValue:)),
         let coordinationDirectory = Self.absolutePath(
           for: "--relay-acceptance-directory",
           in: arguments
@@ -29,14 +34,21 @@
           for: "--relay-acceptance-keychain-service",
           in: arguments
         ),
-        keychainService.hasPrefix("io.gotry.quotabar.relay-owner.e2e."),
+        keychainService.hasPrefix("io.gotry.quotabar.relay-controller.e2e."),
         let screenshotOutputPath = Self.absolutePath(for: "--screenshot-output", in: arguments)
       else {
         return nil
       }
 
-      self.relayOrigin = relayOrigin
-      self.ownerTokenPath = ownerTokenPath
+      let controllerTokenPath = Self.absolutePath(
+        for: "--relay-acceptance-controller-token-file",
+        in: arguments
+      )
+      guard mode == .managed || controllerTokenPath != nil else { return nil }
+
+      self.mode = mode
+      self.relayOrigin = relayURL.absoluteString
+      self.controllerTokenPath = controllerTokenPath
       self.coordinationDirectory = coordinationDirectory
       self.defaultsSuite = defaultsSuite
       self.keychainService = keychainService
@@ -53,10 +65,21 @@
 
     @MainActor
     func makeRelayStateModel() -> RelayStateModel {
-      RelayStateModel(
+      let managedRelayConfiguration: ManagedRelayConfiguration? =
+        switch mode {
+        case .selfHosted: nil
+        case .managed:
+          ManagedRelayConfiguration(
+            name: "E2E Managed",
+            baseURL: URL(string: relayOrigin)!
+          )
+        }
+      return RelayStateModel(
         client: RelayClient(transport: URLSessionRelayHTTPTransport()),
         profileStore: RelayProfileStore(defaults: defaults),
-        credentialStore: credentialStore
+        credentialStore: credentialStore,
+        managedEnrollmentStore: ManagedRelayEnrollmentStore(defaults: defaults),
+        managedRelayConfiguration: managedRelayConfiguration
       )
     }
 
@@ -67,8 +90,8 @@
       return defaults
     }
 
-    var credentialStore: RelayOwnerCredentialStore {
-      RelayOwnerCredentialStore(
+    var credentialStore: RelayControllerCredentialStore {
+      RelayControllerCredentialStore(
         operations: SystemRelayKeychainOperations(),
         service: keychainService
       )
@@ -115,29 +138,52 @@
           to: configuration.file("app.pid")
         )
       } catch {
-        fail(configuration: configuration, model: model, profileID: nil)
+        Task { @MainActor in
+          await fail(configuration: configuration, model: model, profileID: nil)
+        }
         return
       }
 
       Task { @MainActor in
         var profileID: UUID?
         do {
-          let ownerToken = try readSmallText(from: configuration.ownerTokenPath, limit: 4_096)
-          let profile = try await model.relayStateModel.addSelfHostedProfile(
-            name: "E2E Self-Hosted",
-            origin: configuration.relayOrigin,
-            ownerBearer: ownerToken
-          )
+          let profile: RelayProfile
+          switch configuration.mode {
+          case .selfHosted:
+            guard let controllerTokenPath = configuration.controllerTokenPath else {
+              throw RelayAcceptanceError.invalidInput
+            }
+            let controllerToken = try readSmallText(from: controllerTokenPath, limit: 4_096)
+            profile = try await model.relayStateModel.addSelfHostedProfile(
+              name: "E2E Self-Hosted",
+              origin: configuration.relayOrigin,
+              controllerBearer: controllerToken
+            )
+            try FileManager.default.removeItem(at: controllerTokenPath)
+          case .managed:
+            await model.relayStateModel.ensureManagedControllerProfile()
+            guard model.relayStateModel.profiles.count == 1,
+              let managedProfile = model.relayStateModel.profiles.first,
+              managedProfile.mode == .managed
+            else {
+              throw RelayAcceptanceError.validationFailed
+            }
+            profile = managedProfile
+          }
           profileID = profile.id
-          try FileManager.default.removeItem(at: configuration.ownerTokenPath)
 
-          guard try configuration.credentialStore.load(reference: profile.credentialReference)
-            == ownerToken
-          else {
+          let controllerToken = try configuration.credentialStore.load(
+            reference: profile.credentialReference
+          )
+          guard !controllerToken.isEmpty else {
             throw RelayAcceptanceError.validationFailed
           }
           try writeJSON(
-            ["profile_id": profile.id.uuidString, "relay_origin": profile.baseURL.absoluteString],
+            [
+              "mode": configuration.mode.rawValue,
+              "profile_id": profile.id.uuidString,
+              "relay_origin": profile.baseURL.absoluteString,
+            ],
             to: configuration.file("ready.json")
           )
 
@@ -168,7 +214,7 @@
           let restoredModel = configuration.makeRelayStateModel()
           guard restoredModel.profiles.map(\.id) == [profile.id],
             try configuration.credentialStore.load(reference: profile.credentialReference)
-              == ownerToken
+              == controllerToken
           else {
             throw RelayAcceptanceError.validationFailed
           }
@@ -198,9 +244,10 @@
             profileID: profile.id,
             deviceID: deviceID
           )
-          guard model.relayStateModel.state(for: profile.id)?.devices.contains(where: {
-            $0.deviceID == deviceID && $0.revokedAt != nil
-          }) == true
+          guard
+            model.relayStateModel.state(for: profile.id)?.devices.contains(where: {
+              $0.deviceID == deviceID && $0.revokedAt != nil
+            }) == true
           else {
             throw RelayAcceptanceError.validationFailed
           }
@@ -210,22 +257,37 @@
             configuration.file("rejection-confirmed"),
             cancellationPath: configuration.file("cancel")
           )
-          try model.relayStateModel.deleteProfile(profile.id)
+          try await model.relayStateModel.deleteProfile(profile.id)
           profileID = nil
+          if configuration.mode == .managed {
+            do {
+              _ = try await RelayClient(transport: URLSessionRelayHTTPTransport())
+                .fetchLatestSnapshots(
+                  profile: profile,
+                  controllerBearer: controllerToken
+                )
+              throw RelayAcceptanceError.validationFailed
+            } catch let error as RelayClientError where error.category == .authentication {
+              // The deleted managed controller token must no longer authorize remote reads.
+            }
+          }
           guard configuration.makeRelayStateModel().profiles.isEmpty else {
             throw RelayAcceptanceError.validationFailed
           }
           do {
             _ = try configuration.credentialStore.load(reference: profile.credentialReference)
             throw RelayAcceptanceError.validationFailed
-          } catch RelayOwnerCredentialStoreError.missingCredential {
+          } catch RelayControllerCredentialStoreError.missingCredential {
             // Expected after deleting the profile.
           }
           configuration.defaults.removePersistentDomain(forName: configuration.defaultsSuite)
-          try writeJSON(["cleaned": true], to: configuration.file("completed.json"))
+          try writeJSON(
+            ["cleaned": true, "mode": configuration.mode.rawValue],
+            to: configuration.file("completed.json")
+          )
           NSApplication.shared.terminate(nil)
         } catch {
-          fail(configuration: configuration, model: model, profileID: profileID)
+          await fail(configuration: configuration, model: model, profileID: profileID)
         }
       }
     }
@@ -252,9 +314,10 @@
         throw RelayAcceptanceError.validationFailed
       }
 
-      guard case .content(let providers, let warning) = model.overviewState(
-        enabledProviders: [.codex]
-      ), warning == nil,
+      guard
+        case .content(let providers, let warning) = model.overviewState(
+          enabledProviders: [.codex]
+        ), warning == nil,
         let account = providers.first?.accounts.first,
         account.identity.fingerprint == "e2e-codex-account",
         account.sourceSummary == "Remote",
@@ -279,15 +342,17 @@
       configuration: RelayAcceptanceConfiguration,
       model: MenuBarViewModel,
       profileID: UUID?
-    ) {
+    ) async {
       if let profileID {
-        try? model.relayStateModel.deleteProfile(profileID)
+        try? await model.relayStateModel.deleteProfile(profileID)
         try? configuration.credentialStore.delete(
-          reference: RelayOwnerCredentialStore.reference(for: profileID)
+          reference: RelayControllerCredentialStore.reference(for: profileID)
         )
       }
       configuration.defaults.removePersistentDomain(forName: configuration.defaultsSuite)
-      try? FileManager.default.removeItem(at: configuration.ownerTokenPath)
+      if let controllerTokenPath = configuration.controllerTokenPath {
+        try? FileManager.default.removeItem(at: controllerTokenPath)
+      }
       try? writeText("relay acceptance failed", to: configuration.file("failed"))
       fputs("relay acceptance failed\n", stderr)
       NSApplication.shared.terminate(nil)

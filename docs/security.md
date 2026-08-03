@@ -21,23 +21,30 @@ data requirements.
 - QuotaBar may cache one last normalized local collection report in its application preferences for
   immediate startup. The cache may contain masked labels and account fingerprints, but never raw
   provider responses, credential payloads, access tokens, refresh tokens, cookies, or headers.
-- Store each QuotaBar Relay owner bearer only in Keychain under the fixed
-  `io.gotry.quotabar.relay-owner` service with
+- Store each QuotaBar Relay controller bearer only in Keychain under the fixed
+  `io.gotry.quotabar.relay-controller` service with
   `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`. Relay profile metadata in UserDefaults stores
   only its derived Keychain reference, never the bearer. Store edge credentials in the platform
   credential store or a user-only (`0600`) file.
-- QuotaBar Settings accepts an owner bearer only through transient `SecureField` state. It must
-  canonicalize and verify the Relay through discovery before moving the bearer into Keychain, then
-  clear the transient value after success. The bearer must never enter profile metadata or other
-  application preferences.
+- QuotaBar registers its anonymous managed controller without an account and moves the returned
+  bearer directly into Keychain. Self-hosted Settings accepts a controller bearer only through
+  transient `SecureField` state. It must canonicalize and verify the Relay through discovery before
+  moving the bearer into Keychain, then clear the transient value after success. The bearer must
+  never enter profile metadata or other application preferences.
 - Relay setup failures, safe error presentation, fixtures, logs, and screenshots must never echo or
-  persist the owner bearer or an Authorization header.
-- The `VISUAL_TEST` Relay owner-path acceptance flow uses a random Keychain service under the
-  `io.gotry.quotabar.relay-owner.e2e.*` prefix, a unique UserDefaults suite, a `0600` owner-token
-  handoff file, loopback networking, and isolated CLI storage. It must delete the handoff immediately
-  after Keychain persistence and remove the profile, Keychain item, defaults domain, CLI credential,
-  SQLite database, and child processes on completion or cooperative cancellation. Production builds
-  continue to use only the fixed Keychain service above.
+  persist a controller bearer or an Authorization header.
+- Removing a managed profile or choosing Delete All QuotaBar Data deletes its anonymous controller
+  remotely before deleting its local bearer whenever the Relay is reachable; controller deletion
+  cascades its devices and snapshots. QuotaBar deletes orphaned items under its controller Keychain
+  service at startup. It retains only a non-secret managed-enrollment opt-out so restarting the app
+  cannot recreate a controller after an explicit deletion. Ordinary Finder app removal has no
+  uninstall callback, so guaranteed credential cleanup remains an explicit in-app operation.
+- The `VISUAL_TEST` Relay controller-path acceptance flow uses a random Keychain service under the
+  `io.gotry.quotabar.relay-controller.e2e.*` prefix, a unique UserDefaults suite, a `0600` controller
+  token handoff file, loopback networking, and isolated CLI storage. It must delete the handoff
+  immediately after Keychain persistence and remove the profile, Keychain item, defaults domain,
+  CLI credential, SQLite database, and child processes on completion or cooperative cancellation.
+  Production builds continue to use only the fixed Keychain service above.
 - Only the provider-specific, stable quota-owner identifiers documented in
   [`provider-collection.md`](provider-collection.md) may produce a globally scoped account
   fingerprint. Namespace the identifier type before hashing it.
@@ -68,18 +75,18 @@ data requirements.
 
 - Device enrollment follows
   [`decisions/0002-relay-device-code-pairing.md`](decisions/0002-relay-device-code-pairing.md).
-- Do not reuse user read credentials as device write credentials.
-- Owner bearer sessions may carry `quota:read` and `device:manage`; device bearer credentials carry
-  only `quota:write:self`. These are distinct credential classes, and a device credential may write
-  snapshots only for its own device ID.
+- Do not reuse controller read credentials as device write credentials.
+- Controller bearer credentials may carry `quota:read` and `device:manage`; device bearer
+  credentials carry only `quota:write:self`. These are distinct credential classes: a device may
+  write snapshots only for its own device ID and may revoke only itself.
 - Store each device credential together with its Relay URL and instance ID; never send it to a
   different Relay.
 - Before collection or authenticated upload, QuotaCLI discovers the credential's saved Relay URL
   without Authorization and requires the advertised instance ID to match the saved instance ID. A
   mismatch sends no device credential and starts no provider collection.
-- Before every authenticated owner request, QuotaBar discovers the profile's canonical Relay origin
-  without Authorization and requires the advertised instance ID to match the bound profile. It
-  refuses redirects and sends no owner bearer after a mismatch.
+- Before every authenticated controller request, QuotaBar discovers the profile's canonical Relay
+  origin without Authorization and requires the advertised instance ID to match the bound profile.
+  It refuses redirects and sends no controller bearer after a mismatch.
 - QuotaCLI's file-backed edge credential lives under `XDG_CONFIG_HOME` or the user's `.config`
   directory. Its containing QuotaCLI directory is `0700`, its credential file is `0600`, writes use
   a same-directory temporary file and atomic rename, and POSIX reads reject group/other-accessible
@@ -92,21 +99,35 @@ data requirements.
 - QuotaCLI persists the next device snapshot sequence only after Relay acceptance. Retrying after a
   local persistence failure reuses the prior sequence and relies on Relay's idempotent `204`
   response for that device sequence.
-- Local unpairing first stops the macOS reporting service when present, then deletes only the local
-  credential. It must state that the owner still needs to revoke the remote device through QuotaBar
-  or Relay device management.
-- Persist only hashes of device and owner-session bearer tokens and pairing device/user codes, never
-  their plaintext values. Return a generated device bearer credential only once when pairing is
-  consumed.
-- A self-hosted Relay must receive `QUOTA_RELAY_OWNER_TOKEN` through its deployment environment and
-  fail startup when it is missing, shorter than 32 characters, or surrounded by whitespace. Hash it
-  before persistence, never include it in logs or errors, and replace the fixed bootstrap session on
-  every startup so rotation immediately invalidates the prior bearer.
+- Unpairing first stops the macOS reporting service when present, verifies the bound Relay instance,
+  and uses the device bearer to revoke that device remotely. It deletes the local credential only
+  after the Relay returns the idempotent successful self-revocation response. A token hash belonging
+  to that already-revoked device receives the same success; an unknown or rejected credential does
+  not prove deletion and remains local for retry or explicit local-only cleanup.
+- Persist only hashes of device and controller bearer tokens and pairing device/user codes, never
+  their plaintext values. Return a generated controller bearer only once at managed registration
+  and a generated device bearer only once when pairing is consumed.
+- A self-hosted Relay must receive `QUOTA_RELAY_CONTROLLER_TOKEN` through its deployment environment
+  and fail startup when it is missing, shorter than 32 characters, or surrounded by whitespace.
+  Hash it before persistence, never include it in logs or errors, and replace the fixed controller
+  credential on every startup so rotation immediately invalidates the prior bearer.
 - Persist rate limits as fixed-window counters keyed by hashes of their action and subject. Do not
-  retain the raw rate-limit subject, and delete expired counters while consuming new requests.
-- Store only normalized snapshots, credential hashes, required ownership and lifecycle metadata, and
-  bounded rate-limit counters in D1/SQLite.
-- Keep D1 migrations explicit and review changes that broaden retained user data.
+  retain the raw rate-limit subject, and delete expired counters while consuming new requests. The
+  managed runtime derives anonymous-client subjects only from Cloudflare's trusted connecting-IP
+  metadata; the self-hosted runtime does not trust forwarding headers.
+- Revoke devices after 30 days without a successful report. Enforce inactivity during device
+  authorization as well as scheduled maintenance so an expired token cannot regain activity.
+- Delete a managed controller once it is at least 30 days old and none of its devices has been active
+  during that window. Cascade its sessions, devices, snapshots, and associated pairing state. Never
+  apply this garbage collection to the permanent self-hosted controller. Delete expired pairing
+  sessions after a 24-hour diagnostic retention window.
+- Device revocation prevents further reads and writes but does not delete retained normalized
+  snapshots. Deleting a managed controller is the authenticated operation that cascades its devices
+  and snapshots; local-only cleanup cannot make that guarantee.
+- Store only normalized snapshots, credential hashes, required controller and lifecycle metadata,
+  and bounded rate-limit counters in D1/SQLite. Accept at most 32 observations in one snapshot
+  envelope. Do not retain account identities or external subjects.
+- Keep D1 migrations explicit and review changes that broaden retained data.
 - A self-hosted Relay requires a persistent SQLite volume and fails closed when storage cannot open.
 
 ## Failure behavior

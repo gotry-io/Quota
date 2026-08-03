@@ -17,7 +17,7 @@ struct MenuBarViewModelRelayTests {
     )
     let client = OverviewRelayClient(
       snapshotResults: [
-        .success(OwnerSnapshotListResponse(observations: [
+        .success(ControllerSnapshotListResponse(observations: [
           try overviewObservation(deviceID: "device-a", snapshot: remoteSnapshot)
         ]))
       ]
@@ -62,7 +62,7 @@ struct MenuBarViewModelRelayTests {
     let observedAt = overviewNow.addingTimeInterval(-10)
     let client = OverviewRelayClient(
       snapshotResults: [
-        .success(OwnerSnapshotListResponse(observations: [
+        .success(ControllerSnapshotListResponse(observations: [
           try overviewObservation(
             deviceID: "device-a",
             snapshot: overviewSnapshot(
@@ -117,7 +117,7 @@ struct MenuBarViewModelRelayTests {
     let profile = try overviewProfile()
     let client = OverviewRelayClient(
       snapshotResults: [
-        .success(OwnerSnapshotListResponse(observations: [
+        .success(ControllerSnapshotListResponse(observations: [
           try overviewObservation(
             deviceID: "device-a",
             snapshot: overviewSnapshot(fingerprint: "account", scope: .source)
@@ -148,7 +148,7 @@ struct MenuBarViewModelRelayTests {
     let profile = try overviewProfile()
     let client = OverviewRelayClient(
       snapshotResults: [
-        .success(OwnerSnapshotListResponse(observations: [
+        .success(ControllerSnapshotListResponse(observations: [
           try overviewObservation(
             deviceID: "device-a",
             snapshot: overviewSnapshot(
@@ -194,7 +194,7 @@ struct MenuBarViewModelRelayTests {
     )
     let client = OverviewRelayClient(
       snapshotResults: [
-        .success(OwnerSnapshotListResponse(observations: [
+        .success(ControllerSnapshotListResponse(observations: [
           try overviewObservation(
             deviceID: "device-a",
             snapshot: overviewSnapshot(
@@ -277,7 +277,7 @@ struct MenuBarViewModelRelayTests {
     )
     let client = OverviewRelayClient(
       snapshotResults: [
-        .success(OwnerSnapshotListResponse(observations: [observation])),
+        .success(ControllerSnapshotListResponse(observations: [observation])),
         .failure(.unavailable),
       ]
     )
@@ -312,7 +312,7 @@ struct MenuBarViewModelRelayTests {
     let profile = try overviewProfile()
     let client = OverviewRelayClient(
       snapshotResults: [
-        .success(OwnerSnapshotListResponse(observations: [
+        .success(ControllerSnapshotListResponse(observations: [
           try overviewObservation(
             deviceID: "device-a",
             snapshot: overviewSnapshot(fingerprint: "remote-account", scope: .global)
@@ -403,11 +403,11 @@ private enum OverviewRelayCall: Equatable, Sendable {
   case devices
 }
 
-private actor OverviewRelayClient: RelayOwnerClientServing {
+private actor OverviewRelayClient: RelayControllerClientServing {
   private(set) var calls: [OverviewRelayCall] = []
-  private var snapshotResults: [Result<OwnerSnapshotListResponse, RelayClientError>]
+  private var snapshotResults: [Result<ControllerSnapshotListResponse, RelayClientError>]
 
-  init(snapshotResults: [Result<OwnerSnapshotListResponse, RelayClientError>] = []) {
+  init(snapshotResults: [Result<ControllerSnapshotListResponse, RelayClientError>] = []) {
     self.snapshotResults = snapshotResults
   }
 
@@ -415,10 +415,14 @@ private actor OverviewRelayClient: RelayOwnerClientServing {
     throw RelayClientError.unavailable
   }
 
+  func registerController(baseURL _: URL) async throws -> ControllerRegistrationResponse {
+    throw RelayClientError.unavailable
+  }
+
   func approvePairing(
     userCode _: String,
     profile _: RelayProfile,
-    ownerBearer _: String
+    controllerBearer _: String
   ) async throws {
     throw RelayClientError.unavailable
   }
@@ -426,25 +430,25 @@ private actor OverviewRelayClient: RelayOwnerClientServing {
   func denyPairing(
     userCode _: String,
     profile _: RelayProfile,
-    ownerBearer _: String
+    controllerBearer _: String
   ) async throws {
     throw RelayClientError.unavailable
   }
 
   func fetchLatestSnapshots(
     profile _: RelayProfile,
-    ownerBearer _: String
-  ) async throws -> OwnerSnapshotListResponse {
+    controllerBearer _: String
+  ) async throws -> ControllerSnapshotListResponse {
     calls.append(.snapshots)
     guard !snapshotResults.isEmpty else {
-      return OwnerSnapshotListResponse(observations: [])
+      return ControllerSnapshotListResponse(observations: [])
     }
     return try snapshotResults.removeFirst().get()
   }
 
   func listDevices(
     profile _: RelayProfile,
-    ownerBearer _: String
+    controllerBearer _: String
   ) async throws -> DeviceListResponse {
     calls.append(.devices)
     return DeviceListResponse(devices: [])
@@ -453,7 +457,14 @@ private actor OverviewRelayClient: RelayOwnerClientServing {
   func revokeDevice(
     deviceID _: String,
     profile _: RelayProfile,
-    ownerBearer _: String
+    controllerBearer _: String
+  ) async throws {
+    throw RelayClientError.unavailable
+  }
+
+  func deleteController(
+    profile _: RelayProfile,
+    controllerBearer _: String
   ) async throws {
     throw RelayClientError.unavailable
   }
@@ -474,14 +485,18 @@ private final class OverviewRelayProfileStore: RelayProfilePersisting {
   func save(_: [RelayProfile]) throws {}
 }
 
-private struct OverviewRelayCredentialStore: RelayOwnerCredentialPersisting {
+private struct OverviewRelayCredentialStore: RelayControllerCredentialPersisting {
   func save(_: String, reference _: String) throws {}
 
   func load(reference _: String) throws -> String {
-    "owner_synthetic"
+    "controller_synthetic"
   }
 
   func delete(reference _: String) throws {}
+
+  func reconcile(retaining _: Set<String>) throws {}
+
+  func deleteAll() throws {}
 }
 
 private struct OverviewLocalCollector: LocalQuotaCollecting {
@@ -536,7 +551,7 @@ private func overviewProfile(
 private func overviewObservation(
   deviceID: String,
   snapshot: QuotaSnapshot
-) throws -> OwnerSnapshotObservation {
+) throws -> ControllerSnapshotObservation {
   let snapshotData = try QuotaWireCodec.makeEncoder().encode(snapshot)
   let snapshotJSON = try #require(String(data: snapshotData, encoding: .utf8))
   let responseData = Data(
@@ -544,7 +559,7 @@ private func overviewObservation(
   )
   return try #require(
     QuotaWireCodec.makeDecoder()
-      .decode(OwnerSnapshotListResponse.self, from: responseData)
+      .decode(ControllerSnapshotListResponse.self, from: responseData)
       .observations.first
   )
 }

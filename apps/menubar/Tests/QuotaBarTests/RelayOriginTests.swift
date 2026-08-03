@@ -33,7 +33,7 @@ func canonicalizesRelayOrigins() throws {
     "https://quota.example.com/./",
     "https://quota.example.com/%2e/",
     "https://quota.example.com?",
-    "https://quota.example.com?mode=owner",
+    "https://quota.example.com?mode=controller",
     "https://quota.example.com#",
     "ftp://quota.example.com",
     "quota.example.com",

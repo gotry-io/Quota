@@ -1,14 +1,14 @@
 import {
-  OWNER_AUTH_SCOPES,
-  type AuthSessionRecord,
+  CONTROLLER_AUTH_SCOPES,
+  type ControllerAuthScope,
+  type ControllerSessionRecord,
   type PairingConsumeOutcome,
   type PairingDecisionOutcome,
   type RateLimitInput,
-  type OwnerAuthScope,
 } from "@gotry-io/relay-core";
 
-export interface AuthSessionRow {
-  owner_id: string;
+export interface ControllerSessionRow {
+  controller_id: string;
   scopes_json: string;
 }
 
@@ -24,33 +24,33 @@ export interface RateLimitRow {
   window_expires_at: string;
 }
 
-export function encodeAuthScopes(scopes: OwnerAuthScope[]): string {
+export function encodeControllerScopes(scopes: ControllerAuthScope[]): string {
   const uniqueScopes = [...new Set(scopes)];
   if (
     uniqueScopes.length !== scopes.length ||
-    uniqueScopes.some((scope) => !(OWNER_AUTH_SCOPES as readonly string[]).includes(scope))
+    uniqueScopes.some((scope) => !(CONTROLLER_AUTH_SCOPES as readonly string[]).includes(scope))
   ) {
-    throw new Error("Authentication session contains invalid scopes");
+    throw new Error("Controller session contains invalid scopes");
   }
   return JSON.stringify(uniqueScopes);
 }
 
-export function decodeAuthSession(row: AuthSessionRow): AuthSessionRecord {
+export function decodeControllerSession(row: ControllerSessionRow): ControllerSessionRecord {
   const value: unknown = JSON.parse(row.scopes_json);
   if (
     !Array.isArray(value) ||
     new Set(value).size !== value.length ||
     value.some(
       (scope) =>
-        typeof scope !== "string" || !(OWNER_AUTH_SCOPES as readonly string[]).includes(scope),
+        typeof scope !== "string" || !(CONTROLLER_AUTH_SCOPES as readonly string[]).includes(scope),
     )
   ) {
-    throw new Error("Authentication session contains invalid scopes");
+    throw new Error("Controller session contains invalid scopes");
   }
 
   return {
-    owner_id: row.owner_id,
-    scopes: value as OwnerAuthScope[],
+    controller_id: row.controller_id,
+    scopes: value as ControllerAuthScope[],
   };
 }
 

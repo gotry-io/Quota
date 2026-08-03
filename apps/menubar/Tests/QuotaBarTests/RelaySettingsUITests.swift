@@ -57,28 +57,28 @@ struct RelaySettingsUITests {
 
   @Test
   func addRelayFormCanonicalizesSafeFieldsWithoutChangingTheCredential() throws {
-    let ownerBearer = "synthetic_owner_credential_0123456789"
+    let controllerBearer = "synthetic_controller_credential_0123456789"
 
     let validated = try RelayAddFormValidation.validate(
       name: "  Home Relay  ",
       origin: "HTTPS://Relay.Example:443/",
-      ownerBearer: ownerBearer
+      controllerBearer: controllerBearer
     )
 
     #expect(validated.name == "Home Relay")
     #expect(validated.origin == "https://relay.example")
-    #expect(validated.ownerBearer == ownerBearer)
+    #expect(validated.controllerBearer == controllerBearer)
   }
 
   @Test
   func addRelayFormUsesFixedErrorsThatNeverEchoTheCredential() {
-    let ownerBearer = "  synthetic_owner_credential_0123456789  "
+    let controllerBearer = "  synthetic_controller_credential_0123456789  "
 
     do {
       _ = try RelayAddFormValidation.validate(
         name: "Home Relay",
         origin: "https://relay.example",
-        ownerBearer: ownerBearer
+        controllerBearer: controllerBearer
       )
       Issue.record("Expected credential validation to fail.")
     } catch {
@@ -86,17 +86,17 @@ struct RelaySettingsUITests {
         for: error,
         fallback: "Check the Relay details and try again."
       )
-      #expect(message == "Enter a valid Relay owner credential.")
-      #expect(message?.contains(ownerBearer) == false)
+      #expect(message == "Enter a valid Relay controller credential.")
+      #expect(message?.contains(controllerBearer) == false)
     }
 
-    let leakyError = LeakyError(value: ownerBearer)
+    let leakyError = LeakyError(value: controllerBearer)
     let fallback = RelaySettingsErrorPresentation.message(
       for: leakyError,
       fallback: "QuotaBar could not add the Relay."
     )
     #expect(fallback == "QuotaBar could not add the Relay.")
-    #expect(fallback?.contains(ownerBearer) == false)
+    #expect(fallback?.contains(controllerBearer) == false)
   }
 
   @Test

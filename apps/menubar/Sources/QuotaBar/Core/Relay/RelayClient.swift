@@ -54,9 +54,9 @@ enum RelayClientError: LocalizedError, Equatable, Sendable {
     case .instanceMismatch:
       "The Relay instance no longer matches this profile."
     case .credentialRejected:
-      "The Relay owner credential is no longer valid."
+      "The Relay controller credential is no longer valid."
     case .permissionDenied:
-      "The Relay owner credential lacks the required permission."
+      "The Relay controller credential lacks the required permission."
     case .resourceNotFound:
       "The requested Relay item was not found."
     case .pairingUnavailable:
@@ -115,56 +115,72 @@ actor RelayClient {
     return relayInfo
   }
 
+  func registerController(baseURL: URL) async throws -> ControllerRegistrationResponse {
+    let canonicalURL: URL
+    do {
+      canonicalURL = try RelayOrigin.canonicalURL(from: baseURL)
+    } catch {
+      throw RelayClientError.invalidRelayURL
+    }
+    let request = makeRequest(
+      url: canonicalURL.appending(path: "api/v1/controllers"),
+      method: "POST"
+    )
+    let response = try await send(request)
+    try requireStatus(response.statusCode, expected: 201, authenticated: false)
+    return try decode(ControllerRegistrationResponse.self, from: response.body)
+  }
+
   func approvePairing(
     userCode: String,
     profile: RelayProfile,
-    ownerBearer: String
+    controllerBearer: String
   ) async throws {
     try await decidePairing(
       action: "approve",
       userCode: userCode,
       profile: profile,
-      ownerBearer: ownerBearer
+      controllerBearer: controllerBearer
     )
   }
 
   func denyPairing(
     userCode: String,
     profile: RelayProfile,
-    ownerBearer: String
+    controllerBearer: String
   ) async throws {
     try await decidePairing(
       action: "deny",
       userCode: userCode,
       profile: profile,
-      ownerBearer: ownerBearer
+      controllerBearer: controllerBearer
     )
   }
 
   func fetchLatestSnapshots(
     profile: RelayProfile,
-    ownerBearer: String
-  ) async throws -> OwnerSnapshotListResponse {
+    controllerBearer: String
+  ) async throws -> ControllerSnapshotListResponse {
     let boundURL = try await verifyInstance(for: profile)
     let request = try authenticatedRequest(
       url: boundURL.appending(path: "api/v1/snapshots"),
       method: "GET",
-      ownerBearer: ownerBearer
+      controllerBearer: controllerBearer
     )
     let response = try await send(request)
     try requireStatus(response.statusCode, expected: 200, authenticated: true)
-    return try decode(OwnerSnapshotListResponse.self, from: response.body)
+    return try decode(ControllerSnapshotListResponse.self, from: response.body)
   }
 
   func listDevices(
     profile: RelayProfile,
-    ownerBearer: String
+    controllerBearer: String
   ) async throws -> DeviceListResponse {
     let boundURL = try await verifyInstance(for: profile)
     let request = try authenticatedRequest(
       url: boundURL.appending(path: "api/v1/devices"),
       method: "GET",
-      ownerBearer: ownerBearer
+      controllerBearer: controllerBearer
     )
     let response = try await send(request)
     try requireStatus(response.statusCode, expected: 200, authenticated: true)
@@ -174,7 +190,7 @@ actor RelayClient {
   func revokeDevice(
     deviceID: String,
     profile: RelayProfile,
-    ownerBearer: String
+    controllerBearer: String
   ) async throws {
     let boundURL = try await verifyInstance(for: profile)
     guard !deviceID.isEmpty,
@@ -191,7 +207,21 @@ actor RelayClient {
     let request = try authenticatedRequest(
       url: url,
       method: "DELETE",
-      ownerBearer: ownerBearer
+      controllerBearer: controllerBearer
+    )
+    let response = try await send(request)
+    try requireStatus(response.statusCode, expected: 204, authenticated: true)
+  }
+
+  func deleteController(
+    profile: RelayProfile,
+    controllerBearer: String
+  ) async throws {
+    let boundURL = try await verifyInstance(for: profile)
+    let request = try authenticatedRequest(
+      url: boundURL.appending(path: "api/v1/controllers/self"),
+      method: "DELETE",
+      controllerBearer: controllerBearer
     )
     let response = try await send(request)
     try requireStatus(response.statusCode, expected: 204, authenticated: true)
@@ -201,7 +231,7 @@ actor RelayClient {
     action: String,
     userCode: String,
     profile: RelayProfile,
-    ownerBearer: String
+    controllerBearer: String
   ) async throws {
     let normalizedCode = userCode.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !normalizedCode.isEmpty else {
@@ -220,7 +250,7 @@ actor RelayClient {
     let request = try authenticatedRequest(
       url: boundURL.appending(path: "api/v1/pairings/\(action)"),
       method: "POST",
-      ownerBearer: ownerBearer,
+      controllerBearer: controllerBearer,
       body: body
     )
     let response = try await send(request)
@@ -262,17 +292,17 @@ actor RelayClient {
   private func authenticatedRequest(
     url: URL,
     method: String,
-    ownerBearer: String,
+    controllerBearer: String,
     body: Data? = nil
   ) throws -> URLRequest {
-    guard !ownerBearer.isEmpty,
-      ownerBearer == ownerBearer.trimmingCharacters(in: .whitespacesAndNewlines),
-      ownerBearer.unicodeScalars.allSatisfy({ $0.value >= 0x20 && $0.value != 0x7f })
+    guard !controllerBearer.isEmpty,
+      controllerBearer == controllerBearer.trimmingCharacters(in: .whitespacesAndNewlines),
+      controllerBearer.unicodeScalars.allSatisfy({ $0.value >= 0x20 && $0.value != 0x7f })
     else {
       throw RelayClientError.credentialRejected
     }
     var request = makeRequest(url: url, method: method, body: body)
-    request.setValue("Bearer \(ownerBearer)", forHTTPHeaderField: "Authorization")
+    request.setValue("Bearer \(controllerBearer)", forHTTPHeaderField: "Authorization")
     return request
   }
 

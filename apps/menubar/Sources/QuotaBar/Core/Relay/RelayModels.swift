@@ -1,10 +1,40 @@
 import Foundation
 
-struct OwnerSnapshotListResponse: Decodable, Equatable, Sendable {
-  let observations: [OwnerSnapshotObservation]
+struct ControllerRegistrationResponse: Decodable, Equatable, Sendable {
+  let controllerToken: String
+
+  init(controllerToken: String) {
+    self.controllerToken = controllerToken
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.singleValueContainer()
+    let payload = try container.decode(Payload.self)
+    guard Self.isValid(payload.controllerToken) else {
+      throw DecodingError.dataCorruptedError(
+        in: container,
+        debugDescription: "Invalid Relay controller registration response."
+      )
+    }
+    controllerToken = payload.controllerToken
+  }
+
+  private static func isValid(_ token: String) -> Bool {
+    !token.isEmpty
+      && token == token.trimmingCharacters(in: .whitespacesAndNewlines)
+      && token.unicodeScalars.allSatisfy { $0.value >= 0x20 && $0.value != 0x7f }
+  }
+
+  private struct Payload: Decodable {
+    let controllerToken: String
+  }
 }
 
-struct OwnerSnapshotObservation: Decodable, Equatable, Sendable {
+struct ControllerSnapshotListResponse: Decodable, Equatable, Sendable {
+  let observations: [ControllerSnapshotObservation]
+}
+
+struct ControllerSnapshotObservation: Decodable, Equatable, Sendable {
   let deviceID: String
   let sequence: Int
   let capturedAt: Date

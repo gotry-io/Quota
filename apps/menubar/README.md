@@ -3,14 +3,29 @@
 QuotaBar is the native SwiftUI macOS menu bar client. It displays local QuotaCLI snapshots and
 remote snapshots from one or more persistent QuotaRelay profiles.
 
-The default managed Relay base URL is `https://quota.gotry.io`. Users may add independent
-self-hosted Relay profiles with their own base URLs.
+When polling starts, QuotaBar ensures there is one managed `Quota Relay` profile for
+`https://quota.gotry.io`. If none exists, it verifies discovery, registers an anonymous controller,
+stores the returned controller token only in Keychain, and persists non-secret profile metadata.
+An unavailable managed service remains retryable on the next polling cycle and never blocks local
+quota collection. Users may also add independent self-hosted Relay profiles by entering their base
+URL and externally managed controller token.
 
-The Relay core now stores profile metadata separately from owner bearers, binds profiles to a
+The Relay core stores profile metadata separately from controller bearers, binds profiles to a
 discovered Relay instance, and implements pairing decisions, snapshot reads, device listing, and
 device revocation. It accepts protocol v1 Relays only when they advertise bearer authentication,
 persistent snapshots, and instant device revocation. Credential and transport requirements are
 defined in [`docs/security.md`](../../docs/security.md).
+
+Deleting a managed profile first deletes its anonymous controller and linked Relay data; deleting a
+self-hosted profile removes only QuotaBar's local profile and Keychain token because that controller
+is managed externally. Removing the managed profile persists an enrollment opt-out across restarts;
+**Reconnect Quota Relay** is the explicit action that creates a new anonymous controller. Settings
+also provides **Delete all QuotaBar data**, which deletes managed controllers before clearing all
+QuotaBar controller Keychain items, profiles, cached quota, and user preferences while retaining
+only that opt-out. If the managed Relay cannot be reached, the confirmation flow offers an explicit
+local-only fallback; the managed controller and Relay data may remain remotely while paired devices
+continue reporting. Startup reconciliation removes orphaned QuotaBar controller Keychain items that
+have no profile metadata.
 
 The Relay state model coordinates profile mutation, pairing, last-known-good snapshot and device
 state, explicit refresh, and a cancellable five-minute polling loop. The production app creates one
@@ -88,11 +103,17 @@ process execution, wire decoding, and the shared menu-panel UI together. It does
 menu-bar icon, popover anchor, click-outside dismissal, or other `MenuBarExtra` window chrome, which
 retain a small manual smoke test.
 
-Run `pnpm test:relay:owner-e2e` from the repository root for the real owner-path acceptance flow.
-It launches the signed Visual App through LaunchServices and uses the production URLSession,
-`RelayStateModel`, UserDefaults, and system Keychain boundaries against a temporary loopback Relay.
+Run `pnpm test:relay:e2e` from the repository root for the real self-hosted and managed
+controller-path acceptance flows. It launches the signed Visual App through LaunchServices and uses
+the production URLSession, `RelayStateModel`, UserDefaults, and system Keychain boundaries against a
+temporary loopback Relay.
 A test-only CLI runner injects one normalized non-empty collection report at the existing command
 dependency boundary; pairing, credential persistence, upload sequencing, Relay storage, Overview
 resolution, device revocation, rejection, restart restoration, and cleanup remain real. The flow
 does not read ambient provider credentials or modify production QuotaBar preferences or Keychain
 items.
+
+Before uninstalling QuotaBar, use **Settings → Delete all QuotaBar data** while online. Dragging the
+app to Trash cannot run cleanup code, and Homebrew Cask `zap` can remove preferences and saved window
+state but cannot safely perform authenticated device revocation or delete signed Keychain items on
+the app's behalf.

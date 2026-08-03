@@ -3,12 +3,12 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
+  ControllerSnapshotListResponseSchema,
   DeviceListResponseSchema,
-  OwnerSnapshotListResponseSchema,
 } from "@gotry-io/quota-protocol";
 import { createRelayApp } from "../src/app.ts";
 import { selfHostedRelayInfo } from "../src/config.ts";
-import { bootstrapSelfHostedOwner } from "../src/self-hosted-bootstrap.ts";
+import { bootstrapSelfHostedController } from "../src/self-hosted-bootstrap.ts";
 import { SQLiteRelayState } from "../src/state/sqlite-state.ts";
 
 const repositoryRoot = resolve(import.meta.dir, "../../..");
@@ -49,7 +49,7 @@ describe("QuotaCLI edge against self-hosted QuotaRelay", () => {
       grok: join(temporaryDirectory, "grok"),
     };
     const platformPreload = join(temporaryDirectory, "non-darwin-preload.ts");
-    const ownerToken = `synthetic-owner-token-${crypto.randomUUID()}`;
+    const controllerToken = `synthetic-controller-token-${crypto.randomUUID()}`;
     const instanceID = `cli-e2e-${crypto.randomUUID()}`;
     const activeProcesses = new Set<CLIProcess>();
     let server: ReturnType<typeof Bun.serve> | undefined;
@@ -71,7 +71,7 @@ describe("QuotaCLI edge against self-hosted QuotaRelay", () => {
 
       const state = new SQLiteRelayState(databasePath);
       await state.initialize();
-      await bootstrapSelfHostedOwner(state, ownerToken, new Date());
+      await bootstrapSelfHostedController(state, controllerToken, new Date());
       const app = createRelayApp({ state, relayInfo: selfHostedRelayInfo(instanceID) });
       server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: app.fetch });
       const relayOrigin = `http://127.0.0.1:${server.port}`;
@@ -106,7 +106,7 @@ describe("QuotaCLI edge against self-hosted QuotaRelay", () => {
 
       const approval = await relayRequest(relayOrigin, "/api/v1/pairings/approve", {
         method: "POST",
-        headers: bearerJSONHeaders(ownerToken),
+        headers: bearerJSONHeaders(controllerToken),
         body: JSON.stringify({ user_code: userCode }),
       });
       expect(approval.status).toBe(204);
@@ -118,17 +118,17 @@ describe("QuotaCLI edge against self-hosted QuotaRelay", () => {
         stderr: await pairStderr,
       };
       expect(pairOutput.exitCode).toBe(0);
-      assertBearerMaterialAbsent(pairOutput, [ownerToken]);
+      assertBearerMaterialAbsent(pairOutput, [controllerToken]);
 
       const credentialPath = join(xdgConfigHome, "quotacli", "edge.json");
       const pairedCredential = await readCredential(credentialPath);
-      assertBearerMaterialAbsent(pairOutput, [ownerToken, pairedCredential.device_token]);
+      assertBearerMaterialAbsent(pairOutput, [controllerToken, pairedCredential.device_token]);
       expect(pairOutput.stdout).toContain("Pairing complete.");
       expect(pairedCredential.relay_url).toBe(relayOrigin);
       expect(pairedCredential.instance_id).toBe(instanceID);
       expect(pairedCredential.last_sequence).toBe(-1);
 
-      const devicesBeforeReport = await ownerDevices(relayOrigin, ownerToken);
+      const devicesBeforeReport = await controllerDevices(relayOrigin, controllerToken);
       expect(devicesBeforeReport.devices).toHaveLength(1);
       const pairedDevice = devicesBeforeReport.devices[0];
       expect(pairedDevice?.device_id).toBe(pairedCredential.device_id);
@@ -142,13 +142,13 @@ describe("QuotaCLI edge against self-hosted QuotaRelay", () => {
         activeProcesses,
       );
       expect(reportOutput.exitCode).toBe(1);
-      assertBearerMaterialAbsent(reportOutput, [ownerToken, pairedCredential.device_token]);
+      assertBearerMaterialAbsent(reportOutput, [controllerToken, pairedCredential.device_token]);
       expect(reportOutput.stdout).toContain("Uploaded 0 snapshots with sequence 0.");
       expect(reportOutput.stderr).toContain("provider collection was incomplete");
 
       const reportedCredential = await readCredential(credentialPath);
       expect(reportedCredential.last_sequence).toBe(0);
-      const devicesAfterReport = await ownerDevices(relayOrigin, ownerToken);
+      const devicesAfterReport = await controllerDevices(relayOrigin, controllerToken);
       expect(devicesAfterReport.devices).toHaveLength(1);
       const reportedDevice = devicesAfterReport.devices[0];
       expect(reportedDevice?.device_id).toBe(pairedCredential.device_id);
@@ -156,10 +156,10 @@ describe("QuotaCLI edge against self-hosted QuotaRelay", () => {
       expect(typeof reportedDevice?.last_seen_at).toBe("string");
 
       const snapshotsResponse = await relayRequest(relayOrigin, "/api/v1/snapshots", {
-        headers: bearerHeaders(ownerToken),
+        headers: bearerHeaders(controllerToken),
       });
       expect(snapshotsResponse.status).toBe(200);
-      const snapshots = OwnerSnapshotListResponseSchema.parse(await snapshotsResponse.json());
+      const snapshots = ControllerSnapshotListResponseSchema.parse(await snapshotsResponse.json());
       expect(snapshots.observations).toEqual([]);
 
       const unpairOutput = await runCLI(
@@ -169,14 +169,14 @@ describe("QuotaCLI edge against self-hosted QuotaRelay", () => {
         activeProcesses,
       );
       expect(unpairOutput.exitCode).toBe(0);
-      assertBearerMaterialAbsent(unpairOutput, [ownerToken, pairedCredential.device_token]);
+      assertBearerMaterialAbsent(unpairOutput, [controllerToken, pairedCredential.device_token]);
       expect(unpairOutput.stdout).toContain("local edge credential was removed");
       expect(await pathExists(credentialPath)).toBe(false);
 
-      const devicesAfterUnpair = await ownerDevices(relayOrigin, ownerToken);
+      const devicesAfterUnpair = await controllerDevices(relayOrigin, controllerToken);
       expect(devicesAfterUnpair.devices).toHaveLength(1);
       expect(devicesAfterUnpair.devices[0]?.device_id).toBe(pairedCredential.device_id);
-      expect(devicesAfterUnpair.devices[0]?.revoked_at).toBeNull();
+      expect(typeof devicesAfterUnpair.devices[0]?.revoked_at).toBe("string");
     } finally {
       for (const process of activeProcesses) {
         process.kill(9);
@@ -290,9 +290,9 @@ async function collectText(
   return text;
 }
 
-async function ownerDevices(origin: string, ownerToken: string) {
+async function controllerDevices(origin: string, controllerToken: string) {
   const response = await relayRequest(origin, "/api/v1/devices", {
-    headers: bearerHeaders(ownerToken),
+    headers: bearerHeaders(controllerToken),
   });
   expect(response.status).toBe(200);
   return DeviceListResponseSchema.parse(await response.json());

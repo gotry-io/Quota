@@ -14,7 +14,8 @@ Read the relevant source before changing that area:
 | Credentials, trust, redaction, transport, storage safety | `docs/security.md` |
 | Codex, Claude Code, and Grok collection strategies | `docs/provider-collection.md` |
 | Persistent Relay storage decision and rationale | `docs/decisions/0001-persistent-relay-storage.md` |
-| Relay pairing, code ownership, and credential issuance | `docs/decisions/0002-relay-device-code-pairing.md` |
+| Relay pairing, code control, and credential issuance | `docs/decisions/0002-relay-device-code-pairing.md` |
+| Anonymous Relay controller lifecycle | `docs/decisions/0004-anonymous-relay-controllers.md` |
 | Visual tokens and UI behavior | `DESIGN.md` |
 | App-specific usage | The corresponding `apps/*/README.md` |
 
@@ -75,6 +76,8 @@ Do not create a second description of a canonical rule. Update its source and li
 - Web UI follows `DESIGN.md` and must remain keyboard-accessible and responsive.
 - Wire JSON uses `snake_case`. Primary quota values and meters always represent remaining quota.
 - Product names are Quota, QuotaBar, QuotaCLI, and QuotaRelay.
+- Prefer direct implementations over redundant wrappers, retries, fallbacks, and defensive branches.
+  Add them only for a concrete boundary, failure mode, or security requirement.
 
 ## Development commands
 
@@ -101,7 +104,7 @@ SQLite files, logs, or local credentials.
   cases.
 - Protocol change: run protocol, model, provider, Relay, and Swift decoding tests.
 - Relay change: run Vitest, Bun SQLite tests, and the Cloudflare dry-run build.
-- QuotaBar Relay owner-path change: on macOS, run `pnpm test:relay:owner-e2e` in addition to the
+- QuotaBar Relay controller-path change: on macOS, run `pnpm test:relay:e2e` in addition to the
   affected Swift and Relay tests.
 - Web change: run its type check and production build; inspect desktop and mobile rendering when
   browser tooling is available.

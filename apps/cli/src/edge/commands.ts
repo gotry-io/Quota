@@ -33,6 +33,7 @@ export interface EdgeRelayClient {
   createPairing(deviceDisplayName: string): Promise<PairingCreateResponse>;
   pollPairing(pairing: PairingCreateResponse): Promise<PairingTokenIssuedResponse>;
   uploadSnapshot(deviceToken: string, envelope: QuotaSnapshotEnvelope): Promise<void>;
+  revokeSelf(deviceToken: string): Promise<void>;
 }
 
 export interface EdgeCredentialStoreContract {
@@ -197,32 +198,54 @@ async function runUnpair(
   output: EdgeCommandOutput,
   dependencies: EdgeCommandDependencies,
 ): Promise<number> {
-  let serviceStopFailed = false;
   if (dependencies.platform === "darwin") {
     try {
       await dependencies.service.stop();
     } catch {
-      serviceStopFailed = true;
+      output.stderr("QuotaCLI could not stop background edge reporting. Pairing was retained.");
+      return 1;
     }
+  }
+
+  let credential: EdgeCredential | null;
+  try {
+    credential = await dependencies.store.load();
+  } catch {
+    output.stderr("QuotaCLI could not read the local edge credential.");
+    return 1;
+  }
+  if (!credential) {
+    output.stdout("This machine is already unpaired.");
+    return 0;
+  }
+
+  try {
+    const client = dependencies.createClient(credential.relay_url);
+    const relay = await client.discover();
+    if (relay.instance_id !== credential.instance_id) {
+      output.stderr(
+        "The paired Relay identity does not match the discovered Relay. The local credential was retained.",
+      );
+      return 1;
+    }
+    await client.revokeSelf(credential.device_token);
+  } catch {
+    output.stderr(
+      "QuotaCLI could not revoke the remote device. The local credential was retained for retry.",
+    );
+    return 1;
   }
 
   try {
     await dependencies.store.delete();
-    output.stdout("The local edge credential was removed if it existed.");
-    output.stdout(
-      "The remote device was not revoked. Revoke it in QuotaBar or Relay device management.",
-    );
-    if (serviceStopFailed) {
-      output.stderr(
-        "QuotaCLI could not stop background edge reporting, but the local credential was removed.",
-      );
-      return 1;
-    }
-    return 0;
   } catch {
-    output.stderr("QuotaCLI could not remove the local edge credential.");
+    output.stderr(
+      "The remote device was revoked, but QuotaCLI could not remove the local edge credential.",
+    );
     return 1;
   }
+  output.stdout("The remote device was revoked and the local edge credential was removed.");
+  return 0;
 }
 
 async function runStart(

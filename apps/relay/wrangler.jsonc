@@ -16,6 +16,9 @@
   "observability": {
     "enabled": true
   },
+  "triggers": {
+    "crons": ["0 * * * *"]
+  },
   "vars": {
     "QUOTA_RELAY_INSTANCE_ID": "gotry-managed-primary"
   },

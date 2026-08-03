@@ -70,7 +70,7 @@ struct RelayProfile: Codable, Equatable, Identifiable, Sendable {
   }
 
   static func credentialReference(for id: UUID) -> String {
-    "relay-owner:\(id.uuidString.lowercased())"
+    "relay-controller:\(id.uuidString.lowercased())"
   }
 
   private enum CodingKeys: String, CodingKey {

@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 export const PROTOCOL_VERSION = 1 as const;
+export const MAXIMUM_SNAPSHOTS_PER_ENVELOPE = 32;
 
 export const ProviderIdSchema = z.enum(["codex", "claude", "grok"]);
 export type ProviderId = z.infer<typeof ProviderIdSchema>;
@@ -58,7 +59,7 @@ export const QuotaSnapshotEnvelopeSchema = z
     device_id: z.string().min(1),
     sequence: z.number().int().nonnegative(),
     captured_at: z.string().datetime({ offset: true }),
-    snapshots: z.array(QuotaSnapshotSchema),
+    snapshots: z.array(QuotaSnapshotSchema).max(MAXIMUM_SNAPSHOTS_PER_ENVELOPE),
   })
   .strict();
 export type QuotaSnapshotEnvelope = z.infer<typeof QuotaSnapshotEnvelopeSchema>;
@@ -168,6 +169,13 @@ export const RelayErrorEnvelopeSchema = z
   .strict();
 export type RelayErrorEnvelope = z.infer<typeof RelayErrorEnvelopeSchema>;
 
+export const ControllerCreateResponseSchema = z
+  .object({
+    controller_token: z.string().min(1),
+  })
+  .strict();
+export type ControllerCreateResponse = z.infer<typeof ControllerCreateResponseSchema>;
+
 export const PairingCreateRequestSchema = z
   .object({
     device_display_name: z.string().trim().min(1).max(128),
@@ -222,7 +230,7 @@ export const PairingDenialRequestSchema = z
   .strict();
 export type PairingDenialRequest = z.infer<typeof PairingDenialRequestSchema>;
 
-export const OwnerSnapshotObservationSchema = z
+export const ControllerSnapshotObservationSchema = z
   .object({
     device_id: z.string().min(1),
     sequence: z.number().int().nonnegative(),
@@ -231,14 +239,14 @@ export const OwnerSnapshotObservationSchema = z
     updated_at: z.string().datetime({ offset: true }),
   })
   .strict();
-export type OwnerSnapshotObservation = z.infer<typeof OwnerSnapshotObservationSchema>;
+export type ControllerSnapshotObservation = z.infer<typeof ControllerSnapshotObservationSchema>;
 
-export const OwnerSnapshotListResponseSchema = z
+export const ControllerSnapshotListResponseSchema = z
   .object({
-    observations: z.array(OwnerSnapshotObservationSchema),
+    observations: z.array(ControllerSnapshotObservationSchema),
   })
   .strict();
-export type OwnerSnapshotListResponse = z.infer<typeof OwnerSnapshotListResponseSchema>;
+export type ControllerSnapshotListResponse = z.infer<typeof ControllerSnapshotListResponseSchema>;
 
 export const RelayDeviceSchema = z
   .object({

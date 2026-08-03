@@ -11,6 +11,7 @@
     "captured_at": { "type": "string", "format": "date-time" },
     "snapshots": {
       "type": "array",
+      "maxItems": 32,
       "items": { "$ref": "#/$defs/snapshot" }
     }
   },

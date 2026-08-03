@@ -6,7 +6,7 @@ struct AddRelayView: View {
 
   @State private var name = ""
   @State private var origin = ""
-  @State private var ownerBearer = ""
+  @State private var controllerBearer = ""
   @State private var errorMessage: String?
   @State private var isSubmitting = false
 
@@ -17,7 +17,7 @@ struct AddRelayView: View {
           Text("Connect a self-hosted Relay")
             .font(.system(.headline, design: .rounded, weight: .semibold))
             .foregroundStyle(QuotaPalette.ink)
-          Text("QuotaBar verifies the Relay before storing its owner credential in Keychain.")
+          Text("QuotaBar verifies the Relay before storing its controller credential in Keychain.")
             .font(.caption)
             .foregroundStyle(QuotaPalette.body)
             .fixedSize(horizontal: false, vertical: true)
@@ -36,10 +36,10 @@ struct AddRelayView: View {
             .accessibilityLabel("Relay origin")
         }
 
-        formField("Owner credential") {
-          SecureField("Owner bearer", text: $ownerBearer)
+        formField("Controller credential") {
+          SecureField("Controller bearer", text: $controllerBearer)
             .textFieldStyle(RelayPillTextFieldStyle())
-            .accessibilityLabel("Relay owner credential")
+            .accessibilityLabel("Relay controller credential")
 
           Text("Used only for authenticated requests to the verified Relay and stored in Keychain.")
             .font(.caption2)
@@ -99,7 +99,7 @@ struct AddRelayView: View {
       validated = try RelayAddFormValidation.validate(
         name: name,
         origin: origin,
-        ownerBearer: ownerBearer
+        controllerBearer: controllerBearer
       )
     } catch {
       errorMessage = RelaySettingsErrorPresentation.message(
@@ -117,9 +117,9 @@ struct AddRelayView: View {
         let profile = try await model.addSelfHostedProfile(
           name: validated.name,
           origin: validated.origin,
-          ownerBearer: validated.ownerBearer
+          controllerBearer: validated.controllerBearer
         )
-        ownerBearer = ""
+        controllerBearer = ""
         onAdded(profile.id)
       } catch {
         errorMessage = RelaySettingsErrorPresentation.message(

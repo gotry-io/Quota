@@ -251,16 +251,16 @@
       do {
         let profile = try RelayProfile(
           id: profileID,
-          name: "Studio Relay",
-          baseURL: URL(string: "https://relay.visual.example")!,
-          instanceID: "visual-relay-instance-01",
-          mode: .selfHosted,
+          name: "Quota Relay",
+          baseURL: URL(string: "https://quota.gotry.io")!,
+          instanceID: "visual-managed-relay-instance-01",
+          mode: .managed,
           capabilities: RelayCapabilities(
             realtime: false,
             persistentSnapshots: true,
             instantDeviceRevocation: true,
             history: false,
-            multiTenant: false
+            multiTenant: true
           ),
           isDefault: true
         )
@@ -287,7 +287,7 @@
     }
 
     private static func makeObservations(referenceDate: Date) throws
-      -> [OwnerSnapshotObservation]
+      -> [ControllerSnapshotObservation]
     {
       let snapshots = [
         snapshot(
@@ -333,7 +333,7 @@
       let responseJSON =
         #"{"observations":[{"device_id":"device_visual_studio_mac_01","sequence":42,"captured_at":"\#(capturedAt)","snapshot":\#(encodedSnapshots[0]),"updated_at":"\#(updatedAt)"},{"device_id":"device_visual_studio_mac_01","sequence":42,"captured_at":"\#(capturedAt)","snapshot":\#(encodedSnapshots[1]),"updated_at":"\#(updatedAt)"}]}"#
       return try QuotaWireCodec.makeDecoder()
-        .decode(OwnerSnapshotListResponse.self, from: Data(responseJSON.utf8))
+        .decode(ControllerSnapshotListResponse.self, from: Data(responseJSON.utf8))
         .observations
     }
 

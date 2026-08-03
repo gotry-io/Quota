@@ -198,6 +198,7 @@ private final class BoundedProcessExecution: @unchecked Sendable {
     process.arguments = arguments
     process.standardOutput = standardOutput
     process.standardError = FileHandle.nullDevice
+    installTerminationHandler()
 
     do {
       try process.run()
@@ -213,7 +214,6 @@ private final class BoundedProcessExecution: @unchecked Sendable {
 
     startTimeout()
     startReadingStandardOutput()
-    startWaitingForExit()
 
     if pendingStop != nil {
       terminateProcess()
@@ -282,9 +282,9 @@ private final class BoundedProcessExecution: @unchecked Sendable {
     resume(completion)
   }
 
-  private func startWaitingForExit() {
-    DispatchQueue.global(qos: .utility).async { [self] in
-      process.waitUntilExit()
+  private func installTerminationHandler() {
+    process.terminationHandler = { [weak self] process in
+      guard let self else { return }
       let completion = lock.withLock {
         processFinished = true
         terminationStatus = process.terminationStatus

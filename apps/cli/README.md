@@ -74,14 +74,17 @@ quotacli edge unpair
 
 `pair` discovers and validates Relay capabilities, displays a Relay-generated user code for
 approval in QuotaBar, and stores the issued Relay-bound device credential. It does not accept a
-manually created token and does not start recurring reporting. The managed Relay currently keeps
-owner authentication disabled, so managed pairing fails safely until that identity path is
-available; a bootstrapped self-hosted Relay advertises the required capabilities.
+manually created token and does not start recurring reporting. QuotaBar automatically creates an
+anonymous controller on the managed Relay without a user account; a self-hosted Relay bootstraps
+its controller from the operator-provided environment token. Either controller can approve the
+displayed pairing code.
 
-`unpair` stops and removes the macOS background service before deleting the local credential. On
-other platforms it deletes the local credential directly. It cannot prove possession of owner
-authorization, so the remote device must still be revoked through QuotaBar or Relay device
-management. Pairing and credential ownership are defined in
+`unpair` stops and removes the macOS background service, verifies the saved Relay instance, revokes
+the current device with its device credential, and then deletes the local credential. If discovery
+or revocation fails, the local credential is retained so the command can be retried. The Relay
+returns the same successful response when that exact device credential has already revoked itself;
+an unknown or rejected credential is not treated as proof of revocation. Pairing and credential
+ownership are defined in
 [`ADR 0002`](../../docs/decisions/0002-relay-device-code-pairing.md); storage requirements are in the
 [`security baseline`](../../docs/security.md).
 

@@ -10,6 +10,7 @@ COPY packages/quota-model/package.json packages/quota-model/package.json
 COPY packages/provider/package.json packages/provider/package.json
 COPY packages/relay-core/package.json packages/relay-core/package.json
 RUN bun install --production
+COPY apps/relay/migrations apps/relay/migrations
 COPY apps/relay/src apps/relay/src
 COPY packages/protocol/src packages/protocol/src
 COPY packages/relay-core/src packages/relay-core/src

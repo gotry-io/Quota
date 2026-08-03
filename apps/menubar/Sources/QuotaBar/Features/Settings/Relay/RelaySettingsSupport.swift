@@ -3,14 +3,14 @@ import SwiftUI
 struct ValidatedRelayAddForm: Equatable {
   let name: String
   let origin: String
-  let ownerBearer: String
+  let controllerBearer: String
 }
 
 enum RelayAddFormValidation {
   static func validate(
     name: String,
     origin: String,
-    ownerBearer: String
+    controllerBearer: String
   ) throws -> ValidatedRelayAddForm {
     let canonicalName = name.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !canonicalName.isEmpty else {
@@ -26,17 +26,17 @@ enum RelayAddFormValidation {
       )
     }
 
-    guard !ownerBearer.isEmpty,
-      ownerBearer == ownerBearer.trimmingCharacters(in: .whitespacesAndNewlines),
-      ownerBearer.unicodeScalars.allSatisfy({ $0.value >= 0x20 && $0.value != 0x7f })
+    guard !controllerBearer.isEmpty,
+      controllerBearer == controllerBearer.trimmingCharacters(in: .whitespacesAndNewlines),
+      controllerBearer.unicodeScalars.allSatisfy({ $0.value >= 0x20 && $0.value != 0x7f })
     else {
-      throw RelayFormValidationError.invalidOwnerCredential
+      throw RelayFormValidationError.invalidControllerCredential
     }
 
     return ValidatedRelayAddForm(
       name: canonicalName,
       origin: canonicalOrigin.absoluteString,
-      ownerBearer: ownerBearer
+      controllerBearer: controllerBearer
     )
   }
 }
@@ -44,7 +44,7 @@ enum RelayAddFormValidation {
 enum RelayFormValidationError: LocalizedError, Equatable {
   case missingName
   case invalidOrigin(String)
-  case invalidOwnerCredential
+  case invalidControllerCredential
   case missingPairingCode
 
   var errorDescription: String? {
@@ -53,8 +53,8 @@ enum RelayFormValidationError: LocalizedError, Equatable {
       "Enter a Relay profile name."
     case .invalidOrigin(let message):
       message
-    case .invalidOwnerCredential:
-      "Enter a valid Relay owner credential."
+    case .invalidControllerCredential:
+      "Enter a valid Relay controller credential."
     case .missingPairingCode:
       "Enter the pairing code shown by QuotaCLI."
     }

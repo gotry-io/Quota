@@ -323,6 +323,7 @@ function relayClient(upload: ReportDependencyOptions["upload"]): EdgeRelayClient
     createPairing: vi.fn(async () => pairing()),
     pollPairing: vi.fn(async () => issued()),
     uploadSnapshot: vi.fn(upload ?? (async () => undefined)),
+    revokeSelf: vi.fn(async () => undefined),
   };
 }
 

@@ -21,6 +21,43 @@ func discoversSupportedRelayWithoutAuthorization() async throws {
 }
 
 @Test
+func registersAnonymousControllerWithAnEmptyUnauthenticatedRequest() async throws {
+  let transport = StubRelayTransport([
+    .response(201, Data(#"{"controller_token":"controller_registered_0123456789"}"#.utf8))
+  ])
+  let client = RelayClient(transport: transport)
+
+  let registration = try await client.registerController(
+    baseURL: URL(string: "https://quota.gotry.io")!
+  )
+
+  #expect(registration.controllerToken == "controller_registered_0123456789")
+  let request = try #require(await transport.recordedRequests().first)
+  #expect(request.method == "POST")
+  #expect(request.path == "/api/v1/controllers")
+  #expect(request.authorization == nil)
+  #expect(request.contentType == nil)
+  #expect(request.body == nil)
+}
+
+@Test
+func rejectsMalformedAnonymousControllerRegistration() async throws {
+  let transport = StubRelayTransport([
+    .response(201, Data(#"{"controller_token":" controller_secret"}"#.utf8))
+  ])
+
+  do {
+    _ = try await RelayClient(transport: transport).registerController(
+      baseURL: URL(string: "https://quota.gotry.io")!
+    )
+    Issue.record("Expected malformed controller registration to fail.")
+  } catch let error as RelayClientError {
+    #expect(error == .malformedResponse)
+    #expect(error.errorDescription?.contains("controller_secret") == false)
+  }
+}
+
+@Test
 func sendsExactPairingDecisionRequestsAfterDiscovery() async throws {
   let transport = StubRelayTransport([
     .response(200, supportedDiscovery),
@@ -34,12 +71,12 @@ func sendsExactPairingDecisionRequestsAfterDiscovery() async throws {
   try await client.approvePairing(
     userCode: "  ABCD-EFGH  ",
     profile: profile,
-    ownerBearer: ownerBearer
+    controllerBearer: controllerBearer
   )
   try await client.denyPairing(
     userCode: "IJKL-MNOP",
     profile: profile,
-    ownerBearer: ownerBearer
+    controllerBearer: controllerBearer
   )
 
   let requests = await transport.recordedRequests()
@@ -47,7 +84,7 @@ func sendsExactPairingDecisionRequestsAfterDiscovery() async throws {
   #expect(requests[0].authorization == nil)
   #expect(requests[1].method == "POST")
   #expect(requests[1].path == "/api/v1/pairings/approve")
-  #expect(requests[1].authorization == "Bearer \(ownerBearer)")
+  #expect(requests[1].authorization == "Bearer \(controllerBearer)")
   #expect(requests[1].contentType == "application/json")
   #expect(try jsonObject(requests[1].body) == ["user_code": "ABCD-EFGH"])
   #expect(requests[2].authorization == nil)
@@ -57,7 +94,7 @@ func sendsExactPairingDecisionRequestsAfterDiscovery() async throws {
 }
 
 @Test
-func sendsExactOwnerReadAndRevokeRequests() async throws {
+func sendsExactControllerReadAndRevokeRequests() async throws {
   let transport = StubRelayTransport([
     .response(200, supportedDiscovery),
     .response(200, Data(#"{"observations":[]}"#.utf8)),
@@ -71,13 +108,13 @@ func sendsExactOwnerReadAndRevokeRequests() async throws {
 
   let snapshots = try await client.fetchLatestSnapshots(
     profile: profile,
-    ownerBearer: ownerBearer
+    controllerBearer: controllerBearer
   )
-  let devices = try await client.listDevices(profile: profile, ownerBearer: ownerBearer)
+  let devices = try await client.listDevices(profile: profile, controllerBearer: controllerBearer)
   try await client.revokeDevice(
     deviceID: "device/with %2F space",
     profile: profile,
-    ownerBearer: ownerBearer
+    controllerBearer: controllerBearer
   )
 
   #expect(snapshots.observations.isEmpty)
@@ -90,12 +127,50 @@ func sendsExactOwnerReadAndRevokeRequests() async throws {
   #expect(requests[5].method == "DELETE")
   #expect(requests[5].percentEncodedPath == "/api/v1/devices/device%2Fwith%20%252F%20space")
   #expect([requests[1], requests[3], requests[5]].allSatisfy {
-    $0.authorization == "Bearer \(ownerBearer)"
+    $0.authorization == "Bearer \(controllerBearer)"
   })
 }
 
 @Test
-func instanceMismatchSendsNoOwnerCredential() async throws {
+func sendsExactAuthenticatedControllerDeletionRequest() async throws {
+  let transport = StubRelayTransport([
+    .response(200, supportedDiscovery),
+    .response(204, Data()),
+  ])
+  let client = RelayClient(transport: transport)
+
+  try await client.deleteController(
+    profile: makeProfile(),
+    controllerBearer: controllerBearer
+  )
+
+  let requests = await transport.recordedRequests()
+  #expect(requests.count == 2)
+  #expect(requests[0].authorization == nil)
+  #expect(requests[1].method == "DELETE")
+  #expect(requests[1].path == "/api/v1/controllers/self")
+  #expect(requests[1].authorization == "Bearer \(controllerBearer)")
+  #expect(requests[1].body == nil)
+}
+
+@Test
+func doesNotTreatARejectedControllerCredentialAsProofOfDeletion() async throws {
+  let transport = StubRelayTransport([
+    .response(200, supportedDiscovery),
+    .response(401, sensitiveServerBody),
+  ])
+  let client = RelayClient(transport: transport)
+
+  await #expect(throws: RelayClientError.credentialRejected) {
+    try await client.deleteController(
+      profile: makeProfile(),
+      controllerBearer: controllerBearer
+    )
+  }
+}
+
+@Test
+func instanceMismatchSendsNoControllerCredential() async throws {
   let transport = StubRelayTransport([
     .response(200, discovery(instanceID: "replacement_relay"))
   ])
@@ -103,7 +178,7 @@ func instanceMismatchSendsNoOwnerCredential() async throws {
   let profile = try makeProfile()
 
   do {
-    _ = try await client.listDevices(profile: profile, ownerBearer: ownerBearer)
+    _ = try await client.listDevices(profile: profile, controllerBearer: controllerBearer)
     Issue.record("Expected the Relay instance mismatch to fail.")
   } catch let error as RelayClientError {
     #expect(error == .instanceMismatch)
@@ -115,16 +190,16 @@ func instanceMismatchSendsNoOwnerCredential() async throws {
 }
 
 @Test
-func rejectsOwnerBearerWithSurroundingWhitespaceBeforeAuthenticatedRequest() async throws {
+func rejectsControllerBearerWithSurroundingWhitespaceBeforeAuthenticatedRequest() async throws {
   let transport = StubRelayTransport([.response(200, supportedDiscovery)])
   let client = RelayClient(transport: transport)
 
   do {
     _ = try await client.listDevices(
       profile: makeProfile(),
-      ownerBearer: " \(ownerBearer)"
+      controllerBearer: " \(controllerBearer)"
     )
-    Issue.record("Expected the invalid owner bearer to fail.")
+    Issue.record("Expected the invalid controller bearer to fail.")
   } catch let error as RelayClientError {
     #expect(error == .credentialRejected)
   }
@@ -162,12 +237,12 @@ func returnsFixedSafeErrors(failure: RelayFailureCase) async throws {
   let client = RelayClient(transport: transport)
 
   do {
-    _ = try await client.listDevices(profile: makeProfile(), ownerBearer: ownerBearer)
+    _ = try await client.listDevices(profile: makeProfile(), controllerBearer: controllerBearer)
     Issue.record("Expected the Relay request to fail.")
   } catch let error as RelayClientError {
     #expect(error == failure.expectedError)
     let message = try #require(error.errorDescription)
-    #expect(!message.contains(ownerBearer))
+    #expect(!message.contains(controllerBearer))
     #expect(!message.contains("ABCD-EFGH"))
     #expect(!message.contains("account_01"))
     #expect(!message.contains("alice@example.com"))
@@ -308,8 +383,8 @@ private func jsonObject(_ data: Data?) throws -> [String: String] {
   return try #require(JSONSerialization.jsonObject(with: data) as? [String: String])
 }
 
-private let ownerBearer = "owner_synthetic_0123456789"
+private let controllerBearer = "controller_synthetic_0123456789"
 private let supportedDiscovery = discovery(instanceID: "relay_primary")
 private let sensitiveServerBody = Data(
-  #"{"error":{"message":"upstream_secret owner_synthetic_0123456789 ABCD-EFGH account_01 alice@example.com"}}"#.utf8
+  #"{"error":{"message":"upstream_secret controller_synthetic_0123456789 ABCD-EFGH account_01 alice@example.com"}}"#.utf8
 )

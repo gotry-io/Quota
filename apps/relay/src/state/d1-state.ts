@@ -1,7 +1,9 @@
-import { QuotaSnapshotSchema, type QuotaSnapshotEnvelope } from "@gotry-io/quota-protocol";
+import { type QuotaSnapshotEnvelope, QuotaSnapshotSchema } from "@gotry-io/quota-protocol";
 import type {
-  AuthSessionRecord,
   ConsumePairingSessionInput,
+  ControllerKind,
+  ControllerSessionRecord,
+  CreateControllerInput,
   CreatePairingSessionInput,
   DecidePairingSessionInput,
   DeviceRecord,
@@ -10,19 +12,20 @@ import type {
   RateLimitInput,
   RateLimitResult,
   RegisterDeviceInput,
-  ReplaceAuthSessionInput,
+  RelayMaintenanceInput,
   RelayState,
+  ReplaceControllerSessionInput,
   StoredQuotaSnapshot,
 } from "@gotry-io/relay-core";
 import {
-  type AuthSessionRow,
-  decodeAuthSession,
-  encodeAuthScopes,
-  pairingDecisionOutcome,
+  type ControllerSessionRow,
+  decodeControllerSession,
+  encodeControllerScopes,
   type PairingSessionRow,
+  pairingDecisionOutcome,
   pairingUnavailableConsumeOutcome,
-  rateLimitResult,
   type RateLimitRow,
+  rateLimitResult,
   validateRateLimitInput,
 } from "./records.ts";
 
@@ -45,75 +48,112 @@ export class D1RelayState implements RelayState {
     await this.database.prepare("SELECT 1 AS ready").first();
   }
 
-  async ensureOwner(ownerId: string, createdAt: string): Promise<void> {
+  async createController(input: CreateControllerInput): Promise<void> {
+    await this.database.batch([
+      this.database
+        .prepare(
+          `INSERT INTO controllers (id, kind, created_at)
+           VALUES (?1, ?2, ?3)`,
+        )
+        .bind(input.id, input.kind, input.created_at),
+      this.database
+        .prepare(
+          `INSERT INTO controller_sessions
+            (id, controller_id, token_hash, scopes_json, expires_at, created_at)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
+        )
+        .bind(
+          input.session_id,
+          input.id,
+          input.token_hash,
+          encodeControllerScopes(input.scopes),
+          input.expires_at,
+          input.created_at,
+        ),
+    ]);
+  }
+
+  async deleteController(controllerId: string): Promise<boolean> {
+    const result = await this.database
+      .prepare("DELETE FROM controllers WHERE id = ?1")
+      .bind(controllerId)
+      .run();
+    return result.meta.changes > 0;
+  }
+
+  async ensureController(
+    controllerId: string,
+    kind: ControllerKind,
+    createdAt: string,
+  ): Promise<void> {
     await this.database
       .prepare(
-        `INSERT INTO users (id, created_at)
-         VALUES (?1, ?2)
+        `INSERT INTO controllers (id, kind, created_at)
+         VALUES (?1, ?2, ?3)
          ON CONFLICT(id) DO NOTHING`,
       )
-      .bind(ownerId, createdAt)
+      .bind(controllerId, kind, createdAt)
       .run();
   }
 
-  async replaceAuthSession(input: ReplaceAuthSessionInput): Promise<void> {
+  async replaceControllerSession(input: ReplaceControllerSessionInput): Promise<void> {
     const result = await this.database
       .prepare(
-        `INSERT INTO auth_sessions
-          (id, owner_id, token_hash, scopes_json, expires_at, created_at)
+        `INSERT INTO controller_sessions
+          (id, controller_id, token_hash, scopes_json, expires_at, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)
          ON CONFLICT(id) DO UPDATE SET
            token_hash = excluded.token_hash,
            scopes_json = excluded.scopes_json,
            expires_at = excluded.expires_at,
            revoked_at = NULL
-         WHERE auth_sessions.owner_id = excluded.owner_id`,
+         WHERE controller_sessions.controller_id = excluded.controller_id`,
       )
       .bind(
         input.id,
-        input.owner_id,
+        input.controller_id,
         input.token_hash,
-        encodeAuthScopes(input.scopes),
+        encodeControllerScopes(input.scopes),
         input.expires_at,
         input.created_at,
       )
       .run();
     if (result.meta.changes !== 1) {
-      throw new Error("Authentication session owner does not match");
+      throw new Error("Controller session does not match the controller");
     }
   }
 
-  async getActiveAuthSessionByTokenHash(
+  async getActiveControllerSessionByTokenHash(
     tokenHash: string,
     checkedAt: string,
-  ): Promise<AuthSessionRecord | null> {
+  ): Promise<ControllerSessionRecord | null> {
     const row = await this.database
       .prepare(
-        `SELECT owner_id, scopes_json
-         FROM auth_sessions
+        `SELECT controller_id, scopes_json
+         FROM controller_sessions
          WHERE token_hash = ?1 AND revoked_at IS NULL AND expires_at > ?2`,
       )
       .bind(tokenHash, checkedAt)
-      .first<AuthSessionRow>();
+      .first<ControllerSessionRow>();
 
-    return row ? decodeAuthSession(row) : null;
+    return row ? decodeControllerSession(row) : null;
   }
 
   async registerDevice(input: RegisterDeviceInput): Promise<void> {
     await this.database
       .prepare(
         `INSERT INTO devices
-          (id, owner_id, display_name, token_hash, created_at)
+          (id, controller_id, display_name, token_hash, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5)`,
       )
-      .bind(input.id, input.owner_id, input.display_name, input.token_hash, input.created_at)
+      .bind(input.id, input.controller_id, input.display_name, input.token_hash, input.created_at)
       .run();
   }
 
   async getDevice(deviceId: string): Promise<DeviceRecord | null> {
     return this.database
       .prepare(
-        `SELECT id, owner_id, display_name, created_at, last_seen_at,
+        `SELECT id, controller_id, display_name, created_at, last_seen_at,
                 last_sequence, revoked_at
          FROM devices
          WHERE id = ?1`,
@@ -122,44 +162,107 @@ export class D1RelayState implements RelayState {
       .first<DeviceRecord>();
   }
 
-  async getActiveDeviceByTokenHash(tokenHash: string): Promise<DeviceRecord | null> {
+  async getDeviceByTokenHash(tokenHash: string): Promise<DeviceRecord | null> {
     return this.database
       .prepare(
-        `SELECT id, owner_id, display_name, created_at, last_seen_at,
+        `SELECT id, controller_id, display_name, created_at, last_seen_at,
                 last_sequence, revoked_at
          FROM devices
-         WHERE token_hash = ?1 AND revoked_at IS NULL`,
+         WHERE token_hash = ?1`,
       )
       .bind(tokenHash)
       .first<DeviceRecord>();
   }
 
-  async listDevices(ownerId: string): Promise<DeviceRecord[]> {
+  async listDevices(controllerId: string): Promise<DeviceRecord[]> {
     const result = await this.database
       .prepare(
-        `SELECT id, owner_id, display_name, created_at, last_seen_at,
+        `SELECT id, controller_id, display_name, created_at, last_seen_at,
                 last_sequence, revoked_at
          FROM devices
-         WHERE owner_id = ?1
+         WHERE controller_id = ?1
          ORDER BY created_at ASC`,
       )
-      .bind(ownerId)
+      .bind(controllerId)
       .all<DeviceRecord>();
 
     return result.results;
   }
 
-  async revokeDevice(ownerId: string, deviceId: string, revokedAt: string): Promise<boolean> {
+  async revokeDevice(controllerId: string, deviceId: string, revokedAt: string): Promise<boolean> {
     const result = await this.database
       .prepare(
         `UPDATE devices
          SET revoked_at = ?3
-         WHERE owner_id = ?1 AND id = ?2 AND revoked_at IS NULL`,
+         WHERE controller_id = ?1 AND id = ?2 AND revoked_at IS NULL`,
       )
-      .bind(ownerId, deviceId, revokedAt)
+      .bind(controllerId, deviceId, revokedAt)
       .run();
 
     return result.meta.changes > 0;
+  }
+
+  async revokeDeviceIfInactive(
+    tokenHash: string,
+    inactiveBefore: string,
+    revokedAt: string,
+  ): Promise<boolean> {
+    const result = await this.database
+      .prepare(
+        `UPDATE devices
+         SET revoked_at = ?3
+         WHERE token_hash = ?1 AND revoked_at IS NULL
+           AND julianday(COALESCE(last_seen_at, created_at)) <= julianday(?2)`,
+      )
+      .bind(tokenHash, inactiveBefore, revokedAt)
+      .run();
+
+    return result.meta.changes > 0;
+  }
+
+  async revokeInactiveDevicesForController(
+    controllerId: string,
+    inactiveBefore: string,
+    revokedAt: string,
+  ): Promise<number> {
+    const result = await this.database
+      .prepare(
+        `UPDATE devices
+         SET revoked_at = ?3
+         WHERE controller_id = ?1 AND revoked_at IS NULL
+           AND julianday(COALESCE(last_seen_at, created_at)) <= julianday(?2)`,
+      )
+      .bind(controllerId, inactiveBefore, revokedAt)
+      .run();
+
+    return result.meta.changes;
+  }
+
+  async performMaintenance(input: RelayMaintenanceInput): Promise<void> {
+    await this.database.batch([
+      this.database
+        .prepare(
+          `UPDATE devices
+           SET revoked_at = ?2
+           WHERE revoked_at IS NULL
+             AND julianday(COALESCE(last_seen_at, created_at)) <= julianday(?1)`,
+        )
+        .bind(input.inactive_before, input.maintained_at),
+      this.database
+        .prepare(
+          `DELETE FROM controllers
+           WHERE kind = 'managed' AND julianday(created_at) <= julianday(?1)
+             AND NOT EXISTS (
+               SELECT 1 FROM devices
+               WHERE devices.controller_id = controllers.id
+                 AND julianday(COALESCE(devices.last_seen_at, devices.created_at)) > julianday(?1)
+             )`,
+        )
+        .bind(input.inactive_before),
+      this.database
+        .prepare("DELETE FROM pairing_sessions WHERE julianday(expires_at) <= julianday(?1)")
+        .bind(input.pairing_expired_before),
+    ]);
   }
 
   async createPairingSession(input: CreatePairingSessionInput): Promise<void> {
@@ -191,17 +294,17 @@ export class D1RelayState implements RelayState {
       .prepare(
         input.decision === "approve"
           ? `UPDATE pairing_sessions
-             SET owner_id = ?2, approved_at = ?3
-             WHERE user_code_hash = ?1 AND owner_id IS NULL
+             SET controller_id = ?2, approved_at = ?3
+             WHERE user_code_hash = ?1 AND controller_id IS NULL
                AND approved_at IS NULL AND denied_at IS NULL AND consumed_at IS NULL
                AND expires_at > ?3`
           : `UPDATE pairing_sessions
-             SET owner_id = ?2, denied_at = ?3
-             WHERE user_code_hash = ?1 AND owner_id IS NULL
+             SET controller_id = ?2, denied_at = ?3
+             WHERE user_code_hash = ?1 AND controller_id IS NULL
                AND approved_at IS NULL AND denied_at IS NULL AND consumed_at IS NULL
                AND expires_at > ?3`,
       )
-      .bind(input.user_code_hash, input.owner_id, input.decided_at)
+      .bind(input.user_code_hash, input.controller_id, input.decided_at)
       .run();
 
     if (result.meta.changes === 1) {
@@ -223,10 +326,10 @@ export class D1RelayState implements RelayState {
         this.database
           .prepare(
             `INSERT INTO devices
-              (id, owner_id, display_name, token_hash, pairing_session_id, created_at)
-             SELECT ?2, owner_id, device_display_name, ?3, id, ?4
+              (id, controller_id, display_name, token_hash, pairing_session_id, created_at)
+             SELECT ?2, controller_id, device_display_name, ?3, id, ?4
              FROM pairing_sessions
-             WHERE device_code_hash = ?1 AND owner_id IS NOT NULL
+             WHERE device_code_hash = ?1 AND controller_id IS NOT NULL
                AND approved_at IS NOT NULL AND denied_at IS NULL AND consumed_at IS NULL
                AND expires_at > ?4`,
           )
@@ -293,8 +396,7 @@ export class D1RelayState implements RelayState {
     return rateLimitResult(row, input);
   }
 
-  async recordSnapshot(envelope: QuotaSnapshotEnvelope): Promise<void> {
-    const updatedAt = new Date().toISOString();
+  async recordSnapshot(envelope: QuotaSnapshotEnvelope, receivedAt: string): Promise<void> {
     const statements = [
       ...envelope.snapshots.map((snapshot) =>
         this.database
@@ -323,7 +425,7 @@ export class D1RelayState implements RelayState {
             envelope.captured_at,
             snapshot.observed_at,
             JSON.stringify(snapshot),
-            updatedAt,
+            receivedAt,
           ),
       ),
       this.database
@@ -332,7 +434,7 @@ export class D1RelayState implements RelayState {
            SET last_seen_at = ?2, last_sequence = ?3
            WHERE id = ?1 AND revoked_at IS NULL AND last_sequence < ?3`,
         )
-        .bind(envelope.device_id, updatedAt, envelope.sequence),
+        .bind(envelope.device_id, receivedAt, envelope.sequence),
     ];
 
     const results = await this.database.batch(statements);
@@ -345,19 +447,30 @@ export class D1RelayState implements RelayState {
     if (!device || device.revoked_at) {
       throw new Error("Device is missing or revoked");
     }
+    const touched = await this.database
+      .prepare(
+        `UPDATE devices
+         SET last_seen_at = ?2
+         WHERE id = ?1 AND revoked_at IS NULL`,
+      )
+      .bind(envelope.device_id, receivedAt)
+      .run();
+    if (touched.meta.changes !== 1) {
+      throw new Error("Device activity could not be recorded");
+    }
   }
 
-  async listLatestSnapshots(ownerId: string): Promise<StoredQuotaSnapshot[]> {
+  async listLatestSnapshots(controllerId: string): Promise<StoredQuotaSnapshot[]> {
     const result = await this.database
       .prepare(
         `SELECT snapshots.device_id, snapshots.sequence, snapshots.captured_at,
                 snapshots.snapshot_json, snapshots.updated_at
          FROM quota_snapshots AS snapshots
          INNER JOIN devices ON devices.id = snapshots.device_id
-         WHERE devices.owner_id = ?1
+         WHERE devices.controller_id = ?1 AND devices.revoked_at IS NULL
          ORDER BY snapshots.updated_at DESC`,
       )
-      .bind(ownerId)
+      .bind(controllerId)
       .all<SnapshotRow>();
 
     return result.results.map((row) => ({

@@ -3,6 +3,7 @@
   "$id": "https://quota.gotry.io/schema/relay-http-v1.json",
   "title": "QuotaRelay HTTP API v1 payload",
   "anyOf": [
+    { "$ref": "#/$defs/controller_create_response" },
     { "$ref": "#/$defs/pairing_create_request" },
     { "$ref": "#/$defs/pairing_create_response" },
     { "$ref": "#/$defs/pairing_token_request" },
@@ -11,11 +12,19 @@
     { "$ref": "#/$defs/pairing_approval_request" },
     { "$ref": "#/$defs/pairing_denial_request" },
     { "$ref": "#/$defs/snapshot_upload_request" },
-    { "$ref": "#/$defs/owner_snapshot_list_response" },
+    { "$ref": "#/$defs/controller_snapshot_list_response" },
     { "$ref": "#/$defs/device_list_response" },
     { "$ref": "#/$defs/error_envelope" }
   ],
   "$defs": {
+    "controller_create_response": {
+      "type": "object",
+      "required": ["controller_token"],
+      "properties": {
+        "controller_token": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
     "error_code": {
       "enum": [
         "invalid_request",
@@ -113,7 +122,7 @@
     "snapshot_upload_request": {
       "$ref": "quota-snapshot-v1.json"
     },
-    "owner_snapshot_observation": {
+    "controller_snapshot_observation": {
       "type": "object",
       "required": ["device_id", "sequence", "captured_at", "snapshot", "updated_at"],
       "properties": {
@@ -125,13 +134,13 @@
       },
       "additionalProperties": false
     },
-    "owner_snapshot_list_response": {
+    "controller_snapshot_list_response": {
       "type": "object",
       "required": ["observations"],
       "properties": {
         "observations": {
           "type": "array",
-          "items": { "$ref": "#/$defs/owner_snapshot_observation" }
+          "items": { "$ref": "#/$defs/controller_snapshot_observation" }
         }
       },
       "additionalProperties": false

@@ -212,16 +212,29 @@ describe("edge pair", () => {
 });
 
 describe("edge unpair", () => {
-  it.each([credential(), null])("is idempotent for local credential state %#", async (existing) => {
+  it("revokes the bound remote device before deleting its local credential", async () => {
     const capture = captureOutput();
+    const existing = credential();
     const dependencies = fakeDependencies({ existing });
 
     expect(await runEdgeCommand(["unpair"], capture.output, dependencies)).toBe(0);
-    expect(dependencies.store.load).not.toHaveBeenCalled();
+    expect(dependencies.store.load).toHaveBeenCalledOnce();
+    expect(dependencies.createClient).toHaveBeenCalledWith(existing.relay_url);
     expect(dependencies.store.delete).toHaveBeenCalledOnce();
-    expect(capture.stdout).toContain("The local edge credential was removed if it existed.");
-    expect(capture.stdout.join("\n")).toContain("remote device was not revoked");
-    expect(capture.stdout.join("\n")).toContain("QuotaBar or Relay device management");
+    expect(capture.stdout).toEqual([
+      "The remote device was revoked and the local edge credential was removed.",
+    ]);
+    expect([...capture.stdout, ...capture.stderr].join("\n")).not.toContain(existing.device_token);
+  });
+
+  it("is idempotent when no local credential exists", async () => {
+    const capture = captureOutput();
+    const dependencies = fakeDependencies({ existing: null });
+
+    expect(await runEdgeCommand(["unpair"], capture.output, dependencies)).toBe(0);
+    expect(dependencies.createClient).not.toHaveBeenCalled();
+    expect(dependencies.store.delete).not.toHaveBeenCalled();
+    expect(capture.stdout).toEqual(["This machine is already unpaired."]);
   });
 });
 
@@ -247,6 +260,7 @@ function fakeDependencies(
     createPairing: vi.fn(async () => pairing),
     pollPairing: vi.fn(async () => issued),
     uploadSnapshot: vi.fn(async () => undefined),
+    revokeSelf: vi.fn(async () => undefined),
   };
   const createClient = vi.fn<(relayUrl: string) => EdgeRelayClient>((relayUrl) => ({
     ...client,

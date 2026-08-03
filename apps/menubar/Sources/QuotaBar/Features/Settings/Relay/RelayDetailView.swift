@@ -10,6 +10,7 @@ struct RelayDetailView: View {
   @State private var renameValue = ""
   @State private var errorMessage: String?
   @State private var showsDeleteConfirmation = false
+  @State private var showsLocalDeleteConfirmation = false
   @State private var isDeleting = false
 
   var body: some View {
@@ -61,12 +62,33 @@ struct RelayDetailView: View {
       }
       Button("Cancel", role: .cancel) {}
     } message: {
-      Text("QuotaBar will remove this profile and its Keychain owner credential.")
+      Text(deleteConfirmationMessage)
+    }
+    .confirmationDialog(
+      "Delete only the local Relay data?",
+      isPresented: $showsLocalDeleteConfirmation,
+      titleVisibility: .visible
+    ) {
+      Button("Delete Locally Anyway", role: .destructive) {
+        deleteProfileLocally()
+      }
+      Button("Keep Relay", role: .cancel) {}
+    } message: {
+      Text(
+        "QuotaBar could not confirm remote deletion. Local cleanup may leave the managed controller and Relay data behind while paired devices continue reporting."
+      )
     }
   }
 
   private var profile: RelayProfile? {
     model.profiles.first { $0.id == profileID }
+  }
+
+  private var deleteConfirmationMessage: String {
+    if profile?.mode == .managed {
+      return "QuotaBar will delete this managed controller and its linked Relay data, then remove the local profile and Keychain credential."
+    }
+    return "QuotaBar will remove this self-hosted profile and its local Keychain credential. The externally managed controller remains active."
   }
 
   private func profileSummary(_ profile: RelayProfile) -> some View {
@@ -244,15 +266,33 @@ struct RelayDetailView: View {
   private func deleteProfile() {
     guard !isDeleting else { return }
     isDeleting = true
-    defer { isDeleting = false }
+    Task {
+      defer { isDeleting = false }
+      do {
+        try await model.deleteProfile(profileID)
+        errorMessage = nil
+        onDeleted()
+      } catch {
+        errorMessage = RelaySettingsErrorPresentation.message(
+          for: error,
+          fallback: "QuotaBar could not delete the Relay."
+        )
+        if profile?.mode == .managed, !(error is CancellationError) {
+          showsLocalDeleteConfirmation = true
+        }
+      }
+    }
+  }
+
+  private func deleteProfileLocally() {
     do {
-      try model.deleteProfile(profileID)
+      try model.deleteProfileLocally(profileID)
       errorMessage = nil
       onDeleted()
     } catch {
       errorMessage = RelaySettingsErrorPresentation.message(
         for: error,
-        fallback: "QuotaBar could not delete the Relay."
+        fallback: "QuotaBar could not delete the local Relay data."
       )
     }
   }

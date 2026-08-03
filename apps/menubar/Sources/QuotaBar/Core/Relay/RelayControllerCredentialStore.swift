@@ -23,11 +23,20 @@ enum RelayKeychainOperation: Equatable, Sendable {
   case load(RelayKeychainQuery)
   case update(RelayKeychainItem)
   case delete(RelayKeychainQuery)
+  case listAccounts(service: String)
+  case deleteAll(service: String)
 }
 
 struct RelayKeychainResult: Equatable, Sendable {
   let status: OSStatus
   let data: Data?
+  let accounts: [String]?
+
+  init(status: OSStatus, data: Data?, accounts: [String]? = nil) {
+    self.status = status
+    self.data = data
+    self.accounts = accounts
+  }
 }
 
 protocol RelayKeychainOperating: Sendable {
@@ -69,6 +78,30 @@ struct SystemRelayKeychainOperations: RelayKeychainOperating {
         status: SecItemDelete(baseQuery(query) as CFDictionary),
         data: nil
       )
+
+    case .listAccounts(let service):
+      let attributes: [CFString: Any] = [
+        kSecClass: kSecClassGenericPassword,
+        kSecAttrService: service,
+        kSecReturnAttributes: true,
+        kSecMatchLimit: kSecMatchLimitAll,
+      ]
+      var result: CFTypeRef?
+      let status = SecItemCopyMatching(attributes as CFDictionary, &result)
+      let accounts = (result as? [[String: Any]])?.compactMap { item in
+        item[kSecAttrAccount as String] as? String
+      }
+      return RelayKeychainResult(status: status, data: nil, accounts: accounts)
+
+    case .deleteAll(let service):
+      let attributes: [CFString: Any] = [
+        kSecClass: kSecClassGenericPassword,
+        kSecAttrService: service,
+      ]
+      return RelayKeychainResult(
+        status: SecItemDelete(attributes as CFDictionary),
+        data: nil
+      )
     }
   }
 
@@ -88,7 +121,7 @@ struct SystemRelayKeychainOperations: RelayKeychainOperating {
   }
 }
 
-enum RelayOwnerCredentialStoreError: LocalizedError, Equatable, Sendable {
+enum RelayControllerCredentialStoreError: LocalizedError, Equatable, Sendable {
   case invalidCredential
   case missingCredential
   case corruptCredential
@@ -99,30 +132,30 @@ enum RelayOwnerCredentialStoreError: LocalizedError, Equatable, Sendable {
   var errorDescription: String? {
     switch self {
     case .invalidCredential:
-      "The Relay owner credential is invalid."
+      "The Relay controller credential is invalid."
     case .missingCredential:
-      "The Relay owner credential is missing."
+      "The Relay controller credential is missing."
     case .corruptCredential:
-      "The saved Relay owner credential is invalid."
+      "The saved Relay controller credential is invalid."
     case .couldNotRead:
-      "QuotaBar could not read the Relay owner credential."
+      "QuotaBar could not read the Relay controller credential."
     case .couldNotStore:
-      "QuotaBar could not save the Relay owner credential."
+      "QuotaBar could not save the Relay controller credential."
     case .couldNotDelete:
-      "QuotaBar could not delete the Relay owner credential."
+      "QuotaBar could not delete the Relay controller credential."
     }
   }
 }
 
-struct RelayOwnerCredentialStore: Sendable {
-  static let service = "io.gotry.quotabar.relay-owner"
+struct RelayControllerCredentialStore: Sendable {
+  static let service = "io.gotry.quotabar.relay-controller"
 
   private let operations: any RelayKeychainOperating
   private let service: String
 
   init(
     operations: any RelayKeychainOperating = SystemRelayKeychainOperations(),
-    service: String = RelayOwnerCredentialStore.service
+    service: String = RelayControllerCredentialStore.service
   ) {
     self.operations = operations
     self.service = service
@@ -132,13 +165,13 @@ struct RelayOwnerCredentialStore: Sendable {
     RelayProfile.credentialReference(for: profileID)
   }
 
-  func save(_ ownerBearer: String, reference: String) throws {
-    guard isValid(ownerBearer), !reference.isEmpty else {
-      throw RelayOwnerCredentialStoreError.invalidCredential
+  func save(_ controllerBearer: String, reference: String) throws {
+    guard isValid(controllerBearer), !reference.isEmpty else {
+      throw RelayControllerCredentialStoreError.invalidCredential
     }
     let item = RelayKeychainItem(
       query: query(reference: reference),
-      value: Data(ownerBearer.utf8),
+      value: Data(controllerBearer.utf8),
       accessibility: .afterFirstUnlockThisDeviceOnly
     )
     let added = operations.perform(.add(item))
@@ -146,40 +179,60 @@ struct RelayOwnerCredentialStore: Sendable {
       return
     }
     guard added.status == errSecDuplicateItem else {
-      throw RelayOwnerCredentialStoreError.couldNotStore
+      throw RelayControllerCredentialStoreError.couldNotStore
     }
     guard operations.perform(.update(item)).status == errSecSuccess else {
-      throw RelayOwnerCredentialStoreError.couldNotStore
+      throw RelayControllerCredentialStoreError.couldNotStore
     }
   }
 
   func load(reference: String) throws -> String {
     guard !reference.isEmpty else {
-      throw RelayOwnerCredentialStoreError.missingCredential
+      throw RelayControllerCredentialStoreError.missingCredential
     }
     let result = operations.perform(.load(query(reference: reference, forLoad: true)))
     if result.status == errSecItemNotFound {
-      throw RelayOwnerCredentialStoreError.missingCredential
+      throw RelayControllerCredentialStoreError.missingCredential
     }
     guard result.status == errSecSuccess else {
-      throw RelayOwnerCredentialStoreError.couldNotRead
+      throw RelayControllerCredentialStoreError.couldNotRead
     }
     guard let data = result.data,
-      let ownerBearer = String(data: data, encoding: .utf8),
-      isValid(ownerBearer)
+      let controllerBearer = String(data: data, encoding: .utf8),
+      isValid(controllerBearer)
     else {
-      throw RelayOwnerCredentialStoreError.corruptCredential
+      throw RelayControllerCredentialStoreError.corruptCredential
     }
-    return ownerBearer
+    return controllerBearer
   }
 
   func delete(reference: String) throws {
     guard !reference.isEmpty else {
-      throw RelayOwnerCredentialStoreError.missingCredential
+      throw RelayControllerCredentialStoreError.missingCredential
     }
     let status = operations.perform(.delete(query(reference: reference))).status
     guard status == errSecSuccess || status == errSecItemNotFound else {
-      throw RelayOwnerCredentialStoreError.couldNotDelete
+      throw RelayControllerCredentialStoreError.couldNotDelete
+    }
+  }
+
+  func reconcile(retaining references: Set<String>) throws {
+    let result = operations.perform(.listAccounts(service: service))
+    if result.status == errSecItemNotFound {
+      return
+    }
+    guard result.status == errSecSuccess, let accounts = result.accounts else {
+      throw RelayControllerCredentialStoreError.couldNotRead
+    }
+    for reference in Set(accounts).subtracting(references) {
+      try delete(reference: reference)
+    }
+  }
+
+  func deleteAll() throws {
+    let status = operations.perform(.deleteAll(service: service)).status
+    guard status == errSecSuccess || status == errSecItemNotFound else {
+      throw RelayControllerCredentialStoreError.couldNotDelete
     }
   }
 
@@ -192,9 +245,9 @@ struct RelayOwnerCredentialStore: Sendable {
     )
   }
 
-  private func isValid(_ ownerBearer: String) -> Bool {
-    !ownerBearer.isEmpty
-      && ownerBearer == ownerBearer.trimmingCharacters(in: .whitespacesAndNewlines)
-      && ownerBearer.unicodeScalars.allSatisfy { $0.value >= 0x20 && $0.value != 0x7f }
+  private func isValid(_ controllerBearer: String) -> Bool {
+    !controllerBearer.isEmpty
+      && controllerBearer == controllerBearer.trimmingCharacters(in: .whitespacesAndNewlines)
+      && controllerBearer.unicodeScalars.allSatisfy { $0.value >= 0x20 && $0.value != 0x7f }
   }
 }

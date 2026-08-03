@@ -1,6 +1,7 @@
 import {
+  ControllerCreateResponseSchema,
+  ControllerSnapshotListResponseSchema,
   DeviceListResponseSchema,
-  OwnerSnapshotListResponseSchema,
   PairingApprovalRequestSchema,
   PairingCreateRequestSchema,
   type PairingCreateResponse,
@@ -14,9 +15,9 @@ import {
   type RelayInfo,
 } from "@gotry-io/quota-protocol";
 import type {
-  AuthSessionRecord,
+  ControllerAuthScope,
+  ControllerSessionRecord,
   DeviceRecord,
-  OwnerAuthScope,
   RelayState,
 } from "@gotry-io/relay-core";
 import { type Context, Hono } from "hono";
@@ -24,12 +25,16 @@ import { bodyLimit } from "hono/body-limit";
 import { bearerToken, randomOpaqueSecret, randomUserCode, sha256Hex } from "./security.ts";
 
 const pairingLifetimeSeconds = 10 * 60;
+const pairingSessionRetentionSeconds = 24 * 60 * 60;
 const pairingPollIntervalSeconds = 5;
 const maximumJSONBodyBytes = 64 * 1024;
+const controllerSessionExpiresAt = "9999-12-31T23:59:59.999Z";
+export const deviceInactivitySeconds = 30 * 24 * 60 * 60;
 
 const rateLimits = {
+  controllerCreate: { limit: 10, windowSeconds: 60 * 60 },
   pairingCreate: { limit: 300, windowSeconds: 10 * 60 },
-  pairingPollGlobal: { limit: 10_000, windowSeconds: 10 * 60 },
+  pairingPollClient: { limit: 10_000, windowSeconds: 10 * 60 },
   pairingPollPerCode: { limit: 130, windowSeconds: 10 * 60 },
   pairingDecision: { limit: 30, windowSeconds: 10 * 60 },
 } as const;
@@ -84,12 +89,54 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     }),
   );
 
+  if (options.relayInfo.mode === "managed") {
+    app.post("/api/v1/controllers", async (context) => {
+      const limited = await enforceRateLimit(
+        context,
+        options.state,
+        "controller_create",
+        context.req.header("CF-Connecting-IP") ?? "relay_global",
+        rateLimits.controllerCreate,
+        now(),
+      );
+      if (limited) {
+        return limited;
+      }
+
+      const createdAt = now().toISOString();
+      const controllerToken = randomOpaqueSecret();
+      await options.state.createController({
+        id: `controller_${crypto.randomUUID()}`,
+        kind: "managed",
+        session_id: `controller_session_${crypto.randomUUID()}`,
+        token_hash: await sha256Hex(controllerToken),
+        scopes: ["quota:read", "device:manage"],
+        expires_at: controllerSessionExpiresAt,
+        created_at: createdAt,
+      });
+
+      return context.json(
+        ControllerCreateResponseSchema.parse({ controller_token: controllerToken }),
+        201,
+      );
+    });
+
+    app.delete("/api/v1/controllers/self", async (context) => {
+      const principal = await authorizeController(context, options.state, "device:manage", now());
+      if (principal instanceof Response) {
+        return principal;
+      }
+      await options.state.deleteController(principal.controller_id);
+      return context.body(null, 204);
+    });
+  }
+
   app.post("/api/v1/pairings", async (context) => {
     const limited = await enforceRateLimit(
       context,
       options.state,
       "pairing_create",
-      "relay_global",
+      anonymousClientSubject(context, options.relayInfo),
       rateLimits.pairingCreate,
       now(),
     );
@@ -130,16 +177,16 @@ export function createRelayApp(options: RelayAppOptions): Hono {
       return body;
     }
     const deviceCodeHash = await sha256Hex(body.device_code);
-    const globallyLimited = await enforceRateLimit(
+    const clientLimited = await enforceRateLimit(
       context,
       options.state,
-      "pairing_poll_global",
-      "relay_global",
-      rateLimits.pairingPollGlobal,
+      "pairing_poll_client",
+      anonymousClientSubject(context, options.relayInfo),
+      rateLimits.pairingPollClient,
       now(),
     );
-    if (globallyLimited) {
-      return globallyLimited;
+    if (clientLimited) {
+      return clientLimited;
     }
     const codeLimited = await enforceRateLimit(
       context,
@@ -203,7 +250,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
   });
 
   app.post("/api/v1/snapshots", async (context) => {
-    const principal = await authorizeDevice(context, options.state);
+    const principal = await authorizeDevice(context, options.state, now());
     if (principal instanceof Response) {
       return principal;
     }
@@ -221,10 +268,10 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     }
 
     try {
-      await options.state.recordSnapshot(envelope);
+      await options.state.recordSnapshot(envelope, now().toISOString());
     } catch {
-      const stillActive = await options.state.getActiveDeviceByTokenHash(principal.tokenHash);
-      if (!stillActive) {
+      const stillActive = await options.state.getDeviceByTokenHash(principal.tokenHash);
+      if (!stillActive || stillActive.revoked_at) {
         return unauthorized(context);
       }
       throw new Error("Snapshot persistence failed");
@@ -233,22 +280,26 @@ export function createRelayApp(options: RelayAppOptions): Hono {
   });
 
   app.get("/api/v1/snapshots", async (context) => {
-    const principal = await authorizeOwner(context, options.state, "quota:read", now());
+    const checkedAt = now();
+    const principal = await authorizeController(context, options.state, "quota:read", checkedAt);
     if (principal instanceof Response) {
       return principal;
     }
-    const response = OwnerSnapshotListResponseSchema.parse({
-      observations: await options.state.listLatestSnapshots(principal.owner_id),
+    await revokeInactiveDevicesForController(options.state, principal.controller_id, checkedAt);
+    const response = ControllerSnapshotListResponseSchema.parse({
+      observations: await options.state.listLatestSnapshots(principal.controller_id),
     });
     return context.json(response);
   });
 
   app.get("/api/v1/devices", async (context) => {
-    const principal = await authorizeOwner(context, options.state, "device:manage", now());
+    const checkedAt = now();
+    const principal = await authorizeController(context, options.state, "device:manage", checkedAt);
     if (principal instanceof Response) {
       return principal;
     }
-    const devices = await options.state.listDevices(principal.owner_id);
+    await revokeInactiveDevicesForController(options.state, principal.controller_id, checkedAt);
+    const devices = await options.state.listDevices(principal.controller_id);
     const response = DeviceListResponseSchema.parse({
       devices: devices.map((device) => ({
         device_id: device.id,
@@ -262,15 +313,33 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     return context.json(response);
   });
 
+  app.delete("/api/v1/devices/self", async (context) => {
+    const revokedAt = now();
+    const token = bearerToken(context.req.header("Authorization"));
+    if (!token) {
+      return unauthorized(context);
+    }
+    const device = await options.state.getDeviceByTokenHash(await sha256Hex(token));
+    if (!device) {
+      return unauthorized(context);
+    }
+    if (!device.revoked_at) {
+      await options.state.revokeDevice(device.controller_id, device.id, revokedAt.toISOString());
+    }
+    return context.body(null, 204);
+  });
+
   app.delete("/api/v1/devices/:device_id", async (context) => {
-    const principal = await authorizeOwner(context, options.state, "device:manage", now());
+    const checkedAt = now();
+    const principal = await authorizeController(context, options.state, "device:manage", checkedAt);
     if (principal instanceof Response) {
       return principal;
     }
+    await revokeInactiveDevicesForController(options.state, principal.controller_id, checkedAt);
     const revoked = await options.state.revokeDevice(
-      principal.owner_id,
+      principal.controller_id,
       context.req.param("device_id"),
-      now().toISOString(),
+      checkedAt.toISOString(),
     );
     if (!revoked) {
       return relayError(context, 404, "not_found", "The device was not found.");
@@ -295,7 +364,7 @@ async function decidePairing(
   decision: "approve" | "deny",
   now: () => Date,
 ): Promise<Response> {
-  const principal = await authorizeOwner(context, state, "device:manage", now());
+  const principal = await authorizeController(context, state, "device:manage", now());
   if (principal instanceof Response) {
     return principal;
   }
@@ -303,7 +372,7 @@ async function decidePairing(
     context,
     state,
     "pairing_decision",
-    principal.owner_id,
+    principal.controller_id,
     rateLimits.pairingDecision,
     now(),
   );
@@ -317,7 +386,7 @@ async function decidePairing(
   }
   const outcome = await state.decidePairingSession({
     user_code_hash: await sha256Hex(normalizeUserCode(body.user_code)),
-    owner_id: principal.owner_id,
+    controller_id: principal.controller_id,
     decision,
     decided_at: now().toISOString(),
   });
@@ -347,17 +416,17 @@ async function decidePairing(
   }
 }
 
-async function authorizeOwner(
+async function authorizeController(
   context: Context,
   state: RelayState,
-  requiredScope: OwnerAuthScope,
+  requiredScope: ControllerAuthScope,
   checkedAt: Date,
-): Promise<AuthSessionRecord | Response> {
+): Promise<ControllerSessionRecord | Response> {
   const token = bearerToken(context.req.header("Authorization"));
   if (!token) {
     return unauthorized(context);
   }
-  const session = await state.getActiveAuthSessionByTokenHash(
+  const session = await state.getActiveControllerSessionByTokenHash(
     await sha256Hex(token),
     checkedAt.toISOString(),
   );
@@ -373,17 +442,72 @@ async function authorizeOwner(
 async function authorizeDevice(
   context: Context,
   state: RelayState,
+  checkedAt: Date,
 ): Promise<DevicePrincipal | Response> {
   const token = bearerToken(context.req.header("Authorization"));
   if (!token) {
     return unauthorized(context);
   }
   const tokenHash = await sha256Hex(token);
-  const device = await state.getActiveDeviceByTokenHash(tokenHash);
-  if (!device) {
+  const device = await state.getDeviceByTokenHash(tokenHash);
+  if (!device || device.revoked_at) {
     return unauthorized(context);
   }
+  if (deviceIsInactive(device, checkedAt)) {
+    const revoked = await state.revokeDeviceIfInactive(
+      tokenHash,
+      inactivityCutoff(checkedAt),
+      checkedAt.toISOString(),
+    );
+    if (revoked) {
+      return unauthorized(context);
+    }
+    const refreshed = await state.getDeviceByTokenHash(tokenHash);
+    if (!refreshed || refreshed.revoked_at || deviceIsInactive(refreshed, checkedAt)) {
+      return unauthorized(context);
+    }
+    return { device: refreshed, tokenHash };
+  }
   return { device, tokenHash };
+}
+
+export async function performRelayMaintenance(state: RelayState, checkedAt: Date): Promise<void> {
+  await state.performMaintenance({
+    inactive_before: inactivityCutoff(checkedAt),
+    pairing_expired_before: new Date(
+      checkedAt.getTime() - pairingSessionRetentionSeconds * 1000,
+    ).toISOString(),
+    maintained_at: checkedAt.toISOString(),
+  });
+}
+
+async function revokeInactiveDevicesForController(
+  state: RelayState,
+  controllerId: string,
+  checkedAt: Date,
+): Promise<number> {
+  return state.revokeInactiveDevicesForController(
+    controllerId,
+    inactivityCutoff(checkedAt),
+    checkedAt.toISOString(),
+  );
+}
+
+function deviceIsInactive(device: DeviceRecord, checkedAt: Date): boolean {
+  return (
+    Date.parse(device.last_seen_at ?? device.created_at) <= Date.parse(inactivityCutoff(checkedAt))
+  );
+}
+
+function inactivityCutoff(checkedAt: Date): string {
+  return new Date(checkedAt.getTime() - deviceInactivitySeconds * 1000).toISOString();
+}
+
+function anonymousClientSubject(context: Context, relayInfo: RelayInfo): string {
+  if (relayInfo.mode === "managed") {
+    return context.req.header("CF-Connecting-IP") ?? "relay_global";
+  }
+  return "relay_global";
 }
 
 async function enforceRateLimit(

@@ -8,6 +8,11 @@ struct SettingsHomeView: View {
   @Binding var showsGrok: Bool
   let onOpenRelays: () -> Void
 
+  @State private var showsDeleteAllConfirmation = false
+  @State private var showsLocalDeleteConfirmation = false
+  @State private var isDeletingAllData = false
+  @State private var deleteAllErrorMessage: String?
+
   var body: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 24) {
@@ -74,6 +79,21 @@ struct SettingsHomeView: View {
           .foregroundStyle(QuotaPalette.body)
           .fixedSize(horizontal: false, vertical: true)
 
+          if let deleteAllErrorMessage {
+            Label(deleteAllErrorMessage, systemImage: "exclamationmark.circle")
+              .font(.caption)
+              .foregroundStyle(QuotaPalette.body)
+              .fixedSize(horizontal: false, vertical: true)
+          }
+
+          Button("Delete all QuotaBar data") {
+            showsDeleteAllConfirmation = true
+          }
+          .buttonStyle(.plain)
+          .font(.system(.subheadline, weight: .medium))
+          .foregroundStyle(QuotaPalette.body)
+          .disabled(isDeletingAllData)
+
           Button("Quit QuotaBar") {
             NSApplication.shared.terminate(nil)
           }
@@ -85,6 +105,34 @@ struct SettingsHomeView: View {
       .frame(maxWidth: .infinity, alignment: .topLeading)
       .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
       .padding(.vertical, 16)
+    }
+    .confirmationDialog(
+      "Delete all QuotaBar data?",
+      isPresented: $showsDeleteAllConfirmation,
+      titleVisibility: .visible
+    ) {
+      Button("Delete All Data", role: .destructive) {
+        deleteAllData()
+      }
+      Button("Cancel", role: .cancel) {}
+    } message: {
+      Text(
+        "QuotaBar will delete its managed controller and linked Relay data, then delete all controller credentials, Relay profiles, cached quota, and user preferences. Managed Relay will stay disconnected until you reconnect it."
+      )
+    }
+    .confirmationDialog(
+      "Finish by deleting local data?",
+      isPresented: $showsLocalDeleteConfirmation,
+      titleVisibility: .visible
+    ) {
+      Button("Delete Locally Anyway", role: .destructive) {
+        deleteAllDataLocally()
+      }
+      Button("Keep Data", role: .cancel) {}
+    } message: {
+      Text(
+        "QuotaBar could not confirm full cleanup. Deleting locally may leave the managed controller and Relay data behind while paired devices continue reporting. Use this only if you cannot retry while online."
+      )
     }
   }
 
@@ -154,5 +202,41 @@ struct SettingsHomeView: View {
 
       content()
     }
+  }
+
+  private func deleteAllData() {
+    guard !isDeletingAllData else { return }
+    isDeletingAllData = true
+    deleteAllErrorMessage = nil
+    Task {
+      defer { isDeletingAllData = false }
+      do {
+        try await model.deleteAllQuotaBarData()
+      } catch {
+        deleteAllErrorMessage = RelaySettingsErrorPresentation.message(
+          for: error,
+          fallback: "QuotaBar could not delete all data."
+        )
+        if shouldOfferLocalDelete(after: error) {
+          showsLocalDeleteConfirmation = true
+        }
+      }
+    }
+  }
+
+  private func deleteAllDataLocally() {
+    do {
+      try model.deleteAllQuotaBarDataLocally()
+      deleteAllErrorMessage = nil
+    } catch {
+      deleteAllErrorMessage = RelaySettingsErrorPresentation.message(
+        for: error,
+        fallback: "QuotaBar could not delete its local data."
+      )
+    }
+  }
+
+  private func shouldOfferLocalDelete(after error: Error) -> Bool {
+    !(error is CancellationError)
   }
 }

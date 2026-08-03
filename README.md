@@ -17,7 +17,9 @@ through a persistent QuotaRelay.
 
 The canonical system description is in [architecture](docs/architecture.md). See the
 [security baseline](docs/security.md), [provider strategies](docs/provider-collection.md),
-[persistent storage decision](docs/decisions/0001-persistent-relay-storage.md), and
+[persistent storage decision](docs/decisions/0001-persistent-relay-storage.md),
+[device pairing decision](docs/decisions/0002-relay-device-code-pairing.md),
+[anonymous controller decision](docs/decisions/0004-anonymous-relay-controllers.md), and
 [product design system](DESIGN.md) for their respective concerns.
 
 ## Repository layout
@@ -47,13 +49,13 @@ pnpm install
 pnpm check
 pnpm test
 pnpm build
-pnpm test:relay:owner-e2e
+pnpm test:relay:e2e
 ```
 
 Run the self-hosted Relay with persistent SQLite storage:
 
 ```bash
-export QUOTA_RELAY_OWNER_TOKEN="$(openssl rand -hex 32)"
+export QUOTA_RELAY_CONTROLLER_TOKEN="$(openssl rand -hex 32)"
 pnpm dev:relay:self-hosted
 ```
 
@@ -94,24 +96,28 @@ protocol validation, persistent D1/SQLite Relay storage, Relay discovery, and th
 website. QuotaBar ships its bundled helper and now resolves local and remote observations into one
 stable Overview without accumulating conflicting quota values. One Relay state model is shared by
 five-minute app-lifecycle polling and the typed Settings stack for Relay profiles, pairing decisions,
-device listing, and revocation. Relay owner credentials remain in Keychain.
-The macOS owner-path acceptance test also exercises a real LaunchServices-started QuotaBar against
-an isolated self-hosted Relay: QuotaBar persists the owner bearer, approves a real QuotaCLI pairing,
-renders a non-empty remote snapshot, revokes the device, rejects its next report, restores state,
-and removes all test credentials.
+device listing, and revocation. Controller capabilities remain in Keychain.
+
+The macOS Relay acceptance test exercises a real LaunchServices-started QuotaBar and QuotaCLI
+against isolated managed and self-hosted Relay runtimes. It covers anonymous managed enrollment,
+controller persistence, device pairing, a non-empty report, Remote Overview rendering, device
+revocation and rejection, remote self-unpairing, restart restoration, and credential cleanup.
 
 QuotaRelay implements its protocol-validated `/api/v1` server core for device-code pairing, scoped
 Bearer authentication, snapshot upload and reads, device management, and persistent rate limiting.
-Self-hosted owner bootstrap and authenticated discovery are implemented; managed owner
-authentication remains disabled. QuotaCLI implements Relay pairing, one-shot reporting, local
-unpairing, and an explicit macOS LaunchAgent lifecycle for five-minute reporting; pairing never
-enables recurring uploads. QuotaCLI 0.1.0 is published on npm and later tags publish through OIDC.
+The managed runtime issues anonymous controller capabilities without a user account; the
+self-hosted runtime bootstraps one controller from its environment. Controllers can revoke devices
+or delete their managed data, devices can revoke themselves, and devices inactive for 30 days are
+automatically revoked. Abandoned managed controllers and expired pairing state are reclaimed by
+scheduled maintenance, while self-hosted controllers remain permanent. QuotaCLI implements Relay
+pairing, one-shot reporting, remote unpairing, and an explicit macOS LaunchAgent lifecycle for
+five-minute reporting; pairing never enables recurring uploads. QuotaCLI 0.1.0 is published on npm
+and later tags publish through OIDC.
 
 The deterministic Visual App captures its own window without Screen Recording permission, and its
 automated acceptance harness validates twelve Overview and Settings scenes across appearance and
-text-size variants. Background-service support outside macOS, managed owner authentication, and the
-first published Homebrew artifact remain incomplete. Realtime delivery is optional and not part of
-v1.
+text-size variants. Background-service support outside macOS and the first published Homebrew
+artifact remain incomplete. Realtime delivery is optional and not part of v1.
 
 ## License
 

@@ -18,7 +18,7 @@ struct RelayProfileStoreTests {
       fixture.defaults.data(forKey: RelayProfileStore.storageKey)
     )
     let savedJSON = try #require(String(data: savedData, encoding: .utf8))
-    #expect(!savedJSON.contains("owner_synthetic_secret"))
+    #expect(!savedJSON.contains("controller_synthetic_secret"))
     #expect(!savedJSON.localizedCaseInsensitiveContains("bearer"))
     #expect(savedJSON.contains(profile.credentialReference))
     #expect(try store.load() == [profile])
@@ -49,10 +49,10 @@ struct RelayProfileStoreTests {
     Data(#"{"schema_version":2,"profiles":[]}"#.utf8),
     Data(#"{"schema_version":1,"profiles":[{"id":"11111111-1111-1111-1111-111111111111"}]}"#.utf8),
     Data(
-      #"{"schema_version":1,"profiles":[{"id":"11111111-1111-1111-1111-111111111111","name":"Relay","base_url":"https://relay.example/","instance_id":"relay_primary","mode":"self_hosted","capabilities":{"realtime":false,"persistent_snapshots":true,"instant_device_revocation":true,"history":false,"multi_tenant":false},"credential_reference":"relay-owner:11111111-1111-1111-1111-111111111111","is_default":true}]}"#.utf8
+      #"{"schema_version":1,"profiles":[{"id":"11111111-1111-1111-1111-111111111111","name":"Relay","base_url":"https://relay.example/","instance_id":"relay_primary","mode":"self_hosted","capabilities":{"realtime":false,"persistent_snapshots":true,"instant_device_revocation":true,"history":false,"multi_tenant":false},"credential_reference":"relay-controller:11111111-1111-1111-1111-111111111111","is_default":true}]}"#.utf8
     ),
     Data(
-      #"{"schema_version":1,"profiles":[{"id":"11111111-1111-1111-1111-111111111111","name":" Relay ","base_url":"https://relay.example","instance_id":"relay_primary","mode":"self_hosted","capabilities":{"realtime":false,"persistent_snapshots":true,"instant_device_revocation":true,"history":false,"multi_tenant":false},"credential_reference":"relay-owner:11111111-1111-1111-1111-111111111111","is_default":true}]}"#.utf8
+      #"{"schema_version":1,"profiles":[{"id":"11111111-1111-1111-1111-111111111111","name":" Relay ","base_url":"https://relay.example","instance_id":"relay_primary","mode":"self_hosted","capabilities":{"realtime":false,"persistent_snapshots":true,"instant_device_revocation":true,"history":false,"multi_tenant":false},"credential_reference":"relay-controller:11111111-1111-1111-1111-111111111111","is_default":true}]}"#.utf8
     ),
   ])
   func rejectsInvalidProfileData(data: Data) throws {
@@ -80,7 +80,7 @@ struct RelayProfileStoreTests {
 
     #expect(profile.baseURL.absoluteString == "https://relay.example")
     #expect(profile.instanceID == "relay_primary")
-    #expect(profile.credentialReference == "relay-owner:11111111-1111-1111-1111-111111111111")
+    #expect(profile.credentialReference == "relay-controller:11111111-1111-1111-1111-111111111111")
   }
 }
 

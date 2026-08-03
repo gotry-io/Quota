@@ -6,7 +6,7 @@ private struct CachedQuotaReport: Codable {
 }
 
 struct LocalQuotaReportCache {
-  private static let storageKey = "localQuotaReport.v1"
+  static let storageKey = "localQuotaReport.v1"
   private let defaults: UserDefaults
 
   static var live: LocalQuotaReportCache {

@@ -311,6 +311,81 @@ describe("RelayClient snapshot upload", () => {
   });
 });
 
+describe("RelayClient device self-revocation", () => {
+  it("sends the device Bearer credential only to the fixed self endpoint", async () => {
+    const fetchMock = vi.fn<RelayFetch>().mockResolvedValue(new Response(null, { status: 204 }));
+    const client = new RelayClient("https://relay.example.com", { fetch: fetchMock });
+
+    await expect(client.revokeSelf("synthetic-device-token")).resolves.toBeUndefined();
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://relay.example.com/api/v1/devices/self");
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
+      method: "DELETE",
+      redirect: "error",
+    });
+    expect(fetchMock.mock.calls[0]?.[1]?.body).toBeUndefined();
+    const headers = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
+    expect(headers.get("Authorization")).toBe("Bearer synthetic-device-token");
+    expect(headers.has("Content-Type")).toBe(false);
+  });
+
+  it("does not treat an unauthorized credential as proof of revocation", async () => {
+    const client = new RelayClient("https://relay.example.com", {
+      fetch: vi.fn<RelayFetch>().mockResolvedValue(
+        jsonResponse(
+          {
+            error: {
+              code: "unauthorized",
+              message: "Authorization Bearer synthetic-device-token raw-body-secret",
+            },
+          },
+          401,
+        ),
+      ),
+    });
+
+    const error = await captureError(client.revokeSelf("synthetic-device-token"));
+    expect(error).toMatchObject({
+      code: "unauthorized",
+      status: 401,
+      message: "The Relay rejected the request.",
+    });
+    expect(error.message).not.toMatch(/synthetic-device-token|raw-body-secret|Authorization/);
+  });
+
+  it("keeps other Relay failures explicit and free of response details", async () => {
+    const client = new RelayClient("https://relay.example.com", {
+      fetch: vi.fn<RelayFetch>().mockResolvedValue(
+        jsonResponse(
+          {
+            error: {
+              code: "internal_error",
+              message: "Authorization Bearer synthetic-device-token raw-body-secret",
+            },
+          },
+          500,
+        ),
+      ),
+    });
+
+    const error = await captureError(client.revokeSelf("synthetic-device-token"));
+    expect(error).toMatchObject({
+      code: "internal_error",
+      message: "The Relay rejected the request.",
+    });
+    expect(error.message).not.toMatch(/synthetic-device-token|raw-body-secret|Authorization/);
+  });
+
+  it("rejects an invalid device credential before the request", async () => {
+    const fetchMock = vi.fn<RelayFetch>();
+    const client = new RelayClient("https://relay.example.com", { fetch: fetchMock });
+
+    await expectErrorCode(client.revokeSelf(" surrounded "), "invalid_request");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
 const snapshotEnvelope: QuotaSnapshotEnvelope = {
   schema_version: 1,
   device_id: "device_test",

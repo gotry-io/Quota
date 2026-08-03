@@ -123,10 +123,10 @@ describe("edge background service commands", () => {
     const dependencies = serviceDependencies({ events });
 
     expect(await runEdgeCommand(["unpair"], captureOutput().output, dependencies)).toBe(0);
-    expect(events).toEqual(["stop", "delete"]);
+    expect(events).toEqual(["stop", "load", "discover", "revoke", "delete"]);
   });
 
-  it("deletes the credential and returns a fixed warning when service stop fails", async () => {
+  it("retains pairing and does no remote work when service stop fails", async () => {
     const events: string[] = [];
     const dependencies = serviceDependencies({
       events,
@@ -135,20 +135,86 @@ describe("edge background service commands", () => {
     const capture = captureOutput();
 
     expect(await runEdgeCommand(["unpair"], capture.output, dependencies)).toBe(1);
-    expect(events).toEqual(["stop", "delete"]);
-    expect(dependencies.store.delete).toHaveBeenCalledOnce();
+    expect(events).toEqual(["stop"]);
+    expect(dependencies.store.load).not.toHaveBeenCalled();
+    expect(dependencies.store.delete).not.toHaveBeenCalled();
     expect(capture.stderr).toEqual([
-      "QuotaCLI could not stop background edge reporting, but the local credential was removed.",
+      "QuotaCLI could not stop background edge reporting. Pairing was retained.",
     ]);
     expect(capture.stderr.join("\n")).not.toContain(pairedCredential.device_token);
   });
 
   it("leaves the background service alone when unpairing outside macOS", async () => {
-    const dependencies = serviceDependencies({ platform: "linux" });
+    const events: string[] = [];
+    const dependencies = serviceDependencies({ platform: "linux", events });
 
     expect(await runEdgeCommand(["unpair"], captureOutput().output, dependencies)).toBe(0);
     expect(dependencies.service.stop).not.toHaveBeenCalled();
+    expect(events).toEqual(["load", "discover", "revoke", "delete"]);
     expect(dependencies.store.delete).toHaveBeenCalledOnce();
+  });
+
+  it("retains the credential when Relay discovery fails", async () => {
+    const events: string[] = [];
+    const dependencies = serviceDependencies({
+      events,
+      discoverError: new Error(`raw Relay response ${pairedCredential.device_token}`),
+    });
+    const capture = captureOutput();
+
+    expect(await runEdgeCommand(["unpair"], capture.output, dependencies)).toBe(1);
+    expect(events).toEqual(["stop", "load", "discover"]);
+    expect(dependencies.store.delete).not.toHaveBeenCalled();
+    expect(capture.stderr).toEqual([
+      "QuotaCLI could not revoke the remote device. The local credential was retained for retry.",
+    ]);
+    expect(capture.stderr.join("\n")).not.toContain(pairedCredential.device_token);
+  });
+
+  it("retains the credential when the discovered Relay instance does not match", async () => {
+    const events: string[] = [];
+    const dependencies = serviceDependencies({ events, relayInstanceID: "relay_other" });
+    const capture = captureOutput();
+
+    expect(await runEdgeCommand(["unpair"], capture.output, dependencies)).toBe(1);
+    expect(events).toEqual(["stop", "load", "discover"]);
+    expect(dependencies.store.delete).not.toHaveBeenCalled();
+    expect(capture.stderr).toEqual([
+      "The paired Relay identity does not match the discovered Relay. The local credential was retained.",
+    ]);
+  });
+
+  it("retains the credential when remote self-revocation fails", async () => {
+    const events: string[] = [];
+    const dependencies = serviceDependencies({
+      events,
+      revokeError: new Error(`Bearer ${pairedCredential.device_token} raw Relay body`),
+    });
+    const capture = captureOutput();
+
+    expect(await runEdgeCommand(["unpair"], capture.output, dependencies)).toBe(1);
+    expect(events).toEqual(["stop", "load", "discover", "revoke"]);
+    expect(dependencies.store.delete).not.toHaveBeenCalled();
+    expect(capture.stderr).toEqual([
+      "QuotaCLI could not revoke the remote device. The local credential was retained for retry.",
+    ]);
+    expect(capture.stderr.join("\n")).not.toContain(pairedCredential.device_token);
+  });
+
+  it("reports local deletion failure after remote revocation", async () => {
+    const events: string[] = [];
+    const dependencies = serviceDependencies({
+      events,
+      deleteError: new Error(`delete failed ${pairedCredential.device_token}`),
+    });
+    const capture = captureOutput();
+
+    expect(await runEdgeCommand(["unpair"], capture.output, dependencies)).toBe(1);
+    expect(events).toEqual(["stop", "load", "discover", "revoke", "delete"]);
+    expect(capture.stderr).toEqual([
+      "The remote device was revoked, but QuotaCLI could not remove the local edge credential.",
+    ]);
+    expect(capture.stderr.join("\n")).not.toContain(pairedCredential.device_token);
   });
 
   it.each(["start", "status", "stop"])(
@@ -198,6 +264,10 @@ interface ServiceDependencyOptions {
   startError?: Error;
   statusError?: Error;
   stopError?: Error;
+  discoverError?: Error;
+  revokeError?: Error;
+  deleteError?: Error;
+  relayInstanceID?: string;
   events?: string[];
 }
 
@@ -215,16 +285,54 @@ function serviceDependencies(options: ServiceDependencyOptions = {}): EdgeComman
 } {
   const events = options.events;
   return {
-    createClient: vi.fn(() => {
-      throw new Error("not used");
-    }),
+    createClient: vi.fn((relayUrl: string) => ({
+      relayUrl,
+      discover: vi.fn(async () => {
+        events?.push("discover");
+        if (options.discoverError) {
+          throw options.discoverError;
+        }
+        return {
+          instance_id: options.relayInstanceID ?? pairedCredential.instance_id,
+          mode: "self_hosted" as const,
+          version: "0.1.0",
+          api_versions: [1 as const],
+          auth_methods: ["bearer" as const],
+          capabilities: {
+            realtime: false,
+            persistent_snapshots: true,
+            instant_device_revocation: true,
+            history: false,
+            multi_tenant: false,
+          },
+        };
+      }),
+      createPairing: vi.fn(async () => {
+        throw new Error("not used");
+      }),
+      pollPairing: vi.fn(async () => {
+        throw new Error("not used");
+      }),
+      uploadSnapshot: vi.fn(async () => undefined),
+      revokeSelf: vi.fn(async (deviceToken: string) => {
+        events?.push("revoke");
+        expect(deviceToken).toBe(pairedCredential.device_token);
+        if (options.revokeError) {
+          throw options.revokeError;
+        }
+      }),
+    })),
     store: {
-      load: vi.fn(async () =>
-        options.credential === undefined ? pairedCredential : options.credential,
-      ),
+      load: vi.fn(async () => {
+        events?.push("load");
+        return options.credential === undefined ? pairedCredential : options.credential;
+      }),
       save: vi.fn(async () => undefined),
       delete: vi.fn(async () => {
         events?.push("delete");
+        if (options.deleteError) {
+          throw options.deleteError;
+        }
       }),
     },
     platform: options.platform ?? "darwin",
@@ -252,7 +360,6 @@ function serviceDependencies(options: ServiceDependencyOptions = {}): EdgeComman
     collect: vi.fn(async () => undefined),
   };
 }
-
 function captureOutput(): {
   stdout: string[];
   stderr: string[];

@@ -15,10 +15,12 @@ QuotaRelay has no stateless production mode.
 
 ## Rationale
 
-Users, devices, pairing sessions, revocations, authentication sessions, and current quota snapshots
-are small, structured, mutable records with relational constraints. SQL provides indexes, unique
-constraints, joins, and transactional device lifecycle operations. D1 and SQLite also allow the
-managed and self-hosted runtimes to share one logical schema.
+Controllers, devices, pairing sessions, revocations, capability credentials, and current quota
+snapshots are small, structured, mutable records with relational constraints. SQL provides indexes,
+unique constraints, joins, and transactional device lifecycle operations. D1 and SQLite also allow
+the managed and self-hosted runtimes to share one logical schema. Controllers are anonymous
+authorization boundaries as defined in
+[`0004-anonymous-relay-controllers.md`](0004-anonymous-relay-controllers.md), not user identities.
 
 R2 is object storage. Using it for core state would require application-managed indexes, relations,
 and multi-object concurrency control.

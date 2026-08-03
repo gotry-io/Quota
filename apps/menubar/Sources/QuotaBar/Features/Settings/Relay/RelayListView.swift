@@ -5,11 +5,19 @@ struct RelayListView: View {
   let onAddRelay: () -> Void
   let onOpenRelay: (UUID) -> Void
 
+  @State private var isEnablingManagedRelay = false
+
   var body: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 16) {
         if let issue = model.globalIssue {
           relayIssue(issue)
+        }
+
+        if model.managedEnrollmentDisabled,
+          !model.profiles.contains(where: { $0.mode == .managed })
+        {
+          managedRelayDisabledState
         }
 
         if model.profiles.isEmpty {
@@ -61,6 +69,32 @@ struct RelayListView: View {
     .frame(maxWidth: .infinity)
     .padding(.horizontal, 24)
     .padding(.vertical, 32)
+  }
+
+  private var managedRelayDisabledState: some View {
+    RelayCard {
+      VStack(alignment: .leading, spacing: 9) {
+        Text("Managed Relay is disconnected")
+          .font(QuotaDesign.Typography.providerTitle)
+          .foregroundStyle(QuotaPalette.ink)
+        Text("Reconnect to create a new anonymous controller without an account.")
+          .font(.caption)
+          .foregroundStyle(QuotaPalette.body)
+          .fixedSize(horizontal: false, vertical: true)
+        Button("Reconnect Quota Relay") {
+          guard !isEnablingManagedRelay else { return }
+          isEnablingManagedRelay = true
+          Task {
+            await model.enableManagedControllerProfile()
+            isEnablingManagedRelay = false
+          }
+        }
+        .buttonStyle(.plain)
+        .font(.system(.subheadline, weight: .medium))
+        .foregroundStyle(QuotaPalette.ink)
+        .disabled(isEnablingManagedRelay)
+      }
+    }
   }
 
   private func profileCard(_ profile: RelayProfile) -> some View {

@@ -71,7 +71,7 @@ final class MenuBarViewModel {
   init(
     collector: (any LocalQuotaCollecting)? = nil,
     reportCache: LocalQuotaReportCache? = .live,
-    relayStateModel: RelayStateModel = RelayStateModel()
+    relayStateModel: RelayStateModel = RelayStateModel.live()
   ) {
     self.relayStateModel = relayStateModel
     self.reportCache = reportCache
@@ -99,7 +99,7 @@ final class MenuBarViewModel {
       visualTestReport: QuotaCollectionReport?,
       errorMessage: String?,
       refreshedAt: Date?,
-      relayStateModel: RelayStateModel = RelayStateModel()
+      relayStateModel: RelayStateModel = RelayStateModel.live()
     ) {
       self.relayStateModel = relayStateModel
       report = visualTestReport
@@ -159,8 +159,24 @@ final class MenuBarViewModel {
     }
   }
 
+  func deleteAllQuotaBarData() async throws {
+    try await relayStateModel.deleteAllQuotaBarData()
+    clearLocalState()
+  }
+
+  func deleteAllQuotaBarDataLocally() throws {
+    try relayStateModel.deleteAllQuotaBarDataLocally()
+    clearLocalState()
+  }
+
   func result(for provider: ProviderID) -> QuotaCollectionResult? {
     report?.results.first { $0.provider == provider }
+  }
+
+  private func clearLocalState() {
+    report = nil
+    errorMessage = nil
+    localRefreshedAt = nil
   }
 
   func displaySnapshots(
