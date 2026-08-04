@@ -60,9 +60,8 @@ struct SettingsHomeView: View {
         Divider()
 
         settingsSection("About") {
-          VStack(alignment: .leading, spacing: QuotaDesign.Spacing.sectionBody) {
+          VStack(alignment: .leading, spacing: 0) {
             aboutValueRow(title: "Version", value: AppMetadata.versionLabel)
-
             aboutLinkRow(title: "Website", url: AppMetadata.websiteURL)
             aboutLinkRow(title: "Feedback", url: AppMetadata.feedbackURL)
           }
@@ -122,7 +121,7 @@ struct SettingsHomeView: View {
     _ title: String,
     @ViewBuilder content: () -> Content
   ) -> some View {
-    VStack(alignment: .leading, spacing: QuotaDesign.Spacing.cardBody) {
+    VStack(alignment: .leading, spacing: QuotaDesign.Spacing.sectionRows) {
       Text(title)
         .quotaSectionHeaderStyle()
 
@@ -140,6 +139,11 @@ struct SettingsHomeView: View {
         .quotaMonoMetaStyle()
         .textSelection(.enabled)
     }
+    .frame(
+      maxWidth: .infinity,
+      minHeight: QuotaDesign.Layout.minimumInteractiveDimension,
+      alignment: .leading
+    )
     .accessibilityElement(children: .combine)
     .accessibilityLabel("\(title) \(value)")
   }

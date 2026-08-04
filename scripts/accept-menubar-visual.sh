@@ -192,7 +192,7 @@ capture_scenario() {
   byte_count="$(wc -c <"$screenshot" | tr -d '[:space:]')"
   [[ "$pixel_width" =~ ^[0-9]+$ && "$pixel_height" =~ ^[0-9]+$ ]] \
     || fail "${name}: screenshot dimensions could not be read"
-  [[ "$pixel_width" -eq 320 && "$pixel_height" -ge 560 && "$pixel_height" -le 620 ]] \
+  [[ "$pixel_width" -eq 320 && "$pixel_height" -ge 480 && "$pixel_height" -le 540 ]] \
     || fail "${name}: screenshot dimensions violate the fixed panel contract (${pixel_width}x${pixel_height})"
   [[ "$byte_count" -ge 1024 ]] || fail "${name}: screenshot contains too little image data"
   "$SCREENSHOT_VALIDATOR" "$screenshot" \

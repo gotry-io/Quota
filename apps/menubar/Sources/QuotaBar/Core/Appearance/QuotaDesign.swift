@@ -4,7 +4,7 @@ enum QuotaDesign {
   enum Layout {
     static let panelWidth: CGFloat = 320
     /// Fixed panel height for every page. MenuBarExtra first-open ignores flexible heights.
-    static let panelMaxHeight: CGFloat = 560
+    static let panelMaxHeight: CGFloat = 480
 
     /// Single horizontal gutter for header, page body, and footer.
     static let panelHorizontalPadding: CGFloat = 16
@@ -25,8 +25,6 @@ enum QuotaDesign {
     static let providerRowVerticalPadding: CGFloat = 10
     static let progressHeight: CGFloat = 8
     static let tagCornerRadius: CGFloat = 3
-    static let cardCornerRadius: CGFloat = 12
-    static let cardPadding: CGFloat = 16
     static let controlMinHeight: CGFloat = 36
 
     static let headerIconPointSize: CGFloat = 14
@@ -43,8 +41,8 @@ enum QuotaDesign {
 
     static let section: CGFloat = lg
     static let sectionBody: CGFloat = md
-    static let cardStack: CGFloat = lg
-    static let cardBody: CGFloat = 10
+    /// Dense stacks inside a settings/task section (About rows, device metadata).
+    static let sectionRows: CGFloat = sm
     static let meta: CGFloat = xxs
     static let inline: CGFloat = sm
     static let iconLabel: CGFloat = xs

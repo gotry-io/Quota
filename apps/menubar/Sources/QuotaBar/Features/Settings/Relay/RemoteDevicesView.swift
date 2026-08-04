@@ -21,8 +21,13 @@ struct RemoteDevicesView: View {
         } else if devices.isEmpty {
           emptyState
         } else {
-          ForEach(devices) { owned in
-            deviceRow(owned)
+          VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(devices.enumerated()), id: \.element.id) { index, owned in
+              deviceRow(owned)
+              if index < devices.count - 1 {
+                Divider()
+              }
+            }
           }
         }
 
@@ -68,7 +73,7 @@ struct RemoteDevicesView: View {
   }
 
   private var emptyState: some View {
-    VStack(spacing: QuotaDesign.Spacing.cardBody) {
+    VStack(spacing: QuotaDesign.Spacing.sectionBody) {
       Image(systemName: "laptopcomputer.and.iphone")
         .quotaEmptyIconStyle()
       Text("Pair a device to see its quota in QuotaBar.")
@@ -82,41 +87,40 @@ struct RemoteDevicesView: View {
 
   private func deviceRow(_ owned: OwnedRemoteDevice) -> some View {
     let device = owned.device
-    return RelayCard {
-      VStack(alignment: .leading, spacing: QuotaDesign.Spacing.cardBody) {
-        HStack(alignment: .firstTextBaseline, spacing: QuotaDesign.Spacing.iconLabel) {
-          Text(device.displayName)
-            .quotaRowTitleStyle()
-            .lineLimit(2)
-          Spacer(minLength: 4)
-          healthTag(for: device)
-        }
+    return VStack(alignment: .leading, spacing: QuotaDesign.Spacing.sectionRows) {
+      HStack(alignment: .firstTextBaseline, spacing: QuotaDesign.Spacing.iconLabel) {
+        Text(device.displayName)
+          .quotaRowTitleStyle()
+          .lineLimit(2)
+        Spacer(minLength: QuotaDesign.Spacing.sm)
+        healthLabel(for: device)
+      }
 
-        VStack(alignment: .leading, spacing: QuotaDesign.Spacing.xxs) {
-          Text(lastSeenLabel(device))
-            .quotaMetaStyle()
-          if model.showsEndpointLabelOnDevices {
-            Text(owned.endpointLabel)
-              .quotaMonoMetaStyle()
-              .lineLimit(1)
-          }
-        }
-
-        HStack {
-          Spacer()
-          Button("Remove Device") {
-            pendingRemoval = owned
-          }
-          .buttonStyle(RelaySecondaryButtonStyle())
-          .disabled(isRemoving)
-          .accessibilityLabel("Remove \(device.displayName)")
+      VStack(alignment: .leading, spacing: QuotaDesign.Spacing.xxs) {
+        Text(lastSeenLabel(device))
+          .quotaMetaStyle()
+        if model.showsEndpointLabelOnDevices {
+          Text(owned.endpointLabel)
+            .quotaMonoMetaStyle()
+            .lineLimit(1)
         }
       }
+
+      Button("Remove Device", role: .destructive) {
+        pendingRemoval = owned
+      }
+      .buttonStyle(.plain)
+      .quotaSecondaryStyle()
+      .frame(minHeight: QuotaDesign.Layout.minimumInteractiveDimension)
+      .disabled(isRemoving)
+      .accessibilityLabel("Remove \(device.displayName)")
     }
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .padding(.vertical, QuotaDesign.Layout.providerRowVerticalPadding)
     .accessibilityElement(children: .contain)
   }
 
-  private func healthTag(for device: RelayDevice) -> some View {
+  private func healthLabel(for device: RelayDevice) -> some View {
     if device.lastSeenAt == nil {
       Label("Waiting", systemImage: "clock")
         .quotaMetaStyle()

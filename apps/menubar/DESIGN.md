@@ -54,7 +54,7 @@ Mapped from `QuotaDesign.Layout`:
 | Token | Value | Use |
 | --- | --- | --- |
 | `panelWidth` | 320 | Fixed panel width |
-| `panelMaxHeight` | 560 | Fixed panel height for every page |
+| `panelMaxHeight` | 480 | Fixed panel height for every page |
 | `panelHorizontalPadding` | 16 | Single horizontal gutter for header, page body, and footer |
 | `panelContentWidth` | 288 | `panelWidth - 2 × gutter`; page content must fit here |
 | `pageVerticalPadding` | 16 | Settings / task page body top+bottom inset |
@@ -64,11 +64,9 @@ Mapped from `QuotaDesign.Layout`:
 | `minimumInteractiveDimension` | 28 | Apple HIG recommended minimum response dimension on macOS |
 | `backTitleOffset` | 20 | Compact visual back/title relationship; not the button response width |
 | `headerControlWidth` | 28 | Back / gear / plus / ellipsis response width |
-| `providerRowVerticalPadding` | 10 | Provider block vertical padding |
+| `providerRowVerticalPadding` | 10 | Provider block / dense list row vertical padding |
 | `progressHeight` | 8 | Remaining meter thickness |
 | `controlMinHeight` | 36 | Primary button min height |
-| `cardPadding` | 16 | Remote-device card internal padding |
-| `cardCornerRadius` | 12 | Remote-device card corner |
 | `tagCornerRadius` | 3 | Status tag corner |
 
 ### Spacing scale (`QuotaDesign.Spacing`)
@@ -82,8 +80,7 @@ Mapped from `QuotaDesign.Layout`:
 | `lg` | 16 | Page sections / card stacks |
 | `section` | 16 | Page-level section stack |
 | `sectionBody` | 12 | Inside a section |
-| `cardStack` | 16 | Stack of cards |
-| `cardBody` | 10 | Inside a card |
+| `sectionRows` | 8 | Dense stacks inside a section (About rows, device metadata) |
 | `meta` | 4 | Reset/help lines |
 | `inline` | 8 | Button/field clusters |
 | `iconLabel` | 6 | Icon + text pairs |
@@ -141,12 +138,15 @@ Rules:
 ### Remote Devices
 
 - Aggregate devices this QuotaBar owns across internal endpoint records.
+- Rows are flat list items separated by system `Divider`s — not rounded cards. Match Overview
+  provider-row density (`providerRowVerticalPadding`) rather than marketing card chrome.
 - Row priority: device name and a quiet health/last-report label. Show the Relay endpoint as subdued
   metadata only when more than one endpoint needs disambiguation; use the canonical URL so ports
   and schemes cannot collapse to the same label.
 - Empty state: `Pair a device to see its quota in QuotaBar.` The header `plus` is the only
   **Pair Device** action; do not repeat it as a colored body button.
-- **Remove Device** confirms that the device will stop reporting to this QuotaBar.
+- **Remove Device** is a plain destructive text action that confirms the device will stop reporting
+  to this QuotaBar.
 
 ### Pair Device
 
@@ -159,6 +159,13 @@ Rules:
 - Show the endpoint-correct command with a copy affordance. A complete eight-character paste works,
   and the code auto-submits when complete. VoiceOver exposes the visual cells as eight labeled edit
   fields rather than merging interactive controls into one static element.
+- Pairing success requires both owner approval and device join (QuotaCLI consuming the session).
+  Stay on Pair Device with `Pairing…` until the new device appears in the owner device list; only
+  then navigate back to Remote Devices. Approval alone is an intermediate state and must not finish
+  the flow. If the device never joins before the short timeout, keep the user on Pair Device and
+  show a recovery error (`Keep QuotaCLI running, then enter a new pairing code`).
+- First remote quota may still arrive after join, once the device pushes snapshots. A joined device
+  can therefore appear as Waiting / Never reported immediately after a successful pair.
 - No profile name, owner credential, capability, default profile, or admin copy.
 
 ## Color
@@ -293,6 +300,9 @@ Rules:
 - No bordered chips/CTAs for auth or errors. Status is quiet text beside the provider name.
 - Trailing edge stays provenance-only (selected-source icon). Never replace it with status text.
 - Issue-only rows (no accounts) still show the local source icon when the failure came from local collection.
+- When any presentable account exists for a provider (local or remote), suppress local
+  Needs Sign-In / Unavailable / Can’t Refresh chrome for that provider. Do not blend local auth
+  failure with successful remote quota.
 - `Stale` remains the only outlined status tag (freshness of otherwise successful data). Remote
   device `Active` / `Waiting` state is quiet icon-and-text metadata without tag chrome.
 - Settings Agents rows reuse the same recovery detail; healthy success shows no status chrome.
@@ -318,7 +328,8 @@ Rules:
   - Signed-in / success: no status chrome — only the toggle.
   - Not signed in / error / unavailable: short recovery detail (e.g. `Run \`claude auth login\``).
 - Overflow menu (ellipsis): Delete all QuotaBar data…, Quit QuotaBar.
-- About: Version, Website, Feedback rows (no product-name label, no copyright blurb).
+- About: Version, Website, Feedback rows (no product-name label, no copyright blurb). Each About
+  row uses the same `minimumInteractiveDimension` height so Version matches the link rows.
 
 ### Navigation motion
 

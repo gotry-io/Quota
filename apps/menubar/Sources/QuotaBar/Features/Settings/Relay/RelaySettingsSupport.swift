@@ -91,45 +91,6 @@ struct RelayPairCommandPresentation: Equatable {
   }
 }
 
-struct RelayCard<Content: View>: View {
-  let content: Content
-
-  init(@ViewBuilder content: () -> Content) {
-    self.content = content()
-  }
-
-  var body: some View {
-    content
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .padding(QuotaDesign.Layout.cardPadding)
-      .clipShape(RoundedRectangle(cornerRadius: QuotaDesign.Layout.cardCornerRadius, style: .continuous))
-      .overlay {
-        RoundedRectangle(cornerRadius: QuotaDesign.Layout.cardCornerRadius, style: .continuous)
-          .stroke(QuotaPalette.hairlineBorder, lineWidth: 1)
-      }
-  }
-}
-
-struct RelaySecondaryButtonStyle: ButtonStyle {
-  @Environment(\.isEnabled) private var isEnabled
-
-  func makeBody(configuration: Configuration) -> some View {
-    configuration.label
-      .quotaFont(.rowTitle)
-      .foregroundStyle(isEnabled ? QuotaPalette.ink : QuotaPalette.body)
-      .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
-      .frame(minHeight: 34)
-      .background(
-        QuotaPalette.soft.opacity(configuration.isPressed && isEnabled ? 1.2 : 0.85)
-      )
-      .clipShape(Capsule())
-      .overlay {
-        Capsule()
-          .stroke(QuotaPalette.hairlineBorder, lineWidth: 1)
-      }
-  }
-}
-
 /// Compact single-line field with a small corner radius.
 struct RelayRoundedTextFieldStyle: TextFieldStyle {
   private let cornerRadius: CGFloat = 6
