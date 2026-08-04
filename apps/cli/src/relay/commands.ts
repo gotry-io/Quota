@@ -124,9 +124,9 @@ Usage:
   quotacli relay unpair
   quotacli relay --help
 
-pair stores a Relay-bound device credential and enables macOS background push (immediate on load,
-then every 5 minutes). push performs one collection and upload. unpair stops background push,
-revokes the remote device, and removes the local credential.`;
+pair stores a Relay-bound device credential, performs one foreground collection and upload, then
+enables macOS background push every 5 minutes. push performs one collection and upload. unpair
+stops background push, revokes the remote device, and removes the local credential.`;
 }
 
 export async function runStatusCommand(
@@ -238,25 +238,35 @@ async function runPair(
     return 1;
   }
 
+  // Foreground first upload so QuotaBar can leave Waiting immediately. LaunchAgent still uses
+  // RunAtLoad for login/reboot; pair may therefore push once more when the agent loads.
+  const initialPush = await pushOnce(dependencies);
+  if (initialPush.kind !== "uploaded") {
+    writePushFailure(output, initialPush);
+    output.stderr(
+      "Pairing was saved, but the initial relay push failed. Run `quotacli relay push` before retrying background setup.",
+    );
+    return 1;
+  }
+  writePushSuccess(output, initialPush);
+
   if (dependencies.platform === "darwin") {
     try {
       await dependencies.service.start();
-      output.stdout(
-        "Pairing complete. Background relay push is loaded, runs immediately, and every 5 minutes.",
-      );
-      return 0;
+      output.stdout("Pairing complete. Background relay push is loaded and runs every 5 minutes.");
+      return initialPush.complete ? 0 : 1;
     } catch {
       output.stderr(
-        "Pairing was saved, but QuotaCLI could not start background relay push. Run `quotacli relay unpair` before retrying.",
+        "Pairing and the initial upload were saved, but QuotaCLI could not start background relay push. Run `quotacli relay unpair` before retrying.",
       );
       return 1;
     }
   }
 
   output.stdout(
-    "Pairing complete. Background relay push is supported only on macOS; use `quotacli relay push` to upload manually.",
+    "Pairing complete. Background relay push is supported only on macOS; recurring uploads require `quotacli relay push`.",
   );
-  return 0;
+  return initialPush.complete ? 0 : 1;
 }
 
 async function runUnpair(
@@ -317,18 +327,67 @@ async function runPush(
   output: RelayCommandOutput,
   dependencies: RelayCommandDependencies,
 ): Promise<number> {
+  const result = await pushOnce(dependencies);
+  if (result.kind !== "uploaded") {
+    writePushFailure(output, result);
+    return 1;
+  }
+  writePushSuccess(output, result);
+  return result.complete ? 0 : 1;
+}
+
+type PushOnceResult =
+  | { kind: "not_paired" }
+  | { kind: "instance_mismatch" }
+  | { kind: "failed"; message: string }
+  | {
+      kind: "uploaded";
+      snapshotCount: number;
+      sequence: number;
+      complete: boolean;
+    };
+
+function writePushSuccess(
+  output: RelayCommandOutput,
+  result: Extract<PushOnceResult, { kind: "uploaded" }>,
+): void {
+  output.stdout(
+    `Uploaded ${result.snapshotCount} ${
+      result.snapshotCount === 1 ? "snapshot" : "snapshots"
+    } with sequence ${result.sequence}.`,
+  );
+  if (!result.complete) {
+    output.stderr("The snapshot was uploaded, but provider collection was incomplete.");
+  }
+}
+
+function writePushFailure(
+  output: RelayCommandOutput,
+  result: Exclude<PushOnceResult, { kind: "uploaded" }>,
+): void {
+  switch (result.kind) {
+    case "not_paired":
+      output.stderr("This machine is not paired. Run `quotacli relay pair` first.");
+      return;
+    case "instance_mismatch":
+      output.stderr("The paired Relay identity does not match the discovered Relay.");
+      return;
+    case "failed":
+      output.stderr(result.message);
+  }
+}
+
+async function pushOnce(dependencies: RelayCommandDependencies): Promise<PushOnceResult> {
   try {
     const credential = await dependencies.store.load();
     if (!credential) {
-      output.stderr("This machine is not paired. Run `quotacli relay pair` first.");
-      return 1;
+      return { kind: "not_paired" };
     }
 
     const client = dependencies.createClient(credential.relay_url);
     const relay = await client.discover();
     if (relay.instance_id !== credential.instance_id) {
-      output.stderr("The paired Relay identity does not match the discovered Relay.");
-      return 1;
+      return { kind: "instance_mismatch" };
     }
 
     const collected = await dependencies.collect({
@@ -364,18 +423,17 @@ async function runPush(
       );
     }
 
-    const snapshotCount = parsedEnvelope.data.snapshots.length;
-    output.stdout(
-      `Uploaded ${snapshotCount} ${snapshotCount === 1 ? "snapshot" : "snapshots"} with sequence ${sequence}.`,
-    );
-    if (collectionExitCode(report) !== 0) {
-      output.stderr("The snapshot was uploaded, but provider collection was incomplete.");
-      return 1;
-    }
-    return 0;
+    return {
+      kind: "uploaded",
+      snapshotCount: parsedEnvelope.data.snapshots.length,
+      sequence,
+      complete: collectionExitCode(report) === 0,
+    };
   } catch (error) {
-    output.stderr(safeErrorMessage(error, "QuotaCLI could not complete the relay push."));
-    return 1;
+    return {
+      kind: "failed",
+      message: safeErrorMessage(error, "QuotaCLI could not complete the relay push."),
+    };
   }
 }
 

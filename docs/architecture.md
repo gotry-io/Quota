@@ -32,7 +32,8 @@ Remote QuotaCLI ── outbound HTTPS ── QuotaRelay ── QuotaBar
 ```
 
 QuotaCLI explicitly pairs with a selected Relay, receives a Relay-bound device credential, and on
-macOS enables a LaunchAgent that uploads normalized snapshots immediately and every five minutes.
+`relay pair` uploads one normalized snapshot immediately after the device credential is saved; on
+macOS it then enables a LaunchAgent that continues uploading every five minutes.
 Relay persists accepted snapshots and serves QuotaBar instances authenticated by anonymous owner
 capabilities. It never receives provider credentials or runs provider collectors. Pairing and token
 generation are defined in
@@ -83,8 +84,9 @@ storage requirements are defined only in [`security.md`](security.md).
 - Provides an explicit one-shot `relay push` path that validates the bound Relay instance, collects
   all providers, uploads one normalized envelope, and commits its local sequence after acceptance.
 - On macOS, manages one user LaunchAgent that invokes that same `relay push` path at load and every
-  300 seconds. Pairing installs it, unpairing removes it, and no background-service runtime is
-  provided on other platforms.
+  300 seconds. Pairing installs it after a foreground first upload (so owners see data before the
+  agent starts); RunAtLoad still covers login/reboot. Unpairing removes it. No background-service
+  runtime is provided on other platforms.
 - Unpairing stops that service, uses the device capability to revoke the remote device, and removes
   the local credential only after the Relay reaches a terminal revoked state.
 - Exposes `status` as a read-only summary of local provider readiness and Relay pairing/background

@@ -90,6 +90,8 @@ describe("LaunchAgent plist", () => {
     expect(plist).toContain(`<string>${RELAY_LAUNCH_AGENT_LABEL}</string>`);
     expect(plist).toContain("<string>/opt/a&amp;b/node</string>");
     expect(plist).toContain("<string>/opt/&lt;quota&gt;/main&quot;&apos;.js</string>");
+    // RunAtLoad covers login/reboot. pair also does one foreground push for immediate
+    // owner visibility; the extra load-time push after pair is acceptable.
     expect(plist).toContain("<key>RunAtLoad</key>\n  <true/>");
     expect(plist).toContain("<key>StartInterval</key>\n  <integer>300</integer>");
     expect(plist.match(/<string>\/dev\/null<\/string>/g)).toHaveLength(2);

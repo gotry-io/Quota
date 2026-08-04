@@ -28,12 +28,15 @@ The flow is:
 6. Relay generates a high-entropy opaque bearer credential scoped to `quota:write:self`, stores only
    its hash, and returns the plaintext credential once.
 7. QuotaCLI stores the credential in the platform credential store or a user-only file.
-8. On macOS, QuotaCLI installs the background LaunchAgent that runs `relay push` immediately on load
-   and every five minutes thereafter.
+8. QuotaCLI performs one foreground collection and upload before treating pair as complete, so the
+   owner can observe the device as reporting as soon as join succeeds.
+9. On macOS, QuotaCLI then installs the background LaunchAgent that runs `relay push` every five
+   minutes thereafter. LaunchAgent load is no longer the sole path for the first upload.
 
-Pairing therefore both authorizes the device and enables recurring uploads on platforms that support
-background push. Operators stop reporting by unpairing; there is no separate start/stop lifecycle.
-Manual `quotacli relay push` remains available for one-shot uploads and non-macOS machines.
+Pairing therefore both authorizes the device, publishes an initial snapshot, and enables recurring
+uploads on platforms that support background push. Operators stop reporting by unpairing; there is
+no separate start/stop lifecycle. Manual `quotacli relay push` remains available for one-shot
+uploads, recovery after a failed initial push, and non-macOS recurring use.
 
 ## Credential control
 

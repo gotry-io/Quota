@@ -101,16 +101,17 @@ describe("relay command arguments", () => {
 });
 
 describe("relay pair", () => {
-  it("uses the default Relay URL and starts background push without an in-process upload", async () => {
+  it("uses the default Relay URL, uploads once in-process, then starts background push", async () => {
     const capture = captureOutput();
     const dependencies = fakeDependencies();
 
     expect(await runRelayCommand(["pair"], capture.output, dependencies)).toBe(0);
     expect(dependencies.createClient).toHaveBeenCalledWith("https://quota.gotry.io");
+    expect(dependencies.collect).toHaveBeenCalledOnce();
     expect(dependencies.service.start).toHaveBeenCalledOnce();
-    expect(dependencies.collect).not.toHaveBeenCalled();
+    expect(capture.stdout.join("\n")).toContain("Uploaded 1 snapshot with sequence 0.");
     expect(capture.stdout.join("\n")).toContain(
-      "Background relay push is loaded, runs immediately, and every 5 minutes.",
+      "Background relay push is loaded and runs every 5 minutes.",
     );
   });
 
@@ -125,7 +126,7 @@ describe("relay pair", () => {
     expect(capture.stderr.join("\n")).toContain("quotacli relay unpair");
   });
 
-  it("completes pending pairing and saves a Relay-bound credential without printing secrets", async () => {
+  it("completes pending pairing, uploads once, and saves a Relay-bound credential without printing secrets", async () => {
     let now = Date.parse("2026-08-03T10:00:00Z");
     let saved: RelayCredential | undefined;
     const fetchMock = vi
@@ -133,7 +134,9 @@ describe("relay pair", () => {
       .mockResolvedValueOnce(jsonResponse(relayInfo))
       .mockResolvedValueOnce(jsonResponse(pairing, 201))
       .mockResolvedValueOnce(jsonResponse({ status: "pending", poll_interval_seconds: 7 }, 202))
-      .mockResolvedValueOnce(jsonResponse(issued));
+      .mockResolvedValueOnce(jsonResponse(issued))
+      .mockResolvedValueOnce(jsonResponse(relayInfo))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
     const store: RelayCredentialStoreContract = {
       load: vi.fn(async () => (saved ? { ...saved } : null)),
       save: vi.fn(async (value) => {
@@ -179,7 +182,7 @@ describe("relay pair", () => {
       device_id: issued.device_id,
       device_token: issued.device_token,
       paired_at: "2026-08-03T10:00:12.000Z",
-      last_sequence: -1,
+      last_sequence: 0,
     });
     const createBody = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body)) as {
       device_display_name: string;
@@ -191,34 +194,50 @@ describe("relay pair", () => {
     expect(rendered).toContain(pairing.user_code);
     expect(rendered).toContain(pairing.expires_at);
     expect(rendered).toContain("QuotaBar");
+    expect(rendered).toContain("Uploaded 1 snapshot with sequence 0.");
     expect(rendered).not.toContain(pairing.device_code);
     expect(rendered).not.toContain(issued.device_token);
     expect(rendered).not.toContain("Authorization");
     expect(dependencies.service.start).toHaveBeenCalledOnce();
-    expect(dependencies.collect).not.toHaveBeenCalled();
+    expect(dependencies.collect).toHaveBeenCalledOnce();
     expect(dependencies.service.stop).not.toHaveBeenCalled();
   });
 
-  it("keeps the credential when background start fails after pairing", async () => {
+  it("keeps the credential when the initial push fails after pairing", async () => {
+    const capture = captureOutput();
+    const dependencies = fakeDependencies({
+      collectError: new Error("provider blew up"),
+    });
+
+    expect(await runRelayCommand(["pair"], capture.output, dependencies)).toBe(1);
+    expect(dependencies.store.save).toHaveBeenCalledOnce();
+    expect(dependencies.collect).toHaveBeenCalledOnce();
+    expect(dependencies.service.start).not.toHaveBeenCalled();
+    expect(capture.stderr.join("\n")).toContain("initial relay push failed");
+    expect(capture.stderr.join("\n")).toContain("quotacli relay push");
+  });
+
+  it("keeps the credential when background start fails after the initial upload", async () => {
     const capture = captureOutput();
     const dependencies = fakeDependencies({
       startError: new Error("launchctl failed"),
     });
 
     expect(await runRelayCommand(["pair"], capture.output, dependencies)).toBe(1);
-    expect(dependencies.store.save).toHaveBeenCalledOnce();
-    expect(dependencies.collect).not.toHaveBeenCalled();
+    expect(dependencies.store.save).toHaveBeenCalledTimes(2);
+    expect(dependencies.collect).toHaveBeenCalledOnce();
     expect(capture.stderr.join("\n")).toContain("could not start background relay push");
     expect(capture.stderr.join("\n")).toContain("quotacli relay unpair");
   });
 
-  it("pairs without background support outside macOS and does not push automatically", async () => {
+  it("pairs outside macOS with a foreground upload and without background support", async () => {
     const capture = captureOutput();
     const dependencies = fakeDependencies({ platform: "linux" });
 
     expect(await runRelayCommand(["pair"], capture.output, dependencies)).toBe(0);
     expect(dependencies.service.start).not.toHaveBeenCalled();
-    expect(dependencies.collect).not.toHaveBeenCalled();
+    expect(dependencies.collect).toHaveBeenCalledOnce();
+    expect(capture.stdout.join("\n")).toContain("Uploaded 1 snapshot with sequence 0.");
     expect(capture.stdout.join("\n")).toContain("Background relay push is supported only on macOS");
   });
 
@@ -325,6 +344,7 @@ function fakeDependencies(
     existing?: RelayCredential | null;
     discoverError?: Error;
     startError?: Error;
+    collectError?: Error;
     platform?: NodeJS.Platform;
     status?: "loaded" | "stopped";
   } = {},
@@ -380,7 +400,12 @@ function fakeDependencies(
     ),
     now: () => new Date("2026-08-03T10:00:00Z"),
     deviceName: () => "synthetic-relay",
-    collect: vi.fn(async () => syntheticReport()),
+    collect: vi.fn(async () => {
+      if (options.collectError) {
+        throw options.collectError;
+      }
+      return syntheticReport();
+    }),
     diagnoseProviders: vi.fn(async () => [
       {
         provider: "codex",

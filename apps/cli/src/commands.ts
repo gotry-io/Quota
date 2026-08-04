@@ -205,7 +205,8 @@ Defaults:
   --provider all
   --format text when attached to a terminal, otherwise json
 
-relay pair enables macOS background push (immediate on load, then every 5 minutes).
+relay pair stores a device credential, uploads one snapshot immediately, then enables macOS
+background push every 5 minutes.
 relay push collects local quota and uploads one snapshot to the paired Relay.
 status summarizes local provider readiness and Relay pairing/background state.
 

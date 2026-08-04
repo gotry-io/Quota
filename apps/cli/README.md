@@ -54,7 +54,9 @@ bodies.
 `@gotry-io/quotacli`. `build:standalone` creates `dist/standalone/quotacli` for the QuotaBar app
 bundle and direct release downloads. The npm package installs the same `quotacli` command and does
 not require Bun at runtime. A `v*` Git tag publishes the package from `release-cli.yml` through npm
-Trusted Publishing; the release workflow stores no long-lived npm credential.
+Trusted Publishing; the release workflow stores no long-lived npm credential. Stable tags publish
+to the `latest` dist-tag; prerelease tags such as `v0.0.2-beta.1` publish to `beta`
+(`npm install -g @gotry-io/quotacli@beta`).
 
 ## Relay pairing
 
@@ -70,10 +72,11 @@ quotacli status
 
 `pair` discovers and validates Relay capabilities, displays a Relay-generated user code for
 approval in QuotaBar, and stores the issued Relay-bound device credential. It does not accept a
-manually created token. After the credential is saved, macOS installs the background LaunchAgent,
-which runs `relay push` immediately on load and every five minutes. QuotaBar registers an isolated
-anonymous owner capability for the selected Relay URL (managed or self-hosted) without a user
-account or bootstrap token, then approves the displayed pairing code.
+manually created token. After the credential is saved, `pair` performs one foreground collection
+and upload so the owner can see the device leave Waiting promptly. On macOS it then installs the
+background LaunchAgent, which continues `relay push` every five minutes. QuotaBar registers an
+isolated anonymous owner capability for the selected Relay URL (managed or self-hosted) without a
+user account or bootstrap token, then approves the displayed pairing code.
 
 `unpair` stops and removes the macOS background service, verifies the saved Relay instance, revokes
 the current device with its device credential, and then deletes the local credential. If discovery
@@ -92,9 +95,10 @@ is uploaded but returns exit code `1` with an explicit notice.
 
 ## Recurring relay push
 
-On macOS, `pair` installs and loads the user LaunchAgent `io.gotry.quotacli.relay`. The agent runs
-the same executable's `relay push` command at load and every five minutes. The local device
-credential is stored at `$XDG_CONFIG_HOME/quotacli/device.json` or `~/.config/quotacli/device.json`.
+On macOS, after the foreground first upload, `pair` installs and loads the user LaunchAgent
+`io.gotry.quotacli.relay`. The agent runs the same executable's `relay push` command at load
+(login/reboot) and every five minutes. The local device credential is stored at
+`$XDG_CONFIG_HOME/quotacli/device.json` or `~/.config/quotacli/device.json`.
 `status` reports provider readiness, pairing, Relay, device, sequence, and loaded/stopped background
 state without displaying the device token. `unpair` removes the LaunchAgent together with the remote
 device and local credential.
