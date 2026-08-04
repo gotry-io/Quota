@@ -1,12 +1,13 @@
 name: pr-agent
 
-# AI PR review via PR-Agent, routed through a LiteLLM-compatible OpenAI API.
+# AI PR review via PR-Agent over a LiteLLM-compatible OpenAI API.
 #
-# Required repository secrets (GitHub → Settings → Secrets and variables → Actions):
-#   LITELLM_API_BASE         e.g. https://llm.example.com/v1
-#   LITELLM_API_KEY          API key accepted by that gateway
-#   LITELLM_MODEL            model id for LiteLLM, e.g. openai/gpt-4.1-mini
-#   LITELLM_FALLBACK_MODELS JSON array string, e.g. ["openai/gpt-4.1-mini"]
+# Secret:
+#   LITELLM_API_KEY
+# Variables:
+#   LITELLM_API_BASE           e.g. https://llm.example.com/v1
+#   LITELLM_MODEL              e.g. grok-4.5
+#   LITELLM_FALLBACK_MODELS  JSON array string, e.g. ["deepseek-v4-flash"]
 on:
   pull_request:
     types: [opened, reopened, ready_for_review, synchronize]
@@ -24,7 +25,6 @@ concurrency:
 
 jobs:
   pr_agent:
-    # Skip draft PRs and non-command issue comments.
     if: |
       (github.event_name == 'pull_request' && github.event.pull_request.draft == false) ||
       (github.event_name == 'issue_comment' &&
@@ -38,49 +38,45 @@ jobs:
     runs-on: ubuntu-24.04
     name: PR Agent
     steps:
-      - name: Require LiteLLM secrets
+      - name: Require LiteLLM configuration
         env:
-          LITELLM_API_BASE: ${{ secrets.LITELLM_API_BASE }}
+          LITELLM_API_BASE: ${{ vars.LITELLM_API_BASE }}
           LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
-          LITELLM_MODEL: ${{ secrets.LITELLM_MODEL }}
+          LITELLM_MODEL: ${{ vars.LITELLM_MODEL }}
+          LITELLM_FALLBACK_MODELS: ${{ vars.LITELLM_FALLBACK_MODELS }}
         run: |
           set -euo pipefail
           missing=0
-          for name in LITELLM_API_BASE LITELLM_API_KEY LITELLM_MODEL; do
+          for name in LITELLM_API_BASE LITELLM_API_KEY LITELLM_MODEL LITELLM_FALLBACK_MODELS; do
             if [ -z "${!name:-}" ]; then
-              echo "Missing repository secret: $name" >&2
+              echo "Missing configuration: $name" >&2
               missing=1
             fi
           done
           if [ "$missing" -ne 0 ]; then
-            echo "Configure LiteLLM secrets before PR-Agent can run." >&2
+            echo "Set LITELLM_API_KEY as a secret and the other LITELLM_* values as Actions variables." >&2
             exit 1
           fi
+          echo "LiteLLM base=${LITELLM_API_BASE}"
+          echo "LiteLLM model=${LITELLM_MODEL}"
+          echo "LiteLLM fallback_models=${LITELLM_FALLBACK_MODELS}"
 
       - name: Run PR-Agent
         uses: the-pr-agent/pr-agent@main
         env:
-          # OpenAI-compatible LiteLLM gateway
           OPENAI_KEY: ${{ secrets.LITELLM_API_KEY }}
-          OPENAI.API_BASE: ${{ secrets.LITELLM_API_BASE }}
+          OPENAI.API_BASE: ${{ vars.LITELLM_API_BASE }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-          # Model ids must be valid for your LiteLLM route. Prefer an openai/... id when the
-          # gateway exposes OpenAI-compatible chat completions.
-          config.model: ${{ secrets.LITELLM_MODEL }}
-          # JSON array string. Example: ["openai/gpt-4.1-mini"]
-          config.fallback_models: ${{ secrets.LITELLM_FALLBACK_MODELS }}
-
-          # Custom/gateway model ids are usually absent from PR-Agent's built-in token table.
+          config.model: ${{ vars.LITELLM_MODEL }}
+          config.fallback_models: ${{ vars.LITELLM_FALLBACK_MODELS }}
           config.custom_model_max_tokens: "128000"
 
-          # Auto tools on PR open/sync. Comment commands still work: /review /describe /improve /ask
           github_action_config.auto_review: "true"
           github_action_config.auto_describe: "true"
           github_action_config.auto_improve: "false"
           github_action_config.pr_actions: '["opened", "reopened", "ready_for_review", "synchronize"]'
 
-          # Prefer high-signal review; cut noisy helper chrome.
           PR_REVIEWER.REQUIRE_TESTS_REVIEW: "true"
           PR_REVIEWER.REQUIRE_SECURITY_REVIEW: "true"
           PR_REVIEWER.ENABLE_HELP_TEXT: "false"

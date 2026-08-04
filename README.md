@@ -103,8 +103,8 @@ Static Assets. Path filters cover `apps/relay`, `apps/web`, `packages/protocol`,
 `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`, and uses the `production` GitHub Environment.
 
 Pull requests run AI review through `.github/workflows/pr-agent.yml` (PR-Agent over a
-LiteLLM-compatible OpenAI API). Configure repository secrets `LITELLM_API_BASE`,
-`LITELLM_API_KEY`, `LITELLM_MODEL`, and `LITELLM_FALLBACK_MODELS`. On each non-draft PR,
+LiteLLM-compatible OpenAI API). Configure secret `LITELLM_API_KEY` and Actions variables
+`LITELLM_API_BASE`, `LITELLM_MODEL`, and `LITELLM_FALLBACK_MODELS`. On each non-draft PR,
 PR-Agent auto-runs `/describe` and `/review`; comment `/improve` or `/ask …` for on-demand tools.
 
 ## Status
