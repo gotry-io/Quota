@@ -125,30 +125,8 @@ struct RelayCard<Content: View>: View {
       .clipShape(RoundedRectangle(cornerRadius: QuotaDesign.Layout.cardCornerRadius, style: .continuous))
       .overlay {
         RoundedRectangle(cornerRadius: QuotaDesign.Layout.cardCornerRadius, style: .continuous)
-          .stroke(QuotaPalette.hairline.opacity(0.85), lineWidth: 1)
+          .stroke(QuotaPalette.hairlineBorder, lineWidth: 1)
       }
-  }
-}
-
-struct RelayStatusTag: View {
-  let text: String
-  var systemImage: String?
-
-  var body: some View {
-    HStack(spacing: 3) {
-      if let systemImage {
-        Image(systemName: systemImage)
-      }
-      Text(text)
-    }
-    .font(QuotaDesign.Typography.statusTag)
-    .foregroundStyle(QuotaPalette.charcoal)
-    .padding(.horizontal, 5)
-    .padding(.vertical, 2)
-    .overlay {
-      RoundedRectangle(cornerRadius: QuotaDesign.Layout.tagCornerRadius)
-        .stroke(QuotaPalette.hairline.opacity(0.8), lineWidth: 1)
-    }
   }
 }
 
@@ -157,7 +135,7 @@ struct RelaySecondaryButtonStyle: ButtonStyle {
 
   func makeBody(configuration: Configuration) -> some View {
     configuration.label
-      .font(.system(.subheadline, weight: .medium))
+      .font(QuotaDesign.Typography.rowTitle)
       .foregroundStyle(isEnabled ? QuotaPalette.ink : QuotaPalette.body)
       .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
       .frame(minHeight: 34)
@@ -167,7 +145,7 @@ struct RelaySecondaryButtonStyle: ButtonStyle {
       .clipShape(Capsule())
       .overlay {
         Capsule()
-          .stroke(QuotaPalette.hairline.opacity(0.8), lineWidth: 1)
+          .stroke(QuotaPalette.hairlineBorder, lineWidth: 1)
       }
   }
 }
@@ -182,7 +160,7 @@ struct RelayPillTextFieldStyle: TextFieldStyle {
       .clipShape(Capsule())
       .overlay {
         Capsule()
-          .stroke(QuotaPalette.hairline.opacity(0.8), lineWidth: 1)
+          .stroke(QuotaPalette.hairlineBorder, lineWidth: 1)
       }
   }
 }
@@ -200,7 +178,7 @@ struct RelayRoundedTextFieldStyle: TextFieldStyle {
       .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
       .overlay {
         RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-          .stroke(QuotaPalette.hairline.opacity(0.8), lineWidth: 1)
+          .stroke(QuotaPalette.hairlineBorder, lineWidth: 1)
       }
   }
 }
@@ -232,7 +210,7 @@ struct PairingCodeEntryView: View {
         }
       }
       Text("—")
-        .font(.system(.body, weight: .medium))
+        .font(QuotaDesign.Typography.pairingSeparator)
         .foregroundStyle(QuotaPalette.mute)
       HStack(spacing: boxGap) {
         ForEach(4..<8, id: \.self) { index in
@@ -282,7 +260,7 @@ struct PairingCodeEntryView: View {
     TextField("", text: binding(for: index))
       .textFieldStyle(.plain)
       .multilineTextAlignment(.center)
-      .font(.system(.title3, design: .monospaced, weight: .semibold))
+      .font(QuotaDesign.Typography.pairingCode)
       .frame(width: boxSize, height: boxSize)
       .background(QuotaPalette.soft)
       .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -293,7 +271,7 @@ struct PairingCodeEntryView: View {
               ? QuotaPalette.usageCritical.opacity(0.85)
               : (focusedIndex == index
                 ? QuotaPalette.ink.opacity(0.45)
-                : QuotaPalette.hairline.opacity(0.85)),
+                : QuotaPalette.hairlineBorder),
             lineWidth: focusedIndex == index || showsError ? 1.5 : 1
           )
       }

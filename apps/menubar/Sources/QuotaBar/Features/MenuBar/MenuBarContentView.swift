@@ -34,7 +34,8 @@ struct MenuBarContentView: View {
       title: navigation.title,
       canNavigateBack: navigation.canNavigateBack,
       onNavigateBack: navigateBack,
-      trailing: { headerTrailing }
+      showsLeadingIcon: navigation.currentRoute == nil,
+      trailing: headerTrailingAction
     ) {
       ZStack(alignment: .topLeading) {
         currentPage
@@ -102,60 +103,19 @@ struct MenuBarContentView: View {
     }
   }
 
-  @ViewBuilder
-  private var headerTrailing: some View {
+  private var headerTrailingAction: MenuBarHeader.TrailingAction {
     if navigation.showsSettingsMenu {
-      Menu {
-        Button("Delete All QuotaBar Data…", role: .destructive) {
-          showsDeleteAllConfirmation = true
-        }
-        .disabled(isDeletingAllData)
-
-        Divider()
-
-        Button("Quit QuotaBar") {
-          NSApplication.shared.terminate(nil)
-        }
-      } label: {
-        headerIcon("ellipsis", weight: .bold, pointSize: 16)
+      return .overflowMenu(deleteEnabled: !isDeletingAllData) {
+        showsDeleteAllConfirmation = true
       }
-      .menuStyle(.borderlessButton)
-      .menuIndicator(.hidden)
-      .fixedSize()
-      .accessibilityLabel("Settings menu")
-    } else if navigation.showsAddRelayAction {
-      Button {
-        navigate(to: .addRelay)
-      } label: {
-        headerIcon("plus", weight: .semibold, pointSize: 15)
-      }
-      .buttonStyle(.plain)
-      .fixedSize()
-      .accessibilityLabel("Add Relay")
-    } else if !navigation.canNavigateBack {
-      Button(action: openSettings) {
-        headerIcon("gearshape", weight: .medium, pointSize: 13)
-      }
-      .buttonStyle(.plain)
-      .fixedSize()
-      .accessibilityLabel("Open settings")
     }
-  }
-
-  private func headerIcon(
-    _ systemName: String,
-    weight: Font.Weight,
-    pointSize: CGFloat
-  ) -> some View {
-    Image(systemName: systemName)
-      .font(.system(size: pointSize, weight: weight))
-      .foregroundStyle(QuotaPalette.body)
-      .frame(
-        width: QuotaDesign.Layout.navigationControlSize,
-        height: QuotaDesign.Layout.navigationControlSize,
-        alignment: .center
-      )
-      .contentShape(Rectangle())
+    if navigation.showsAddRelayAction {
+      return .addRelay { navigate(to: .addRelay) }
+    }
+    if !navigation.canNavigateBack {
+      return .openSettings(openSettings)
+    }
+    return .none
   }
 
   @ViewBuilder

@@ -109,7 +109,11 @@ struct MenuBarViewModelRelayTests {
       .remote(relayInstanceID: profile.instanceID, deviceID: "device-a"),
       .remote(relayInstanceID: profile.instanceID, deviceID: "device-b"),
     ])
-    #expect(account.sourceSummary == "Local + 2 remote")
+    // Provenance follows SubscriptionResolver's selectedSource only.
+    #expect(account.selectedSource == .local)
+    #expect(account.sourceSummary == "Local")
+    #expect(account.sourceTooltip == "This Mac")
+    #expect(account.sources.count == 3)
   }
 
   @Test

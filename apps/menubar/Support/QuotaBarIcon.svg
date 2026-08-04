@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>QuotaBar</title>
+  <rect width="1024" height="1024" fill="#fff"/>
+  <path
+    d="M631.707 840.893A350 350 0 1 1 840.893 631.707"
+    fill="none"
+    stroke="#a3a3a3"
+    stroke-width="62"
+    stroke-linecap="round"
+  />
+  <path
+    d="M560.656 762.311A255 255 0 1 1 762.311 560.656"
+    fill="none"
+    stroke="#000"
+    stroke-width="86"
+    stroke-linecap="round"
+  />
+  <path
+    d="m556 556 162 162"
+    fill="none"
+    stroke="#000"
+    stroke-width="76"
+    stroke-linecap="round"
+  />
+</svg>

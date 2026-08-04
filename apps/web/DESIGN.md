@@ -383,7 +383,7 @@ Typography pairs SF Pro Rounded for display roles with the system sans for ordin
 - Flat 12px cards for feature and install blocks.
 - One reading column; marketing pages are not a stack of dashboard widgets.
 - Monospaced commands and device identifiers are treated as primary content.
-- A line-drawn circular quota gauge is the only custom illustration.
+- The double-ring Q gauge product mark is the only custom illustration.
 
 ## Colors
 
@@ -598,7 +598,7 @@ the overview's visual inventory during repeated refreshes.
 ### Onboarding & Pairing
 
 - Center a single reading column no wider than 560px.
-- Use the line-drawn quota gauge at 80–120px once, above the headline.
+- Use the double-ring Q gauge product mark at 80–120px once, above the headline.
 - Present one task per step: discover local providers, choose Relay, pair device, confirm.
 - Pairing commands use `{components.command-pill}` when short and `{components.terminal-card}` when
   output or multiple lines are required.
@@ -624,11 +624,12 @@ stack custom shadows on top of platform elevation.
 
 ### Decorative Depth
 
-The only custom illustration is a line-drawn circular quota gauge. Its stroke uses `{colors.ink}`
-and its empty segment uses `{colors.hairline}`. A small line icon may identify providers, devices,
-Relay, authentication, refresh, settings, and freshness. Utility icons stay monochrome; provider
-marks use brand-tinted monochrome SVGs. There is no photography, texture, glow, glass effect, or
-background artwork.
+The only custom illustration is the double-ring Q gauge product mark. Its primary inner quota arc
+and diagonal tail use `{colors.ink}`; its quieter outer quota-window arc uses `{colors.mute}`. Both
+arcs open on the same lower-right axis, and the tail stays inside the outer circular silhouette. A
+small line icon may identify providers, devices, Relay, authentication, refresh, settings, and
+freshness. Utility icons stay monochrome; provider marks use brand-tinted monochrome SVGs. There is
+no photography, texture, glow, glass effect, or background artwork.
 
 ## Shapes
 
@@ -648,8 +649,14 @@ new default shapes.
 
 ### Icon Geometry
 
-- Product mark: circular quota gauge, 2px line stroke at large sizes and 1–1.5px at menu-bar sizes.
-- Menu-bar icon: template image, 16×16pt, monochrome, no percentage text inside the glyph.
+- Product mark: two concentric open quota arcs plus one lower-right diagonal tail. The inner arc and
+  tail are black; the thinner outer arc uses `{colors.mute}`. Their openings share a 4:30 axis, and
+  the tail begins inside the inner circle without extending beyond the outer arc.
+- Website assets: `public/logo.svg` is the standard double-ring header mark; `public/favicon.svg` is
+  the single-ring 16–32px optical version with a wider opening, heavier stroke, and white backing
+  circle.
+- Menu-bar icon: custom 18×18pt single-ring template mark, solid monochrome with no percentage text
+  inside the glyph. Its native specification lives in `apps/menubar/DESIGN.md`.
 - Provider icons: use the Codex, Claude Code, and Grok monochrome SVG assets from Lobe Icons as
   template images tinted with `{colors.brand-*}` tokens; do not substitute SF Symbols or multicolor
   artwork.
@@ -811,7 +818,7 @@ new default shapes.
 **`empty-state`**
 
 - Flat `{colors.canvas}` surface, `{colors.body}` text, `{typography.body-md}`, padding `32px 24px`.
-- May include the line-drawn quota gauge or one SF Symbol, a short heading, one sentence, and one action.
+- May include the double-ring Q gauge or one SF Symbol, a short heading, one sentence, and one action.
 - Examples: no provider session, no Relay profile, no remote device, no quota endpoint support.
 
 Error states reuse the same component. They replace the illustration with a functional icon and add
@@ -936,7 +943,6 @@ a clear recovery action. Do not create alert banners for ordinary provider failu
 
 - Final light- and dark-appearance screenshots still require release-candidate validation.
 - Hover states are not documented; macOS focus, pressed, selected, and disabled states take priority.
-- Menu-bar icon and line-drawn quota-gauge assets are not finalized.
 - Long provider/account combinations need validation with real anonymized data.
 - Certificate management, quota history, and notification screens are not yet implemented.
 - Provider detail layouts for multiple accounts and multiple quota windows require usability testing.

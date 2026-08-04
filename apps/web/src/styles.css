@@ -93,19 +93,9 @@ footer {
 }
 
 .brand-mark {
+  display: block;
   width: 24px;
   height: 24px;
-  fill: none;
-  stroke-width: 2;
-  stroke-linecap: round;
-}
-
-.brand-track {
-  stroke: var(--hairline-strong);
-}
-
-.brand-value {
-  stroke: var(--ink);
 }
 
 nav {

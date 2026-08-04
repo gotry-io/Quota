@@ -32,8 +32,7 @@ struct RelayDetailView: View {
             showsDeleteConfirmation = true
           }
           .buttonStyle(.plain)
-          .font(.system(.subheadline, weight: .medium))
-          .foregroundStyle(QuotaPalette.body)
+          .quotaSecondaryStyle()
           .disabled(isDeleting)
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -96,27 +95,24 @@ struct RelayDetailView: View {
       VStack(alignment: .leading, spacing: QuotaDesign.Spacing.cardBody) {
         HStack(spacing: QuotaDesign.Spacing.iconLabel) {
           Text(profile.name)
-            .font(.system(.headline, design: .rounded, weight: .semibold))
-            .foregroundStyle(QuotaPalette.ink)
+            .quotaRowTitleStyle()
           if profile.isDefault {
-            RelayStatusTag(text: "Default", systemImage: "checkmark")
+            QuotaStatusTag(text: "Default", systemImage: "checkmark")
           }
         }
 
         Text(profile.baseURL.absoluteString)
-          .font(.system(.caption, design: .monospaced))
-          .foregroundStyle(QuotaPalette.body)
+          .quotaMonoStyle()
           .textSelection(.enabled)
           .fixedSize(horizontal: false, vertical: true)
 
         HStack(spacing: QuotaDesign.Spacing.iconLabel) {
-          RelayStatusTag(text: profile.mode.displayName)
-          RelayStatusTag(text: refreshStatus, systemImage: refreshStatusIcon)
+          QuotaStatusTag(text: profile.mode.displayName)
+          QuotaStatusTag(text: refreshStatus, systemImage: refreshStatusIcon)
         }
 
         Text("Instance \(shortInstanceID(profile.instanceID))")
-          .font(.system(.caption2, design: .monospaced))
-          .foregroundStyle(QuotaPalette.body)
+          .quotaMonoMetaStyle()
           .textSelection(.enabled)
       }
     }
@@ -126,8 +122,7 @@ struct RelayDetailView: View {
     RelayCard {
       VStack(alignment: .leading, spacing: QuotaDesign.Spacing.sectionBody) {
         Text("Profile")
-          .font(.system(.subheadline, weight: .medium))
-          .foregroundStyle(QuotaPalette.charcoal)
+          .quotaSectionHeaderStyle()
 
         HStack(spacing: QuotaDesign.Spacing.inline) {
           TextField("Relay name", text: $renameValue)
@@ -165,13 +160,12 @@ struct RelayDetailView: View {
             Label("Devices", systemImage: "laptopcomputer.and.iphone")
             Spacer()
             Image(systemName: "chevron.right")
-              .font(.system(size: 11, weight: .semibold))
+              .quotaChevronStyle()
           }
           .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .font(.system(.subheadline, weight: .medium))
-        .foregroundStyle(QuotaPalette.ink)
+        .quotaRowTitleStyle()
         .accessibilityLabel("Manage Relay devices")
       }
     }
@@ -181,8 +175,7 @@ struct RelayDetailView: View {
     RelayCard {
       VStack(alignment: .leading, spacing: QuotaDesign.Spacing.cardBody) {
         Text("Capabilities")
-          .font(.system(.subheadline, weight: .medium))
-          .foregroundStyle(QuotaPalette.charcoal)
+          .quotaSectionHeaderStyle()
 
         capability("Persistent snapshots", enabled: capabilities.persistentSnapshots)
         capability("Instant device revocation", enabled: capabilities.instantDeviceRevocation)
@@ -198,11 +191,10 @@ struct RelayDetailView: View {
       Image(systemName: enabled ? "checkmark.circle" : "minus.circle")
         .foregroundStyle(QuotaPalette.body)
       Text(name)
-        .font(.caption)
+        .quotaSecondaryStyle()
       Spacer()
       Text(enabled ? "Supported" : "Unavailable")
-        .font(.caption2)
-        .foregroundStyle(QuotaPalette.body)
+        .quotaMetaStyle()
     }
     .accessibilityElement(children: .combine)
   }
@@ -226,8 +218,7 @@ struct RelayDetailView: View {
 
   private func issueLabel(_ message: String) -> some View {
     Label(message, systemImage: "exclamationmark.circle")
-      .font(.caption)
-      .foregroundStyle(QuotaPalette.body)
+      .quotaSecondaryStyle()
       .fixedSize(horizontal: false, vertical: true)
   }
 

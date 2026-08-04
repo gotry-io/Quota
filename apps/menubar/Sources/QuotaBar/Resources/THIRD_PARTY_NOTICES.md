@@ -2,9 +2,9 @@
 
 ## Lobe Icons
 
-The Codex, Claude Code, and Grok SVG assets are from
-`@lobehub/icons-static-svg` version 1.94.0. The Codex asset has an expanded viewBox to preserve its
-full outline when rendered by macOS CoreSVG; its path data is unchanged.
+The OpenAI, Claude, and Grok monochrome SVG assets are from
+`@lobehub/icons-static-svg` (https://lobehub.com/icons). Paths are used as template marks and tinted
+by QuotaBar.
 
 MIT License
 

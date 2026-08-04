@@ -56,9 +56,10 @@ The release target is a Homebrew Cask from `gotry-io/homebrew-tap`. The signed `
 standalone QuotaCLI helper at a fixed bundle path and invokes that copy instead of a `quotacli`
 found on `PATH`. Users installing QuotaBar therefore do not install the npm CLI separately.
 
-Provider artwork uses the monochrome Codex, Claude Code, and Grok SVG assets from Lobe Icons. The
-source SVGs remain vector resources and render as semantic template images. See
-[`THIRD_PARTY_NOTICES.md`](Sources/QuotaBar/Resources/THIRD_PARTY_NOTICES.md) for attribution.
+Provider artwork uses the monochrome OpenAI, Claude, and Grok SVG assets from Lobe Icons
+(https://lobehub.com/icons). The source SVGs remain vector resources and render as semantic template
+images. See [`THIRD_PARTY_NOTICES.md`](Sources/QuotaBar/Resources/THIRD_PARTY_NOTICES.md) for
+attribution.
 
 ## Visual QA
 

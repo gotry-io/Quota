@@ -39,11 +39,11 @@ Canonical implementation:
    material without hard paper-gray slabs.
 2. **Operational density** — Overview stays compact; Settings/deeper pages are taller. Prefer
    tighter vertical rhythm over large empty canvas.
-3. **Color is secondary signal** — brand tints identify providers; usage tones color remaining
-   meters/percents; auth/stale/errors still use text and icons.
+3. **Monochrome first** — provider marks and usage meters stay on system label ink (opacity tiers
+   for remaining). Auth/stale/errors use text and icons, not brand multicolor.
 4. **One shell, one stack** — Overview is root. Settings, Relays, pairing, and devices push on one
    app-owned path with a leading back control. No second navigation bar.
-5. **Quiet provenance** — Local/Remote is trailing mute meta (symbol + text), not a bordered chip.
+5. **Quiet provenance** — trailing mute icon for the selected source only; detail on hover.
 6. **Reduce Motion** — page transitions become opacity-only or instant when Reduce Motion is on.
 
 ## Layout tokens
@@ -54,18 +54,19 @@ Mapped from `QuotaDesign.Layout`:
 | --- | --- | --- |
 | `panelWidth` | 320 | Fixed panel width |
 | `panelMaxHeight` | 560 | Fixed panel height for every page |
-| `panelHorizontalPadding` | 16 | Single page gutter for every page body |
+| `panelHorizontalPadding` | 16 | Single horizontal gutter for header, page body, and footer |
 | `panelContentWidth` | 288 | `panelWidth - 2 × gutter`; page content must fit here |
 | `pageVerticalPadding` | 16 | Settings / Relay / form page body top+bottom inset |
 | `emptyStateVerticalPadding` | 24 | Extra vertical room for centered empty states only |
 | `headerHeight` | 44 | Shell header |
 | `footerHeight` | 36 | Shell footer |
-| `navigationControlSize` | 28 | Back / gear / ellipsis hit targets |
+| `headerControlWidth` | 28 | Gear / plus / ellipsis hit targets |
 | `providerRowVerticalPadding` | 10 | Provider block vertical padding |
 | `progressHeight` | 8 | Remaining meter thickness |
+| `controlMinHeight` | 36 | Primary button min height |
 | `cardPadding` | 16 | Relay card internal padding |
 | `cardCornerRadius` | 12 | Relay card corner |
-| `tagCornerRadius` | 3 | Stale tag corner only |
+| `tagCornerRadius` | 3 | Status tag corner |
 
 ### Spacing scale (`QuotaDesign.Spacing`)
 
@@ -86,10 +87,11 @@ Mapped from `QuotaDesign.Layout`:
 
 Rules:
 
-1. Every page body uses `panelHorizontalPadding` once. No second page-level horizontal inset.
-2. Settings/Relay/form pages use `pageVerticalPadding` (16). Overview uses 0.
-3. Prefer `Spacing.*` tokens over raw literals for stacks and clusters.
-4. Empty states may add `emptyStateVerticalPadding`, never a second horizontal gutter.
+1. Header, page body, and footer all use `panelHorizontalPadding` (16). No tighter header-only inset.
+2. Header icon *glyphs* sit on that 16pt content edge; hit targets grow inward, not outward.
+3. Settings/Relay/form pages use `pageVerticalPadding` (16). Overview uses 0.
+4. Prefer `Spacing.*` tokens over raw literals for stacks and clusters.
+5. Empty states may add `emptyStateVerticalPadding`, never a second horizontal gutter.
 
 ### Shell anatomy
 
@@ -118,52 +120,65 @@ From `QuotaPalette` — **do not hardcode paper whites/grays for these roles**:
 
 | Role | Source |
 | --- | --- |
-| `ink` / `primary` | `NSColor.labelColor` |
-| `charcoal` / `body` | `NSColor.secondaryLabelColor` |
+| `ink` | `NSColor.labelColor` |
+| `body` | `NSColor.secondaryLabelColor` |
 | `mute` | `NSColor.tertiaryLabelColor` |
 | `hairline` | `NSColor.separatorColor` |
 | `soft` | `quaternaryLabelColor` @ ~35% opacity |
 | `progressTrack` | `Color.primary` @ 8% opacity |
 | `onPrimary` | `alternateSelectedControlTextColor` |
 
-Dividers use the system `Divider` (no fixed gray overlay).
+Dividers use the system `Divider` (no fixed gray overlay). Shared borders use
+`hairlineBorder` (`hairline` @ 80%). Status chips use `QuotaStatusTag`.
 
-### Product-owned accents
+### Usage / brand (monochrome on host chrome)
 
-| Token | Light | Dark | Use |
-| --- | --- | --- | --- |
-| `brand.codex` | `#7A9DFF` | same | Lobe Codex color mid-stop; template tint |
-| `brand.claude` | `#D97757` | same | Claude warm orange tint |
-| `brand.grok` | `#26262A` | `#E4E4E7` | Near-black / lifted gray |
-| `usage.healthy` | `#15803D` | same | Remaining ≥ 40% |
-| `usage.warning` | `#B45309` | same | Remaining ≥ 15% and < 40% |
-| `usage.critical` | `#B91C1C` | same | Remaining < 15% |
+| Token | Value | Use |
+| --- | --- | --- |
+| provider marks | `ink` | All providers share ink template tint |
+| `usage.healthy` | `Color.primary` @ 28% | Remaining ≥ 40% |
+| `usage.warning` | `Color.primary` @ 48% | Remaining ≥ 15% and < 40% |
+| `usage.critical` | `Color.primary` @ 78% | Remaining < 15% |
 
-Stale rows keep the usage tone at ~55% opacity and still show a Stale tag.
+Stale rows further dim the usage fill (~55% of the tone) and still show a Stale tag.
 
 ## Typography
 
-System SF only (`QuotaDesign.Typography`):
+System SF only. Prefer **semantic** roles from `QuotaDesign.Typography` and the view helpers
+below. Avoid bare `.caption` / `.subheadline` / `.font(.system(size:))` in features.
 
-| Role | Font |
-| --- | --- |
-| Panel title | `.headline`, rounded, semibold |
-| Provider title | `.subheadline`, medium |
-| Remaining % | `.subheadline`, semibold, monospaced digits |
-| Window title | `.caption`, medium |
-| Plan · account | `.caption`, medium |
-| Reset / help | `.caption2` |
-| Source label | `.caption2`, medium |
-| Status tag | `.caption2` |
+| Role | Font | Color | Helper |
+| --- | --- | --- | --- |
+| Panel title | `.headline` rounded semibold | `ink` | (header only) |
+| Empty title | `.headline` rounded medium | `ink` | `quotaEmptyTitleStyle` |
+| Row / entity title | `.subheadline` medium | `ink` | `quotaRowTitleStyle` |
+| Section header | `.caption` semibold | `mute` | `quotaSectionHeaderStyle` |
+| Secondary / quiet action / issue | `.caption` | `body` | `quotaSecondaryStyle` |
+| Meta / tags / source | `.caption2` | `mute` | `quotaMetaStyle` |
+| Mono (URL/command/id) | `.caption` monospaced | `body` (never `ink`) | `quotaMonoStyle` |
+| Mono meta (instance id) | `.caption2` monospaced | `mute` | `quotaMonoMetaStyle` |
+| Chevron / affordance | 11 / 10 semibold | `mute` | `quotaChevronStyle` / `quotaAffordanceStyle` |
+| Empty icon | 28 regular | `body` | `quotaEmptyIconStyle` |
+| Remaining % | `.subheadline` semibold | usage tone | — |
+| Window title | `.caption` medium | `body` | — |
+| Pairing code | `.title3` mono semibold | ink via field | — |
+
+Hierarchy: **panelTitle ≥ emptyTitle > rowTitle > sectionHeader > secondary > meta**.
+Section headers stay quieter than row titles so groups don't overpower content.
+Technical strings and chevrons never use `ink`. One helper per font+color pair — no aliases.
 
 No website display scale (30–36px) inside the panel.
 
 ## Iconography
 
-- **Menu bar status item:** system template glyph (monochrome).
-- **Provider marks:** Lobe monochrome SVGs, pre-rasterized to 24pt@2x template bitmaps, tinted with
-  brand colors. Codex path data must keep explicit arc flags (no SVG compact `01` flag gluing) so
-  CoreSVG does not drop contours.
+- **Menu bar status item:** the custom Q gauge in `Resources/BrandIcons/quota.svg`, rendered at
+  18pt as one solid gauge arc and an inward diagonal tail. Small template marks omit the muted outer
+  arc because partial-alpha strokes become soft at menu-bar resolution.
+- **Application icon:** `Support/QuotaBarIcon.svg` is the editable double-ring source;
+  `Support/QuotaBarSmallIcon.svg` is the single-ring 16–64px optical source. The generated
+  `Support/QuotaBar.icns` combines them through `scripts/generate-brand-assets.sh`.
+- **Provider marks:** Lobe monochrome SVGs (`openai`, `claude`, `grok` from lobehub.com/icons),
+  pre-rasterized to 24pt@2x template bitmaps and tinted with system label ink.
 - **Source labels:** SF Symbols — `laptopcomputer` (Local), `network` (Remote),
   `laptopcomputer.and.iphone` (mixed).
 - **Utility:** SF Symbols for back, gear, ellipsis, stale clock, empty states.
@@ -190,11 +205,13 @@ Rules:
 4. Meter fill + % share usage tone. Filled proportion is always **remaining**.
 5. Multi-account: per-account identity row carries its own source label and optional Stale tag.
 
-### Source label
+### Source badge
 
-- Not a bordered chip.
-- Trailing, mute, icon + text.
-- Copy: `Local` | `Remote` | `Local + Remote` | `Local + N remote` | `N remote`.
+- Trailing mute **icon only** for the **selected** observation source.
+- Must match `SubscriptionResolver`’s chosen snapshot — never a multi-source blend.
+- Icons: `laptopcomputer` (local) / `network` (remote).
+- Hover tooltip: `This Mac` or Relay device `displayName` (fallback `Relay Device`).
+- VoiceOver: `Source: {tooltip}`.
 
 ### Provider status (failure / recovery)
 
@@ -209,8 +226,8 @@ Collapse protocol outcomes into three quiet UI states:
 Rules:
 
 - No bordered chips/CTAs for auth or errors. Status is quiet text beside the provider name.
-- Trailing edge stays provenance-only (`Local` / `Remote` / mixed). Never replace source labels with status.
-- Issue-only rows (no accounts) still show `Local` when the failure came from local collection.
+- Trailing edge stays provenance-only (selected-source icon). Never replace it with status text.
+- Issue-only rows (no accounts) still show the local source icon when the failure came from local collection.
 - `Stale` remains the only outlined status tag (freshness of otherwise successful data).
 - Settings Agents rows reuse the same recovery detail; healthy success shows no status chrome.
 
@@ -228,11 +245,11 @@ Rules:
 
 - Sections: Agents, Remote Quota, About.
 - Agents rows: brand icon, name, optional recovery detail, visibility toggle.
-  - Signed-in / success: no status title or “CLI ready” copy — only the toggle (enabled).
-  - Not signed in / error / unavailable: short recovery detail (e.g. `Run claude auth login`);
-    toggle disabled and dimmed.
+  - Visibility toggle is always interactive (auth failures still appear in Overview when enabled).
+  - Signed-in / success: no status chrome — only the toggle.
+  - Not signed in / error / unavailable: short recovery detail (e.g. `Run \`claude auth login\``).
 - Overflow menu (ellipsis): Delete all QuotaBar data…, Quit QuotaBar.
-- About holds product name + version only (not footer).
+- About: Version, Website, Feedback rows (no product-name label, no copyright blurb).
 
 ### Navigation motion
 
@@ -255,7 +272,7 @@ Rules:
 
 - Keep the host `MenuBarExtra` background and system separators/tracks.
 - Keep Overview denser than Settings.
-- Tint provider marks; tone meters by remaining thresholds.
+- Keep provider marks monochrome; tone meters by remaining opacity tiers.
 - Put provenance on the trailing edge as quiet meta.
 - Honor Reduce Motion and VoiceOver labels on combined provider rows.
 

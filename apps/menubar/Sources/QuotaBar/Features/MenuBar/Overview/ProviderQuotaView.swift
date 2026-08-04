@@ -9,8 +9,7 @@ struct ProviderQuotaView: View {
 
       if let detail = presentation.status?.detail {
         Text(detail)
-          .font(QuotaDesign.Typography.metadata)
-          .foregroundStyle(QuotaPalette.body)
+          .quotaSecondaryStyle()
           .fixedSize(horizontal: false, vertical: true)
           .accessibilityLabel(presentation.status?.accessibilityLabel ?? detail)
       }
@@ -38,22 +37,20 @@ struct ProviderQuotaView: View {
         ProviderBrandIcon(provider: presentation.provider)
         Text(presentation.provider.displayName)
       }
-      .font(QuotaDesign.Typography.providerTitle)
-      .foregroundStyle(QuotaPalette.ink)
+      .quotaRowTitleStyle()
 
       // Status sits with the provider name. Never replace trailing Local/Remote —
       // provenance answers "where from", status answers "what's wrong".
       if let status = presentation.status {
         Text(status.title)
-          .font(QuotaDesign.Typography.sourceTag)
-          .foregroundStyle(QuotaPalette.mute)
+          .quotaMetaStyle()
           .lineLimit(1)
           .fixedSize()
           .accessibilityHidden(true)
       } else if presentation.accounts.count == 1,
         presentation.accounts.first?.isStale == true
       {
-        StaleTag()
+        QuotaStatusTag(text: "Stale", systemImage: "clock")
       }
 
       Spacer(minLength: 8)
@@ -61,10 +58,18 @@ struct ProviderQuotaView: View {
       if presentation.accounts.count == 1,
         let account = presentation.accounts.first
       {
-        SourceLabel(summary: account.sourceSummary)
+        SourceBadge(
+          symbolName: account.sourceSymbolName,
+          tooltip: account.sourceTooltip,
+          accessibilityLabel: account.sourceAccessibilityLabel
+        )
       } else if presentation.accounts.isEmpty, presentation.status != nil {
-        // Issue-only local row still has a local collection context.
-        SourceLabel(summary: "Local")
+        // Issue-only local row: collection context is local.
+        SourceBadge(
+          symbolName: "laptopcomputer",
+          tooltip: "This Mac",
+          accessibilityLabel: "Source: This Mac"
+        )
       }
     }
   }
@@ -111,25 +116,28 @@ private struct AccountQuotaView: View {
     HStack(alignment: .firstTextBaseline, spacing: QuotaDesign.Spacing.iconLabel) {
       if let identitySummary {
         Text(identitySummary)
-          .font(QuotaDesign.Typography.metadata.weight(.medium))
+          .font(QuotaDesign.Typography.quotaLabel)
           .foregroundStyle(QuotaPalette.body)
           .lineLimit(1)
           .truncationMode(.middle)
           .accessibilityLabel(accessibilityIdentityLabel)
       } else if showsAccountStatus {
         Text("Account \(accountIndex + 1)")
-          .font(QuotaDesign.Typography.metadata)
-          .foregroundStyle(QuotaPalette.body)
+          .quotaSecondaryStyle()
       }
 
       if showsAccountStatus, presentation.isStale {
-        StaleTag()
+        QuotaStatusTag(text: "Stale", systemImage: "clock")
       }
 
       Spacer(minLength: 8)
 
       if showsAccountStatus {
-        SourceLabel(summary: presentation.sourceSummary)
+        SourceBadge(
+          symbolName: presentation.sourceSymbolName,
+          tooltip: presentation.sourceTooltip,
+          accessibilityLabel: presentation.sourceAccessibilityLabel
+        )
       }
     }
   }
@@ -165,7 +173,7 @@ private struct QuotaWindowRow: View {
       HStack(alignment: .firstTextBaseline, spacing: QuotaDesign.Spacing.inline) {
         Text(window.title)
           .font(QuotaDesign.Typography.quotaLabel)
-          .foregroundStyle(QuotaPalette.charcoal)
+          .foregroundStyle(QuotaPalette.body)
         Spacer(minLength: 8)
         Text(percent(window.remainingPercent))
           .font(QuotaDesign.Typography.remainingValue)
@@ -187,47 +195,27 @@ private struct QuotaWindowRow: View {
           Text("· Observed \(observedAt, style: .relative) ago")
         }
       }
-      .font(QuotaDesign.Typography.resetTime)
-      .foregroundStyle(QuotaPalette.body)
+      .quotaMetaStyle()
       .lineLimit(1)
     }
     .padding(.top, 2)
   }
 }
 
-/// Provenance as quiet meta (icon + text), not a bordered chip.
-private struct SourceLabel: View {
-  let summary: String
+/// Selected-source provenance only. Matches SubscriptionResolver's chosen snapshot —
+/// never a multi-source blend.
+private struct SourceBadge: View {
+  let symbolName: String
+  let tooltip: String
+  let accessibilityLabel: String
 
   var body: some View {
-    Label {
-      Text(summary)
-    } icon: {
-      Image(systemName: symbolName)
-    }
-    .labelStyle(.titleAndIcon)
-    .font(QuotaDesign.Typography.sourceTag)
-    .foregroundStyle(QuotaPalette.mute)
-    .symbolRenderingMode(.monochrome)
-    .fixedSize()
-    .accessibilityLabel("Sources: \(summary)")
-  }
-
-  private var symbolName: String {
-    let normalized = summary.lowercased()
-    if normalized == "local" {
-      return "laptopcomputer"
-    }
-    if normalized == "remote" {
-      return "network"
-    }
-    if normalized.hasPrefix("local") {
-      return "laptopcomputer.and.iphone"
-    }
-    if normalized.contains("remote") {
-      return "network"
-    }
-    return "circle.grid.2x1"
+    Image(systemName: symbolName)
+      .font(QuotaDesign.Typography.metaMedium)
+      .foregroundStyle(QuotaPalette.mute)
+      .symbolRenderingMode(.monochrome)
+      .help(tooltip)
+      .accessibilityLabel(accessibilityLabel)
   }
 }
 
@@ -248,21 +236,6 @@ private struct QuotaProgressBar: View {
     .frame(height: QuotaDesign.Layout.progressHeight)
     .accessibilityLabel("Remaining quota")
     .accessibilityValue(percent(value))
-  }
-}
-
-private struct StaleTag: View {
-  var body: some View {
-    Label("Stale", systemImage: "clock")
-      .font(QuotaDesign.Typography.statusTag)
-      .foregroundStyle(QuotaPalette.charcoal)
-      .padding(.horizontal, 5)
-      .padding(.vertical, 2)
-      .overlay {
-        RoundedRectangle(cornerRadius: QuotaDesign.Layout.tagCornerRadius)
-          .stroke(QuotaPalette.hairline.opacity(0.7))
-      }
-      .fixedSize()
   }
 }
 

@@ -37,8 +37,7 @@ struct AddRelayView: View {
     ScrollView {
       VStack(alignment: .leading, spacing: QuotaDesign.Spacing.section) {
         Text("Enter the 8-character code shown by QuotaCLI. Pairing starts automatically.")
-          .font(.caption)
-          .foregroundStyle(QuotaPalette.body)
+          .quotaSecondaryStyle()
           .multilineTextAlignment(.center)
           .fixedSize(horizontal: false, vertical: true)
           .frame(maxWidth: .infinity)
@@ -60,8 +59,7 @@ struct AddRelayView: View {
               ProgressView()
                 .controlSize(.small)
               Text("Pairing…")
-                .font(.caption)
-                .foregroundStyle(QuotaPalette.body)
+                .quotaSecondaryStyle()
             }
             .frame(maxWidth: .infinity)
             .accessibilityElement(children: .combine)
@@ -70,8 +68,7 @@ struct AddRelayView: View {
 
           if let errorMessage {
             Label(errorMessage, systemImage: "exclamationmark.circle")
-              .font(.caption)
-              .foregroundStyle(QuotaPalette.body)
+              .quotaSecondaryStyle()
               .multilineTextAlignment(.center)
               .fixedSize(horizontal: false, vertical: true)
               .frame(maxWidth: .infinity)
@@ -107,7 +104,7 @@ struct AddRelayView: View {
 
               TextField("https://quota.gotry.io", text: $origin)
                 .textFieldStyle(RelayRoundedTextFieldStyle())
-                .font(.system(.body, design: .monospaced))
+                .quotaMonoStyle()
                 .disabled(isSubmitting)
 
               if !usesOfficialRelay {
@@ -139,13 +136,12 @@ struct AddRelayView: View {
       } label: {
         HStack(spacing: QuotaDesign.Spacing.iconLabel) {
           Image(systemName: "chevron.right")
-            .font(.system(size: 11, weight: .semibold))
+            .quotaChevronStyle()
             .rotationEffect(.degrees(isExpanded.wrappedValue ? 90 : 0))
           Text(title)
-            .font(.system(.subheadline, weight: .medium))
+            .quotaSectionHeaderStyle()
           Spacer(minLength: 0)
         }
-        .foregroundStyle(QuotaPalette.charcoal)
         .contentShape(Rectangle())
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, QuotaDesign.Spacing.xxs)
@@ -169,20 +165,17 @@ struct AddRelayView: View {
   ) -> some View {
     VStack(alignment: .leading, spacing: QuotaDesign.Spacing.meta) {
       Text(title)
-        .font(QuotaDesign.Typography.resetTime)
-        .foregroundStyle(QuotaPalette.mute)
+        .quotaMetaStyle()
 
       HStack(spacing: QuotaDesign.Spacing.inline) {
         Text(command)
-          .font(.system(.caption, design: .monospaced))
-          .foregroundStyle(QuotaPalette.ink)
+          .quotaMonoStyle()
           .lineLimit(2)
           .frame(maxWidth: .infinity, alignment: .leading)
 
         Button(copied ? "Copied" : "Copy", action: action)
           .buttonStyle(.plain)
-          .font(.system(.caption, weight: .medium))
-          .foregroundStyle(QuotaPalette.body)
+          .quotaSecondaryStyle()
           .accessibilityLabel(copyLabel)
       }
       .padding(.horizontal, 10)
@@ -191,7 +184,7 @@ struct AddRelayView: View {
       .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
       .overlay {
         RoundedRectangle(cornerRadius: 8, style: .continuous)
-          .stroke(QuotaPalette.hairline.opacity(0.75), lineWidth: 1)
+          .stroke(QuotaPalette.hairlineBorder, lineWidth: 1)
       }
     }
   }

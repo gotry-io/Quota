@@ -1,11 +1,12 @@
 import SwiftUI
 
-struct MenuBarShell<Content: View, Trailing: View>: View {
+struct MenuBarShell<Content: View>: View {
   let model: MenuBarViewModel
   let title: String
   let canNavigateBack: Bool
   let onNavigateBack: () -> Void
-  let trailing: Trailing
+  let showsLeadingIcon: Bool
+  let trailing: MenuBarHeader.TrailingAction
   let content: Content
 
   init(
@@ -13,20 +14,28 @@ struct MenuBarShell<Content: View, Trailing: View>: View {
     title: String,
     canNavigateBack: Bool,
     onNavigateBack: @escaping () -> Void,
-    @ViewBuilder trailing: () -> Trailing,
+    showsLeadingIcon: Bool = false,
+    trailing: MenuBarHeader.TrailingAction = .none,
     @ViewBuilder content: () -> Content
   ) {
     self.model = model
     self.title = title
     self.canNavigateBack = canNavigateBack
     self.onNavigateBack = onNavigateBack
-    self.trailing = trailing()
+    self.showsLeadingIcon = showsLeadingIcon
+    self.trailing = trailing
     self.content = content()
   }
 
   var body: some View {
     VStack(spacing: 0) {
-      panelHeader
+      MenuBarHeader(
+        title: title,
+        canNavigateBack: canNavigateBack,
+        onNavigateBack: onNavigateBack,
+        showsLeadingIcon: showsLeadingIcon,
+        trailing: trailing
+      )
 
       Divider()
 
@@ -41,64 +50,6 @@ struct MenuBarShell<Content: View, Trailing: View>: View {
     .frame(width: QuotaDesign.Layout.panelWidth)
     // MenuBarExtra often ignores flexible height on first open. Pin the shared ceiling.
     .frame(height: QuotaDesign.Layout.panelMaxHeight)
-  }
-
-  private var panelHeader: some View {
-    HStack(spacing: 0) {
-      HStack(spacing: 0) {
-        if canNavigateBack {
-          Button(action: onNavigateBack) {
-            Image(systemName: "chevron.left")
-              .font(.system(size: 14, weight: .semibold))
-              .foregroundStyle(QuotaPalette.body)
-              .frame(
-                width: 20,
-                height: QuotaDesign.Layout.navigationControlSize,
-                alignment: .leading
-              )
-              .contentShape(Rectangle())
-          }
-          .buttonStyle(.plain)
-          .accessibilityLabel("Back")
-          .padding(.trailing, QuotaDesign.Spacing.iconLabel)
-        }
-
-        Text(title)
-          .font(QuotaDesign.Typography.panelTitle)
-          .foregroundStyle(QuotaPalette.ink)
-          .lineLimit(1)
-      }
-
-      Spacer(minLength: QuotaDesign.Spacing.inline)
-
-      trailing
-        .frame(
-          minWidth: QuotaDesign.Layout.navigationControlSize,
-          minHeight: QuotaDesign.Layout.navigationControlSize,
-          alignment: .trailing
-        )
-    }
-    .frame(maxWidth: .infinity, minHeight: QuotaDesign.Layout.headerHeight, alignment: .center)
-    .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
-  }
-}
-
-extension MenuBarShell where Trailing == EmptyView {
-  init(
-    model: MenuBarViewModel,
-    title: String,
-    canNavigateBack: Bool,
-    onNavigateBack: @escaping () -> Void,
-    @ViewBuilder content: () -> Content
-  ) {
-    self.init(
-      model: model,
-      title: title,
-      canNavigateBack: canNavigateBack,
-      onNavigateBack: onNavigateBack,
-      trailing: { EmptyView() },
-      content: content
-    )
   }
 }
 
@@ -122,8 +73,7 @@ struct MenuBarFooterView: View {
       .disabled(model.isRefreshing)
       .accessibilityLabel("Refresh quota, \(lastRefreshLabel)")
     }
-    .font(.caption)
-    .foregroundStyle(QuotaPalette.body)
+    .quotaSecondaryStyle()
     .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
     .frame(height: QuotaDesign.Layout.footerHeight)
   }

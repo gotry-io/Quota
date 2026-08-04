@@ -16,8 +16,7 @@ struct RelayDevicesView: View {
           HStack(spacing: QuotaDesign.Spacing.inline) {
             ProgressView().controlSize(.small)
             Text("Refreshing devices…")
-              .font(.caption)
-              .foregroundStyle(QuotaPalette.body)
+              .quotaSecondaryStyle()
           }
           .frame(maxWidth: .infinity, minHeight: 80)
         } else if devices.isEmpty {
@@ -83,13 +82,11 @@ struct RelayDevicesView: View {
   private var emptyState: some View {
     VStack(spacing: QuotaDesign.Spacing.cardBody) {
       Image(systemName: "laptopcomputer.and.iphone")
-        .font(.system(size: 24))
+        .quotaEmptyIconStyle()
       Text("No Paired Devices")
-        .font(.system(.headline, design: .rounded, weight: .semibold))
-        .foregroundStyle(QuotaPalette.ink)
+        .quotaEmptyTitleStyle()
       Text("Run the QuotaCLI pairing command on a device, then approve its code from Pair Device.")
-        .font(.caption)
-        .foregroundStyle(QuotaPalette.body)
+        .quotaSecondaryStyle()
         .multilineTextAlignment(.center)
         .fixedSize(horizontal: false, vertical: true)
     }
@@ -102,20 +99,18 @@ struct RelayDevicesView: View {
       VStack(alignment: .leading, spacing: QuotaDesign.Spacing.cardBody) {
         HStack(spacing: QuotaDesign.Spacing.iconLabel) {
           Text(device.displayName)
-            .font(QuotaDesign.Typography.providerTitle)
-            .foregroundStyle(QuotaPalette.ink)
+            .quotaRowTitleStyle()
             .lineLimit(2)
           Spacer(minLength: 4)
           if device.revokedAt != nil {
-            RelayStatusTag(text: "Revoked", systemImage: "slash.circle")
+            QuotaStatusTag(text: "Revoked", systemImage: "slash.circle")
           } else {
-            RelayStatusTag(text: "Active", systemImage: "checkmark.circle")
+            QuotaStatusTag(text: "Active", systemImage: "checkmark.circle")
           }
         }
 
         Text(device.shortID)
-          .font(.system(.caption, design: .monospaced))
-          .foregroundStyle(QuotaPalette.body)
+          .quotaMonoStyle()
           .textSelection(.enabled)
 
         HStack(alignment: .firstTextBaseline) {
@@ -123,8 +118,7 @@ struct RelayDevicesView: View {
             Text(lastSeenLabel(device))
             Text(device.sequenceLabel)
           }
-          .font(.caption2)
-          .foregroundStyle(QuotaPalette.body)
+          .quotaMetaStyle()
 
           Spacer()
 
@@ -152,8 +146,7 @@ struct RelayDevicesView: View {
 
   private func issueLabel(_ message: String) -> some View {
     Label(message, systemImage: "exclamationmark.circle")
-      .font(.caption)
-      .foregroundStyle(QuotaPalette.body)
+      .quotaSecondaryStyle()
       .fixedSize(horizontal: false, vertical: true)
   }
 

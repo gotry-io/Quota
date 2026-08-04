@@ -51,16 +51,13 @@ struct RelayListView: View {
   private var emptyState: some View {
     VStack(spacing: QuotaDesign.Spacing.sectionBody) {
       Image(systemName: "network")
-        .font(.system(size: 28, weight: .regular))
-        .foregroundStyle(QuotaPalette.ink)
+        .quotaEmptyIconStyle()
 
       Text("No Relays Configured")
-        .font(.system(.headline, design: .rounded, weight: .semibold))
-        .foregroundStyle(QuotaPalette.ink)
+        .quotaEmptyTitleStyle()
 
       Text("Add a self-hosted Relay to read quota from remote QuotaCLI devices.")
-        .font(.subheadline)
-        .foregroundStyle(QuotaPalette.body)
+        .quotaSecondaryStyle()
         .multilineTextAlignment(.center)
         .fixedSize(horizontal: false, vertical: true)
 
@@ -75,11 +72,9 @@ struct RelayListView: View {
     RelayCard {
       VStack(alignment: .leading, spacing: QuotaDesign.Spacing.cardBody) {
         Text("Managed Relay Is Disconnected")
-          .font(QuotaDesign.Typography.providerTitle)
-          .foregroundStyle(QuotaPalette.ink)
+          .quotaRowTitleStyle()
         Text("Reconnect to create a new anonymous controller without an account.")
-          .font(.caption)
-          .foregroundStyle(QuotaPalette.body)
+          .quotaSecondaryStyle()
           .fixedSize(horizontal: false, vertical: true)
         Button("Reconnect Quota Relay") {
           guard !isEnablingManagedRelay else { return }
@@ -90,8 +85,7 @@ struct RelayListView: View {
           }
         }
         .buttonStyle(.plain)
-        .font(.system(.subheadline, weight: .medium))
-        .foregroundStyle(QuotaPalette.ink)
+        .quotaRowTitleStyle()
         .disabled(isEnablingManagedRelay)
       }
     }
@@ -103,32 +97,29 @@ struct RelayListView: View {
       VStack(alignment: .leading, spacing: QuotaDesign.Spacing.cardBody) {
         HStack(spacing: QuotaDesign.Spacing.iconLabel) {
           Text(profile.name)
-            .font(QuotaDesign.Typography.providerTitle)
-            .foregroundStyle(QuotaPalette.ink)
+            .quotaRowTitleStyle()
             .lineLimit(1)
 
           if profile.isDefault {
-            RelayStatusTag(text: "Default", systemImage: "checkmark")
+            QuotaStatusTag(text: "Default", systemImage: "checkmark")
           }
 
           Spacer(minLength: QuotaDesign.Spacing.xxs)
           Image(systemName: "chevron.right")
-            .font(.system(size: 11, weight: .semibold))
-            .foregroundStyle(QuotaPalette.body)
+            .quotaChevronStyle()
         }
 
         Text(profile.baseURL.absoluteString)
-          .font(.system(.caption, design: .monospaced))
-          .foregroundStyle(QuotaPalette.body)
+          .quotaMonoStyle()
           .lineLimit(2)
           .multilineTextAlignment(.leading)
 
         HStack(spacing: QuotaDesign.Spacing.iconLabel) {
-          RelayStatusTag(text: profile.mode.displayName)
+          QuotaStatusTag(text: profile.mode.displayName)
           if let issue = state?.issue {
-            RelayStatusTag(text: shortIssueLabel(issue), systemImage: "exclamationmark.circle")
+            QuotaStatusTag(text: shortIssueLabel(issue), systemImage: "exclamationmark.circle")
           } else {
-            RelayStatusTag(
+            QuotaStatusTag(
               text: state?.refreshLabel ?? "Not Loaded",
               systemImage: state?.refreshIcon
             )
@@ -137,8 +128,7 @@ struct RelayListView: View {
 
         if let issue = state?.issue {
           Text(issue.message)
-            .font(.caption)
-            .foregroundStyle(QuotaPalette.body)
+            .quotaSecondaryStyle()
             .fixedSize(horizontal: false, vertical: true)
         }
       }

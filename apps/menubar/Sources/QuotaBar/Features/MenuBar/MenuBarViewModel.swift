@@ -32,22 +32,30 @@ struct AccountQuotaPresentation: Equatable, Identifiable {
   let identity: QuotaSubscriptionIdentity
   let snapshot: QuotaSnapshot
   let isStale: Bool
+  /// Every contributing source (debug / future use). UI provenance follows selectedSource only.
   let sources: [QuotaObservationSource]
+  /// Snapshot chosen by SubscriptionResolver — single source of truth for numbers and badge.
   let selectedSource: QuotaObservationSource
+  /// Human label for selectedSource ("This Mac" or Relay device display name).
+  let selectedSourceDisplayName: String
 
   var id: QuotaSubscriptionIdentity { identity }
 
+  /// Compact kind label aligned to selectedSource only (never a multi-source blend).
   var sourceSummary: String {
-    let hasLocal = sources.contains(.local)
-    let remoteCount = sources.count - (hasLocal ? 1 : 0)
-    if hasLocal {
-      switch remoteCount {
-      case 0: return "Local"
-      case 1: return "Local + Remote"
-      default: return "Local + \(remoteCount) remote"
-      }
-    }
-    return remoteCount == 1 ? "Remote" : "\(remoteCount) remote"
+    selectedSource.isLocal ? "Local" : "Remote"
+  }
+
+  var sourceSymbolName: String {
+    selectedSource.isLocal ? "laptopcomputer" : "network"
+  }
+
+  var sourceTooltip: String {
+    selectedSourceDisplayName
+  }
+
+  var sourceAccessibilityLabel: String {
+    "Source: \(selectedSourceDisplayName)"
   }
 }
 
@@ -198,7 +206,7 @@ final class MenuBarViewModel {
   ) -> [AccountQuotaPresentation] {
     resolvedSubscriptions(now: now)
       .filter { $0.identity.provider == provider }
-      .map(Self.presentation(for:))
+      .map { presentation(for: $0) }
   }
 
   func overviewState(
@@ -286,7 +294,7 @@ final class MenuBarViewModel {
     !snapshot.windows.isEmpty && (snapshot.status == .available || snapshot.status == .stale)
   }
 
-  private static func presentation(
+  private func presentation(
     for subscription: ResolvedQuotaSubscription
   ) -> AccountQuotaPresentation {
     AccountQuotaPresentation(
@@ -294,8 +302,28 @@ final class MenuBarViewModel {
       snapshot: subscription.selectedSnapshot,
       isStale: subscription.isStale,
       sources: subscription.sources,
-      selectedSource: subscription.selectedSource
+      selectedSource: subscription.selectedSource,
+      selectedSourceDisplayName: displayName(for: subscription.selectedSource)
     )
+  }
+
+  private func displayName(for source: QuotaObservationSource) -> String {
+    switch source {
+    case .local:
+      return "This Mac"
+    case .remote(let relayInstanceID, let deviceID):
+      if let profile = relayStateModel.profiles.first(where: { $0.instanceID == relayInstanceID }),
+        let device = relayStateModel.state(for: profile.id)?.devices.first(where: {
+          $0.deviceID == deviceID
+        })
+      {
+        let name = device.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !name.isEmpty {
+          return name
+        }
+      }
+      return "Relay Device"
+    }
   }
 
   private static func message(for error: Error) -> String {

@@ -217,7 +217,8 @@
         ($0.identity.fingerprint, $0.sourceSummary)
       }
     )
-    #expect(summaries["visual_personal"] == "Local + Remote")
+    // Badge follows selectedSource only (local wins when both are valid).
+    #expect(summaries["visual_personal"] == "Local")
     #expect(summaries["visual_remote_grok"] == "Remote")
   }
 

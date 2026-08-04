@@ -69,8 +69,10 @@ struct QuotaBarApp: App {
     }
 
     var body: some Scene {
-      MenuBarExtra("QuotaBar", systemImage: "gauge.with.dots.needle.50percent") {
+      MenuBarExtra {
         MenuBarContentView(model: model)
+      } label: {
+        QuotaMenuBarIcon()
       }
       .menuBarExtraStyle(.window)
     }

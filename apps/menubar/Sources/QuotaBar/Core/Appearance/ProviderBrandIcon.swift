@@ -4,7 +4,6 @@ import SwiftUI
 struct ProviderBrandIcon: View {
   let provider: ProviderID
   var size: CGFloat = 14
-  @Environment(\.colorScheme) private var colorScheme
 
   var body: some View {
     Group {
@@ -19,7 +18,7 @@ struct ProviderBrandIcon: View {
     .frame(width: size, height: size)
     // Keep drawing inside the frame; fixed assets should already be padded.
     .clipped()
-    .foregroundStyle(QuotaPalette.brandColor(for: provider, colorScheme: colorScheme))
+    .foregroundStyle(QuotaPalette.ink)
     .accessibilityHidden(true)
   }
 }
@@ -105,8 +104,8 @@ enum ProviderBrandAssets {
 extension ProviderID {
   fileprivate var brandIconAssetName: String {
     switch self {
-    case .codex: "codex"
-    case .claude: "claudecode"
+    case .codex: "openai"
+    case .claude: "claude"
     case .grok: "grok"
     }
   }

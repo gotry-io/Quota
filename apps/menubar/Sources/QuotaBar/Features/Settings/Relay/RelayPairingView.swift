@@ -15,8 +15,7 @@ struct RelayPairingView: View {
     ScrollView {
       VStack(alignment: .leading, spacing: QuotaDesign.Spacing.section) {
         Text("Enter the 8-character code shown by QuotaCLI. Pairing starts automatically.")
-          .font(.caption)
-          .foregroundStyle(QuotaPalette.body)
+          .quotaSecondaryStyle()
           .multilineTextAlignment(.center)
           .fixedSize(horizontal: false, vertical: true)
           .frame(maxWidth: .infinity)
@@ -38,23 +37,20 @@ struct RelayPairingView: View {
               ProgressView()
                 .controlSize(.small)
               Text("Pairing…")
-                .font(.caption)
-                .foregroundStyle(QuotaPalette.body)
+                .quotaSecondaryStyle()
             }
             .frame(maxWidth: .infinity)
           }
 
           if let statusMessage {
             Label(statusMessage, systemImage: "checkmark.circle")
-              .font(.caption)
-              .foregroundStyle(QuotaPalette.body)
+              .quotaSecondaryStyle()
               .frame(maxWidth: .infinity)
           }
 
           if let errorMessage {
             Label(errorMessage, systemImage: "exclamationmark.circle")
-              .font(.caption)
-              .foregroundStyle(QuotaPalette.body)
+              .quotaSecondaryStyle()
               .multilineTextAlignment(.center)
               .fixedSize(horizontal: false, vertical: true)
               .frame(maxWidth: .infinity)

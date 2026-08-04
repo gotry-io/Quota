@@ -13,6 +13,18 @@ func loadsBundledProviderBrandSVGs() throws {
   }
 }
 
+@Test @MainActor
+func loadsBundledQuotaBrandSVG() throws {
+  let url = try #require(QuotaBrandAssets.menuBarResourceURL())
+  #expect(url.pathExtension == "svg")
+  let svg = try String(contentsOf: url, encoding: .utf8)
+  #expect(svg.components(separatedBy: "<path").count == 3)
+  #expect(!svg.contains("stroke-opacity"))
+  let image = try #require(QuotaBrandAssets.menuBarTemplateImage())
+  #expect(image.isTemplate)
+  #expect(image.size == NSSize(width: 18, height: 18))
+}
+
 @Test
 func decodesRelayCapabilities() throws {
   let data = Data(

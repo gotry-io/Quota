@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct SettingsHomeView: View {
@@ -19,8 +20,7 @@ struct SettingsHomeView: View {
           }
 
           Text("Turn on signed-in agents to show them in Overview.")
-            .font(QuotaDesign.Typography.resetTime)
-            .foregroundStyle(QuotaPalette.body)
+            .quotaMetaStyle()
             .fixedSize(horizontal: false, vertical: true)
         }
 
@@ -34,19 +34,16 @@ struct SettingsHomeView: View {
 
               VStack(alignment: .leading, spacing: QuotaDesign.Spacing.xxs) {
                 Text("Relays")
-                  .font(QuotaDesign.Typography.providerTitle)
-                  .foregroundStyle(QuotaPalette.ink)
+                  .quotaRowTitleStyle()
                 Text(relaySummary)
-                  .font(QuotaDesign.Typography.resetTime)
-                  .foregroundStyle(QuotaPalette.body)
+                  .quotaMetaStyle()
                   .lineLimit(2)
               }
 
               Spacer()
 
               Image(systemName: "chevron.right")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(QuotaPalette.body)
+                .quotaChevronStyle()
             }
             .contentShape(Rectangle())
           }
@@ -58,26 +55,16 @@ struct SettingsHomeView: View {
         Divider()
 
         settingsSection("About") {
-          HStack(alignment: .firstTextBaseline) {
-            Text("QuotaBar")
-              .font(.system(.subheadline, weight: .medium))
-            Spacer()
-            Text("v\(AppMetadata.version)")
-              .font(.system(.caption, design: .monospaced))
-              .foregroundStyle(QuotaPalette.body)
-          }
+          VStack(alignment: .leading, spacing: QuotaDesign.Spacing.sectionBody) {
+            aboutValueRow(title: "Version", value: AppMetadata.versionLabel)
 
-          Text(
-            "Local-first subscription quota for coding agents. MIT licensed by gotry-io contributors."
-          )
-          .font(.caption)
-          .foregroundStyle(QuotaPalette.body)
-          .fixedSize(horizontal: false, vertical: true)
+            aboutLinkRow(title: "Website", url: AppMetadata.websiteURL)
+            aboutLinkRow(title: "Feedback", url: AppMetadata.feedbackURL)
+          }
 
           if let deleteAllErrorMessage {
             Label(deleteAllErrorMessage, systemImage: "exclamationmark.circle")
-              .font(.caption)
-              .foregroundStyle(QuotaPalette.body)
+              .quotaSecondaryStyle()
               .fixedSize(horizontal: false, vertical: true)
           }
         }
@@ -103,25 +90,22 @@ struct SettingsHomeView: View {
 
       VStack(alignment: .leading, spacing: QuotaDesign.Spacing.xxs) {
         Text(provider.displayName)
-          .font(QuotaDesign.Typography.providerTitle)
-          .foregroundStyle(status.canToggle ? QuotaPalette.ink : QuotaPalette.body)
+          .quotaRowTitleStyle()
 
         if let detail = status.detail {
           Text(detail)
-            .font(QuotaDesign.Typography.resetTime)
-            .foregroundStyle(QuotaPalette.mute)
+            .quotaMetaStyle()
             .fixedSize(horizontal: false, vertical: true)
         }
       }
 
       Spacer(minLength: QuotaDesign.Spacing.sm)
 
-      // Keep stored preference even when disabled; only block interaction.
+      // Visibility is user preference only — auth/unavailable still show in Overview
+      // when enabled, so the toggle stays interactive for every agent.
       Toggle("Show \(provider.displayName)", isOn: isOn)
         .labelsHidden()
         .controlSize(.small)
-        .disabled(!status.canToggle)
-        .opacity(status.canToggle ? 1 : 0.45)
         .accessibilityHint(status.accessibilityHint)
     }
     .accessibilityElement(children: .combine)
@@ -133,19 +117,48 @@ struct SettingsHomeView: View {
   ) -> some View {
     VStack(alignment: .leading, spacing: QuotaDesign.Spacing.cardBody) {
       Text(title)
-        .font(.system(.subheadline, weight: .medium))
-        .foregroundStyle(QuotaPalette.charcoal)
+        .quotaSectionHeaderStyle()
 
       content()
     }
   }
+
+  private func aboutValueRow(title: String, value: String) -> some View {
+    HStack(spacing: QuotaDesign.Spacing.sectionBody) {
+      // Labels stay quieter than the section title ("About").
+      Text(title)
+        .quotaSecondaryStyle()
+      Spacer(minLength: QuotaDesign.Spacing.sm)
+      Text(value)
+        .quotaMonoMetaStyle()
+        .textSelection(.enabled)
+    }
+    .accessibilityElement(children: .combine)
+    .accessibilityLabel("\(title) \(value)")
+  }
+
+  private func aboutLinkRow(title: String, url: URL) -> some View {
+    Button {
+      NSWorkspace.shared.open(url)
+    } label: {
+      HStack(spacing: QuotaDesign.Spacing.sectionBody) {
+        Text(title)
+          .quotaSecondaryStyle()
+        Spacer(minLength: QuotaDesign.Spacing.sm)
+        Image(systemName: "arrow.up.right")
+          .quotaAffordanceStyle()
+      }
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .accessibilityLabel(title)
+    .accessibilityHint("Opens in browser")
+  }
 }
 
-/// Settings Agents row model: signed-in agents are toggleable with no status chrome;
-/// everything else shows a short recovery hint and a disabled toggle.
+/// Settings Agents row model: visibility toggle is always interactive; non-success
+/// collection outcomes only add a short recovery/status detail.
 struct AgentStatusPresentation: Equatable {
-  /// When true, the visibility toggle is interactive.
-  let canToggle: Bool
   /// Optional secondary line. Nil for healthy signed-in agents.
   let detail: String?
   let accessibilityHint: String
@@ -153,31 +166,27 @@ struct AgentStatusPresentation: Equatable {
   static func resolve(result: QuotaCollectionResult?) -> AgentStatusPresentation {
     guard let result else {
       return AgentStatusPresentation(
-        canToggle: false,
         detail: "Refresh to check access.",
-        accessibilityHint: "Not checked yet. Refresh quota, then sign in if needed."
+        accessibilityHint: "Not checked yet. Toggle visibility anytime; refresh to update status."
       )
     }
 
     switch result.outcome {
     case .success:
       return AgentStatusPresentation(
-        canToggle: true,
         detail: nil,
-        accessibilityHint: "Signed in. Toggle to show or hide in Overview."
+        accessibilityHint: "Toggle to show or hide in Overview."
       )
     case .authRequired, .unavailable, .unsupported, .error:
       guard let status = ProviderStatusCopy.from(result: result) else {
         return AgentStatusPresentation(
-          canToggle: false,
           detail: "Unavailable",
-          accessibilityHint: "Provider unavailable."
+          accessibilityHint: "Provider unavailable. Toggle to show or hide in Overview."
         )
       }
       return AgentStatusPresentation(
-        canToggle: false,
         detail: status.detail ?? status.title,
-        accessibilityHint: status.accessibilityLabel
+        accessibilityHint: "\(status.accessibilityLabel) Toggle to show or hide in Overview."
       )
     }
   }

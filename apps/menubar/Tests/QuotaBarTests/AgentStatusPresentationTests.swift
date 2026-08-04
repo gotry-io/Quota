@@ -5,7 +5,7 @@ import Testing
 
 struct AgentStatusPresentationTests {
   @Test
-  func signedInIsToggleableWithoutStatusCopy() {
+  func signedInShowsNoStatusCopy() {
     let status = AgentStatusPresentation.resolve(
       result: QuotaCollectionResult(
         provider: .codex,
@@ -15,12 +15,11 @@ struct AgentStatusPresentationTests {
         message: nil
       )
     )
-    #expect(status.canToggle)
     #expect(status.detail == nil)
   }
 
   @Test
-  func authRequiredDisablesToggleAndShowsLoginHint() {
+  func authRequiredKeepsLoginHintAndStaysSelectable() {
     let status = AgentStatusPresentation.resolve(
       result: QuotaCollectionResult(
         provider: .claude,
@@ -30,7 +29,6 @@ struct AgentStatusPresentationTests {
         message: "Claude OAuth credentials are missing or unreadable. Run `claude auth login`."
       )
     )
-    #expect(!status.canToggle)
     #expect(status.detail == "Run `claude auth login`")
   }
 
@@ -45,7 +43,6 @@ struct AgentStatusPresentationTests {
         message: "Grok auth.json not found."
       )
     )
-    #expect(!status.canToggle)
     #expect(status.detail == "Run `grok login`")
   }
 
@@ -60,7 +57,6 @@ struct AgentStatusPresentationTests {
         message: "Codex usage API is rate limited."
       )
     )
-    #expect(!status.canToggle)
     #expect(status.detail == "Codex usage API is rate limited.")
   }
 
@@ -75,14 +71,12 @@ struct AgentStatusPresentationTests {
         message: "Malformed billing payload."
       )
     )
-    #expect(!status.canToggle)
     #expect(status.detail == "Malformed billing payload.")
   }
 
   @Test
-  func missingResultDisablesToggle() {
+  func missingResultShowsRefreshHint() {
     let status = AgentStatusPresentation.resolve(result: nil)
-    #expect(!status.canToggle)
     #expect(status.detail == "Refresh to check access.")
   }
 }

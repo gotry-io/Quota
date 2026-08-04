@@ -81,17 +81,14 @@ private struct OverviewEmptyStateView: View {
   var body: some View {
     VStack(spacing: QuotaDesign.Spacing.sectionBody) {
       Image(systemName: systemImage)
-        .font(.system(size: 36, weight: .light))
-        .foregroundStyle(QuotaPalette.ink)
+        .quotaEmptyIconStyle()
 
       Text(title)
-        .font(.system(.title3, design: .rounded, weight: .medium))
-        .foregroundStyle(QuotaPalette.ink)
+        .quotaEmptyTitleStyle()
 
       Text(message)
-        .font(.subheadline)
+        .quotaSecondaryStyle()
         .multilineTextAlignment(.center)
-        .foregroundStyle(QuotaPalette.body)
         .fixedSize(horizontal: false, vertical: true)
 
       if let actionTitle, let action {
@@ -108,8 +105,7 @@ private struct InlineRefreshError: View {
 
   var body: some View {
     Label(message, systemImage: "clock.arrow.circlepath")
-      .font(.caption)
-      .foregroundStyle(QuotaPalette.body)
+      .quotaSecondaryStyle()
       .frame(maxWidth: .infinity, alignment: .leading)
       .padding(.vertical, QuotaDesign.Spacing.sectionBody)
   }
