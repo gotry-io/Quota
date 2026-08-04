@@ -5,8 +5,6 @@ struct MenuBarShell<Content: View, Trailing: View>: View {
   let title: String
   let canNavigateBack: Bool
   let onNavigateBack: () -> Void
-  let panelMinHeight: CGFloat
-  let panelIdealHeight: CGFloat
   let trailing: Trailing
   let content: Content
 
@@ -15,8 +13,6 @@ struct MenuBarShell<Content: View, Trailing: View>: View {
     title: String,
     canNavigateBack: Bool,
     onNavigateBack: @escaping () -> Void,
-    panelMinHeight: CGFloat = QuotaDesign.Layout.overviewPanelMinHeight,
-    panelIdealHeight: CGFloat = QuotaDesign.Layout.overviewPanelHeight,
     @ViewBuilder trailing: () -> Trailing,
     @ViewBuilder content: () -> Content
   ) {
@@ -24,8 +20,6 @@ struct MenuBarShell<Content: View, Trailing: View>: View {
     self.title = title
     self.canNavigateBack = canNavigateBack
     self.onNavigateBack = onNavigateBack
-    self.panelMinHeight = panelMinHeight
-    self.panelIdealHeight = panelIdealHeight
     self.trailing = trailing()
     self.content = content()
   }
@@ -45,12 +39,8 @@ struct MenuBarShell<Content: View, Trailing: View>: View {
       MenuBarFooterView(model: model)
     }
     .frame(width: QuotaDesign.Layout.panelWidth)
-    .frame(
-      minHeight: panelMinHeight,
-      idealHeight: panelIdealHeight,
-      maxHeight: QuotaDesign.Layout.panelMaxHeight
-    )
-    .background(.regularMaterial)
+    // MenuBarExtra often ignores flexible height on first open. Pin the shared ceiling.
+    .frame(height: QuotaDesign.Layout.panelMaxHeight)
   }
 
   private var panelHeader: some View {
@@ -70,7 +60,7 @@ struct MenuBarShell<Content: View, Trailing: View>: View {
           }
           .buttonStyle(.plain)
           .accessibilityLabel("Back")
-          .padding(.trailing, 6)
+          .padding(.trailing, QuotaDesign.Spacing.iconLabel)
         }
 
         Text(title)
@@ -79,7 +69,7 @@ struct MenuBarShell<Content: View, Trailing: View>: View {
           .lineLimit(1)
       }
 
-      Spacer(minLength: 8)
+      Spacer(minLength: QuotaDesign.Spacing.inline)
 
       trailing
         .frame(
@@ -99,8 +89,6 @@ extension MenuBarShell where Trailing == EmptyView {
     title: String,
     canNavigateBack: Bool,
     onNavigateBack: @escaping () -> Void,
-    panelMinHeight: CGFloat = QuotaDesign.Layout.overviewPanelMinHeight,
-    panelIdealHeight: CGFloat = QuotaDesign.Layout.overviewPanelHeight,
     @ViewBuilder content: () -> Content
   ) {
     self.init(
@@ -108,8 +96,6 @@ extension MenuBarShell where Trailing == EmptyView {
       title: title,
       canNavigateBack: canNavigateBack,
       onNavigateBack: onNavigateBack,
-      panelMinHeight: panelMinHeight,
-      panelIdealHeight: panelIdealHeight,
       trailing: { EmptyView() },
       content: content
     )
@@ -120,7 +106,7 @@ struct MenuBarFooterView: View {
   @Bindable var model: MenuBarViewModel
 
   var body: some View {
-    HStack(spacing: 12) {
+    HStack(spacing: QuotaDesign.Spacing.sectionBody) {
       Spacer(minLength: 0)
 
       Button {
@@ -144,7 +130,7 @@ struct MenuBarFooterView: View {
 
   private var lastRefreshLabel: String {
     guard let refreshedAt = model.refreshedAt else {
-      return "Not refreshed"
+      return "Not Refreshed"
     }
     return "Updated \(refreshedAt.formatted(date: .omitted, time: .shortened))"
   }

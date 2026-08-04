@@ -3,7 +3,7 @@ import SwiftUI
 
 /// Palette for QuotaBar on native menubar material.
 /// Structural chrome (hairlines, tracks, soft fills) uses system adaptive colors so it
-/// sits cleanly on `.regularMaterial`. Brand marks and usage tones stay product-owned.
+/// sits cleanly on the host menu-bar panel background. Brand marks and usage tones stay product-owned.
 enum QuotaPalette {
   // MARK: Core text (system adaptive for material harmony)
 
@@ -31,10 +31,12 @@ enum QuotaPalette {
   static let focusRing = Color(red: 59 / 255, green: 130 / 255, blue: 246 / 255).opacity(0.5)
 
   // MARK: Usage tones (Quota-specific)
+  // One step darker/muted than pure Tailwind-600 so meters sit on default
+  // MenuBarExtra chrome without glowing.
 
-  static let usageHealthy = Color(red: 22 / 255, green: 163 / 255, blue: 74 / 255)
-  static let usageWarning = Color(red: 217 / 255, green: 119 / 255, blue: 6 / 255)
-  static let usageCritical = Color(red: 220 / 255, green: 38 / 255, blue: 38 / 255)
+  static let usageHealthy = Color(red: 21 / 255, green: 128 / 255, blue: 61 / 255)
+  static let usageWarning = Color(red: 180 / 255, green: 83 / 255, blue: 9 / 255)
+  static let usageCritical = Color(red: 185 / 255, green: 28 / 255, blue: 28 / 255)
 
   // MARK: Provider brand tints (marks only)
 

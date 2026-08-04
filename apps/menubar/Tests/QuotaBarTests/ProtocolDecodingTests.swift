@@ -164,9 +164,29 @@ func refreshesMenuBarModelFromLocalCollector() async throws {
     Issue.record("Expected Grok quota content")
     return
   }
-  #expect(providers.map(\.provider) == [.grok])
-  #expect(model.overviewState(enabledProviders: [.codex]) == .empty(refreshWarning: nil))
-  #expect(model.overviewState(enabledProviders: [.claude]) == .empty(refreshWarning: nil))
+  #expect(providers.map(\.provider) == [.codex, .claude, .grok])
+  #expect(providers.first { $0.provider == .codex }?.status?.kind == .needsSignIn)
+  #expect(providers.first { $0.provider == .codex }?.status?.detail == "Run `codex login`")
+  #expect(providers.first { $0.provider == .claude }?.status?.kind == .unavailable)
+  #expect(
+    providers.first { $0.provider == .claude }?.status?.detail
+      == "The usage endpoint is temporarily unavailable."
+  )
+  #expect(providers.first { $0.provider == .grok }?.status == nil)
+  #expect(providers.first { $0.provider == .grok }?.accounts.isEmpty == false)
+
+  guard case .content(let codexOnly, _) = model.overviewState(enabledProviders: [.codex]) else {
+    Issue.record("Expected Codex auth-required content")
+    return
+  }
+  #expect(codexOnly.map(\.provider) == [.codex])
+  #expect(codexOnly.first?.status?.kind == .needsSignIn)
+
+  guard case .content(let claudeOnly, _) = model.overviewState(enabledProviders: [.claude]) else {
+    Issue.record("Expected Claude unavailable content")
+    return
+  }
+  #expect(claudeOnly.map(\.provider) == [.claude])
   #expect(model.errorMessage == nil)
   #expect(model.refreshedAt != nil)
 }
@@ -247,7 +267,7 @@ func overviewStateDisplaysEveryAccountAndDerivesExpiredSnapshotsAsStale() async 
 }
 
 @Test @MainActor
-func emptyOverviewPreservesARefreshFailureWarning() async throws {
+func refreshFailureKeepsCachedAuthIssueAndShowsWarning() async throws {
   let suiteName = "QuotaBarTests.\(UUID().uuidString)"
   let defaults = try #require(UserDefaults(suiteName: suiteName))
   defer { defaults.removePersistentDomain(forName: suiteName) }
@@ -261,11 +281,16 @@ func emptyOverviewPreservesARefreshFailureWarning() async throws {
 
   await model.refresh()
 
-  guard case .empty(let refreshWarning) = model.overviewState(enabledProviders: [.codex]) else {
-    Issue.record("Expected an empty overview")
+  guard
+    case .content(let providers, let refreshWarning) = model.overviewState(enabledProviders: [.codex])
+  else {
+    Issue.record("Expected cached auth-required content with a refresh warning")
     return
   }
   #expect(refreshWarning == "Synthetic collection failure.")
+  #expect(providers.map(\.provider) == [.codex])
+  #expect(providers.first?.status?.kind == .needsSignIn)
+  #expect(providers.first?.status?.detail == "Run `codex login`")
 }
 
 @Test @MainActor

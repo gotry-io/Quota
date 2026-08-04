@@ -13,20 +13,15 @@ struct RelayPairingView: View {
 
   var body: some View {
     ScrollView {
-      VStack(alignment: .center, spacing: 18) {
-        VStack(spacing: 6) {
-          Text("Pair a device")
-            .font(.system(.headline, design: .rounded, weight: .semibold))
-            .foregroundStyle(QuotaPalette.ink)
-          Text("Enter the 8-character code shown by QuotaCLI on the device you trust.")
-            .font(.caption)
-            .foregroundStyle(QuotaPalette.body)
-            .multilineTextAlignment(.center)
-            .fixedSize(horizontal: false, vertical: true)
-        }
-        .frame(maxWidth: 300)
+      VStack(alignment: .leading, spacing: QuotaDesign.Spacing.section) {
+        Text("Enter the 8-character code shown by QuotaCLI. Pairing starts automatically.")
+          .font(.caption)
+          .foregroundStyle(QuotaPalette.body)
+          .multilineTextAlignment(.center)
+          .fixedSize(horizontal: false, vertical: true)
+          .frame(maxWidth: .infinity)
 
-        VStack(spacing: 10) {
+        VStack(spacing: QuotaDesign.Spacing.cardBody) {
           PairingCodeEntryView(
             code: $pairingCode,
             isDisabled: isSubmitting,
@@ -36,21 +31,24 @@ struct RelayPairingView: View {
               submit(canonicalCode: canonical)
             }
           )
+          .frame(maxWidth: .infinity)
 
           if isSubmitting {
-            HStack(spacing: 8) {
+            HStack(spacing: QuotaDesign.Spacing.inline) {
               ProgressView()
                 .controlSize(.small)
               Text("Pairing…")
                 .font(.caption)
                 .foregroundStyle(QuotaPalette.body)
             }
+            .frame(maxWidth: .infinity)
           }
 
           if let statusMessage {
             Label(statusMessage, systemImage: "checkmark.circle")
               .font(.caption)
               .foregroundStyle(QuotaPalette.body)
+              .frame(maxWidth: .infinity)
           }
 
           if let errorMessage {
@@ -59,19 +57,15 @@ struct RelayPairingView: View {
               .foregroundStyle(QuotaPalette.body)
               .multilineTextAlignment(.center)
               .fixedSize(horizontal: false, vertical: true)
+              .frame(maxWidth: .infinity)
               .accessibilityLabel("Pairing failed. \(errorMessage)")
           }
         }
 
-        Text("Pairing starts automatically when all eight characters are entered.")
-          .font(.caption2)
-          .foregroundStyle(QuotaPalette.mute)
-          .multilineTextAlignment(.center)
-          .frame(maxWidth: 280)
-      }
-      .frame(maxWidth: .infinity)
+        }
+      .frame(maxWidth: .infinity, alignment: .topLeading)
       .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
-      .padding(.vertical, 20)
+      .padding(.vertical, QuotaDesign.Layout.pageVerticalPadding)
     }
   }
 

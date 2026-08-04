@@ -70,9 +70,9 @@
   func relayVisualRoutesParseIntoOneTypedStackWithMatchingTitles() throws {
     let routeExpectations: [(rawValue: String, title: String, depth: Int)] = [
       ("relays", "Relays", 2),
-      ("add", "Pair device", 3),
+      ("add", "Pair Device", 3),
       ("detail", "Relay", 3),
-      ("pairing", "Pair device", 4),
+      ("pairing", "Pair Device", 4),
       ("devices", "Devices", 4),
     ]
 
@@ -144,10 +144,27 @@
     }
     #expect(refreshWarning == "Refresh failed. Showing the last local report.")
 
+    guard
+      case .content(let emptyProviders, let emptyWarning) = try configuration(
+        fixture: .empty,
+        referenceDate: referenceDate
+      ).makeModel().overviewState(
+        enabledProviders: Set(ProviderID.allCases),
+        now: referenceDate
+      )
+    else {
+      Issue.record("Expected auth/unavailable provider rows for the empty fixture.")
+      return
+    }
+    #expect(emptyWarning == nil)
+    #expect(emptyProviders.map(\.provider) == [.codex, .claude, .grok])
+    #expect(emptyProviders.allSatisfy { $0.accounts.isEmpty })
+    #expect(emptyProviders.first { $0.provider == .codex }?.status?.kind == .needsSignIn)
+    #expect(emptyProviders.first { $0.provider == .claude }?.status?.kind == .needsSignIn)
+    #expect(emptyProviders.first { $0.provider == .grok }?.status?.kind == .unavailable)
     #expect(
-      try configuration(fixture: .empty, referenceDate: referenceDate).makeModel()
-        .overviewState(enabledProviders: Set(ProviderID.allCases), now: referenceDate)
-        == .empty(refreshWarning: nil)
+      emptyProviders.first { $0.provider == .grok }?.status?.detail
+        == "Grok quota is temporarily unavailable."
     )
 
     #expect(

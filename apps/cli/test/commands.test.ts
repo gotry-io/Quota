@@ -122,6 +122,22 @@ describe("QuotaCLI", () => {
     );
   });
 
+  it("renders auth failures as explicit sign-in recovery copy", async () => {
+    const capture = captureOutput();
+    const code = await runCli(
+      ["quota", "--provider", "all", "--format", "text"],
+      capture.output,
+      { isTty: true },
+    );
+
+    expect(code).toBe(1);
+    const text = capture.stdout.join("");
+    expect(text).toContain("Claude Code: sign-in required — run `claude auth login`");
+    expect(text).toContain("Codex (plus)");
+    expect(text).toContain("Grok (plus)");
+    expect(text).not.toContain("auth_required —");
+  });
+
   it("rejects invalid provider values with exit code 2", async () => {
     const capture = captureOutput();
     const code = await runCli(["quota", "--provider", "nope"], capture.output);

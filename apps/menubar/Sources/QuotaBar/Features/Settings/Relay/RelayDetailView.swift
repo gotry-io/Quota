@@ -16,7 +16,7 @@ struct RelayDetailView: View {
   var body: some View {
     ScrollView {
       if let profile {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: QuotaDesign.Spacing.section) {
           profileSummary(profile)
           profileActions(profile)
           capabilities(profile.capabilities)
@@ -38,7 +38,7 @@ struct RelayDetailView: View {
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
-        .padding(.vertical, 16)
+        .padding(.vertical, QuotaDesign.Layout.pageVerticalPadding)
         .onAppear {
           if renameValue.isEmpty {
             renameValue = profile.name
@@ -93,8 +93,8 @@ struct RelayDetailView: View {
 
   private func profileSummary(_ profile: RelayProfile) -> some View {
     RelayCard {
-      VStack(alignment: .leading, spacing: 9) {
-        HStack(spacing: 6) {
+      VStack(alignment: .leading, spacing: QuotaDesign.Spacing.cardBody) {
+        HStack(spacing: QuotaDesign.Spacing.iconLabel) {
           Text(profile.name)
             .font(.system(.headline, design: .rounded, weight: .semibold))
             .foregroundStyle(QuotaPalette.ink)
@@ -109,7 +109,7 @@ struct RelayDetailView: View {
           .textSelection(.enabled)
           .fixedSize(horizontal: false, vertical: true)
 
-        HStack(spacing: 6) {
+        HStack(spacing: QuotaDesign.Spacing.iconLabel) {
           RelayStatusTag(text: profile.mode.displayName)
           RelayStatusTag(text: refreshStatus, systemImage: refreshStatusIcon)
         }
@@ -124,12 +124,12 @@ struct RelayDetailView: View {
 
   private func profileActions(_ profile: RelayProfile) -> some View {
     RelayCard {
-      VStack(alignment: .leading, spacing: 12) {
+      VStack(alignment: .leading, spacing: QuotaDesign.Spacing.sectionBody) {
         Text("Profile")
           .font(.system(.subheadline, weight: .medium))
           .foregroundStyle(QuotaPalette.charcoal)
 
-        HStack(spacing: 8) {
+        HStack(spacing: QuotaDesign.Spacing.inline) {
           TextField("Relay name", text: $renameValue)
             .textFieldStyle(RelayPillTextFieldStyle())
             .accessibilityLabel("Relay profile name")
@@ -140,7 +140,7 @@ struct RelayDetailView: View {
           .disabled(canonicalRenameValue.isEmpty || canonicalRenameValue == profile.name)
         }
 
-        HStack(spacing: 8) {
+        HStack(spacing: QuotaDesign.Spacing.inline) {
           Button("Refresh") {
             Task { await model.refreshProfile(profileID) }
           }
@@ -157,7 +157,7 @@ struct RelayDetailView: View {
 
         Divider()
 
-        Button("Pair device", action: onOpenPairing)
+        Button("Pair Device", action: onOpenPairing)
           .buttonStyle(QuotaPrimaryButtonStyle())
 
         Button(action: onOpenDevices) {
@@ -179,7 +179,7 @@ struct RelayDetailView: View {
 
   private func capabilities(_ capabilities: RelayCapabilities) -> some View {
     RelayCard {
-      VStack(alignment: .leading, spacing: 10) {
+      VStack(alignment: .leading, spacing: QuotaDesign.Spacing.cardBody) {
         Text("Capabilities")
           .font(.system(.subheadline, weight: .medium))
           .foregroundStyle(QuotaPalette.charcoal)
@@ -194,7 +194,7 @@ struct RelayDetailView: View {
   }
 
   private func capability(_ name: String, enabled: Bool) -> some View {
-    HStack(spacing: 8) {
+    HStack(spacing: QuotaDesign.Spacing.inline) {
       Image(systemName: enabled ? "checkmark.circle" : "minus.circle")
         .foregroundStyle(QuotaPalette.body)
       Text(name)
@@ -208,7 +208,7 @@ struct RelayDetailView: View {
   }
 
   private var refreshStatus: String {
-    model.state(for: profileID)?.refreshLabel ?? "Not loaded"
+    model.state(for: profileID)?.refreshLabel ?? "Not Loaded"
   }
 
   private var canonicalRenameValue: String {

@@ -34,8 +34,6 @@ struct MenuBarContentView: View {
       title: navigation.title,
       canNavigateBack: navigation.canNavigateBack,
       onNavigateBack: navigateBack,
-      panelMinHeight: navigation.panelMinHeight,
-      panelIdealHeight: navigation.panelIdealHeight,
       trailing: { headerTrailing }
     ) {
       ZStack(alignment: .topLeading) {
@@ -48,7 +46,6 @@ struct MenuBarContentView: View {
       .clipped()
     }
     .animation(panelAnimation, value: navigation.pageIdentity)
-    .animation(panelAnimation, value: navigation.panelIdealHeight)
     .confirmationDialog(
       "Delete all QuotaBar data?",
       isPresented: $showsDeleteAllConfirmation,
@@ -293,9 +290,9 @@ enum MenuBarRoute: Hashable {
     switch self {
     case .settings: "Settings"
     case .relays: "Relays"
-    case .addRelay: "Pair device"
+    case .addRelay: "Pair Device"
     case .relayDetail: "Relay"
-    case .pairing: "Pair device"
+    case .pairing: "Pair Device"
     case .devices: "Devices"
     }
   }
@@ -316,19 +313,6 @@ struct MenuBarNavigationState: Equatable {
       return "\(path.count):\(String(describing: currentRoute))"
     }
     return "overview"
-  }
-
-  /// Overview stays compact; Settings and deeper pages use the taller panel.
-  var panelMinHeight: CGFloat {
-    currentRoute == nil
-      ? QuotaDesign.Layout.overviewPanelMinHeight
-      : QuotaDesign.Layout.settingsPanelMinHeight
-  }
-
-  var panelIdealHeight: CGFloat {
-    currentRoute == nil
-      ? QuotaDesign.Layout.overviewPanelHeight
-      : QuotaDesign.Layout.settingsPanelHeight
   }
 
   mutating func open(_ route: MenuBarRoute) {

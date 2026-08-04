@@ -33,7 +33,8 @@ Canonical implementation:
 
 ## Product principles
 
-1. **Native host, product interior** — panel background is system `.regularMaterial`. Structural
+1. **Native host, product interior** — panel background comes from `MenuBarExtra` window chrome (no
+   extra material overlay). Structural
    chrome (dividers, tracks, soft fills, body text) uses system adaptive colors so it sits on
    material without hard paper-gray slabs.
 2. **Operational density** — Overview stays compact; Settings/deeper pages are taller. Prefer
@@ -51,19 +52,44 @@ Mapped from `QuotaDesign.Layout`:
 
 | Token | Value | Use |
 | --- | --- | --- |
-| `panelWidth` | 360 | Fixed panel width |
-| `overviewPanelHeight` | 440 | Ideal Overview height |
-| `overviewPanelMinHeight` | 380 | Overview floor |
-| `settingsPanelHeight` | 520 | Ideal Settings / deeper pages |
-| `settingsPanelMinHeight` | 480 | Settings floor |
-| `panelMaxHeight` | 560 | Hard ceiling |
-| `panelHorizontalPadding` | 16 | Content inset |
+| `panelWidth` | 320 | Fixed panel width |
+| `panelMaxHeight` | 560 | Fixed panel height for every page |
+| `panelHorizontalPadding` | 16 | Single page gutter for every page body |
+| `panelContentWidth` | 288 | `panelWidth - 2 × gutter`; page content must fit here |
+| `pageVerticalPadding` | 16 | Settings / Relay / form page body top+bottom inset |
+| `emptyStateVerticalPadding` | 24 | Extra vertical room for centered empty states only |
 | `headerHeight` | 44 | Shell header |
 | `footerHeight` | 36 | Shell footer |
 | `navigationControlSize` | 28 | Back / gear / ellipsis hit targets |
 | `providerRowVerticalPadding` | 10 | Provider block vertical padding |
 | `progressHeight` | 8 | Remaining meter thickness |
+| `cardPadding` | 16 | Relay card internal padding |
+| `cardCornerRadius` | 12 | Relay card corner |
 | `tagCornerRadius` | 3 | Stale tag corner only |
+
+### Spacing scale (`QuotaDesign.Spacing`)
+
+| Token | Value | Use |
+| --- | --- | --- |
+| `xxs` | 4 | Dense meta / tiny gaps |
+| `xs` | 6 | Title blocks, icon+label |
+| `sm` | 8 | Inline controls |
+| `md` | 12 | Section body |
+| `lg` | 16 | Page sections / card stacks |
+| `section` | 16 | Page-level section stack |
+| `sectionBody` | 12 | Inside a section |
+| `cardStack` | 16 | Stack of cards |
+| `cardBody` | 10 | Inside a card |
+| `meta` | 4 | Reset/help lines |
+| `inline` | 8 | Button/field clusters |
+| `iconLabel` | 6 | Icon + text pairs |
+
+Rules:
+
+1. Every page body uses `panelHorizontalPadding` once. No second page-level horizontal inset.
+2. Settings/Relay/form pages use `pageVerticalPadding` (16). Overview uses 0.
+3. Prefer `Spacing.*` tokens over raw literals for stacks and clusters.
+4. Empty states may add `emptyStateVerticalPadding`, never a second horizontal gutter.
 
 ### Shell anatomy
 
@@ -79,8 +105,8 @@ Mapped from `QuotaDesign.Layout`:
 
 - **Overview trailing:** gear → opens Settings.
 - **Settings trailing:** `ellipsis` overflow menu (Delete all data…, Quit).
-- **Relays trailing:** `plus` → Pair device (no bottom primary button on the list).
-- **Pair device:** no trailing action; 8-cell code entry auto-submits when complete.
+- **Relays trailing:** `plus` → Pair Device (no bottom primary button on the list).
+- **Pair Device:** no trailing action; 8-cell code entry auto-submits when complete.
 - **Other pages:** no trailing control; back returns through the stack.
 - Footer shows refresh affordance on the **right** only. Version lives in Settings → About.
 
@@ -109,9 +135,9 @@ Dividers use the system `Divider` (no fixed gray overlay).
 | `brand.codex` | `#7A9DFF` | same | Lobe Codex color mid-stop; template tint |
 | `brand.claude` | `#D97757` | same | Claude warm orange tint |
 | `brand.grok` | `#26262A` | `#E4E4E7` | Near-black / lifted gray |
-| `usage.healthy` | `#16A34A` | same | Remaining ≥ 40% |
-| `usage.warning` | `#D97706` | same | Remaining ≥ 15% and < 40% |
-| `usage.critical` | `#DC2626` | same | Remaining < 15% |
+| `usage.healthy` | `#15803D` | same | Remaining ≥ 40% |
+| `usage.warning` | `#B45309` | same | Remaining ≥ 15% and < 40% |
+| `usage.critical` | `#B91C1C` | same | Remaining < 15% |
 
 Stale rows keep the usage tone at ~55% opacity and still show a Stale tag.
 
@@ -170,6 +196,24 @@ Rules:
 - Trailing, mute, icon + text.
 - Copy: `Local` | `Remote` | `Local + Remote` | `Local + N remote` | `N remote`.
 
+### Provider status (failure / recovery)
+
+Collapse protocol outcomes into three quiet UI states:
+
+| UI | Protocol outcomes | Trailing | Detail |
+| --- | --- | --- | --- |
+| Needs Sign-In | `auth_required` | mute text | `Run \`… login\`` |
+| Unavailable | `unavailable`, `unsupported` | mute text | short reason if useful |
+| Can’t Refresh | `error` | mute text | short reason if useful |
+
+Rules:
+
+- No bordered chips/CTAs for auth or errors. Status is quiet text beside the provider name.
+- Trailing edge stays provenance-only (`Local` / `Remote` / mixed). Never replace source labels with status.
+- Issue-only rows (no accounts) still show `Local` when the failure came from local collection.
+- `Stale` remains the only outlined status tag (freshness of otherwise successful data).
+- Settings Agents rows reuse the same recovery detail; healthy success shows no status chrome.
+
 ### Stale tag
 
 - Small outlined tag with clock symbol + `Stale` (still the one exception that keeps light chrome).
@@ -182,7 +226,7 @@ Rules:
 
 ### Settings
 
-- Sections: Agents, Remote quota, About.
+- Sections: Agents, Remote Quota, About.
 - Agents rows: brand icon, name, optional recovery detail, visibility toggle.
   - Signed-in / success: no status title or “CLI ready” copy — only the toggle (enabled).
   - Not signed in / error / unavailable: short recovery detail (e.g. `Run claude auth login`);
@@ -195,7 +239,7 @@ Rules:
 - Forward: insert from trailing + opacity; remove toward leading + opacity.
 - Back: reverse.
 - Duration ~0.28s snappy; Reduce Motion → opacity only or none.
-- Panel height animates between Overview and Settings ideals with the same motion preference.
+- Panel height is fixed at `panelMaxHeight` for every page.
 
 ## Content rules
 
@@ -209,7 +253,7 @@ Rules:
 
 ### Do
 
-- Keep system material background and system separators/tracks.
+- Keep the host `MenuBarExtra` background and system separators/tracks.
 - Keep Overview denser than Settings.
 - Tint provider marks; tone meters by remaining thresholds.
 - Put provenance on the trailing edge as quiet meta.

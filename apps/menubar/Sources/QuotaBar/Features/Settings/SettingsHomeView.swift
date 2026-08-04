@@ -10,9 +10,9 @@ struct SettingsHomeView: View {
 
   var body: some View {
     ScrollView {
-      VStack(alignment: .leading, spacing: 16) {
+      VStack(alignment: .leading, spacing: QuotaDesign.Spacing.section) {
         settingsSection("Agents") {
-          VStack(alignment: .leading, spacing: 12) {
+          VStack(alignment: .leading, spacing: QuotaDesign.Spacing.sectionBody) {
             providerToggle(.codex, isOn: $showsCodex)
             providerToggle(.claude, isOn: $showsClaude)
             providerToggle(.grok, isOn: $showsGrok)
@@ -26,13 +26,13 @@ struct SettingsHomeView: View {
 
         Divider()
 
-        settingsSection("Remote quota") {
+        settingsSection("Remote Quota") {
           Button(action: onOpenRelays) {
-            HStack(spacing: 12) {
+            HStack(spacing: QuotaDesign.Spacing.sectionBody) {
               Image(systemName: "network")
                 .frame(width: 18)
 
-              VStack(alignment: .leading, spacing: 3) {
+              VStack(alignment: .leading, spacing: QuotaDesign.Spacing.xxs) {
                 Text("Relays")
                   .font(QuotaDesign.Typography.providerTitle)
                   .foregroundStyle(QuotaPalette.ink)
@@ -84,7 +84,7 @@ struct SettingsHomeView: View {
       }
       .frame(maxWidth: .infinity, alignment: .topLeading)
       .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
-      .padding(.vertical, 12)
+      .padding(.vertical, QuotaDesign.Layout.pageVerticalPadding)
     }
   }
 
@@ -98,10 +98,10 @@ struct SettingsHomeView: View {
       result: model.result(for: provider)
     )
 
-    return HStack(alignment: .center, spacing: 12) {
+    return HStack(alignment: .center, spacing: QuotaDesign.Spacing.sectionBody) {
       ProviderBrandIcon(provider: provider, size: 16)
 
-      VStack(alignment: .leading, spacing: 3) {
+      VStack(alignment: .leading, spacing: QuotaDesign.Spacing.xxs) {
         Text(provider.displayName)
           .font(QuotaDesign.Typography.providerTitle)
           .foregroundStyle(status.canToggle ? QuotaPalette.ink : QuotaPalette.body)
@@ -114,7 +114,7 @@ struct SettingsHomeView: View {
         }
       }
 
-      Spacer(minLength: 8)
+      Spacer(minLength: QuotaDesign.Spacing.sm)
 
       // Keep stored preference even when disabled; only block interaction.
       Toggle("Show \(provider.displayName)", isOn: isOn)
@@ -131,7 +131,7 @@ struct SettingsHomeView: View {
     _ title: String,
     @ViewBuilder content: () -> Content
   ) -> some View {
-    VStack(alignment: .leading, spacing: 10) {
+    VStack(alignment: .leading, spacing: QuotaDesign.Spacing.cardBody) {
       Text(title)
         .font(.system(.subheadline, weight: .medium))
         .foregroundStyle(QuotaPalette.charcoal)
@@ -166,73 +166,19 @@ struct AgentStatusPresentation: Equatable {
         detail: nil,
         accessibilityHint: "Signed in. Toggle to show or hide in Overview."
       )
-    case .authRequired:
-      return AgentStatusPresentation(
-        canToggle: false,
-        detail: authHint(for: result.provider, message: result.message),
-        accessibilityHint: "Not signed in. Sign in with the provider CLI to enable."
-      )
-    case .unavailable:
-      return AgentStatusPresentation(
-        canToggle: false,
-        detail: conciseMessage(result.message) ?? "Temporarily unavailable.",
-        accessibilityHint: "Provider unavailable."
-      )
-    case .unsupported:
-      return AgentStatusPresentation(
-        canToggle: false,
-        detail: conciseMessage(result.message) ?? "Not supported here.",
-        accessibilityHint: "Provider unsupported."
-      )
-    case .error:
-      return AgentStatusPresentation(
-        canToggle: false,
-        detail: conciseMessage(result.message) ?? "Could not read quota.",
-        accessibilityHint: "Provider error."
-      )
-    }
-  }
-
-  private static func authHint(for provider: ProviderID, message: String?) -> String {
-    if let command = loginCommand(in: message) {
-      return "Run \(command)"
-    }
-    switch provider {
-    case .codex:
-      return "Run `codex login`"
-    case .claude:
-      return "Run `claude auth login`"
-    case .grok:
-      return "Run `grok login`"
-    }
-  }
-
-  private static func loginCommand(in message: String?) -> String? {
-    guard let message else { return nil }
-    if let match = message.range(of: #"`([^`]+)`"#, options: .regularExpression) {
-      let full = String(message[match])
-      return String(full.dropFirst().dropLast())
-    }
-    return nil
-  }
-
-  private static func conciseMessage(_ message: String?) -> String? {
-    guard let trimmed = message?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty
-    else {
-      return nil
-    }
-    if let command = loginCommand(in: trimmed) {
-      return "Run \(command)"
-    }
-    if trimmed.count <= 96 {
-      return trimmed
-    }
-    if let period = trimmed.firstIndex(of: ".") {
-      let sentence = String(trimmed[...period]).trimmingCharacters(in: .whitespacesAndNewlines)
-      if sentence.count >= 12, sentence.count <= 96 {
-        return sentence
+    case .authRequired, .unavailable, .unsupported, .error:
+      guard let status = ProviderStatusCopy.from(result: result) else {
+        return AgentStatusPresentation(
+          canToggle: false,
+          detail: "Unavailable",
+          accessibilityHint: "Provider unavailable."
+        )
       }
+      return AgentStatusPresentation(
+        canToggle: false,
+        detail: status.detail ?? status.title,
+        accessibilityHint: status.accessibilityLabel
+      )
     }
-    return String(trimmed.prefix(93)).trimmingCharacters(in: .whitespacesAndNewlines) + "…"
   }
 }

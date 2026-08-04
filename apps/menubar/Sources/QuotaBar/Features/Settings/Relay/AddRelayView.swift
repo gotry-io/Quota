@@ -35,20 +35,15 @@ struct AddRelayView: View {
 
   var body: some View {
     ScrollView {
-      VStack(alignment: .center, spacing: 18) {
-        VStack(spacing: 6) {
-          Text("Pair a device")
-            .font(.system(.headline, design: .rounded, weight: .semibold))
-            .foregroundStyle(QuotaPalette.ink)
-          Text("Enter the 8-character code shown by QuotaCLI. Pairing starts automatically.")
-            .font(.caption)
-            .foregroundStyle(QuotaPalette.body)
-            .multilineTextAlignment(.center)
-            .fixedSize(horizontal: false, vertical: true)
-        }
-        .frame(maxWidth: 300)
+      VStack(alignment: .leading, spacing: QuotaDesign.Spacing.section) {
+        Text("Enter the 8-character code shown by QuotaCLI. Pairing starts automatically.")
+          .font(.caption)
+          .foregroundStyle(QuotaPalette.body)
+          .multilineTextAlignment(.center)
+          .fixedSize(horizontal: false, vertical: true)
+          .frame(maxWidth: .infinity)
 
-        VStack(spacing: 10) {
+        VStack(spacing: QuotaDesign.Spacing.cardBody) {
           PairingCodeEntryView(
             code: $pairingCode,
             isDisabled: isSubmitting,
@@ -58,15 +53,17 @@ struct AddRelayView: View {
               submit(canonicalCode: canonical)
             }
           )
+          .frame(maxWidth: .infinity)
 
           if isSubmitting {
-            HStack(spacing: 8) {
+            HStack(spacing: QuotaDesign.Spacing.inline) {
               ProgressView()
                 .controlSize(.small)
               Text("Pairing…")
                 .font(.caption)
                 .foregroundStyle(QuotaPalette.body)
             }
+            .frame(maxWidth: .infinity)
             .accessibilityElement(children: .combine)
             .accessibilityLabel("Pairing")
           }
@@ -77,13 +74,14 @@ struct AddRelayView: View {
               .foregroundStyle(QuotaPalette.body)
               .multilineTextAlignment(.center)
               .fixedSize(horizontal: false, vertical: true)
+              .frame(maxWidth: .infinity)
               .accessibilityLabel("Pairing failed. \(errorMessage)")
           }
         }
 
-        VStack(alignment: .leading, spacing: 8) {
-          collapsibleSection(title: "On the device", isExpanded: $showsDeviceHelp) {
-            VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: QuotaDesign.Spacing.sm) {
+          collapsibleSection(title: "On the Device", isExpanded: $showsDeviceHelp) {
+            VStack(alignment: .leading, spacing: QuotaDesign.Spacing.cardBody) {
               commandRow(
                 title: "Install",
                 command: installCommand,
@@ -102,7 +100,7 @@ struct AddRelayView: View {
           }
 
           collapsibleSection(title: "Advanced", isExpanded: $showsAdvanced) {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: QuotaDesign.Spacing.sm) {
               TextField("Name (optional)", text: $name)
                 .textFieldStyle(RelayRoundedTextFieldStyle())
                 .disabled(isSubmitting)
@@ -120,11 +118,11 @@ struct AddRelayView: View {
             }
           }
         }
-        .frame(maxWidth: 320, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
       }
-      .frame(maxWidth: .infinity)
+      .frame(maxWidth: .infinity, alignment: .topLeading)
       .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
-      .padding(.vertical, 20)
+      .padding(.vertical, QuotaDesign.Layout.pageVerticalPadding)
     }
   }
 
@@ -133,13 +131,13 @@ struct AddRelayView: View {
     isExpanded: Binding<Bool>,
     @ViewBuilder content: () -> Content
   ) -> some View {
-    VStack(alignment: .leading, spacing: 8) {
+    VStack(alignment: .leading, spacing: QuotaDesign.Spacing.sm) {
       Button {
         withAnimation(.snappy(duration: 0.2)) {
           isExpanded.wrappedValue.toggle()
         }
       } label: {
-        HStack(spacing: 6) {
+        HStack(spacing: QuotaDesign.Spacing.iconLabel) {
           Image(systemName: "chevron.right")
             .font(.system(size: 11, weight: .semibold))
             .rotationEffect(.degrees(isExpanded.wrappedValue ? 90 : 0))
@@ -150,7 +148,7 @@ struct AddRelayView: View {
         .foregroundStyle(QuotaPalette.charcoal)
         .contentShape(Rectangle())
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.vertical, 4)
+        .padding(.vertical, QuotaDesign.Spacing.xxs)
       }
       .buttonStyle(.plain)
       .accessibilityLabel(title)
@@ -158,7 +156,6 @@ struct AddRelayView: View {
 
       if isExpanded.wrappedValue {
         content()
-          .padding(.leading, 2)
       }
     }
   }
@@ -170,12 +167,12 @@ struct AddRelayView: View {
     copyLabel: String,
     action: @escaping () -> Void
   ) -> some View {
-    VStack(alignment: .leading, spacing: 4) {
+    VStack(alignment: .leading, spacing: QuotaDesign.Spacing.meta) {
       Text(title)
         .font(QuotaDesign.Typography.resetTime)
         .foregroundStyle(QuotaPalette.mute)
 
-      HStack(spacing: 8) {
+      HStack(spacing: QuotaDesign.Spacing.inline) {
         Text(command)
           .font(.system(.caption, design: .monospaced))
           .foregroundStyle(QuotaPalette.ink)
@@ -189,7 +186,7 @@ struct AddRelayView: View {
           .accessibilityLabel(copyLabel)
       }
       .padding(.horizontal, 10)
-      .padding(.vertical, 8)
+      .padding(.vertical, QuotaDesign.Spacing.sm)
       .background(QuotaPalette.soft)
       .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
       .overlay {

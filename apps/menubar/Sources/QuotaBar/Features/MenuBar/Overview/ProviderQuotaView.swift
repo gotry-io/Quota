@@ -4,8 +4,16 @@ struct ProviderQuotaView: View {
   let presentation: ProviderQuotaPresentation
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 5) {
+    VStack(alignment: .leading, spacing: QuotaDesign.Spacing.xs) {
       providerHeader
+
+      if let detail = presentation.status?.detail {
+        Text(detail)
+          .font(QuotaDesign.Typography.metadata)
+          .foregroundStyle(QuotaPalette.body)
+          .fixedSize(horizontal: false, vertical: true)
+          .accessibilityLabel(presentation.status?.accessibilityLabel ?? detail)
+      }
 
       ForEach(Array(presentation.accounts.enumerated()), id: \.element.id) { index, account in
         AccountQuotaView(
@@ -25,15 +33,24 @@ struct ProviderQuotaView: View {
   }
 
   private var providerHeader: some View {
-    HStack(alignment: .center, spacing: 8) {
-      HStack(spacing: 6) {
+    HStack(alignment: .center, spacing: QuotaDesign.Spacing.inline) {
+      HStack(spacing: QuotaDesign.Spacing.iconLabel) {
         ProviderBrandIcon(provider: presentation.provider)
         Text(presentation.provider.displayName)
       }
       .font(QuotaDesign.Typography.providerTitle)
       .foregroundStyle(QuotaPalette.ink)
 
-      if presentation.accounts.count == 1,
+      // Status sits with the provider name. Never replace trailing Local/Remote —
+      // provenance answers "where from", status answers "what's wrong".
+      if let status = presentation.status {
+        Text(status.title)
+          .font(QuotaDesign.Typography.sourceTag)
+          .foregroundStyle(QuotaPalette.mute)
+          .lineLimit(1)
+          .fixedSize()
+          .accessibilityHidden(true)
+      } else if presentation.accounts.count == 1,
         presentation.accounts.first?.isStale == true
       {
         StaleTag()
@@ -45,6 +62,9 @@ struct ProviderQuotaView: View {
         let account = presentation.accounts.first
       {
         SourceLabel(summary: account.sourceSummary)
+      } else if presentation.accounts.isEmpty, presentation.status != nil {
+        // Issue-only local row still has a local collection context.
+        SourceLabel(summary: "Local")
       }
     }
   }
@@ -65,7 +85,7 @@ private struct AccountQuotaView: View {
   }
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 6) {
+    VStack(alignment: .leading, spacing: QuotaDesign.Spacing.iconLabel) {
       if showsAccountMetadata {
         accountHeader
       }
@@ -88,7 +108,7 @@ private struct AccountQuotaView: View {
   }
 
   private var accountHeader: some View {
-    HStack(alignment: .firstTextBaseline, spacing: 6) {
+    HStack(alignment: .firstTextBaseline, spacing: QuotaDesign.Spacing.iconLabel) {
       if let identitySummary {
         Text(identitySummary)
           .font(QuotaDesign.Typography.metadata.weight(.medium))
@@ -141,8 +161,8 @@ private struct QuotaWindowRow: View {
   }
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 4) {
-      HStack(alignment: .firstTextBaseline, spacing: 8) {
+    VStack(alignment: .leading, spacing: QuotaDesign.Spacing.meta) {
+      HStack(alignment: .firstTextBaseline, spacing: QuotaDesign.Spacing.inline) {
         Text(window.title)
           .font(QuotaDesign.Typography.quotaLabel)
           .foregroundStyle(QuotaPalette.charcoal)
@@ -156,7 +176,7 @@ private struct QuotaWindowRow: View {
 
       QuotaProgressBar(value: window.remainingPercent, fill: usageColor)
 
-      HStack(alignment: .firstTextBaseline, spacing: 8) {
+      HStack(alignment: .firstTextBaseline, spacing: QuotaDesign.Spacing.inline) {
         if let resetsAt = window.resetsAt {
           Text("Resets \(formatResetDate(resetsAt))")
         } else {

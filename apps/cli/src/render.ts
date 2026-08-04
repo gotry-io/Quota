@@ -1,5 +1,9 @@
 import { remainingPercent } from "@gotry-io/quota-model";
-import type { QuotaCollectionReport, QuotaCollectionResult } from "@gotry-io/quota-protocol";
+import type {
+  ProviderId,
+  QuotaCollectionReport,
+  QuotaCollectionResult,
+} from "@gotry-io/quota-protocol";
 
 export function renderJson(report: QuotaCollectionReport, pretty: boolean): string {
   return `${JSON.stringify(report, null, pretty ? 2 : undefined)}\n`;
@@ -19,8 +23,7 @@ export function renderText(report: QuotaCollectionReport): string {
 function renderResultText(result: QuotaCollectionResult): string[] {
   const title = providerTitle(result.provider);
   if (result.outcome !== "success") {
-    const message = result.message ?? result.outcome;
-    return [`${title}: ${result.outcome} — ${message}`];
+    return [renderFailureLine(title, result)];
   }
 
   const lines: string[] = [];
@@ -42,6 +45,77 @@ function renderResultText(result: QuotaCollectionResult): string[] {
     lines.push(`  source: ${snapshot.source}`);
   }
   return lines;
+}
+
+function renderFailureLine(title: string, result: QuotaCollectionResult): string {
+  if (result.outcome === "auth_required") {
+    return `${title}: sign-in required — run \`${loginCommand(result.provider, result.message)}\``;
+  }
+  const label =
+    result.outcome === "unavailable"
+      ? "unavailable"
+      : result.outcome === "unsupported"
+        ? "unsupported"
+        : "error";
+  return `${title}: ${label} — ${conciseFailureDetail(result.message) ?? label}`;
+}
+
+function loginCommand(provider: ProviderId, message: string | undefined): string {
+  const fromMessage = message?.match(/`([^`]+)`/)?.[1]?.trim();
+  if (fromMessage) {
+    return normalizeLoginCommand(fromMessage, provider);
+  }
+  return defaultLoginCommand(provider);
+}
+
+function defaultLoginCommand(provider: ProviderId): string {
+  switch (provider) {
+    case "codex":
+      return "codex login";
+    case "claude":
+      return "claude auth login";
+    case "grok":
+      return "grok login";
+  }
+}
+
+function normalizeLoginCommand(command: string, provider: ProviderId): string {
+  switch (command) {
+    case "codex":
+    case "codex login":
+      return "codex login";
+    case "claude":
+    case "claude login":
+    case "claude auth login":
+      return "claude auth login";
+    case "grok":
+    case "grok login":
+      return "grok login";
+    default:
+      return command.includes(" ") ? command : defaultLoginCommand(provider);
+  }
+}
+
+function conciseFailureDetail(message: string | undefined): string | undefined {
+  const trimmed = message?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  // Auth failures already collapse to the login command above.
+  if (trimmed.includes("`")) {
+    const withoutCommand = trimmed.replace(/`[^`]+`/g, "").replace(/\s+/g, " ").trim();
+    if (!withoutCommand || withoutCommand === "." || withoutCommand.toLowerCase().startsWith("run")) {
+      return undefined;
+    }
+  }
+  if (trimmed.length <= 96) {
+    return trimmed;
+  }
+  const period = trimmed.indexOf(".");
+  if (period >= 11 && period <= 95) {
+    return trimmed.slice(0, period + 1);
+  }
+  return `${trimmed.slice(0, 93).trimEnd()}…`;
 }
 
 function providerTitle(provider: string): string {

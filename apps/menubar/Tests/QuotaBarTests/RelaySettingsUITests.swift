@@ -11,9 +11,9 @@ struct RelaySettingsUITests {
   func relayRoutesHaveStableTitles() {
     #expect(MenuBarRoute.settings.title == "Settings")
     #expect(MenuBarRoute.relays.title == "Relays")
-    #expect(MenuBarRoute.addRelay.title == "Pair device")
+    #expect(MenuBarRoute.addRelay.title == "Pair Device")
     #expect(MenuBarRoute.relayDetail(profileID).title == "Relay")
-    #expect(MenuBarRoute.pairing(profileID).title == "Pair device")
+    #expect(MenuBarRoute.pairing(profileID).title == "Pair Device")
     #expect(MenuBarRoute.devices(profileID).title == "Devices")
   }
 

@@ -31,7 +31,7 @@ struct AgentStatusPresentationTests {
       )
     )
     #expect(!status.canToggle)
-    #expect(status.detail == "Run claude auth login")
+    #expect(status.detail == "Run `claude auth login`")
   }
 
   @Test
@@ -47,6 +47,36 @@ struct AgentStatusPresentationTests {
     )
     #expect(!status.canToggle)
     #expect(status.detail == "Run `grok login`")
+  }
+
+  @Test
+  func unavailableKeepsMessageAndDoesNotLookLikeLogin() {
+    let status = AgentStatusPresentation.resolve(
+      result: QuotaCollectionResult(
+        provider: .codex,
+        outcome: .unavailable,
+        snapshots: [],
+        source: nil,
+        message: "Codex usage API is rate limited."
+      )
+    )
+    #expect(!status.canToggle)
+    #expect(status.detail == "Codex usage API is rate limited.")
+  }
+
+  @Test
+  func errorUsesCantRefreshWithoutLoginCopy() {
+    let status = AgentStatusPresentation.resolve(
+      result: QuotaCollectionResult(
+        provider: .grok,
+        outcome: .error,
+        snapshots: [],
+        source: nil,
+        message: "Malformed billing payload."
+      )
+    )
+    #expect(!status.canToggle)
+    #expect(status.detail == "Malformed billing payload.")
   }
 
   @Test

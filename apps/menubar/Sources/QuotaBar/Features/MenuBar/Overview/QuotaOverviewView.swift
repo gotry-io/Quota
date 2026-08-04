@@ -21,13 +21,13 @@ struct QuotaOverviewView: View {
     case .loading:
       OverviewEmptyStateView(
         systemImage: "gauge.with.dots.needle.50percent",
-        title: "Reading quota",
+        title: "Reading Quota",
         message: "Checking your local and Relay quota sources."
       )
     case .unavailable(let message):
       OverviewEmptyStateView(
         systemImage: "exclamationmark.circle",
-        title: "Quota unavailable",
+        title: "Quota Unavailable",
         message: message,
         actionTitle: "Retry"
       ) {
@@ -40,7 +40,7 @@ struct QuotaOverviewView: View {
         }
         OverviewEmptyStateView(
           systemImage: "eye.slash",
-          title: "No providers to show",
+          title: "No Providers To Show",
           message: "Sign in with a provider CLI, connect a Relay, or enable a provider in Settings.",
           actionTitle: "Open settings",
           action: onOpenSettings
@@ -79,7 +79,7 @@ private struct OverviewEmptyStateView: View {
   var action: (() -> Void)?
 
   var body: some View {
-    VStack(spacing: 12) {
+    VStack(spacing: QuotaDesign.Spacing.sectionBody) {
       Image(systemName: systemImage)
         .font(.system(size: 36, weight: .light))
         .foregroundStyle(QuotaPalette.ink)
@@ -100,7 +100,6 @@ private struct OverviewEmptyStateView: View {
       }
     }
     .frame(maxWidth: .infinity, minHeight: 260)
-    .padding(.horizontal, 24)
   }
 }
 
@@ -112,6 +111,6 @@ private struct InlineRefreshError: View {
       .font(.caption)
       .foregroundStyle(QuotaPalette.body)
       .frame(maxWidth: .infinity, alignment: .leading)
-      .padding(.vertical, 12)
+      .padding(.vertical, QuotaDesign.Spacing.sectionBody)
   }
 }

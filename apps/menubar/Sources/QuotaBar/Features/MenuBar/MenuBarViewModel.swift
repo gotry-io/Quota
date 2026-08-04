@@ -11,8 +11,21 @@ enum QuotaOverviewState: Equatable {
 struct ProviderQuotaPresentation: Equatable, Identifiable {
   let provider: ProviderID
   let accounts: [AccountQuotaPresentation]
+  /// Local collection issue when this provider has no usable live windows, or a soft warning
+  /// alongside cached/remote accounts.
+  let status: ProviderStatusCopy?
 
   var id: ProviderID { provider }
+
+  init(
+    provider: ProviderID,
+    accounts: [AccountQuotaPresentation],
+    status: ProviderStatusCopy? = nil
+  ) {
+    self.provider = provider
+    self.accounts = accounts
+    self.status = status
+  }
 }
 
 struct AccountQuotaPresentation: Equatable, Identifiable {
@@ -197,8 +210,9 @@ final class MenuBarViewModel {
     let providers: [ProviderQuotaPresentation] = ProviderID.allCases.compactMap { provider in
       guard enabledProviders.contains(provider) else { return nil }
       let accounts = displaySnapshots(for: provider, now: now)
-      guard !accounts.isEmpty else { return nil }
-      return ProviderQuotaPresentation(provider: provider, accounts: accounts)
+      let status = providerStatus(for: provider)
+      guard !accounts.isEmpty || status != nil else { return nil }
+      return ProviderQuotaPresentation(provider: provider, accounts: accounts, status: status)
     }
 
     guard !providers.isEmpty else {
@@ -230,6 +244,12 @@ final class MenuBarViewModel {
       messages.append("\(profile.name): \(message)")
     }
     return messages.isEmpty ? nil : messages.joined(separator: " ")
+  }
+
+  private func providerStatus(for provider: ProviderID) -> ProviderStatusCopy? {
+    // Prefer live local collection outcomes. Remote-only success still shows accounts above.
+    guard let result = result(for: provider) else { return nil }
+    return ProviderStatusCopy.from(result: result)
   }
 
   private func resolvedSubscriptions(now: Date) -> [ResolvedQuotaSubscription] {

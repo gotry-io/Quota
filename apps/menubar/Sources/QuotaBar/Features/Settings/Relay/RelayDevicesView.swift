@@ -11,9 +11,9 @@ struct RelayDevicesView: View {
 
   var body: some View {
     ScrollView {
-      VStack(alignment: .leading, spacing: 14) {
+      VStack(alignment: .leading, spacing: QuotaDesign.Spacing.sectionBody) {
         if state?.isRefreshing == true, devices.isEmpty {
-          HStack(spacing: 8) {
+          HStack(spacing: QuotaDesign.Spacing.inline) {
             ProgressView().controlSize(.small)
             Text("Refreshing devices…")
               .font(.caption)
@@ -37,7 +37,7 @@ struct RelayDevicesView: View {
       }
       .frame(maxWidth: .infinity, alignment: .topLeading)
       .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
-      .padding(.vertical, 16)
+      .padding(.vertical, QuotaDesign.Layout.pageVerticalPadding)
     }
     .task(id: profileID) {
       guard performsInitialRefresh else { return }
@@ -81,27 +81,26 @@ struct RelayDevicesView: View {
   }
 
   private var emptyState: some View {
-    VStack(spacing: 10) {
+    VStack(spacing: QuotaDesign.Spacing.cardBody) {
       Image(systemName: "laptopcomputer.and.iphone")
         .font(.system(size: 24))
-      Text("No paired devices")
+      Text("No Paired Devices")
         .font(.system(.headline, design: .rounded, weight: .semibold))
         .foregroundStyle(QuotaPalette.ink)
-      Text("Run the QuotaCLI pairing command on a device, then approve its code from Pair device.")
+      Text("Run the QuotaCLI pairing command on a device, then approve its code from Pair Device.")
         .font(.caption)
         .foregroundStyle(QuotaPalette.body)
         .multilineTextAlignment(.center)
         .fixedSize(horizontal: false, vertical: true)
     }
     .frame(maxWidth: .infinity)
-    .padding(.horizontal, 24)
-    .padding(.vertical, 32)
+    .padding(.vertical, QuotaDesign.Layout.emptyStateVerticalPadding)
   }
 
   private func deviceCard(_ device: RelayDevice) -> some View {
     RelayCard {
-      VStack(alignment: .leading, spacing: 9) {
-        HStack(spacing: 6) {
+      VStack(alignment: .leading, spacing: QuotaDesign.Spacing.cardBody) {
+        HStack(spacing: QuotaDesign.Spacing.iconLabel) {
           Text(device.displayName)
             .font(QuotaDesign.Typography.providerTitle)
             .foregroundStyle(QuotaPalette.ink)
@@ -120,7 +119,7 @@ struct RelayDevicesView: View {
           .textSelection(.enabled)
 
         HStack(alignment: .firstTextBaseline) {
-          VStack(alignment: .leading, spacing: 3) {
+          VStack(alignment: .leading, spacing: QuotaDesign.Spacing.xxs) {
             Text(lastSeenLabel(device))
             Text(device.sequenceLabel)
           }

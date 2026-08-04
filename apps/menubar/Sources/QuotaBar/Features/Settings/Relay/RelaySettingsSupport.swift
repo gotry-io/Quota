@@ -121,10 +121,10 @@ struct RelayCard<Content: View>: View {
   var body: some View {
     content
       .frame(maxWidth: .infinity, alignment: .leading)
-      .padding(16)
-      .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+      .padding(QuotaDesign.Layout.cardPadding)
+      .clipShape(RoundedRectangle(cornerRadius: QuotaDesign.Layout.cardCornerRadius, style: .continuous))
       .overlay {
-        RoundedRectangle(cornerRadius: 12, style: .continuous)
+        RoundedRectangle(cornerRadius: QuotaDesign.Layout.cardCornerRadius, style: .continuous)
           .stroke(QuotaPalette.hairline.opacity(0.85), lineWidth: 1)
       }
   }
@@ -159,7 +159,7 @@ struct RelaySecondaryButtonStyle: ButtonStyle {
     configuration.label
       .font(.system(.subheadline, weight: .medium))
       .foregroundStyle(isEnabled ? QuotaPalette.ink : QuotaPalette.body)
-      .padding(.horizontal, 16)
+      .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
       .frame(minHeight: 34)
       .background(
         QuotaPalette.soft.opacity(configuration.isPressed && isEnabled ? 1.2 : 0.85)
@@ -176,7 +176,7 @@ struct RelayPillTextFieldStyle: TextFieldStyle {
   func _body(configuration: TextField<Self._Label>) -> some View {
     configuration
       .textFieldStyle(.plain)
-      .padding(.horizontal, 12)
+      .padding(.horizontal, QuotaDesign.Spacing.sectionBody)
       .frame(minHeight: 32)
       .background(QuotaPalette.soft)
       .clipShape(Capsule())
@@ -218,11 +218,15 @@ struct PairingCodeEntryView: View {
   @State private var cells: [String] = Array(repeating: "", count: RelayPairingCodeValidation.codeLength)
   @State private var lastSubmitted: String?
 
-  private let boxSize: CGFloat = 32
+  // Fit eight boxes inside panelContentWidth (320 - 16*2 = 288):
+  // 8*box + 6*boxGap + 2*groupGap + dash ≈ content width.
+  private let boxSize: CGFloat = 28
+  private let boxGap: CGFloat = 5
+  private let groupGap: CGFloat = 8
 
   var body: some View {
-    HStack(spacing: 8) {
-      HStack(spacing: 6) {
+    HStack(spacing: groupGap) {
+      HStack(spacing: boxGap) {
         ForEach(0..<4, id: \.self) { index in
           codeBox(index)
         }
@@ -230,12 +234,13 @@ struct PairingCodeEntryView: View {
       Text("—")
         .font(.system(.body, weight: .medium))
         .foregroundStyle(QuotaPalette.mute)
-      HStack(spacing: 6) {
+      HStack(spacing: boxGap) {
         ForEach(4..<8, id: \.self) { index in
           codeBox(index)
         }
       }
     }
+    .frame(maxWidth: .infinity)
     .accessibilityElement(children: .combine)
     .accessibilityLabel("Pairing code")
     .accessibilityValue(displayCode)
@@ -378,7 +383,7 @@ extension RelayMode {
   var displayName: String {
     switch self {
     case .managed: "Managed"
-    case .selfHosted: "Self-hosted"
+    case .selfHosted: "Self-Hosted"
     }
   }
 }
@@ -387,7 +392,7 @@ extension RelayProfileState {
   var refreshLabel: String {
     if isRefreshing { return "Refreshing…" }
     if refreshIssue != nil { return isStale ? "Stale" : "Unavailable" }
-    guard let lastSuccessfulRefreshAt else { return "Not refreshed" }
+    guard let lastSuccessfulRefreshAt else { return "Not Refreshed" }
     return "Updated \(lastSuccessfulRefreshAt.formatted(date: .omitted, time: .shortened))"
   }
 

@@ -24,7 +24,7 @@ struct RelayListView: View {
           .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
       } else {
         ScrollView {
-          VStack(alignment: .leading, spacing: 16) {
+          VStack(alignment: .leading, spacing: QuotaDesign.Spacing.cardStack) {
             if showsManagedReconnect {
               managedRelayDisabledState
             }
@@ -41,7 +41,7 @@ struct RelayListView: View {
           }
           .frame(maxWidth: .infinity, alignment: .topLeading)
           .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
-          .padding(.vertical, 16)
+          .padding(.vertical, QuotaDesign.Layout.pageVerticalPadding)
         }
       }
     }
@@ -49,12 +49,12 @@ struct RelayListView: View {
   }
 
   private var emptyState: some View {
-    VStack(spacing: 14) {
+    VStack(spacing: QuotaDesign.Spacing.sectionBody) {
       Image(systemName: "network")
         .font(.system(size: 28, weight: .regular))
         .foregroundStyle(QuotaPalette.ink)
 
-      Text("No Relays configured")
+      Text("No Relays Configured")
         .font(.system(.headline, design: .rounded, weight: .semibold))
         .foregroundStyle(QuotaPalette.ink)
 
@@ -66,16 +66,15 @@ struct RelayListView: View {
 
       Button("Add Relay", action: onAddRelay)
         .buttonStyle(QuotaPrimaryButtonStyle())
-        .padding(.top, 4)
+        .padding(.top, QuotaDesign.Spacing.xxs)
     }
-    .frame(maxWidth: 280)
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
   }
 
   private var managedRelayDisabledState: some View {
     RelayCard {
-      VStack(alignment: .leading, spacing: 9) {
-        Text("Managed Relay is disconnected")
+      VStack(alignment: .leading, spacing: QuotaDesign.Spacing.cardBody) {
+        Text("Managed Relay Is Disconnected")
           .font(QuotaDesign.Typography.providerTitle)
           .foregroundStyle(QuotaPalette.ink)
         Text("Reconnect to create a new anonymous controller without an account.")
@@ -101,8 +100,8 @@ struct RelayListView: View {
   private func profileCard(_ profile: RelayProfile) -> some View {
     let state = model.state(for: profile.id)
     return RelayCard {
-      VStack(alignment: .leading, spacing: 9) {
-        HStack(spacing: 6) {
+      VStack(alignment: .leading, spacing: QuotaDesign.Spacing.cardBody) {
+        HStack(spacing: QuotaDesign.Spacing.iconLabel) {
           Text(profile.name)
             .font(QuotaDesign.Typography.providerTitle)
             .foregroundStyle(QuotaPalette.ink)
@@ -112,7 +111,7 @@ struct RelayListView: View {
             RelayStatusTag(text: "Default", systemImage: "checkmark")
           }
 
-          Spacer(minLength: 4)
+          Spacer(minLength: QuotaDesign.Spacing.xxs)
           Image(systemName: "chevron.right")
             .font(.system(size: 11, weight: .semibold))
             .foregroundStyle(QuotaPalette.body)
@@ -124,13 +123,13 @@ struct RelayListView: View {
           .lineLimit(2)
           .multilineTextAlignment(.leading)
 
-        HStack(spacing: 6) {
+        HStack(spacing: QuotaDesign.Spacing.iconLabel) {
           RelayStatusTag(text: profile.mode.displayName)
           if let issue = state?.issue {
             RelayStatusTag(text: shortIssueLabel(issue), systemImage: "exclamationmark.circle")
           } else {
             RelayStatusTag(
-              text: state?.refreshLabel ?? "Not loaded",
+              text: state?.refreshLabel ?? "Not Loaded",
               systemImage: state?.refreshIcon
             )
           }
