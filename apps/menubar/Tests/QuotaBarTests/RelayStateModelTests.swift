@@ -568,6 +568,131 @@ struct RelayStateModelTests {
   }
 
   @Test
+  func concurrentRefreshRequestsSerializeAndRerun() async throws {
+    let profile = try sampleRelayProfile(id: profileID1)
+    let firstDevice = try sampleDevice(deviceID: "device_waiting", sequence: -1)
+    let secondDevice = try sampleDevice(deviceID: "device_active", sequence: 1)
+    let observation = try sampleObservation(deviceID: "device_active", sequence: 1)
+    let gate = RefreshGate()
+    let client = GatedRelayStateClient(
+      gate: gate,
+      snapshotResults: [
+        .success(OwnerSnapshotListResponse(observations: [])),
+        .success(OwnerSnapshotListResponse(observations: [observation])),
+      ],
+      deviceResults: [
+        .success(DeviceListResponse(devices: [firstDevice])),
+        .success(DeviceListResponse(devices: [secondDevice])),
+      ]
+    )
+    let model = RelayStateModel(
+      client: client,
+      profileStore: FakeRelayProfileStore(loadedProfiles: .success([profile])),
+      credentialStore: FakeRelayCredentialStore(
+        tokens: [profile.credentialReference: syntheticOwnerBearer]
+      ),
+      now: { Date(timeIntervalSince1970: 1_785_752_430) }
+    )
+
+    async let first: Void = model.refreshProfile(profile.id)
+    await gate.waitUntilEntered()
+    async let second: Void = model.refreshProfile(profile.id)
+    await gate.release()
+    _ = await (first, second)
+
+    let state = try #require(model.state(for: profile.id))
+    #expect(state.devices == [secondDevice])
+    #expect(state.observations == [observation])
+    #expect(!state.isRefreshing)
+    #expect(await client.snapshotCallCount == 2)
+    #expect(await client.deviceCallCount == 2)
+  }
+
+  @Test
+  func waitForJoinedDeviceSucceedsWhenANewDeviceAppears() async throws {
+    let profile = try sampleRelayProfile(id: profileID1)
+    let existing = try sampleDevice(deviceID: "device_existing", sequence: 3)
+    let joined = try sampleDevice(deviceID: "device_joined", sequence: -1)
+    let sleepLog = SleepLog()
+    let client = FakeRelayStateClient(
+      deviceResults: [
+        .success(DeviceListResponse(devices: [existing])),
+        .success(DeviceListResponse(devices: [existing, joined])),
+      ]
+    )
+    let model = RelayStateModel(
+      client: client,
+      profileStore: FakeRelayProfileStore(loadedProfiles: .success([profile])),
+      credentialStore: FakeRelayCredentialStore(
+        tokens: [profile.credentialReference: syntheticOwnerBearer]
+      ),
+      sleep: { duration in
+        sleepLog.append(duration)
+      },
+      now: { Date(timeIntervalSince1970: 1_785_752_430) }
+    )
+
+    let device = try await model.waitForJoinedDevice(
+      profileID: profile.id,
+      excludingDeviceIDs: [existing.deviceID],
+      timeout: .seconds(10),
+      interval: .seconds(1)
+    )
+
+    #expect(device == joined)
+    #expect(model.state(for: profile.id)?.devices == [existing, joined])
+    #expect(sleepLog.values == [.seconds(1)])
+    #expect(await client.calls == [
+      .snapshots(profile.id, syntheticOwnerBearer),
+      .devices(profile.id, syntheticOwnerBearer),
+      .snapshots(profile.id, syntheticOwnerBearer),
+      .devices(profile.id, syntheticOwnerBearer),
+    ])
+  }
+
+  @Test
+  func waitForJoinedDeviceFailsWhenConsumeNeverHappens() async throws {
+    let profile = try sampleRelayProfile(id: profileID1)
+    let sleepLog = SleepLog()
+    let client = FakeRelayStateClient(
+      deviceResults: [
+        .success(DeviceListResponse(devices: [])),
+        .success(DeviceListResponse(devices: [])),
+        .success(DeviceListResponse(devices: [])),
+      ]
+    )
+    let model = RelayStateModel(
+      client: client,
+      profileStore: FakeRelayProfileStore(loadedProfiles: .success([profile])),
+      credentialStore: FakeRelayCredentialStore(
+        tokens: [profile.credentialReference: syntheticOwnerBearer]
+      ),
+      sleep: { duration in
+        sleepLog.append(duration)
+      },
+      now: { Date(timeIntervalSince1970: 1_785_752_430) }
+    )
+
+    do {
+      _ = try await model.waitForJoinedDevice(
+        profileID: profile.id,
+        timeout: .seconds(2),
+        interval: .seconds(1)
+      )
+      Issue.record("Expected pairing join to time out.")
+    } catch let error as RelayStateModelError {
+      #expect(error.issue.category == .unavailable)
+      #expect(
+        error.issue.message
+          == "The device did not finish joining. Keep QuotaCLI running, then enter a new pairing code."
+      )
+    }
+
+    #expect(model.ownedDevices.isEmpty)
+    #expect(sleepLog.values == [.seconds(1), .seconds(1)])
+  }
+
+  @Test
   func revokeRefreshesDevicesAndKeepsSnapshots() async throws {
     let profile = try sampleRelayProfile(id: profileID1)
     let remainingDevice = try sampleDevice(deviceID: "device_02", sequence: 2)
@@ -699,6 +824,140 @@ private enum FakeRelayClientCall: Equatable, Sendable {
   case devices(UUID, String)
   case revoke(UUID, String, String)
   case deleteOwner(UUID, String)
+}
+
+private final class SleepLog: @unchecked Sendable {
+  private let lock = NSLock()
+  private var storage: [Duration] = []
+
+  var values: [Duration] {
+    lock.withLock { storage }
+  }
+
+  func append(_ duration: Duration) {
+    lock.withLock { storage.append(duration) }
+  }
+}
+
+/// Holds the first in-flight refresh until a concurrent follow-up can queue behind it.
+private actor RefreshGate {
+  private var enteredContinuation: CheckedContinuation<Void, Never>?
+  private var releaseContinuation: CheckedContinuation<Void, Never>?
+  private var didEnter = false
+  private var didRelease = false
+
+  func waitUntilEntered() async {
+    if didEnter { return }
+    await withCheckedContinuation { continuation in
+      if didEnter {
+        continuation.resume()
+      } else {
+        enteredContinuation = continuation
+      }
+    }
+  }
+
+  func enter() async {
+    didEnter = true
+    enteredContinuation?.resume()
+    enteredContinuation = nil
+    if didRelease { return }
+    await withCheckedContinuation { continuation in
+      if didRelease {
+        continuation.resume()
+      } else {
+        releaseContinuation = continuation
+      }
+    }
+  }
+
+  func release() {
+    didRelease = true
+    releaseContinuation?.resume()
+    releaseContinuation = nil
+  }
+}
+
+private actor GatedRelayStateClient: RelayOwnerClientServing {
+  private let gate: RefreshGate
+  private var snapshotResults: [Result<OwnerSnapshotListResponse, RelayClientError>]
+  private var deviceResults: [Result<DeviceListResponse, RelayClientError>]
+  private(set) var snapshotCallCount = 0
+  private(set) var deviceCallCount = 0
+
+  init(
+    gate: RefreshGate,
+    snapshotResults: [Result<OwnerSnapshotListResponse, RelayClientError>],
+    deviceResults: [Result<DeviceListResponse, RelayClientError>]
+  ) {
+    self.gate = gate
+    self.snapshotResults = snapshotResults
+    self.deviceResults = deviceResults
+  }
+
+  func discover(baseURL _: URL) async throws -> RelayInfo {
+    throw RelayClientError.unavailable
+  }
+
+  func registerOwner(baseURL _: URL) async throws -> OwnerRegistrationResponse {
+    throw RelayClientError.unavailable
+  }
+
+  func approvePairing(
+    userCode _: String,
+    profile _: RelayProfile,
+    ownerBearer _: String
+  ) async throws {
+    throw RelayClientError.unavailable
+  }
+
+  func denyPairing(
+    userCode _: String,
+    profile _: RelayProfile,
+    ownerBearer _: String
+  ) async throws {
+    throw RelayClientError.unavailable
+  }
+
+  func fetchLatestSnapshots(
+    profile _: RelayProfile,
+    ownerBearer _: String
+  ) async throws -> OwnerSnapshotListResponse {
+    snapshotCallCount += 1
+    if snapshotCallCount == 1 {
+      await gate.enter()
+    }
+    guard !snapshotResults.isEmpty else {
+      return OwnerSnapshotListResponse(observations: [])
+    }
+    return try snapshotResults.removeFirst().get()
+  }
+
+  func listDevices(
+    profile _: RelayProfile,
+    ownerBearer _: String
+  ) async throws -> DeviceListResponse {
+    deviceCallCount += 1
+    guard !deviceResults.isEmpty else {
+      return DeviceListResponse(devices: [])
+    }
+    return try deviceResults.removeFirst().get()
+  }
+
+  func revokeDevice(
+    deviceID _: String,
+    profile _: RelayProfile,
+    ownerBearer _: String
+  ) async throws {
+    throw RelayClientError.unavailable
+  }
+
+  func deleteOwner(
+    profile _: RelayProfile,
+    ownerBearer _: String
+  ) async throws {
+    throw RelayClientError.unavailable
+  }
 }
 
 private actor FakeRelayStateClient: RelayOwnerClientServing {

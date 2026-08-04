@@ -7,6 +7,57 @@ import Testing
 @MainActor
 struct MenuBarViewModelRelayTests {
   @Test
+  func suppressesLocalAuthStatusWhenRemoteAccountsArePresentable() async throws {
+    let profile = try overviewProfile()
+    let remoteSnapshot = overviewSnapshot(
+      provider: .claude,
+      fingerprint: "remote-claude",
+      scope: .global,
+      usedPercent: 42
+    )
+    let remoteObservations = OwnerSnapshotListResponse(observations: [
+      try overviewObservation(deviceID: "device-a", snapshot: remoteSnapshot)
+    ])
+    let client = OverviewRelayClient(
+      snapshotResults: [
+        .success(remoteObservations),
+        .success(remoteObservations),
+      ]
+    )
+    let localAuthReport = QuotaCollectionReport(
+      schemaVersion: 1,
+      capturedAt: overviewNow,
+      results: [
+        QuotaCollectionResult(
+          provider: .claude,
+          outcome: .authRequired,
+          snapshots: [],
+          source: nil,
+          message: "Claude OAuth credentials are missing. Run `claude auth login`."
+        )
+      ]
+    )
+    let model = MenuBarViewModel(
+      collector: OverviewLocalCollector(report: localAuthReport),
+      reportCache: nil,
+      relayStateModel: makeOverviewRelayStateModel(profiles: [profile], client: client)
+    )
+    await model.refresh()
+
+    guard case .content(let providers, _) = model.overviewState(
+      enabledProviders: [.claude]
+    ) else {
+      Issue.record("Expected remote Claude quota without local auth chrome.")
+      return
+    }
+    let provider = try #require(providers.first)
+    #expect(provider.provider == .claude)
+    #expect(provider.status == nil)
+    #expect(provider.accounts.count == 1)
+    #expect(provider.accounts.first?.sourceSummary == "Remote")
+  }
+
+  @Test
   func presentsRemoteQuotaBeforeALocalReportExists() async throws {
     let profile = try overviewProfile()
     let remoteSnapshot = overviewSnapshot(

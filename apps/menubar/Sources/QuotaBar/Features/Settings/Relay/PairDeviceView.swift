@@ -106,7 +106,7 @@ struct PairDeviceView: View {
           }
         }
 
-        VStack(alignment: .leading, spacing: QuotaDesign.Spacing.cardBody) {
+        VStack(alignment: .leading, spacing: QuotaDesign.Spacing.sectionRows) {
           Text("Pairing Code")
             .quotaSectionHeaderStyle()
 
@@ -296,8 +296,18 @@ struct PairDeviceView: View {
       do {
         let origin = try resolvedOrigin()
         let profile = try await model.ensureEndpoint(origin: origin)
+        // Approval alone is not success. Snapshot current devices, then wait until QuotaCLI
+        // consumes the session and a new device appears before leaving this page.
+        let knownDeviceIDs = Set(
+          (model.state(for: profile.id)?.devices ?? [])
+            .filter { $0.revokedAt == nil }
+            .map(\.deviceID)
+        )
         try await model.approvePairing(profileID: profile.id, userCode: canonicalCode)
-        await model.refreshProfile(profile.id)
+        try await model.waitForJoinedDevice(
+          profileID: profile.id,
+          excludingDeviceIDs: knownDeviceIDs
+        )
         onFinished()
       } catch {
         errorMessage = RelaySettingsErrorPresentation.message(

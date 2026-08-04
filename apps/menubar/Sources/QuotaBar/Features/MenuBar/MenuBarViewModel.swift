@@ -218,7 +218,9 @@ final class MenuBarViewModel {
     let providers: [ProviderQuotaPresentation] = ProviderID.allCases.compactMap { provider in
       guard enabledProviders.contains(provider) else { return nil }
       let accounts = displaySnapshots(for: provider, now: now)
-      let status = providerStatus(for: provider)
+      // Local auth/error chrome is only for issue-only rows. Once any account (local or
+      // remote) is presentable, Overview shows that quota without blending Needs Sign-In.
+      let status = accounts.isEmpty ? providerStatus(for: provider) : nil
       guard !accounts.isEmpty || status != nil else { return nil }
       return ProviderQuotaPresentation(provider: provider, accounts: accounts, status: status)
     }

@@ -184,6 +184,11 @@ final class RelayStateModel {
   @ObservationIgnored
   private var ensuringEndpointURLs = Set<String>()
 
+  /// Per-profile refresh chain so concurrent callers await and then run a fresh pass
+  /// instead of silently dropping the later request (e.g. post-pair vs background poll).
+  @ObservationIgnored
+  private var profileRefreshTail: [UUID: Task<Void, Never>] = [:]
+
   init(
     client: any RelayOwnerClientServing = RelayClient(),
     profileStore: any RelayProfilePersisting = RelayProfileStore(),
@@ -495,11 +500,71 @@ final class RelayStateModel {
   }
 
   func refreshProfile(_ profileID: UUID) async {
-    guard let profile = profiles.first(where: { $0.id == profileID }),
-      profileStates[profileID]?.isRefreshing != true
-    else {
-      return
+    guard profiles.contains(where: { $0.id == profileID }) else { return }
+
+    let previous = profileRefreshTail[profileID]
+    let task = Task { @MainActor in
+      await previous?.value
+      guard !Task.isCancelled else { return }
+      await self.executeRefreshProfile(profileID)
     }
+    profileRefreshTail[profileID] = task
+    await task.value
+    if profileRefreshTail[profileID] == task {
+      profileRefreshTail[profileID] = nil
+    }
+  }
+
+  func refreshAllProfiles() async {
+    for profileID in profiles.map(\.id) {
+      guard !Task.isCancelled else { return }
+      await refreshProfile(profileID)
+    }
+  }
+
+  /// Waits until QuotaCLI consumes the approved session and a new device appears.
+  /// Approval alone is not success. Uses injected `sleep` so tests need no wall clock.
+  @discardableResult
+  func waitForJoinedDevice(
+    profileID: UUID,
+    excludingDeviceIDs: Set<String> = [],
+    timeout: Duration = .seconds(30),
+    interval: Duration = .seconds(1)
+  ) async throws -> RelayDevice {
+    guard profiles.contains(where: { $0.id == profileID }) else {
+      throw Self.profileNotFoundError
+    }
+
+    var elapsed: Duration = .zero
+    while !Task.isCancelled {
+      await refreshProfile(profileID)
+      if let joined = profileStates[profileID]?.devices.first(where: {
+        $0.revokedAt == nil && !excludingDeviceIDs.contains($0.deviceID)
+      }) {
+        return joined
+      }
+      if elapsed >= timeout { break }
+
+      let sleepFor = min(interval, timeout - elapsed)
+      guard sleepFor > .zero else { break }
+      do {
+        try await sleep(sleepFor)
+      } catch {
+        throw CancellationError()
+      }
+      elapsed += sleepFor
+    }
+
+    if Task.isCancelled { throw CancellationError() }
+    throw Self.modelError(
+      category: .unavailable,
+      message:
+        "The device did not finish joining. Keep QuotaCLI running, then enter a new pairing code."
+    )
+  }
+
+  private func executeRefreshProfile(_ profileID: UUID) async {
+    guard let profile = profiles.first(where: { $0.id == profileID }) else { return }
     updateState(for: profileID) { $0.isRefreshing = true }
     defer { updateState(for: profileID) { $0.isRefreshing = false } }
 
@@ -525,13 +590,6 @@ final class RelayStateModel {
       return
     } catch {
       setRefreshIssue(Self.issue(for: error), for: profileID)
-    }
-  }
-
-  func refreshAllProfiles() async {
-    for profileID in profiles.map(\.id) {
-      guard !Task.isCancelled else { return }
-      await refreshProfile(profileID)
     }
   }
 
