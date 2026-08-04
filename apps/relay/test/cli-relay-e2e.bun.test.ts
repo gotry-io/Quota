@@ -37,7 +37,7 @@ interface StoredRelayCredential {
 }
 
 describe("QuotaCLI relay against self-hosted QuotaRelay", () => {
-  it("pairs with an initial empty heartbeat push and unpairs through real HTTP", async () => {
+  it("pairs with a foreground empty heartbeat push and unpairs through real HTTP", async () => {
     const temporaryDirectory = await mkdtemp(join(tmpdir(), "quota-cli-relay-e2e-"));
     const databasePath = join(temporaryDirectory, "relay.db");
     const xdgConfigHome = join(temporaryDirectory, "config");
@@ -122,44 +122,27 @@ describe("QuotaCLI relay against self-hosted QuotaRelay", () => {
         stdout: await pairStdout,
         stderr: await pairStderr,
       };
-      expect(pairOutput.exitCode).toBe(0);
+      // No provider credentials in the sandbox: pair still uploads an empty heartbeat, then
+      // exits 1 because collection was incomplete. Credential and device join must succeed.
+      expect(pairOutput.exitCode).toBe(1);
       assertBearerMaterialAbsent(pairOutput, [ownerToken]);
 
       const credentialPath = join(xdgConfigHome, "quotacli", "device.json");
       const pairedCredential = await readCredential(credentialPath);
       assertBearerMaterialAbsent(pairOutput, [ownerToken, pairedCredential.device_token]);
+      expect(pairOutput.stdout).toContain("Uploaded 0 snapshots with sequence 0.");
       expect(pairOutput.stdout).toContain("Background relay push is supported only on macOS");
-      expect(pairOutput.stdout).not.toContain("Uploaded");
+      expect(pairOutput.stderr).toContain("provider collection was incomplete");
       expect(pairedCredential.relay_url).toBe(relayOrigin);
       expect(pairedCredential.instance_id).toBe(instanceID);
-      expect(pairedCredential.last_sequence).toBe(-1);
+      expect(pairedCredential.last_sequence).toBe(0);
 
       const devicesAfterPair = await ownerDevices(relayOrigin, ownerToken);
       expect(devicesAfterPair.devices).toHaveLength(1);
       const pairedDevice = devicesAfterPair.devices[0];
       expect(pairedDevice?.device_id).toBe(pairedCredential.device_id);
-      expect(pairedDevice?.last_sequence).toBe(-1);
-      expect(pairedDevice?.last_seen_at).toBeNull();
-
-      const pushOutput = await runCLI(
-        ["relay", "push"],
-        environment,
-        platformPreload,
-        activeProcesses,
-      );
-      expect(pushOutput.exitCode).toBe(1);
-      assertBearerMaterialAbsent(pushOutput, [ownerToken, pairedCredential.device_token]);
-      expect(pushOutput.stdout).toContain("Uploaded 0 snapshots with sequence 0.");
-      expect(pushOutput.stderr).toContain("provider collection was incomplete");
-
-      const reportedCredential = await readCredential(credentialPath);
-      expect(reportedCredential.last_sequence).toBe(0);
-      const devicesAfterPush = await ownerDevices(relayOrigin, ownerToken);
-      expect(devicesAfterPush.devices).toHaveLength(1);
-      const reportedDevice = devicesAfterPush.devices[0];
-      expect(reportedDevice?.device_id).toBe(pairedCredential.device_id);
-      expect(reportedDevice?.last_sequence).toBe(0);
-      expect(typeof reportedDevice?.last_seen_at).toBe("string");
+      expect(pairedDevice?.last_sequence).toBe(0);
+      expect(typeof pairedDevice?.last_seen_at).toBe("string");
 
       const snapshotsResponse = await relayRequest(relayOrigin, "/api/v1/snapshots", {
         headers: bearerHeaders(ownerToken),
