@@ -65,30 +65,15 @@
   enum VisualTestRoute: String {
     case overview
     case settings
-    case relays
-    case add
-    case detail
-    case pairing
-    case devices
+    case remoteDevices = "remote-devices"
+    case pairDevice = "pair-device"
 
     fileprivate var path: [MenuBarRoute] {
       switch self {
       case .overview: []
       case .settings: [.settings]
-      case .relays: [.settings, .relays]
-      case .add: [.settings, .relays, .addRelay]
-      case .detail:
-        [.settings, .relays, .relayDetail(VisualRelayFixture.profileID)]
-      case .pairing:
-        [
-          .settings, .relays, .relayDetail(VisualRelayFixture.profileID),
-          .pairing(VisualRelayFixture.profileID),
-        ]
-      case .devices:
-        [
-          .settings, .relays, .relayDetail(VisualRelayFixture.profileID),
-          .devices(VisualRelayFixture.profileID),
-        ]
+      case .remoteDevices: [.settings, .remoteDevices]
+      case .pairDevice: [.settings, .remoteDevices, .pairDevice]
       }
     }
   }
@@ -131,7 +116,10 @@
     let screenshotOutputPath: URL?
     let referenceDate: Date
 
-    init?(arguments: [String], referenceDate: Date = Date()) {
+    init?(
+      arguments: [String],
+      referenceDate: Date = Date(timeIntervalSince1970: 1_785_752_430)
+    ) {
       guard
         let dataSource: VisualTestDataSource = Self.argument(
           "--data-source",
@@ -261,8 +249,7 @@
             instantDeviceRevocation: true,
             history: false,
             multiTenant: true
-          ),
-          isDefault: true
+          )
         )
         let deviceResponse = try QuotaWireCodec.makeDecoder().decode(
           DeviceListResponse.self,
@@ -287,7 +274,7 @@
     }
 
     private static func makeObservations(referenceDate: Date) throws
-      -> [ControllerSnapshotObservation]
+      -> [OwnerSnapshotObservation]
     {
       let snapshots = [
         snapshot(
@@ -333,7 +320,7 @@
       let responseJSON =
         #"{"observations":[{"device_id":"device_visual_studio_mac_01","sequence":42,"captured_at":"\#(capturedAt)","snapshot":\#(encodedSnapshots[0]),"updated_at":"\#(updatedAt)"},{"device_id":"device_visual_studio_mac_01","sequence":42,"captured_at":"\#(capturedAt)","snapshot":\#(encodedSnapshots[1]),"updated_at":"\#(updatedAt)"}]}"#
       return try QuotaWireCodec.makeDecoder()
-        .decode(ControllerSnapshotListResponse.self, from: Data(responseJSON.utf8))
+        .decode(OwnerSnapshotListResponse.self, from: Data(responseJSON.utf8))
         .observations
     }
 

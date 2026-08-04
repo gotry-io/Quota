@@ -9,7 +9,7 @@ implemented; the repository's current milestone is maintained in the root
 The product list and user-facing descriptions are maintained in the root
 [`README.md`](../README.md). Architecturally, QuotaBar, QuotaCLI, QuotaRelay, and Quota Web are four
 independently runnable or deployable boundaries. Local collection must continue to work without the
-managed service. Relay has anonymous capability-based controllers rather than user accounts, and the
+managed service. Relay has anonymous capability-based owners rather than user accounts, and the
 website does not participate in credential discovery or quota collection.
 
 ## Data paths
@@ -33,12 +33,12 @@ Remote QuotaCLI ── outbound HTTPS ── QuotaRelay ── QuotaBar
 
 QuotaCLI explicitly pairs with a selected Relay, receives a Relay-bound device credential, and on
 macOS enables a LaunchAgent that uploads normalized snapshots immediately and every five minutes.
-Relay persists accepted snapshots and serves QuotaBar instances authenticated by anonymous controller
+Relay persists accepted snapshots and serves QuotaBar instances authenticated by anonymous owner
 capabilities. It never receives provider credentials or runs provider collectors. Pairing and token
 generation are defined in
 [`decisions/0002-relay-device-code-pairing.md`](decisions/0002-relay-device-code-pairing.md).
 The account-free control boundary is defined in
-[`decisions/0004-anonymous-relay-controllers.md`](decisions/0004-anonymous-relay-controllers.md).
+[`decisions/0004-anonymous-relay-owners.md`](decisions/0004-anonymous-relay-owners.md).
 Relay observation retention and QuotaBar subscription presentation are defined in
 [`decisions/0003-observation-preserving-subscription-merge.md`](decisions/0003-observation-preserving-subscription-merge.md).
 Relay retains observations by reporting device rather than globally deduplicating subscriptions.
@@ -54,21 +54,21 @@ storage requirements are defined only in [`security.md`](security.md).
 ### QuotaBar
 
 - Swift 6.2 and SwiftUI, targeting macOS 14 or newer.
-- Owns local presentation, Relay profiles, and presentation-time resolution of local and remote
-  observations as defined by
+- Owns local presentation, internal Relay endpoint records, and presentation-time resolution of
+  local and remote observations as defined by
   [`decisions/0003-observation-preserving-subscription-merge.md`](decisions/0003-observation-preserving-subscription-merge.md).
 - Ships its exact compatible QuotaCLI helper inside the signed app bundle and never resolves it from
   the user's `PATH`.
-- Stores Relay controller credentials in Keychain and profile metadata separately. It automatically
-  creates an anonymous controller when first connecting to the managed Relay; self-hosted profiles
-  accept the deployment-provided controller credential.
-- Discovers and binds a Relay profile before using its versioned controller endpoints. Its
-  controller client covers pairing decisions, snapshot reads, device listing, and device
-  revocation.
+- Stores hidden owner capabilities in Keychain and keeps endpoint records as internal state only.
+  Pairing through any Relay URL automatically registers an isolated anonymous owner capability;
+  users never enter tokens, profile names, or admin credentials.
+- Discovers and binds each endpoint before using its versioned owner endpoints. The owner client
+  covers pairing decisions, snapshot reads, device listing, and device revocation for that
+  QuotaBar's private group only.
 - Shares one `RelayStateModel` between five-minute app-lifecycle polling, the Overview, and the
-  panel's single typed Settings stack for Relay profiles, pairing decisions, and device management.
-- Its macOS controller-path acceptance flow launches the real app boundary and composes the same
-  `RelayStateModel`, stores, controller client, resolver, and Settings actions against isolated
+  panel's single typed Settings stack for Remote Devices and Pair Device.
+- Its macOS owner-path acceptance flow launches the real app boundary and composes the same
+  `RelayStateModel`, stores, owner client, resolver, and Settings actions against isolated
   managed and self-hosted Relay runtimes; no second test implementation of the Relay protocol is
   used.
 
@@ -129,25 +129,25 @@ quota-model  quota-provider  relay-core
 The managed runtime uses Cloudflare Workers and D1. The self-hosted runtime uses Bun and an embedded
 SQLite file. Both implement the `@gotry-io/relay-core` state contract and expose the same protocol
 behavior. Versioned Relay operations live under `/api/v1`; the server core covers device-code
-pairing, device-owned snapshot writes and self-revocation, controller snapshot reads, and controller
+pairing, device-owned snapshot writes and self-revocation, owner snapshot reads, and owner
 device management through scoped Bearer credentials. Pairing is defined in
 [`decisions/0002-relay-device-code-pairing.md`](decisions/0002-relay-device-code-pairing.md), while
 credential and scope rules are defined in [`security.md`](security.md).
 
-The self-hosted runtime requires `QUOTA_RELAY_CONTROLLER_TOKEN` at startup. It binds that bearer to
-the fixed self-hosted controller and atomically replaces the fixed bootstrap credential when the
-deployment token changes. The managed runtime instead lets QuotaBar register a random anonymous
-controller capability directly; neither runtime has user accounts.
+Both managed and self-hosted runtimes allow anonymous owner registration. Neither requires a
+bootstrap token or user account. Each registration creates an isolated expiring owner group scoped
+to the devices that QuotaBar pairs through that endpoint. See
+[`decisions/0005-url-only-relay-enrollment.md`](decisions/0005-url-only-relay-enrollment.md).
 
 Every successful device report advances `last_seen_at`. A device that has not reported for 30 days
 is revoked on the authorization path, while the Worker scheduled handler and self-hosted maintenance
 timer persist the same transition without waiting for a client request. The hourly maintenance also
-deletes managed controllers that are at least 30 days old with no device activity in that window and
-removes pairing sessions 24 hours after their expiry. It never garbage-collects the permanent
-self-hosted controller. Snapshot envelopes are bounded to 32 observations before persistence.
+deletes ephemeral owner groups that are at least 30 days old with no device activity in that window
+and removes pairing sessions 24 hours after their expiry. Snapshot envelopes are bounded to 32
+observations before persistence.
 
 QuotaBar reads snapshots over authenticated HTTP polling in v1. If later product measurements
-justify realtime push, the managed runtime may add one Durable Object per controller for WebSocket
+justify realtime push, the managed runtime may add one Durable Object per owner for WebSocket
 coordination while D1 remains the source of truth; the self-hosted runtime would provide an
 equivalent in-process connection hub.
 
@@ -166,7 +166,6 @@ GET /.well-known/quotabar-relay
 The managed discovery URL is
 `https://quota.gotry.io/.well-known/quotabar-relay`. The document identifies the Relay instance,
 supported API versions, authentication methods, deployment mode, and capabilities. Device
-credentials are bound to the advertised issuer and instance ID. The bootstrapped self-hosted runtime
-and the managed runtime both advertise bearer authentication, persistent snapshots, and instant
-device revocation. Managed `multi_tenant` means multiple isolated anonymous controllers share the
-runtime; it does not imply accounts.
+credentials are bound to the advertised issuer and instance ID. Both runtimes advertise bearer
+authentication, persistent snapshots, instant device revocation, and `multi_tenant` for isolated
+anonymous owner groups. `multi_tenant` does not imply user accounts.

@@ -15,7 +15,7 @@ Read the relevant source before changing that area:
 | Codex, Claude Code, and Grok collection strategies | `docs/provider-collection.md` |
 | Persistent Relay storage decision and rationale | `docs/decisions/0001-persistent-relay-storage.md` |
 | Relay pairing, code control, and credential issuance | `docs/decisions/0002-relay-device-code-pairing.md` |
-| Anonymous Relay controller lifecycle | `docs/decisions/0004-anonymous-relay-controllers.md` |
+| Anonymous Relay owner lifecycle | `docs/decisions/0004-anonymous-relay-owners.md` |
 | Website visual tokens and marketing UI | `apps/web/DESIGN.md` |
 | QuotaBar menu-panel visual tokens and UI behavior | `apps/menubar/DESIGN.md` |
 | App-specific usage | The corresponding `apps/*/README.md` |
@@ -106,7 +106,7 @@ SQLite files, logs, or local credentials.
   cases.
 - Protocol change: run protocol, model, provider, Relay, and Swift decoding tests.
 - Relay change: run Vitest, Bun SQLite tests, and the Cloudflare dry-run build.
-- QuotaBar Relay controller-path change: on macOS, run `pnpm test:relay:e2e` in addition to the
+- QuotaBar Relay owner-path change: on macOS, run `pnpm test:relay:e2e` in addition to the
   affected Swift and Relay tests.
 - Web change: run its type check and production build; inspect desktop and mobile rendering when
   browser tooling is available.

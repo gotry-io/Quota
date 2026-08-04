@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 
@@ -5,16 +6,11 @@ import Testing
 
 @Suite
 struct RelaySettingsUITests {
-  private let profileID = UUID(uuidString: "7A926551-3832-4E39-A931-695563D96541")!
-
   @Test
-  func relayRoutesHaveStableTitles() {
+  func remoteDeviceRoutesHaveStableTitles() {
     #expect(MenuBarRoute.settings.title == "Settings")
-    #expect(MenuBarRoute.relays.title == "Relays")
-    #expect(MenuBarRoute.addRelay.title == "Pair Device")
-    #expect(MenuBarRoute.relayDetail(profileID).title == "Relay")
-    #expect(MenuBarRoute.pairing(profileID).title == "Pair Device")
-    #expect(MenuBarRoute.devices(profileID).title == "Devices")
+    #expect(MenuBarRoute.remoteDevices.title == "Remote Devices")
+    #expect(MenuBarRoute.pairDevice.title == "Pair Device")
   }
 
   @Test
@@ -25,73 +21,26 @@ struct RelaySettingsUITests {
     #expect(!navigation.canNavigateBack)
 
     navigation.open(.settings)
-    navigation.open(.relays)
-    navigation.open(.relays)
+    navigation.open(.remoteDevices)
+    navigation.open(.remoteDevices)
 
-    #expect(navigation.path == [.settings, .relays])
-    #expect(navigation.currentRoute == .relays)
-    #expect(navigation.title == "Relays")
+    #expect(navigation.path == [.settings, .remoteDevices])
+    #expect(navigation.currentRoute == .remoteDevices)
+    #expect(navigation.title == "Remote Devices")
     #expect(navigation.canNavigateBack)
+    #expect(navigation.showsPairDeviceAction)
+
+    navigation.open(.pairDevice)
+    #expect(navigation.path == [.settings, .remoteDevices, .pairDevice])
+    #expect(navigation.title == "Pair Device")
+    #expect(!navigation.showsPairDeviceAction)
 
     navigation.navigateBack()
-    #expect(navigation.currentRoute == .settings)
+    #expect(navigation.currentRoute == .remoteDevices)
+    navigation.navigateBack()
     navigation.navigateBack()
     navigation.navigateBack()
     #expect(navigation.path.isEmpty)
-  }
-
-  @Test
-  func replaceTurnsTheAddPageIntoTheCreatedRelayDetail() {
-    var navigation = MenuBarNavigationState(path: [.settings, .relays, .addRelay])
-
-    navigation.replaceLast(with: .relayDetail(profileID))
-
-    #expect(navigation.path == [.settings, .relays, .relayDetail(profileID)])
-    #expect(navigation.currentRoute == .relayDetail(profileID))
-  }
-
-  @Test
-  func addRelayFormCanonicalizesSafeFieldsWithoutChangingTheCredential() throws {
-    let controllerBearer = "synthetic_controller_credential_0123456789"
-
-    let validated = try RelayAddFormValidation.validate(
-      name: "  Home Relay  ",
-      origin: "HTTPS://Relay.Example:443/",
-      controllerBearer: controllerBearer
-    )
-
-    #expect(validated.name == "Home Relay")
-    #expect(validated.origin == "https://relay.example")
-    #expect(validated.controllerBearer == controllerBearer)
-  }
-
-  @Test
-  func addRelayFormUsesFixedErrorsThatNeverEchoTheCredential() {
-    let controllerBearer = "  synthetic_controller_credential_0123456789  "
-
-    do {
-      _ = try RelayAddFormValidation.validate(
-        name: "Home Relay",
-        origin: "https://relay.example",
-        controllerBearer: controllerBearer
-      )
-      Issue.record("Expected credential validation to fail.")
-    } catch {
-      let message = RelaySettingsErrorPresentation.message(
-        for: error,
-        fallback: "Check the Relay details and try again."
-      )
-      #expect(message == "Enter a valid Relay controller credential.")
-      #expect(message?.contains(controllerBearer) == false)
-    }
-
-    let leakyError = LeakyError(value: controllerBearer)
-    let fallback = RelaySettingsErrorPresentation.message(
-      for: leakyError,
-      fallback: "QuotaBar could not add the Relay."
-    )
-    #expect(fallback == "QuotaBar could not add the Relay.")
-    #expect(fallback?.contains(controllerBearer) == false)
   }
 
   @Test
@@ -113,16 +62,60 @@ struct RelaySettingsUITests {
   }
 
   @Test
-  func deviceSequenceLabelHidesTheUnreportedSentinel() throws {
-    let response = try QuotaWireCodec.makeDecoder().decode(
-      DeviceListResponse.self,
-      from: Data(
-        #"{"devices":[{"device_id":"device-new","display_name":"New device","created_at":"2026-08-03T10:00:00Z","last_seen_at":null,"last_sequence":-1,"revoked_at":null}]}"#.utf8
-      )
+  func pairCommandStaysVisibleForOtherRelayAndUsesTheValidatedURL() throws {
+    let officialURL = try #require(URL(string: "https://quota.gotry.io"))
+    let placeholder = RelayPairCommandPresentation.make(
+      selectedURL: nil,
+      officialURL: officialURL,
+      isOtherChoice: true
     )
-    let device = try #require(response.devices.first)
+    #expect(placeholder.command == "quotacli relay pair --relay <relay-url>")
+    #expect(!placeholder.canCopy)
 
-    #expect(device.sequenceLabel == "No reports yet")
+    let customURL = try #require(URL(string: "https://relay.example"))
+    let custom = RelayPairCommandPresentation.make(
+      selectedURL: customURL,
+      officialURL: officialURL,
+      isOtherChoice: true
+    )
+    #expect(custom.command == "quotacli relay pair --relay https://relay.example")
+    #expect(custom.canCopy)
+  }
+
+  @Test
+  func errorPresentationNeverEchoesSecrets() {
+    let secret = "synthetic_owner_credential_0123456789"
+    let leakyError = LeakyError(value: secret)
+    let fallback = RelaySettingsErrorPresentation.message(
+      for: leakyError,
+      fallback: "QuotaBar could not complete pairing."
+    )
+    #expect(fallback == "QuotaBar could not complete pairing.")
+    #expect(fallback?.contains(secret) == false)
+  }
+
+  @Test
+  func usageTonesMapToSemanticColors() {
+    #expect(QuotaUsageTone.tone(remainingPercent: 68) == .healthy)
+    #expect(QuotaUsageTone.tone(remainingPercent: 20) == .warning)
+    #expect(QuotaUsageTone.tone(remainingPercent: 10) == .critical)
+    #expect(QuotaUsageTone.healthy.meterColor == QuotaPalette.accent)
+    #expect(QuotaUsageTone.warning.meterColor == QuotaPalette.warning)
+    #expect(QuotaUsageTone.critical.meterColor == QuotaPalette.critical)
+  }
+
+  @Test
+  func primaryButtonTextMeetsAAContrastAcrossSystemAccentsAndAppearances() throws {
+    for appearanceName in [NSAppearance.Name.aqua, .darkAqua] {
+      let appearance = try #require(NSAppearance(named: appearanceName))
+      for color in [NSColor.systemYellow, .systemOrange, .systemIndigo, .systemBlue] {
+        let background = QuotaPalette.resolvedColor(color, for: appearance)
+        let foreground = QuotaPalette.accessibleTextColor(for: background)
+        #expect(
+          QuotaPalette.contrastRatio(foreground: foreground, background: background) >= 4.5
+        )
+      }
+    }
   }
 }
 

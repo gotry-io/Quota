@@ -116,7 +116,7 @@ private struct AccountQuotaView: View {
     HStack(alignment: .firstTextBaseline, spacing: QuotaDesign.Spacing.iconLabel) {
       if let identitySummary {
         Text(identitySummary)
-          .font(QuotaDesign.Typography.quotaLabel)
+          .quotaFont(.quotaLabel)
           .foregroundStyle(QuotaPalette.body)
           .lineLimit(1)
           .truncationMode(.middle)
@@ -163,42 +163,61 @@ private struct QuotaWindowRow: View {
   let observedAt: Date
   let isStale: Bool
 
-  private var usageColor: Color {
+  private var meterColor: Color {
     let color = QuotaPalette.usageColor(remainingPercent: window.remainingPercent)
     return isStale ? color.opacity(0.55) : color
+  }
+
+  private var valueColor: Color {
+    isStale ? QuotaPalette.mute : QuotaPalette.ink
   }
 
   var body: some View {
     VStack(alignment: .leading, spacing: QuotaDesign.Spacing.meta) {
       HStack(alignment: .firstTextBaseline, spacing: QuotaDesign.Spacing.inline) {
         Text(window.title)
-          .font(QuotaDesign.Typography.quotaLabel)
+          .quotaFont(.quotaLabel)
           .foregroundStyle(QuotaPalette.body)
         Spacer(minLength: 8)
-        Text(percent(window.remainingPercent))
-          .font(QuotaDesign.Typography.remainingValue)
+        Text("\(percent(window.remainingPercent)) left")
+          .quotaFont(.remainingValue)
           .monospacedDigit()
-          .foregroundStyle(usageColor)
+          .foregroundStyle(valueColor)
           .accessibilityLabel("\(percent(window.remainingPercent)) left")
       }
 
-      QuotaProgressBar(value: window.remainingPercent, fill: usageColor)
+      QuotaProgressBar(value: window.remainingPercent, fill: meterColor)
 
-      HStack(alignment: .firstTextBaseline, spacing: QuotaDesign.Spacing.inline) {
-        if let resetsAt = window.resetsAt {
-          Text("Resets \(formatResetDate(resetsAt))")
-        } else {
-          Text("Reset time unavailable")
-        }
-
-        if isStale {
-          Text("· Observed \(observedAt, style: .relative) ago")
-        }
-      }
-      .quotaMetaStyle()
-      .lineLimit(1)
+      quotaMetadata
+        .quotaMetaStyle()
     }
     .padding(.top, 2)
+  }
+
+  @ViewBuilder
+  private var quotaMetadata: some View {
+    if isStale {
+      ViewThatFits(in: .horizontal) {
+        HStack(alignment: .firstTextBaseline, spacing: QuotaDesign.Spacing.inline) {
+          resetText
+          Text("· Observed \(observedAt, style: .relative) ago")
+        }
+        VStack(alignment: .leading, spacing: QuotaDesign.Spacing.meta) {
+          resetText
+          Text("Observed \(observedAt, style: .relative) ago")
+        }
+      }
+    } else {
+      resetText
+    }
+  }
+
+  private var resetText: Text {
+    if let resetsAt = window.resetsAt {
+      Text("Resets \(formatResetDate(resetsAt))")
+    } else {
+      Text("Reset time unavailable")
+    }
   }
 }
 
@@ -211,7 +230,7 @@ private struct SourceBadge: View {
 
   var body: some View {
     Image(systemName: symbolName)
-      .font(QuotaDesign.Typography.metaMedium)
+      .quotaFont(.metaMedium)
       .foregroundStyle(QuotaPalette.mute)
       .symbolRenderingMode(.monochrome)
       .help(tooltip)
@@ -246,15 +265,12 @@ private func percent(_ value: Double) -> String {
   return String(format: "%.1f%%", value)
 }
 
-private let resetDateFormatter: DateFormatter = {
-  let formatter = DateFormatter()
-  formatter.locale = Locale.current
-  formatter.timeZone = .current
-  // Compact absolute time: keeps second precision without a long gray line.
-  formatter.dateFormat = "MM-dd HH:mm:ss"
-  return formatter
-}()
-
 private func formatResetDate(_ date: Date) -> String {
-  resetDateFormatter.string(from: date)
+  // Locale-appropriate weekday + time, no seconds (e.g. "Sat, 12:51 PM").
+  date.formatted(
+    .dateTime
+      .weekday(.abbreviated)
+      .hour()
+      .minute()
+  )
 }

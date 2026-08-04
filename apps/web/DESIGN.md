@@ -526,7 +526,10 @@ Inter may substitute for body text, while JetBrains Mono or Fira Code may substi
 - **Settings card:** `{spacing.xl}` (24px); large summary card may use `{spacing.xxl}` (32px).
 - **Full-page section rhythm:** `{spacing.section}` (88px) for onboarding and future web surfaces only.
 
-### Menu Bar Panel
+### Menu-panel marketing illustrations
+
+These rules apply only when the website illustrates QuotaBar. The native panel's actual geometry,
+tokens, copy, and behavior are canonical in [`apps/menubar/DESIGN.md`](../menubar/DESIGN.md).
 
 - Preferred width: 360px; supported range: 340–400px.
 - Maximum visible height: 640px; provider/device content scrolls while header and footer remain stable.
@@ -535,8 +538,8 @@ Inter may substitute for body text, while JetBrains Mono or Fira Code may substi
 - Footer height: 36px.
 - Resolved subscription rows appear in provider order; local and remote observations may contribute
   to the same row without being numerically combined.
-- Remote device inventory and revocation belong to the selected Relay profile in Settings rather
-  than appearing as a second Overview section.
+- Remote device inventory and removal appear in Settings → Remote Devices rather than as a second
+  Overview section. Website illustrations must not show Relay profile administration.
 - Provider rows are ordered Codex, Claude Code, Grok unless the user explicitly reorders them.
 - On launch, render the last normalized local report immediately and refresh it in the background;
   never replace cached quota with a loading-only screen.
@@ -557,28 +560,23 @@ Inter may substitute for body text, while JetBrains Mono or Fira Code may substi
 - Settings remain inside the 340–400px menu-bar panel; do not open a separate settings window.
 - Visible-agent controls and About information are flat sections. Quit and delete-all live in the
   Settings header overflow menu.
-- Relay profile listing, setup, detail, pairing decisions, and device management use deeper
-  destinations in the same typed stack.
-- The managed Relay is enrolled automatically with an anonymous controller capability; do not add
-  account, sign-in, or manually copied managed-token UI. Self-hosted Relay setup asks for its URL
-  and controller token in a secure field.
-- `Delete all QuotaBar data` is a destructive Settings overflow action. It deletes managed controllers
-  while online before clearing local profiles, cached quota, preferences, and QuotaBar Keychain entries.
-  When remote deletion fails, require a separate `Delete Locally Anyway` confirmation and explain
-  that the managed controller and Relay data may remain while paired devices continue reporting.
-- Removing the managed Relay or deleting all data persists a disconnected state across app
-  restarts. `Reconnect Quota Relay` is the only UI action that clears it and creates a new anonymous
-  controller; ordinary polling must not silently undo a destructive user action.
+- Remote Devices and Pair Device use deeper destinations in the same typed stack. A Relay is only a
+  URL; do not expose owner capabilities, profile administration, or global device lists.
+- QuotaBar enrolls an isolated anonymous owner capability for any Relay URL during Pair Device; do
+  not add account, sign-in, or manually copied token UI.
+- `Delete all QuotaBar data` is a destructive Settings overflow action. It deletes reachable owner
+  groups while online before clearing local endpoint records, cached quota, preferences, and Keychain
+  entries. When remote deletion fails, require a separate `Delete Locally Anyway` confirmation.
 - Provider switches list all supported agents and describe unsigned or unavailable sessions as
   quiet secondary text.
 - A provider enters the quota overview only when collection succeeds and at least one `available`
   or `stale` snapshot contains a quota window. Authentication, unavailable, unsupported, empty, and
   error outcomes remain discoverable in Settings instead of becoming provider rows.
 
-### Compact Menu Language
+### Compact menu language in marketing artwork
 
-The following roles are the canonical display grammar for QuotaBar. New menu-panel UI reuses these
-roles rather than introducing one-off sizes, containers, tags, or transitions.
+The following roles keep website mockups internally consistent. They are not implementation tokens
+for QuotaBar; native values come only from `apps/menubar/DESIGN.md`.
 
 | Role | Canonical treatment | Purpose |
 |---|---|---|
@@ -674,7 +672,7 @@ new default shapes.
 
 - Background `{colors.primary}`, text `{colors.on-primary}`, type `{typography.button-md}`,
   padding `8px 20px`, height `36px`, rounded `{rounded.full}`.
-- Use for `Pair device`, `Add Relay`, `Open settings`, `Retry`, or the current step's single action.
+- Use for `Pair Device`, `Open settings`, `Retry`, or the current step's single action.
 - Pressed state uses `{components.button-primary-active}`.
 - At most one black pill is visible in a compact panel region.
 
@@ -727,8 +725,8 @@ new default shapes.
   values. When the provider API omits plan, show only the account label and do not invent a plan
   name.
 - Every quota window, including the first, uses the same compact row: window title on the left and a
-  stronger remaining percentage on the right, then an 8px meter, then a compact absolute reset time
-  (`MM-dd HH:mm:ss`). Remaining percent and meter fill share the usage tone color.
+  stronger `N% left` value on the right, then an 8px semantic-color meter, then a locale-appropriate
+  weekday/time reset without routine seconds. Percentage text remains readable neutral ink.
 - Clicking the row opens details; the full row is the hit target.
 
 **`quota-progress-track`** and **`quota-progress-fill`**
@@ -739,9 +737,9 @@ new default shapes.
   Stale rows keep the same tone at reduced opacity and still show the Stale tag.
 - The filled proportion always represents **remaining**, never sometimes used and sometimes remaining.
 - Show the numeric remaining value at the trailing edge as the primary anchor
-  (`{typography.body-sm-strong}` / semibold subheadline); omit the trailing word `left` in the
-  visible label. The meter is supplementary.
-- Reset timestamps use a compact absolute form rather than relative countdown copy.
+  (`{typography.body-sm-strong}` / semibold subheadline) and retain the explicit word `left`. The
+  meter is supplementary.
+- Reset timestamps use locale-appropriate weekday/time copy without routine seconds.
 - For unlimited or unknown quota, replace the meter with an explicit text label.
 
 **`quota-card`** — expanded quota detail
@@ -776,19 +774,17 @@ new default shapes.
 
 ### Relay & Device
 
-**`relay-card`**
-
-- Background `{colors.canvas}`, 1px `{colors.hairline}` border, padding `{spacing.xl}` (24px),
-  rounded `{rounded.lg}`.
-- Shows profile name, base URL, managed/self-hosted mode, connectivity, and advertised capabilities.
-- Credential contents never appear. A Keychain reference may be described only as `Stored securely`.
+A Relay is illustrated only as an endpoint URL chosen during Pair Device. Do not draw Relay profile,
+owner capability, mode, or administration cards.
 
 **`device-card`**
 
 - Same geometry as `relay-card`.
-- Shows display name, shortened device ID, last seen or revoked time, last accepted sequence, and
-  state. The device API does not expose a provider count, so the card must not infer or fabricate one.
-- `Revoke` is a text or secondary control until confirmation; it must not become a chromatic red button.
+- Shows display name, quiet Active/Waiting state, and last report. Show the Relay endpoint only when
+  multiple endpoints need disambiguation, using its canonical URL so ports remain distinct; do not
+  expose internal IDs or sequence counters.
+- `Remove Device` is a text or secondary control until confirmation; it must not become a chromatic
+  red button.
 
 ### Commands & Diagnostics
 
@@ -819,7 +815,7 @@ new default shapes.
 
 - Flat `{colors.canvas}` surface, `{colors.body}` text, `{typography.body-md}`, padding `32px 24px`.
 - May include the double-ring Q gauge or one SF Symbol, a short heading, one sentence, and one action.
-- Examples: no provider session, no Relay profile, no remote device, no quota endpoint support.
+- Examples: no provider session, no paired remote device, or no quota endpoint support.
 
 Error states reuse the same component. They replace the illustration with a functional icon and add
 a clear recovery action. Do not create alert banners for ordinary provider failures.
@@ -904,7 +900,8 @@ a clear recovery action. Do not create alert banners for ordinary provider failu
 
 ### Collapsing Strategy
 
-- **Menu panel:** width stays fixed by profile; content scrolls vertically and never becomes two columns.
+- **Menu-panel artwork:** width stays fixed by the illustrated panel; content scrolls vertically and
+  never becomes two columns.
 - **Provider row:** plan and reset metadata wrap below the primary line; percentage never truncates.
 - **Settings:** remains a single-column embedded panel with flat sections.
 - **Card actions:** horizontal button row becomes vertical, with primary action first.

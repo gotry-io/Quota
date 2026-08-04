@@ -1,39 +1,39 @@
 import Foundation
 import Observation
 
-protocol RelayControllerClientServing: Sendable {
+protocol RelayOwnerClientServing: Sendable {
   func discover(baseURL: URL) async throws -> RelayInfo
-  func registerController(baseURL: URL) async throws -> ControllerRegistrationResponse
+  func registerOwner(baseURL: URL) async throws -> OwnerRegistrationResponse
   func approvePairing(
     userCode: String,
     profile: RelayProfile,
-    controllerBearer: String
+    ownerBearer: String
   ) async throws
   func denyPairing(
     userCode: String,
     profile: RelayProfile,
-    controllerBearer: String
+    ownerBearer: String
   ) async throws
   func fetchLatestSnapshots(
     profile: RelayProfile,
-    controllerBearer: String
-  ) async throws -> ControllerSnapshotListResponse
+    ownerBearer: String
+  ) async throws -> OwnerSnapshotListResponse
   func listDevices(
     profile: RelayProfile,
-    controllerBearer: String
+    ownerBearer: String
   ) async throws -> DeviceListResponse
   func revokeDevice(
     deviceID: String,
     profile: RelayProfile,
-    controllerBearer: String
+    ownerBearer: String
   ) async throws
-  func deleteController(
+  func deleteOwner(
     profile: RelayProfile,
-    controllerBearer: String
+    ownerBearer: String
   ) async throws
 }
 
-extension RelayClient: RelayControllerClientServing {}
+extension RelayClient: RelayOwnerClientServing {}
 
 @MainActor
 protocol RelayProfilePersisting {
@@ -43,15 +43,15 @@ protocol RelayProfilePersisting {
 
 extension RelayProfileStore: RelayProfilePersisting {}
 
-protocol RelayControllerCredentialPersisting: Sendable {
-  func save(_ controllerBearer: String, reference: String) throws
+protocol RelayOwnerCredentialPersisting: Sendable {
+  func save(_ ownerBearer: String, reference: String) throws
   func load(reference: String) throws -> String
   func delete(reference: String) throws
   func reconcile(retaining references: Set<String>) throws
   func deleteAll() throws
 }
 
-extension RelayControllerCredentialStore: RelayControllerCredentialPersisting {}
+extension RelayOwnerCredentialStore: RelayOwnerCredentialPersisting {}
 
 @MainActor
 protocol QuotaBarDefaultsResetting {
@@ -81,48 +81,24 @@ struct QuotaBarDefaultsResetter: QuotaBarDefaultsResetting {
   ]
 }
 
-@MainActor
-protocol ManagedRelayEnrollmentPersisting {
-  var isDisabled: Bool { get }
-  func setDisabled(_ disabled: Bool)
-}
-
-@MainActor
-struct ManagedRelayEnrollmentStore: ManagedRelayEnrollmentPersisting {
-  static let storageKey = "relay.managedEnrollmentDisabled"
-
-  private let defaults: UserDefaults
-
-  init(defaults: UserDefaults = .standard) {
-    self.defaults = defaults
-  }
-
-  var isDisabled: Bool {
-    defaults.bool(forKey: Self.storageKey)
-  }
-
-  func setDisabled(_ disabled: Bool) {
-    defaults.set(disabled, forKey: Self.storageKey)
-  }
-}
-
-@MainActor
-final class EphemeralManagedRelayEnrollmentStore: ManagedRelayEnrollmentPersisting {
-  private(set) var isDisabled = false
-
-  func setDisabled(_ disabled: Bool) {
-    isDisabled = disabled
-  }
-}
-
-struct ManagedRelayConfiguration: Equatable, Sendable {
-  let name: String
+/// Official managed Relay endpoint. Used as the Pair Device default; never a user credential.
+struct OfficialRelayEndpoint: Equatable, Sendable {
+  let displayName: String
   let baseURL: URL
 
-  static let production = ManagedRelayConfiguration(
-    name: "Quota Relay",
+  static let production = OfficialRelayEndpoint(
+    displayName: "Quota Relay",
     baseURL: URL(string: "https://quota.gotry.io")!
   )
+}
+
+/// Device owned by this QuotaBar, aggregated across internal endpoint records.
+struct OwnedRemoteDevice: Equatable, Identifiable, Sendable {
+  let profileID: UUID
+  let device: RelayDevice
+  let endpointLabel: String
+
+  var id: String { "\(profileID.uuidString):\(device.deviceID)" }
 }
 
 enum RelayStateIssueCategory: String, Equatable, Sendable {
@@ -148,7 +124,7 @@ struct RelayStateModelError: LocalizedError, Equatable, Sendable {
 }
 
 struct RelayProfileState: Equatable, Sendable {
-  var observations: [ControllerSnapshotObservation] = []
+  var observations: [OwnerSnapshotObservation] = []
   var devices: [RelayDevice] = []
   var lastSuccessfulRefreshAt: Date?
   var isRefreshing = false
@@ -171,25 +147,21 @@ final class RelayStateModel {
   private(set) var profileStates: [UUID: RelayProfileState]
   private(set) var globalIssue: RelayStateIssue?
   private(set) var isPolling = false
-  private(set) var managedEnrollmentDisabled: Bool
 
   @ObservationIgnored
-  private let client: any RelayControllerClientServing
+  private let client: any RelayOwnerClientServing
 
   @ObservationIgnored
   private let profileStore: any RelayProfilePersisting
 
   @ObservationIgnored
-  private let credentialStore: any RelayControllerCredentialPersisting
+  private let credentialStore: any RelayOwnerCredentialPersisting
 
   @ObservationIgnored
   private let defaultsResetter: any QuotaBarDefaultsResetting
 
   @ObservationIgnored
-  private let managedEnrollmentStore: any ManagedRelayEnrollmentPersisting
-
-  @ObservationIgnored
-  private let managedRelayConfiguration: ManagedRelayConfiguration?
+  private let officialRelay: OfficialRelayEndpoint?
 
   @ObservationIgnored
   private let pollInterval: Duration
@@ -210,15 +182,14 @@ final class RelayStateModel {
   private var pollingGeneration = 0
 
   @ObservationIgnored
-  private var isRegisteringManagedProfile = false
+  private var ensuringEndpointURLs = Set<String>()
 
   init(
-    client: any RelayControllerClientServing = RelayClient(),
+    client: any RelayOwnerClientServing = RelayClient(),
     profileStore: any RelayProfilePersisting = RelayProfileStore(),
-    credentialStore: any RelayControllerCredentialPersisting = RelayControllerCredentialStore(),
+    credentialStore: any RelayOwnerCredentialPersisting = RelayOwnerCredentialStore(),
     defaultsResetter: any QuotaBarDefaultsResetting = QuotaBarDefaultsResetter(),
-    managedEnrollmentStore: any ManagedRelayEnrollmentPersisting = EphemeralManagedRelayEnrollmentStore(),
-    managedRelayConfiguration: ManagedRelayConfiguration? = .production,
+    officialRelay: OfficialRelayEndpoint? = .production,
     pollInterval: Duration = .seconds(300),
     sleep: @escaping @Sendable (Duration) async throws -> Void = { duration in
       try await Task.sleep(for: duration)
@@ -230,9 +201,7 @@ final class RelayStateModel {
     self.profileStore = profileStore
     self.credentialStore = credentialStore
     self.defaultsResetter = defaultsResetter
-    self.managedEnrollmentStore = managedEnrollmentStore
-    managedEnrollmentDisabled = managedEnrollmentStore.isDisabled
-    self.managedRelayConfiguration = managedRelayConfiguration
+    self.officialRelay = officialRelay
     self.pollInterval = pollInterval
     self.sleep = sleep
     self.now = now
@@ -264,27 +233,70 @@ final class RelayStateModel {
   }
 
   static func live() -> RelayStateModel {
-    RelayStateModel(managedEnrollmentStore: ManagedRelayEnrollmentStore())
+    RelayStateModel()
   }
 
   func state(for profileID: UUID) -> RelayProfileState? {
     profileStates[profileID]
   }
 
-  @discardableResult
-  func addSelfHostedProfile(
-    name: String,
-    origin: String,
-    controllerBearer: String
-  ) async throws -> RelayProfile {
-    let canonicalName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !canonicalName.isEmpty else {
-      throw Self.modelError(
-        category: .configuration,
-        message: "Enter a Relay profile name."
-      )
+  /// Active devices this QuotaBar owns across all internal endpoint records.
+  var ownedDevices: [OwnedRemoteDevice] {
+    var owned: [OwnedRemoteDevice] = []
+    for profile in profiles {
+      let devices = profileStates[profile.id]?.devices ?? []
+      for device in devices where device.revokedAt == nil {
+        owned.append(
+          OwnedRemoteDevice(
+            profileID: profile.id,
+            device: device,
+            endpointLabel: profile.baseURL.absoluteString
+          )
+        )
+      }
     }
+    owned.sort { left, right in
+      left.device.displayName.localizedStandardCompare(right.device.displayName)
+        == .orderedAscending
+    }
+    return owned
+  }
 
+  var remoteDeviceSummary: String {
+    let count = ownedDevices.count
+    if count == 0 { return "No devices" }
+    if count == 1 { return "1 device" }
+    return "\(count) devices"
+  }
+
+  var showsEndpointLabelOnDevices: Bool {
+    Set(ownedDevices.map(\.profileID)).count > 1
+  }
+
+  var knownEndpointURLs: [URL] {
+    var seen = Set<String>()
+    var urls: [URL] = []
+    if let official = officialRelay?.baseURL {
+      seen.insert(official.absoluteString)
+      urls.append(official)
+    }
+    for profile in profiles {
+      let key = profile.baseURL.absoluteString
+      if seen.insert(key).inserted {
+        urls.append(profile.baseURL)
+      }
+    }
+    return urls
+  }
+
+  var officialRelayBaseURL: URL? {
+    officialRelay?.baseURL
+  }
+
+  /// Ensures this QuotaBar has a private owner capability for the Relay at `origin`.
+  /// Reuses an existing endpoint record for the same canonical base URL.
+  @discardableResult
+  func ensureEndpoint(origin: String) async throws -> RelayProfile {
     let canonicalURL: URL
     do {
       canonicalURL = try RelayOrigin.canonicalURL(from: origin)
@@ -294,9 +306,53 @@ final class RelayStateModel {
       throw RelayStateModelError(issue: issue)
     }
 
+    let urlKey = canonicalURL.absoluteString
+    guard !ensuringEndpointURLs.contains(urlKey) else {
+      throw Self.modelError(
+        category: .unavailable,
+        message: "QuotaBar is already preparing this Relay endpoint."
+      )
+    }
+    ensuringEndpointURLs.insert(urlKey)
+    defer { ensuringEndpointURLs.remove(urlKey) }
+
+    if let existingIndex = profiles.firstIndex(where: { $0.baseURL == canonicalURL }) {
+      let existing = profiles[existingIndex]
+      do {
+        let ownerBearer = try credentialStore.load(
+          reference: existing.credentialReference
+        )
+        let devices = try await client.listDevices(
+          profile: existing,
+          ownerBearer: ownerBearer
+        )
+        try Task.checkCancellation()
+        updateState(for: existing.id) { state in
+          state.devices = devices.devices
+          state.operationIssue = nil
+        }
+        globalIssue = nil
+        return existing
+      } catch is CancellationError {
+        throw CancellationError()
+      } catch {
+        guard Self.requiresOwnerReenrollment(after: error) else {
+          let issue = Self.issue(for: error)
+          globalIssue = issue
+          throw RelayStateModelError(issue: issue)
+        }
+
+        // Pair Device is an explicit enrollment action. If the Keychain item or remote ephemeral
+        // owner has expired, discard only the unusable local endpoint record and create a new
+        // isolated owner below. The inaccessible remote group remains bounded by Relay GC.
+        try deleteLocalProfile(at: existingIndex)
+      }
+    }
+
     let relayInfo: RelayInfo
     do {
       relayInfo = try await client.discover(baseURL: canonicalURL)
+      try Task.checkCancellation()
     } catch is CancellationError {
       throw CancellationError()
     } catch {
@@ -304,27 +360,41 @@ final class RelayStateModel {
       globalIssue = issue
       throw RelayStateModelError(issue: issue)
     }
-    guard relayInfo.mode == .selfHosted else {
+
+    guard relayInfo.capabilities.multiTenant,
+      relayInfo.capabilities.persistentSnapshots,
+      relayInfo.capabilities.instantDeviceRevocation
+    else {
       let error = Self.modelError(
         category: .unsupported,
-        message: "Only self-hosted Relays can be added with a controller bearer."
+        message: "This Relay does not support isolated remote devices."
       )
       globalIssue = error.issue
       throw error
+    }
+
+    let registration: OwnerRegistrationResponse
+    do {
+      registration = try await client.registerOwner(baseURL: canonicalURL)
+      try Task.checkCancellation()
+    } catch is CancellationError {
+      throw CancellationError()
+    } catch {
+      let issue = Self.issue(for: error)
+      globalIssue = issue
+      throw RelayStateModelError(issue: issue)
     }
 
     let profile: RelayProfile
     do {
       profile = try RelayProfile(
         id: makeProfileID(),
-        name: canonicalName,
+        name: Self.displayName(for: canonicalURL, official: officialRelay),
         baseURL: canonicalURL,
         instanceID: relayInfo.instanceID,
         mode: relayInfo.mode,
-        capabilities: relayInfo.capabilities,
-        isDefault: profiles.isEmpty
+        capabilities: relayInfo.capabilities
       )
-      try credentialStore.save(controllerBearer, reference: profile.credentialReference)
     } catch {
       let issue = Self.issue(for: error)
       globalIssue = issue
@@ -332,19 +402,28 @@ final class RelayStateModel {
     }
 
     do {
+      try credentialStore.save(
+        registration.ownerToken,
+        reference: profile.credentialReference
+      )
       try profileStore.save(profiles + [profile])
     } catch {
+      let persistenceError = error
       do {
+        try await client.deleteOwner(
+          profile: profile,
+          ownerBearer: registration.ownerToken
+        )
         try credentialStore.delete(reference: profile.credentialReference)
       } catch {
         let rollbackError = Self.modelError(
           category: .persistence,
-          message: "QuotaBar could not remove the Relay controller credential after profile storage failed."
+          message: "QuotaBar could not roll back the Relay endpoint after local persistence failed."
         )
         globalIssue = rollbackError.issue
         throw rollbackError
       }
-      let issue = Self.issue(for: error)
+      let issue = Self.issue(for: persistenceError)
       globalIssue = issue
       throw RelayStateModelError(issue: issue)
     }
@@ -355,127 +434,20 @@ final class RelayStateModel {
     return profile
   }
 
-  /// Replaces the Keychain controller bearer for an existing self-hosted profile.
-  func updateControllerCredential(profileID: UUID, controllerBearer: String) throws {
-    guard let profile = profiles.first(where: { $0.id == profileID }) else {
-      throw Self.profileNotFoundError
-    }
-    guard profile.mode == .selfHosted else {
-      throw Self.modelError(
-        category: .unsupported,
-        message: "Only self-hosted Relays store a controller bearer."
-      )
-    }
-    guard !controllerBearer.isEmpty,
-      controllerBearer == controllerBearer.trimmingCharacters(in: .whitespacesAndNewlines),
-      controllerBearer.unicodeScalars.allSatisfy({ $0.value >= 0x20 && $0.value != 0x7f })
-    else {
-      throw Self.modelError(
-        category: .configuration,
-        message: "Enter a valid Relay controller credential."
-      )
-    }
-    do {
-      try credentialStore.save(controllerBearer, reference: profile.credentialReference)
-      if var state = profileStates[profileID] {
-        state.operationIssue = nil
-        profileStates[profileID] = state
-      }
-      globalIssue = nil
-    } catch {
-      let issue = Self.issue(for: error)
-      setOperationIssue(issue, for: profileID)
-      throw RelayStateModelError(issue: issue)
-    }
-  }
-
-  func ensureManagedControllerProfile() async {
-    guard let configuration = managedRelayConfiguration,
-      !managedEnrollmentDisabled,
-      !profiles.contains(where: { $0.mode == .managed }),
-      !isRegisteringManagedProfile
-    else {
-      return
-    }
-
-    isRegisteringManagedProfile = true
-    defer { isRegisteringManagedProfile = false }
-
-    do {
-      let relayInfo = try await client.discover(baseURL: configuration.baseURL)
-      try Task.checkCancellation()
-      guard relayInfo.mode == .managed, relayInfo.capabilities.multiTenant else {
-        throw RelayClientError.unsupportedRelay
-      }
-
-      let registration = try await client.registerController(baseURL: configuration.baseURL)
-      let profile = try RelayProfile(
-        id: makeProfileID(),
-        name: configuration.name,
-        baseURL: configuration.baseURL,
-        instanceID: relayInfo.instanceID,
-        mode: relayInfo.mode,
-        capabilities: relayInfo.capabilities,
-        isDefault: profiles.isEmpty
-      )
-
-      do {
-        try credentialStore.save(
-          registration.controllerToken,
-          reference: profile.credentialReference
-        )
-        try profileStore.save(profiles + [profile])
-      } catch {
-        let persistenceError = error
-        do {
-          try await client.deleteController(
-            profile: profile,
-            controllerBearer: registration.controllerToken
-          )
-          try credentialStore.delete(reference: profile.credentialReference)
-        } catch {
-          throw Self.modelError(
-            category: .persistence,
-            message: "QuotaBar could not roll back the managed Relay after local persistence failed."
-          )
-        }
-        throw persistenceError
-      }
-
-      profiles.append(profile)
-      profileStates[profile.id] = RelayProfileState()
-      globalIssue = nil
-    } catch is CancellationError {
-    } catch {
-      globalIssue = Self.issue(for: error)
-    }
-  }
-
-  func enableManagedControllerProfile() async {
-    managedEnrollmentStore.setDisabled(false)
-    managedEnrollmentDisabled = false
-    await ensureManagedControllerProfile()
-    if let profileID = profiles.first(where: { $0.mode == .managed })?.id {
-      await refreshProfile(profileID)
-    }
-  }
-
   func deleteProfile(_ profileID: UUID) async throws {
     guard let index = profiles.firstIndex(where: { $0.id == profileID }) else {
       throw Self.profileNotFoundError
     }
     let profile = profiles[index]
 
-    if profile.mode == .managed {
-      do {
-        try await deleteManagedController(for: profile)
-      } catch is CancellationError {
-        throw CancellationError()
-      } catch {
-        let issue = Self.issue(for: error)
-        setOperationIssue(issue, for: profileID)
-        throw RelayStateModelError(issue: issue)
-      }
+    do {
+      try await deleteRemoteOwner(for: profile)
+    } catch is CancellationError {
+      throw CancellationError()
+    } catch {
+      let issue = Self.issue(for: error)
+      setOperationIssue(issue, for: profileID)
+      throw RelayStateModelError(issue: issue)
     }
 
     try deleteLocalProfile(at: index)
@@ -490,9 +462,9 @@ final class RelayStateModel {
 
   func deleteAllQuotaBarData() async throws {
     do {
-      for profile in profiles where profile.mode == .managed {
+      for profile in profiles {
         try Task.checkCancellation()
-        try await deleteManagedController(for: profile)
+        try await deleteRemoteOwner(for: profile)
       }
       try deleteAllLocalData()
     } catch is CancellationError {
@@ -514,33 +486,6 @@ final class RelayStateModel {
     }
   }
 
-  func setDefaultProfile(_ profileID: UUID) throws {
-    guard profiles.contains(where: { $0.id == profileID }) else {
-      throw Self.profileNotFoundError
-    }
-    var updatedProfiles = profiles
-    for index in updatedProfiles.indices {
-      updatedProfiles[index].isDefault = updatedProfiles[index].id == profileID
-    }
-    try saveProfileMutation(updatedProfiles, affectedProfileID: profileID)
-  }
-
-  func renameProfile(_ profileID: UUID, to name: String) throws {
-    let canonicalName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !canonicalName.isEmpty else {
-      throw Self.modelError(
-        category: .configuration,
-        message: "Enter a Relay profile name."
-      )
-    }
-    guard let index = profiles.firstIndex(where: { $0.id == profileID }) else {
-      throw Self.profileNotFoundError
-    }
-    var updatedProfiles = profiles
-    updatedProfiles[index].name = canonicalName
-    try saveProfileMutation(updatedProfiles, affectedProfileID: profileID)
-  }
-
   func approvePairing(profileID: UUID, userCode: String) async throws {
     try await decidePairing(profileID: profileID, userCode: userCode, approve: true)
   }
@@ -559,15 +504,15 @@ final class RelayStateModel {
     defer { updateState(for: profileID) { $0.isRefreshing = false } }
 
     do {
-      let controllerBearer = try credentialStore.load(reference: profile.credentialReference)
+      let ownerBearer = try credentialStore.load(reference: profile.credentialReference)
       let observations = try await client.fetchLatestSnapshots(
         profile: profile,
-        controllerBearer: controllerBearer
+        ownerBearer: ownerBearer
       )
       try Task.checkCancellation()
       let devices = try await client.listDevices(
         profile: profile,
-        controllerBearer: controllerBearer
+        ownerBearer: ownerBearer
       )
       try Task.checkCancellation()
       updateState(for: profileID) { state in
@@ -595,16 +540,16 @@ final class RelayStateModel {
       throw Self.profileNotFoundError
     }
     do {
-      let controllerBearer = try credentialStore.load(reference: profile.credentialReference)
+      let ownerBearer = try credentialStore.load(reference: profile.credentialReference)
       try await client.revokeDevice(
         deviceID: deviceID,
         profile: profile,
-        controllerBearer: controllerBearer
+        ownerBearer: ownerBearer
       )
       try Task.checkCancellation()
       let devices = try await client.listDevices(
         profile: profile,
-        controllerBearer: controllerBearer
+        ownerBearer: ownerBearer
       )
       try Task.checkCancellation()
       updateState(for: profileID) { state in
@@ -657,18 +602,18 @@ final class RelayStateModel {
       throw Self.profileNotFoundError
     }
     do {
-      let controllerBearer = try credentialStore.load(reference: profile.credentialReference)
+      let ownerBearer = try credentialStore.load(reference: profile.credentialReference)
       if approve {
         try await client.approvePairing(
           userCode: userCode,
           profile: profile,
-          controllerBearer: controllerBearer
+          ownerBearer: ownerBearer
         )
       } else {
         try await client.denyPairing(
           userCode: userCode,
           profile: profile,
-          controllerBearer: controllerBearer
+          ownerBearer: ownerBearer
         )
       }
       updateState(for: profileID) { $0.operationIssue = nil }
@@ -682,27 +627,23 @@ final class RelayStateModel {
   }
 
   private func runPollingCycle() async {
-    await ensureManagedControllerProfile()
-    guard !Task.isCancelled else { return }
     await refreshAllProfiles()
   }
 
   private func deleteAllLocalData() throws {
     try credentialStore.deleteAll()
     defaultsResetter.deleteAll()
-    managedEnrollmentStore.setDisabled(true)
-    managedEnrollmentDisabled = true
     stopPolling()
     profiles = []
     profileStates = [:]
     globalIssue = nil
   }
 
-  private func deleteManagedController(for profile: RelayProfile) async throws {
-    let controllerBearer = try credentialStore.load(reference: profile.credentialReference)
-    try await client.deleteController(
+  private func deleteRemoteOwner(for profile: RelayProfile) async throws {
+    let ownerBearer = try credentialStore.load(reference: profile.credentialReference)
+    try await client.deleteOwner(
       profile: profile,
-      controllerBearer: controllerBearer
+      ownerBearer: ownerBearer
     )
   }
 
@@ -710,9 +651,6 @@ final class RelayStateModel {
     let profile = profiles[index]
     var remainingProfiles = profiles
     remainingProfiles.remove(at: index)
-    if profile.isDefault, !remainingProfiles.isEmpty {
-      remainingProfiles[0].isDefault = true
-    }
     do {
       try profileStore.save(remainingProfiles)
       try credentialStore.delete(reference: profile.credentialReference)
@@ -724,25 +662,33 @@ final class RelayStateModel {
 
     profiles = remainingProfiles
     profileStates[profile.id] = nil
-    if profile.mode == .managed {
-      managedEnrollmentStore.setDisabled(true)
-      managedEnrollmentDisabled = true
-    }
   }
 
-  private func saveProfileMutation(
-    _ updatedProfiles: [RelayProfile],
-    affectedProfileID: UUID
-  ) throws {
-    do {
-      try profileStore.save(updatedProfiles)
-      profiles = updatedProfiles
-      updateState(for: affectedProfileID) { $0.operationIssue = nil }
-    } catch {
-      let issue = Self.issue(for: error)
-      setOperationIssue(issue, for: affectedProfileID)
-      throw RelayStateModelError(issue: issue)
+  private static func displayName(for url: URL, official: OfficialRelayEndpoint?) -> String {
+    if let official, url == official.baseURL {
+      return official.displayName
     }
+    return url.host() ?? url.absoluteString
+  }
+
+  private static func requiresOwnerReenrollment(after error: Error) -> Bool {
+    if let credentialError = error as? RelayOwnerCredentialStoreError {
+      switch credentialError {
+      case .invalidCredential, .missingCredential, .corruptCredential:
+        return true
+      case .couldNotRead, .couldNotStore, .couldNotDelete:
+        return false
+      }
+    }
+    if let clientError = error as? RelayClientError {
+      switch clientError {
+      case .credentialRejected, .permissionDenied, .instanceMismatch:
+        return true
+      default:
+        return false
+      }
+    }
+    return false
   }
 
   private func updateState(
@@ -770,7 +716,7 @@ final class RelayStateModel {
 
   private static let profileNotFoundError = modelError(
     category: .configuration,
-    message: "The Relay profile was not found."
+    message: "The Relay endpoint was not found."
   )
 
   private static func modelError(
@@ -795,7 +741,7 @@ final class RelayStateModel {
         message: relayError.errorDescription ?? "QuotaBar could not complete the Relay request."
       )
     }
-    if let credentialError = error as? RelayControllerCredentialStoreError {
+    if let credentialError = error as? RelayOwnerCredentialStoreError {
       let category: RelayStateIssueCategory = switch credentialError {
       case .missingCredential: .credentialMissing
       case .invalidCredential, .corruptCredential: .authentication
@@ -803,13 +749,13 @@ final class RelayStateModel {
       }
       return RelayStateIssue(
         category: category,
-        message: credentialError.errorDescription ?? "QuotaBar could not access the Relay credential."
+        message: credentialError.errorDescription ?? "QuotaBar could not use its private Relay access."
       )
     }
     if let profileError = error as? RelayProfileStoreError {
       return RelayStateIssue(
         category: .persistence,
-        message: profileError.errorDescription ?? "QuotaBar could not access the Relay profiles."
+        message: profileError.errorDescription ?? "QuotaBar could not access its saved Relay endpoints."
       )
     }
     if let originError = error as? RelayOriginError {
@@ -821,7 +767,7 @@ final class RelayStateModel {
     if let profileError = error as? RelayProfileError {
       return RelayStateIssue(
         category: .configuration,
-        message: profileError.errorDescription ?? "The Relay profile is invalid."
+        message: profileError.errorDescription ?? "The Relay endpoint is invalid."
       )
     }
     return RelayStateIssue(
@@ -842,24 +788,24 @@ final class RelayStateModel {
         profileStore: VisualFixtureRelayProfileStore(profiles: profiles),
         credentialStore: VisualFixtureRelayCredentialStore(),
         defaultsResetter: VisualFixtureDefaultsResetter(),
-        managedRelayConfiguration: nil
+        officialRelay: nil
       )
       model.profileStates = profileStates
       return model
     }
   }
 
-  private struct VisualFixtureRelayClient: RelayControllerClientServing {
+  private struct VisualFixtureRelayClient: RelayOwnerClientServing {
     func discover(baseURL: URL) async throws -> RelayInfo { throw RelayClientError.unavailable }
 
-    func registerController(baseURL: URL) async throws -> ControllerRegistrationResponse {
+    func registerOwner(baseURL: URL) async throws -> OwnerRegistrationResponse {
       throw RelayClientError.unavailable
     }
 
     func approvePairing(
       userCode: String,
       profile: RelayProfile,
-      controllerBearer: String
+      ownerBearer: String
     ) async throws {
       throw RelayClientError.unavailable
     }
@@ -867,21 +813,21 @@ final class RelayStateModel {
     func denyPairing(
       userCode: String,
       profile: RelayProfile,
-      controllerBearer: String
+      ownerBearer: String
     ) async throws {
       throw RelayClientError.unavailable
     }
 
     func fetchLatestSnapshots(
       profile: RelayProfile,
-      controllerBearer: String
-    ) async throws -> ControllerSnapshotListResponse {
+      ownerBearer: String
+    ) async throws -> OwnerSnapshotListResponse {
       throw RelayClientError.unavailable
     }
 
     func listDevices(
       profile: RelayProfile,
-      controllerBearer: String
+      ownerBearer: String
     ) async throws -> DeviceListResponse {
       throw RelayClientError.unavailable
     }
@@ -889,14 +835,14 @@ final class RelayStateModel {
     func revokeDevice(
       deviceID: String,
       profile: RelayProfile,
-      controllerBearer: String
+      ownerBearer: String
     ) async throws {
       throw RelayClientError.unavailable
     }
 
-    func deleteController(
+    func deleteOwner(
       profile: RelayProfile,
-      controllerBearer: String
+      ownerBearer: String
     ) async throws {
       throw RelayClientError.unavailable
     }
@@ -910,23 +856,23 @@ final class RelayStateModel {
     func save(_ profiles: [RelayProfile]) throws { throw RelayProfileStoreError.couldNotSave }
   }
 
-  private struct VisualFixtureRelayCredentialStore: RelayControllerCredentialPersisting {
-    func save(_ controllerBearer: String, reference: String) throws {
-      throw RelayControllerCredentialStoreError.couldNotStore
+  private struct VisualFixtureRelayCredentialStore: RelayOwnerCredentialPersisting {
+    func save(_ ownerBearer: String, reference: String) throws {
+      throw RelayOwnerCredentialStoreError.couldNotStore
     }
 
     func load(reference: String) throws -> String {
-      throw RelayControllerCredentialStoreError.missingCredential
+      throw RelayOwnerCredentialStoreError.missingCredential
     }
 
     func delete(reference: String) throws {
-      throw RelayControllerCredentialStoreError.couldNotDelete
+      throw RelayOwnerCredentialStoreError.couldNotDelete
     }
 
     func reconcile(retaining references: Set<String>) throws {}
 
     func deleteAll() throws {
-      throw RelayControllerCredentialStoreError.couldNotDelete
+      throw RelayOwnerCredentialStoreError.couldNotDelete
     }
   }
 

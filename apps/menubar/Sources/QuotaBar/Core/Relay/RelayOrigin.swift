@@ -7,7 +7,7 @@ enum RelayOriginError: LocalizedError, Equatable, Sendable {
   var errorDescription: String? {
     switch self {
     case .invalidURL:
-      "Enter a Relay origin without credentials, a path, query, or fragment."
+      "Enter a Relay origin without a username, password, path, query, or fragment."
     case .insecureURL:
       "Relay connections require HTTPS except for loopback development Relays."
     }

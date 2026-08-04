@@ -103,8 +103,15 @@ function conciseFailureDetail(message: string | undefined): string | undefined {
   }
   // Auth failures already collapse to the login command above.
   if (trimmed.includes("`")) {
-    const withoutCommand = trimmed.replace(/`[^`]+`/g, "").replace(/\s+/g, " ").trim();
-    if (!withoutCommand || withoutCommand === "." || withoutCommand.toLowerCase().startsWith("run")) {
+    const withoutCommand = trimmed
+      .replace(/`[^`]+`/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (
+      !withoutCommand ||
+      withoutCommand === "." ||
+      withoutCommand.toLowerCase().startsWith("run")
+    ) {
       return undefined;
     }
   }

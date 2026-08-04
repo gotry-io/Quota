@@ -13,7 +13,7 @@ mkdirSync(dirname(databasePath), { recursive: true, mode: 0o700 });
 const state = new SQLiteRelayState(databasePath);
 await state.initialize();
 
-const relayInfo = managedRelayInfo(process.env.QUOTA_RELAY_INSTANCE_ID ?? "managed-controller-e2e");
+const relayInfo = managedRelayInfo(process.env.QUOTA_RELAY_INSTANCE_ID ?? "managed-owner-e2e");
 const app = createRelayApp({ state, relayInfo });
 const server = Bun.serve({
   hostname: process.env.HOST ?? "127.0.0.1",

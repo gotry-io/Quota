@@ -58,7 +58,7 @@ struct MenuBarContentView: View {
       Button("Cancel", role: .cancel) {}
     } message: {
       Text(
-        "QuotaBar will delete its managed controller and linked Relay data, then delete all controller credentials, Relay profiles, cached quota, and user preferences. Managed Relay will stay disconnected until you reconnect it."
+        "QuotaBar will remove its remote device groups when reachable, then delete its cached quota and preferences. Paired devices will stop appearing in this QuotaBar."
       )
     }
     .confirmationDialog(
@@ -72,7 +72,7 @@ struct MenuBarContentView: View {
       Button("Keep Data", role: .cancel) {}
     } message: {
       Text(
-        "QuotaBar could not confirm full cleanup. Deleting locally may leave the managed controller and Relay data behind while paired devices continue reporting. Use this only if you cannot retry while online."
+        "QuotaBar could not confirm remote cleanup. Deleting locally may leave remote device groups behind while paired devices continue reporting. Use this only if you cannot retry while online."
       )
     }
     .task {
@@ -109,8 +109,8 @@ struct MenuBarContentView: View {
         showsDeleteAllConfirmation = true
       }
     }
-    if navigation.showsAddRelayAction {
-      return .addRelay { navigate(to: .addRelay) }
+    if navigation.showsPairDeviceAction {
+      return .pairDevice { navigate(to: .pairDevice) }
     }
     if !navigation.canNavigateBack {
       return .openSettings(openSettings)
@@ -133,33 +133,16 @@ struct MenuBarContentView: View {
         showsCodex: $showsCodex,
         showsClaude: $showsClaude,
         showsGrok: $showsGrok,
-        onOpenRelays: { navigate(to: .relays) },
+        onOpenRemoteDevices: { navigate(to: .remoteDevices) },
         deleteAllErrorMessage: deleteAllErrorMessage
       )
-    case .relays:
-      RelayListView(
+    case .remoteDevices:
+      RemoteDevicesView(
         model: model.relayStateModel,
-        onAddRelay: { navigate(to: .addRelay) },
-        onOpenRelay: { navigate(to: .relayDetail($0)) }
-      )
-    case .addRelay:
-      AddRelayView(model: model.relayStateModel, onFinished: navigateBack)
-    case .relayDetail(let profileID):
-      RelayDetailView(
-        model: model.relayStateModel,
-        profileID: profileID,
-        onOpenPairing: { navigate(to: .pairing(profileID)) },
-        onOpenDevices: { navigate(to: .devices(profileID)) },
-        onDeleted: navigateBack
-      )
-    case .pairing(let profileID):
-      RelayPairingView(model: model.relayStateModel, profileID: profileID)
-    case .devices(let profileID):
-      RelayDevicesView(
-        model: model.relayStateModel,
-        profileID: profileID,
         performsInitialRefresh: performsRelayRefreshes
       )
+    case .pairDevice:
+      PairDeviceView(model: model.relayStateModel, onFinished: navigateBack)
     }
   }
 
@@ -240,20 +223,14 @@ private enum NavigationDirection {
 
 enum MenuBarRoute: Hashable {
   case settings
-  case relays
-  case addRelay
-  case relayDetail(UUID)
-  case pairing(UUID)
-  case devices(UUID)
+  case remoteDevices
+  case pairDevice
 
   var title: String {
     switch self {
     case .settings: "Settings"
-    case .relays: "Relays"
-    case .addRelay: "Pair Device"
-    case .relayDetail: "Relay"
-    case .pairing: "Pair Device"
-    case .devices: "Devices"
+    case .remoteDevices: "Remote Devices"
+    case .pairDevice: "Pair Device"
     }
   }
 }
@@ -265,7 +242,7 @@ struct MenuBarNavigationState: Equatable {
   var title: String { currentRoute?.title ?? "QuotaBar" }
   var canNavigateBack: Bool { !path.isEmpty }
   var showsSettingsMenu: Bool { path == [.settings] }
-  var showsAddRelayAction: Bool { currentRoute == .relays }
+  var showsPairDeviceAction: Bool { currentRoute == .remoteDevices }
 
   /// Stable identity for page transitions (depth + route).
   var pageIdentity: String {

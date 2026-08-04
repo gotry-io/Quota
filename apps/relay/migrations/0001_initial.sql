@@ -1,27 +1,13 @@
 PRAGMA foreign_keys = ON;
 
-CREATE TABLE users (
+CREATE TABLE owners (
   id TEXT PRIMARY KEY,
-  external_subject TEXT UNIQUE,
   created_at TEXT NOT NULL
 );
 
-CREATE TABLE devices (
-  id TEXT PRIMARY KEY,
-  owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  display_name TEXT NOT NULL,
-  token_hash TEXT NOT NULL UNIQUE,
-  created_at TEXT NOT NULL,
-  last_seen_at TEXT,
-  last_sequence INTEGER NOT NULL DEFAULT -1 CHECK (last_sequence >= -1),
-  revoked_at TEXT
-);
-
-CREATE INDEX devices_owner_id_idx ON devices(owner_id);
-
 CREATE TABLE pairing_sessions (
   id TEXT PRIMARY KEY,
-  owner_id TEXT REFERENCES users(id) ON DELETE CASCADE,
+  owner_id TEXT REFERENCES owners(id) ON DELETE CASCADE,
   device_code_hash TEXT NOT NULL UNIQUE,
   user_code_hash TEXT NOT NULL UNIQUE,
   device_display_name TEXT NOT NULL,
@@ -38,6 +24,24 @@ CREATE TABLE pairing_sessions (
 CREATE INDEX pairing_sessions_owner_id_idx ON pairing_sessions(owner_id);
 CREATE INDEX pairing_sessions_expires_at_idx ON pairing_sessions(expires_at);
 
+CREATE TABLE devices (
+  id TEXT PRIMARY KEY,
+  owner_id TEXT NOT NULL REFERENCES owners(id) ON DELETE CASCADE,
+  display_name TEXT NOT NULL,
+  token_hash TEXT NOT NULL UNIQUE,
+  pairing_session_id TEXT REFERENCES pairing_sessions(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL,
+  last_seen_at TEXT,
+  last_sequence INTEGER NOT NULL DEFAULT -1 CHECK (last_sequence >= -1),
+  revoked_at TEXT
+);
+
+CREATE INDEX devices_owner_id_idx ON devices(owner_id);
+CREATE UNIQUE INDEX devices_pairing_session_id_idx
+ON devices(pairing_session_id)
+WHERE pairing_session_id IS NOT NULL;
+CREATE INDEX devices_activity_idx ON devices(revoked_at, last_seen_at, created_at);
+
 CREATE TABLE quota_snapshots (
   device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
   provider TEXT NOT NULL CHECK (provider IN ('codex', 'claude', 'grok')),
@@ -52,13 +56,24 @@ CREATE TABLE quota_snapshots (
 
 CREATE INDEX quota_snapshots_observed_at_idx ON quota_snapshots(observed_at);
 
-CREATE TABLE auth_sessions (
+CREATE TABLE owner_sessions (
   id TEXT PRIMARY KEY,
-  owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  owner_id TEXT NOT NULL REFERENCES owners(id) ON DELETE CASCADE,
   token_hash TEXT NOT NULL UNIQUE,
+  scopes_json TEXT NOT NULL,
   expires_at TEXT NOT NULL,
   revoked_at TEXT,
   created_at TEXT NOT NULL
 );
 
-CREATE INDEX auth_sessions_owner_id_idx ON auth_sessions(owner_id);
+CREATE INDEX owner_sessions_owner_id_idx ON owner_sessions(owner_id);
+
+CREATE TABLE rate_limit_counters (
+  key_hash TEXT NOT NULL,
+  window_started_at TEXT NOT NULL,
+  window_expires_at TEXT NOT NULL,
+  request_count INTEGER NOT NULL CHECK (request_count >= 1),
+  PRIMARY KEY (key_hash, window_started_at)
+);
+
+CREATE INDEX rate_limit_counters_expires_at_idx ON rate_limit_counters(window_expires_at);

@@ -33,13 +33,12 @@ struct RelayInfo: Codable, Equatable, Sendable {
 
 struct RelayProfile: Codable, Equatable, Identifiable, Sendable {
   let id: UUID
-  var name: String
+  let name: String
   let baseURL: URL
   let instanceID: String
   let mode: RelayMode
   let capabilities: RelayCapabilities
   let credentialReference: String
-  var isDefault: Bool
 
   init(
     id: UUID = UUID(),
@@ -47,8 +46,7 @@ struct RelayProfile: Codable, Equatable, Identifiable, Sendable {
     baseURL: URL,
     instanceID: String,
     mode: RelayMode,
-    capabilities: RelayCapabilities,
-    isDefault: Bool = false
+    capabilities: RelayCapabilities
   ) throws {
     let canonicalURL = try RelayOrigin.canonicalURL(from: baseURL)
     guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
@@ -66,11 +64,10 @@ struct RelayProfile: Codable, Equatable, Identifiable, Sendable {
     self.mode = mode
     self.capabilities = capabilities
     self.credentialReference = Self.credentialReference(for: id)
-    self.isDefault = isDefault
   }
 
   static func credentialReference(for id: UUID) -> String {
-    "relay-controller:\(id.uuidString.lowercased())"
+    "relay-owner:\(id.uuidString.lowercased())"
   }
 
   private enum CodingKeys: String, CodingKey {
@@ -81,7 +78,6 @@ struct RelayProfile: Codable, Equatable, Identifiable, Sendable {
     case mode
     case capabilities
     case credentialReference
-    case isDefault
   }
 
   init(from decoder: Decoder) throws {
@@ -93,7 +89,7 @@ struct RelayProfile: Codable, Equatable, Identifiable, Sendable {
       throw DecodingError.dataCorruptedError(
         forKey: .baseURL,
         in: container,
-        debugDescription: "Invalid Relay profile."
+        debugDescription: "Invalid Relay endpoint record."
       )
     }
 
@@ -113,8 +109,7 @@ struct RelayProfile: Codable, Equatable, Identifiable, Sendable {
         baseURL: canonicalURL,
         instanceID: container.decode(String.self, forKey: .instanceID),
         mode: container.decode(RelayMode.self, forKey: .mode),
-        capabilities: container.decode(RelayCapabilities.self, forKey: .capabilities),
-        isDefault: container.decode(Bool.self, forKey: .isDefault)
+        capabilities: container.decode(RelayCapabilities.self, forKey: .capabilities)
       )
       guard name == savedName else {
         throw RelayProfileError.invalidProfile
@@ -123,7 +118,7 @@ struct RelayProfile: Codable, Equatable, Identifiable, Sendable {
       throw DecodingError.dataCorruptedError(
         forKey: .baseURL,
         in: container,
-        debugDescription: "Invalid Relay profile."
+        debugDescription: "Invalid Relay endpoint record."
       )
     }
   }
@@ -137,12 +132,11 @@ struct RelayProfile: Codable, Equatable, Identifiable, Sendable {
     try container.encode(mode, forKey: .mode)
     try container.encode(capabilities, forKey: .capabilities)
     try container.encode(credentialReference, forKey: .credentialReference)
-    try container.encode(isDefault, forKey: .isDefault)
   }
 }
 
 enum RelayProfileError: LocalizedError, Equatable, Sendable {
   case invalidProfile
 
-  var errorDescription: String? { "The saved Relay profile is invalid." }
+  var errorDescription: String? { "The saved Relay endpoint is invalid." }
 }

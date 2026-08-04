@@ -4,9 +4,10 @@ name: QuotaBar-design
 description: |
   Design system for QuotaBar, the native macOS menu-bar app. This document describes the shipped
   panel as implemented in SwiftUI — not the marketing website. QuotaBar is a dense operational
-  utility on system material chrome: compact provider rows, brand-tinted monochrome marks, semantic
-  usage meters, quiet provenance labels, and a single typed page stack inside one shared shell.
-  Website tokens live in apps/web/DESIGN.md and must not be treated as menubar requirements.
+  utility on system material chrome: compact provider rows, monochrome provider marks, restrained
+  accent/orange/red semantic meters, quiet provenance labels, and a single typed page stack
+  (Overview → Settings → Remote Devices → Pair Device). Website tokens live in apps/web/DESIGN.md
+  and must not be treated as menubar requirements.
 ---
 
 # QuotaBar Design System
@@ -39,9 +40,9 @@ Canonical implementation:
    material without hard paper-gray slabs.
 2. **Operational density** — Overview stays compact; Settings/deeper pages are taller. Prefer
    tighter vertical rhythm over large empty canvas.
-3. **Monochrome first** — provider marks and usage meters stay on system label ink (opacity tiers
-   for remaining). Auth/stale/errors use text and icons, not brand multicolor.
-4. **One shell, one stack** — Overview is root. Settings, Relays, pairing, and devices push on one
+3. **Restrained semantic color** — structure stays system adaptive; meters and primary actions use
+   accent/orange/red only. Auth/stale/errors still use text and icons, never provider brand colors.
+4. **One shell, one stack** — Overview is root. Settings, Remote Devices, and Pair Device push on one
    app-owned path with a leading back control. No second navigation bar.
 5. **Quiet provenance** — trailing mute icon for the selected source only; detail on hover.
 6. **Reduce Motion** — page transitions become opacity-only or instant when Reduce Motion is on.
@@ -56,16 +57,18 @@ Mapped from `QuotaDesign.Layout`:
 | `panelMaxHeight` | 560 | Fixed panel height for every page |
 | `panelHorizontalPadding` | 16 | Single horizontal gutter for header, page body, and footer |
 | `panelContentWidth` | 288 | `panelWidth - 2 × gutter`; page content must fit here |
-| `pageVerticalPadding` | 16 | Settings / Relay / form page body top+bottom inset |
+| `pageVerticalPadding` | 16 | Settings / task page body top+bottom inset |
 | `emptyStateVerticalPadding` | 24 | Extra vertical room for centered empty states only |
 | `headerHeight` | 44 | Shell header |
 | `footerHeight` | 36 | Shell footer |
-| `headerControlWidth` | 28 | Gear / plus / ellipsis hit targets |
+| `minimumInteractiveDimension` | 28 | Apple HIG recommended minimum response dimension on macOS |
+| `backTitleOffset` | 20 | Compact visual back/title relationship; not the button response width |
+| `headerControlWidth` | 28 | Back / gear / plus / ellipsis response width |
 | `providerRowVerticalPadding` | 10 | Provider block vertical padding |
 | `progressHeight` | 8 | Remaining meter thickness |
 | `controlMinHeight` | 36 | Primary button min height |
-| `cardPadding` | 16 | Relay card internal padding |
-| `cardCornerRadius` | 12 | Relay card corner |
+| `cardPadding` | 16 | Remote-device card internal padding |
+| `cardCornerRadius` | 12 | Remote-device card corner |
 | `tagCornerRadius` | 3 | Status tag corner |
 
 ### Spacing scale (`QuotaDesign.Spacing`)
@@ -89,7 +92,7 @@ Rules:
 
 1. Header, page body, and footer all use `panelHorizontalPadding` (16). No tighter header-only inset.
 2. Header icon *glyphs* sit on that 16pt content edge; hit targets grow inward, not outward.
-3. Settings/Relay/form pages use `pageVerticalPadding` (16). Overview uses 0.
+3. Settings and task pages use `pageVerticalPadding` (16). Overview uses 0.
 4. Prefer `Spacing.*` tokens over raw literals for stacks and clusters.
 5. Empty states may add `emptyStateVerticalPadding`, never a second horizontal gutter.
 
@@ -107,10 +110,56 @@ Rules:
 
 - **Overview trailing:** gear → opens Settings.
 - **Settings trailing:** `ellipsis` overflow menu (Delete all data…, Quit).
-- **Relays trailing:** `plus` → Pair Device (no bottom primary button on the list).
+- **Remote Devices trailing:** `plus` with accessibility label **Pair Device**.
 - **Pair Device:** no trailing action; 8-cell code entry auto-submits when complete.
-- **Other pages:** no trailing control; back returns through the stack.
+- **Other pages:** no trailing control; back returns through the stack. Back uses a compact 20pt
+  visual slot so the title stays attached to the chevron, while its response region remains
+  28×44pt by overlapping the otherwise noninteractive title gap.
 - Footer shows refresh affordance on the **right** only. Version lives in Settings → About.
+
+### Interaction and accessibility
+
+- Custom controls follow Apple's macOS accessibility guidance: target at least 28×28pt; 20×20pt is
+  an exceptional lower bound, not the normal design target.
+- Visual density never shrinks response geometry. Header icons use 28×44pt targets, text actions
+  such as Refresh and Copy have at least 28pt height, and disclosure/link rows expose the whole row.
+- Agent visibility uses one native Toggle with at least a 28pt response region. Native Picker and
+  text-field behavior stays intact, including keyboard navigation and focus treatment.
+- Every icon-only action has an accessibility label and macOS hover help. Plain buttons use
+  SwiftUI's native style for pressed, focused, and disabled states.
+- The eight pairing-code fields remain separate 28×28pt edit targets so pointer and VoiceOver users
+  can address an individual character without breaking the fixed 288pt content width.
+
+### Settings information architecture
+
+| Section | Content |
+| --- | --- |
+| **Agents** | Provider visibility toggles; quiet helper: `Choose which agents appear in Overview.` |
+| **Remote Devices** | Single destination; secondary value is a device count (`3 devices` / `No devices`). |
+| **About** | Version, website, feedback. |
+
+### Remote Devices
+
+- Aggregate devices this QuotaBar owns across internal endpoint records.
+- Row priority: device name and a quiet health/last-report label. Show the Relay endpoint as subdued
+  metadata only when more than one endpoint needs disambiguation; use the canonical URL so ports
+  and schemes cannot collapse to the same label.
+- Empty state: `Pair a device to see its quota in QuotaBar.` The header `plus` is the only
+  **Pair Device** action; do not repeat it as a colored body button.
+- **Remove Device** confirms that the device will stop reporting to this QuotaBar.
+
+### Pair Device
+
+- Default endpoint: official Quota Relay. Known endpoints and **Other Relay…** (reveals Relay URL).
+- Task order is endpoint → visible `quotacli relay pair` command → pairing code. Installation help is
+  secondary disclosure, not a prerequisite form.
+- For **Other Relay…**, keep the `--relay <relay-url>` command preview visible. Replace the
+  placeholder and enable Copy/code entry only when the custom URL is structurally valid; never show
+  the fallback official command.
+- Show the endpoint-correct command with a copy affordance. A complete eight-character paste works,
+  and the code auto-submits when complete. VoiceOver exposes the visual cells as eight labeled edit
+  fields rather than merging interactive controls into one static element.
+- No profile name, owner credential, capability, default profile, or admin copy.
 
 ## Color
 
@@ -126,46 +175,59 @@ From `QuotaPalette` — **do not hardcode paper whites/grays for these roles**:
 | `hairline` | `NSColor.separatorColor` |
 | `soft` | `quaternaryLabelColor` @ ~35% opacity |
 | `progressTrack` | `Color.primary` @ 8% opacity |
-| `onPrimary` | `alternateSelectedControlTextColor` |
 
 Dividers use the system `Divider` (no fixed gray overlay). Shared borders use
 `hairlineBorder` (`hairline` @ 80%). Status chips use `QuotaStatusTag`.
 
-### Usage / brand (monochrome on host chrome)
+### Semantic (three roles only)
+
+| Role | Source | Use |
+| --- | --- | --- |
+| Accent | `controlAccentColor` (indigo product fallback) | primary actions, focus, healthy meter fill |
+| Warning | `systemOrange` | remaining 15%–39% meter fill |
+| Critical | `systemRed` | remaining &lt; 15% meter fill |
 
 | Token | Value | Use |
 | --- | --- | --- |
 | provider marks | `ink` | All providers share ink template tint |
-| `usage.healthy` | `Color.primary` @ 28% | Remaining ≥ 40% |
-| `usage.warning` | `Color.primary` @ 48% | Remaining ≥ 15% and < 40% |
-| `usage.critical` | `Color.primary` @ 78% | Remaining < 15% |
+| remaining % text | `ink` | All thresholds; the meter carries semantic color |
+| primary button | accent fill + contrast-selected black/white label | AA contrast for every system accent |
 
-Stale rows further dim the usage fill (~55% of the tone) and still show a Stale tag.
+Stale rows further dim the meter fill (~55% of the tone), mute the percentage text, and still show a
+Stale tag. The numeric percentage and filled meter length preserve meaning without relying on hue;
+errors and destructive actions retain explicit labels or icons. Do not introduce provider colors,
+success green, tinted cards, gradients, shadows, or extra status colors.
 
 ## Typography
 
-System SF only. Prefer **semantic** roles from `QuotaDesign.Typography` and the view helpers
-below. Avoid bare `.caption` / `.subheadline` / `.font(.system(size:))` in features.
+System SF only. Prefer **semantic** roles from `QuotaDesign.Typography` and the view helpers below.
+Text roles use compact base sizes at the standard setting and scale explicitly from Extra Large
+through Accessibility 5. This keeps normal menu-panel density while making the macOS Dynamic Type
+environment observable and testable. Avoid bare `.caption` / `.subheadline` /
+`.font(.system(size:))` in features.
 
-| Role | Font | Color | Helper |
+| Role | Base font | Color | Helper |
 | --- | --- | --- | --- |
-| Panel title | `.headline` rounded semibold | `ink` | (header only) |
-| Empty title | `.headline` rounded medium | `ink` | `quotaEmptyTitleStyle` |
-| Row / entity title | `.subheadline` medium | `ink` | `quotaRowTitleStyle` |
-| Section header | `.caption` semibold | `mute` | `quotaSectionHeaderStyle` |
-| Secondary / quiet action / issue | `.caption` | `body` | `quotaSecondaryStyle` |
-| Meta / tags / source | `.caption2` | `mute` | `quotaMetaStyle` |
-| Mono (URL/command/id) | `.caption` monospaced | `body` (never `ink`) | `quotaMonoStyle` |
-| Mono meta (instance id) | `.caption2` monospaced | `mute` | `quotaMonoMetaStyle` |
+| Panel title | 13pt rounded semibold | `ink` | (header only) |
+| Empty title | 13pt rounded medium | `ink` | `quotaEmptyTitleStyle` |
+| Row / entity title | 13pt medium | `ink` | `quotaRowTitleStyle` |
+| Section header | 11pt semibold | `mute` | `quotaSectionHeaderStyle` |
+| Secondary / quiet action / issue | 11pt regular | `body` | `quotaSecondaryStyle` |
+| Meta / tags / source | 10pt regular | `mute` | `quotaMetaStyle` |
+| Mono (URL/command/id) | 11pt monospaced | `body` (never `ink`) | `quotaMonoStyle` |
+| Mono meta (instance id) | 10pt monospaced | `mute` | `quotaMonoMetaStyle` |
 | Chevron / affordance | 11 / 10 semibold | `mute` | `quotaChevronStyle` / `quotaAffordanceStyle` |
 | Empty icon | 28 regular | `body` | `quotaEmptyIconStyle` |
-| Remaining % | `.subheadline` semibold | usage tone | — |
-| Window title | `.caption` medium | `body` | — |
-| Pairing code | `.title3` mono semibold | ink via field | — |
+| Remaining % | 13pt semibold | `ink` (`mute` when stale) | `quotaFont(.remainingValue)` |
+| Window title | 11pt medium | `body` | `quotaFont(.quotaLabel)` |
+| Pairing code | fixed `.title3` mono semibold | ink via field | — |
 
 Hierarchy: **panelTitle ≥ emptyTitle > rowTitle > sectionHeader > secondary > meta**.
 Section headers stay quieter than row titles so groups don't overpower content.
 Technical strings and chevrons never use `ink`. One helper per font+color pair — no aliases.
+Utility icons and the eight-cell pairing-code geometry stay fixed because they already provide a
+large target and must fit the 288pt content width; all explanatory and actionable text around them
+scales.
 
 No website display scale (30–36px) inside the panel.
 
@@ -190,9 +252,9 @@ No website display scale (30–36px) inside the panel.
 ```text
 [brand] Codex                               Local
 Pro Lite · eg***@example.com
-Weekly                                29%
+Weekly                           29% left
 ████████░░░░
-Resets 08-08 12:51:26
+Resets Sat, 12:51 PM
 ```
 
 Rules:
@@ -200,10 +262,13 @@ Rules:
 1. Provider icon + name leading; source label trailing (mute).
 2. Account line: `Plan · maskedLabel` plain text (no plan chip). Plan slugs normalized for display
    only (`prolite` → `Pro Lite`, `supergrok` → `SuperGrok`, OIDC Grok hint → SuperGrok).
-3. Each window: title left, **strong remaining %** right (no trailing word `left`), 8px meter,
-   compact absolute reset `MM-dd HH:mm:ss`.
-4. Meter fill + % share usage tone. Filled proportion is always **remaining**.
-5. Multi-account: per-account identity row carries its own source label and optional Stale tag.
+3. Each window: title left, **strong remaining %** right with the explicit word `left`, 8px meter,
+   then a locale-appropriate weekday/time reset without routine seconds.
+4. Percentage text stays readable ink; the meter uses accent/orange/red by threshold. Filled
+   proportion is always **remaining**.
+5. Reset and stale-observation metadata share one line when they fit and stack at larger text sizes;
+   do not truncate either value to preserve density.
+6. Multi-account: per-account identity row carries its own source label and optional Stale tag.
 
 ### Source badge
 
@@ -228,7 +293,8 @@ Rules:
 - No bordered chips/CTAs for auth or errors. Status is quiet text beside the provider name.
 - Trailing edge stays provenance-only (selected-source icon). Never replace it with status text.
 - Issue-only rows (no accounts) still show the local source icon when the failure came from local collection.
-- `Stale` remains the only outlined status tag (freshness of otherwise successful data).
+- `Stale` remains the only outlined status tag (freshness of otherwise successful data). Remote
+  device `Active` / `Waiting` state is quiet icon-and-text metadata without tag chrome.
 - Settings Agents rows reuse the same recovery detail; healthy success shows no status chrome.
 
 ### Stale tag
@@ -238,12 +304,15 @@ Rules:
 
 ### Primary button
 
-- Black/label-colored pill, min height 36, horizontal padding 18.
+- Accent-filled pill with a black-or-white label selected from the resolved accent for AA contrast;
+  min height 36, horizontal padding 18.
+- Press feedback uses a slight scale change, not translucent accent fill, so label contrast remains
+  stable on both light and dark material.
 - At most one high-emphasis pill visible in a compact region (empty-state Retry, etc.).
 
 ### Settings
 
-- Sections: Agents, Remote Quota, About.
+- Sections: Agents, Remote Devices, About.
 - Agents rows: brand icon, name, optional recovery detail, visibility toggle.
   - Visibility toggle is always interactive (auth failures still appear in Overview when enabled).
   - Signed-in / success: no status chrome — only the toggle.
@@ -261,6 +330,8 @@ Rules:
 ## Content rules
 
 - Primary number and meter = **remaining** quota, never used-by-default.
+- Empty Overview recovery is expressed as user tasks: sign in to a provider CLI, pair a remote
+  device, or enable an agent. Never instruct the user to add, connect, or manage a Relay.
 - Do not invent Grok plan from billing; OIDC/`auth_mode` hint → `supergrok` display only.
 - Never show raw tokens, full emails, or unredacted account ids.
 - Cache-first launch: show last local report immediately, refresh in background (plan fields may
@@ -286,5 +357,5 @@ Rules:
 
 ## Reference
 
-Implementation is the source of truth when this document drifts. Website design:
-[`apps/web/DESIGN.md`](../web/DESIGN.md).
+This document is the canonical QuotaBar UI source. Keep implementation and tests aligned with it.
+Website design is specified separately in [`apps/web/DESIGN.md`](../web/DESIGN.md).

@@ -11,7 +11,7 @@ struct MenuBarHeader: View {
   enum TrailingAction {
     case none
     case openSettings(() -> Void)
-    case addRelay(() -> Void)
+    case pairDevice(() -> Void)
     case overflowMenu(deleteEnabled: Bool, onDeleteAll: () -> Void)
   }
 
@@ -22,26 +22,28 @@ struct MenuBarHeader: View {
   var showsLeadingIcon: Bool = false
   let trailing: TrailingAction
 
-  private let backGlyphWidth: CGFloat = 12
-
   var body: some View {
     HStack(spacing: 0) {
       if canNavigateBack {
         headerButton(
           systemName: "chevron.left",
           accessibilityLabel: "Back",
-          width: backGlyphWidth,
+          width: QuotaDesign.Layout.headerControlWidth,
           alignment: .leading,
           action: onNavigateBack
         )
-        Color.clear.frame(width: QuotaDesign.Spacing.xs, height: 1)
+        // Keep the title visually close while preserving a 28pt-wide response region.
+        .padding(
+          .trailing,
+          QuotaDesign.Layout.backTitleOffset - QuotaDesign.Layout.headerControlWidth
+        )
       } else if showsLeadingIcon {
         leadingTitleIcon
         Color.clear.frame(width: QuotaDesign.Spacing.xs, height: 1)
       }
 
       Text(title)
-        .font(QuotaDesign.Typography.panelTitle)
+        .quotaFont(.panelTitle)
         .foregroundStyle(QuotaPalette.ink)
         .lineLimit(1)
         .accessibilityAddTraits(.isHeader)
@@ -84,10 +86,10 @@ struct MenuBarHeader: View {
         action: action
       )
 
-    case .addRelay(let action):
+    case .pairDevice(let action):
       headerButton(
         systemName: "plus",
-        accessibilityLabel: "Add Relay",
+        accessibilityLabel: "Pair Device",
         width: QuotaDesign.Layout.headerControlWidth,
         alignment: .trailing,
         action: action
@@ -99,7 +101,6 @@ struct MenuBarHeader: View {
         deleteEnabled: deleteEnabled,
         onDeleteAll: onDeleteAll
       )
-      .accessibilityLabel("Settings menu")
     }
   }
 
@@ -123,6 +124,7 @@ struct MenuBarHeader: View {
     }
     .buttonStyle(.plain)
     .accessibilityLabel(accessibilityLabel)
+    .help(accessibilityLabel)
   }
 }
 
@@ -153,6 +155,8 @@ private struct HeaderOverflowPlainButton: View {
       HeaderMenuAnchorView(anchor: anchor)
         .frame(width: 0, height: 0)
     )
+    .accessibilityLabel("Settings menu")
+    .help("Settings menu")
   }
 }
 

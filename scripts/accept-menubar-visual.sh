@@ -52,6 +52,7 @@ done
 
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/quotabar-visual-acceptance.XXXXXX")"
 WINDOW_FINDER="${WORK_DIR}/find-menubar-visual-window"
+SCREENSHOT_VALIDATOR="${WORK_DIR}/validate-menubar-screenshot"
 
 stop_app() {
   if [[ -z "$APP_PID" ]]; then
@@ -97,6 +98,9 @@ OUTPUT_DIR="$(cd "$OUTPUT_DIR" && pwd)"
 "/usr/bin/swiftc" \
   "${ROOT_DIR}/scripts/find-menubar-visual-window.swift" \
   -o "$WINDOW_FINDER"
+"/usr/bin/swiftc" \
+  "${ROOT_DIR}/scripts/validate-menubar-screenshot.swift" \
+  -o "$SCREENSHOT_VALIDATOR"
 
 # name|fixture|route|appearance|text-size
 SCENARIOS=(
@@ -106,12 +110,13 @@ SCENARIOS=(
   "overview-cached-error|cached-refresh-error|overview|light|standard"
   "overview-empty|empty|overview|light|standard"
   "overview-unavailable|unavailable|overview|dark|standard"
-  "settings|content|settings|light|extra-large"
-  "relays|content|relays|dark|standard"
-  "add-relay|content|add|light|standard"
-  "relay-detail|content|detail|dark|standard"
-  "pairing|content|pairing|light|accessibility"
-  "devices|content|devices|dark|extra-large"
+  "overview-a11y|content|overview|light|accessibility"
+  "settings|content|settings|light|standard"
+  "remote-devices|content|remote-devices|dark|standard"
+  "pair-device|content|pair-device|light|standard"
+  "remote-devices-a11y|content|remote-devices|dark|accessibility"
+  "pair-device-a11y|content|pair-device|light|accessibility"
+  "settings-a11y|content|settings|light|accessibility"
 )
 
 capture_scenario() {
@@ -187,9 +192,11 @@ capture_scenario() {
   byte_count="$(wc -c <"$screenshot" | tr -d '[:space:]')"
   [[ "$pixel_width" =~ ^[0-9]+$ && "$pixel_height" =~ ^[0-9]+$ ]] \
     || fail "${name}: screenshot dimensions could not be read"
-  [[ "$pixel_width" -ge 300 && "$pixel_height" -ge 300 ]] \
-    || fail "${name}: screenshot dimensions are unexpectedly small (${pixel_width}x${pixel_height})"
+  [[ "$pixel_width" -eq 320 && "$pixel_height" -ge 560 && "$pixel_height" -le 620 ]] \
+    || fail "${name}: screenshot dimensions violate the fixed panel contract (${pixel_width}x${pixel_height})"
   [[ "$byte_count" -ge 1024 ]] || fail "${name}: screenshot contains too little image data"
+  "$SCREENSHOT_VALIDATOR" "$screenshot" \
+    || fail "${name}: screenshot pixel validation failed"
 
   printf '%s\t%sx%s\n' "$screenshot" "$pixel_width" "$pixel_height"
   CURRENT_SCREENSHOT=""
@@ -198,6 +205,19 @@ capture_scenario() {
 
 for scenario in "${SCENARIOS[@]}"; do
   capture_scenario "$scenario"
+done
+
+for comparison in \
+  "overview-light:overview-a11y" \
+  "settings:settings-a11y" \
+  "remote-devices:remote-devices-a11y" \
+  "pair-device:pair-device-a11y"; do
+  IFS=':' read -r standard_name accessibility_name <<<"$comparison"
+  if cmp -s \
+    "${OUTPUT_DIR}/${standard_name}.png" \
+    "${OUTPUT_DIR}/${accessibility_name}.png"; then
+    fail "${accessibility_name}: accessibility text size did not change rendered pixels"
+  fi
 done
 
 printf 'visual acceptance passed: %s\n' "$OUTPUT_DIR"

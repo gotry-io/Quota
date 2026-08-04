@@ -23,7 +23,7 @@
         "provider": { "enum": ["codex", "claude", "grok"] },
         "account": {
           "type": "object",
-          "required": ["fingerprint"],
+          "required": ["fingerprint", "fingerprint_scope"],
           "properties": {
             "fingerprint": { "type": "string", "minLength": 1 },
             "fingerprint_scope": { "enum": ["global", "source"] },

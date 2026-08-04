@@ -96,7 +96,7 @@ function successCollector(
 function snapshotFixture(provider: "codex" | "claude" | "grok", source: string): QuotaSnapshot {
   return {
     provider,
-    account: { fingerprint: `${provider}-fp` },
+    account: { fingerprint: `${provider}-fp`, fingerprint_scope: "source" },
     windows: [{ id: "five_hour", title: "5 hour", used_percent: 10 }],
     source,
     status: "available",

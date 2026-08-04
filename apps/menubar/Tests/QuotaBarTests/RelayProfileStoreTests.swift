@@ -18,8 +18,9 @@ struct RelayProfileStoreTests {
       fixture.defaults.data(forKey: RelayProfileStore.storageKey)
     )
     let savedJSON = try #require(String(data: savedData, encoding: .utf8))
-    #expect(!savedJSON.contains("controller_synthetic_secret"))
+    #expect(!savedJSON.contains("owner_synthetic_secret"))
     #expect(!savedJSON.localizedCaseInsensitiveContains("bearer"))
+    #expect(!savedJSON.contains("is_default"))
     #expect(savedJSON.contains(profile.credentialReference))
     #expect(try store.load() == [profile])
   }
@@ -32,27 +33,15 @@ struct RelayProfileStoreTests {
     #expect(try RelayProfileStore(defaults: fixture.defaults).load().isEmpty)
   }
 
-  @Test
-  func nonemptyProfilesRequireExactlyOneDefault() throws {
-    let fixture = try UserDefaultsFixture()
-    defer { fixture.remove() }
-    let store = RelayProfileStore(defaults: fixture.defaults)
-    let profile = try sampleProfile(isDefault: false)
-
-    #expect(throws: RelayProfileStoreError.invalidData) {
-      try store.save([profile])
-    }
-  }
-
   @Test(arguments: [
     Data("not json".utf8),
     Data(#"{"schema_version":2,"profiles":[]}"#.utf8),
     Data(#"{"schema_version":1,"profiles":[{"id":"11111111-1111-1111-1111-111111111111"}]}"#.utf8),
     Data(
-      #"{"schema_version":1,"profiles":[{"id":"11111111-1111-1111-1111-111111111111","name":"Relay","base_url":"https://relay.example/","instance_id":"relay_primary","mode":"self_hosted","capabilities":{"realtime":false,"persistent_snapshots":true,"instant_device_revocation":true,"history":false,"multi_tenant":false},"credential_reference":"relay-controller:11111111-1111-1111-1111-111111111111","is_default":true}]}"#.utf8
+      #"{"schema_version":1,"profiles":[{"id":"11111111-1111-1111-1111-111111111111","name":"Relay","base_url":"https://relay.example/","instance_id":"relay_primary","mode":"self_hosted","capabilities":{"realtime":false,"persistent_snapshots":true,"instant_device_revocation":true,"history":false,"multi_tenant":false},"credential_reference":"relay-owner:11111111-1111-1111-1111-111111111111"}]}"#.utf8
     ),
     Data(
-      #"{"schema_version":1,"profiles":[{"id":"11111111-1111-1111-1111-111111111111","name":" Relay ","base_url":"https://relay.example","instance_id":"relay_primary","mode":"self_hosted","capabilities":{"realtime":false,"persistent_snapshots":true,"instant_device_revocation":true,"history":false,"multi_tenant":false},"credential_reference":"relay-controller:11111111-1111-1111-1111-111111111111","is_default":true}]}"#.utf8
+      #"{"schema_version":1,"profiles":[{"id":"11111111-1111-1111-1111-111111111111","name":" Relay ","base_url":"https://relay.example","instance_id":"relay_primary","mode":"self_hosted","capabilities":{"realtime":false,"persistent_snapshots":true,"instant_device_revocation":true,"history":false,"multi_tenant":false},"credential_reference":"relay-owner:11111111-1111-1111-1111-111111111111"}]}"#.utf8
     ),
   ])
   func rejectsInvalidProfileData(data: Data) throws {
@@ -63,10 +52,10 @@ struct RelayProfileStoreTests {
 
     do {
       _ = try store.load()
-      Issue.record("Expected invalid Relay profile data to fail.")
+      Issue.record("Expected invalid Relay endpoint data to fail.")
     } catch let error as RelayProfileStoreError {
       #expect(error == .invalidData)
-      #expect(error.errorDescription == "The saved Relay profiles are invalid.")
+      #expect(error.errorDescription == "The saved Relay endpoints are invalid.")
     }
   }
 
@@ -80,7 +69,7 @@ struct RelayProfileStoreTests {
 
     #expect(profile.baseURL.absoluteString == "https://relay.example")
     #expect(profile.instanceID == "relay_primary")
-    #expect(profile.credentialReference == "relay-controller:11111111-1111-1111-1111-111111111111")
+    #expect(profile.credentialReference == "relay-owner:11111111-1111-1111-1111-111111111111")
   }
 }
 
@@ -101,8 +90,7 @@ private struct UserDefaultsFixture {
 
 private func sampleProfile(
   id: UUID = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
-  baseURL: URL = URL(string: "https://relay.example")!,
-  isDefault: Bool = true
+  baseURL: URL = URL(string: "https://relay.example")!
 ) throws -> RelayProfile {
   try RelayProfile(
     id: id,
@@ -116,7 +104,6 @@ private func sampleProfile(
       instantDeviceRevocation: true,
       history: false,
       multiTenant: false
-    ),
-    isDefault: isDefault
+    )
   )
 }

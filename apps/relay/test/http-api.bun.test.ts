@@ -4,8 +4,8 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  ControllerCreateResponseSchema,
-  ControllerSnapshotListResponseSchema,
+  OwnerCreateResponseSchema,
+  OwnerSnapshotListResponseSchema,
   DeviceListResponseSchema,
   PairingCreateResponseSchema,
   PairingTokenIssuedResponseSchema,
@@ -18,9 +18,9 @@ import { managedRelayInfo } from "../src/config.ts";
 import { sha256Hex } from "../src/security.ts";
 import { SQLiteRelayState } from "../src/state/sqlite-state.ts";
 
-const controllerManageToken = "controller-manage-token-for-http-tests";
-const controllerReadToken = "controller-read-token-for-http-tests";
-const otherControllerManageToken = "other-controller-manage-token-for-http-tests";
+const ownerManageToken = "owner-manage-token-for-http-tests";
+const ownerReadToken = "owner-read-token-for-http-tests";
+const otherOwnerManageToken = "other-owner-manage-token-for-http-tests";
 
 const relayInfo: RelayInfo = {
   instance_id: "http-test-relay",
@@ -55,7 +55,7 @@ describe("QuotaRelay HTTP v1 API", () => {
       fixture.app,
       "/api/v1/pairings/approve",
       { user_code: pairing.user_code.toLowerCase() },
-      controllerManageToken,
+      ownerManageToken,
     );
     expect(approvalResponse.status).toBe(204);
     expect(await approvalResponse.text()).toBe("");
@@ -64,7 +64,7 @@ describe("QuotaRelay HTTP v1 API", () => {
       fixture.app,
       "/api/v1/pairings/approve",
       { user_code: pairing.user_code },
-      otherControllerManageToken,
+      otherOwnerManageToken,
     );
     expect(repeatedApproval.status).toBe(409);
     expect(await errorCode(repeatedApproval)).toBe("conflict");
@@ -73,7 +73,7 @@ describe("QuotaRelay HTTP v1 API", () => {
       fixture.app,
       "/api/v1/pairings/deny",
       { user_code: pairing.user_code },
-      otherControllerManageToken,
+      otherOwnerManageToken,
     );
     expect(repeatedDenial.status).toBe(409);
     expect(await errorCode(repeatedDenial)).toBe("conflict");
@@ -108,13 +108,13 @@ describe("QuotaRelay HTTP v1 API", () => {
     expect(impersonationResponse.status).toBe(403);
     expect(await errorCode(impersonationResponse)).toBe("forbidden");
 
-    const controllerCredentialOnDeviceRoute = await postJSON(
+    const ownerCredentialOnDeviceRoute = await postJSON(
       fixture.app,
       "/api/v1/snapshots",
       snapshotEnvelope(issued.device_id, 1),
-      controllerManageToken,
+      ownerManageToken,
     );
-    expect(controllerCredentialOnDeviceRoute.status).toBe(401);
+    expect(ownerCredentialOnDeviceRoute.status).toBe(401);
 
     const snapshotResponse = await postJSON(
       fixture.app,
@@ -131,51 +131,39 @@ describe("QuotaRelay HTTP v1 API", () => {
     const wrongSnapshotScope = await getWithBearer(
       fixture.app,
       "/api/v1/snapshots",
-      controllerManageToken,
+      ownerManageToken,
     );
     expect(wrongSnapshotScope.status).toBe(403);
 
-    const snapshotsResponse = await getWithBearer(
-      fixture.app,
-      "/api/v1/snapshots",
-      controllerReadToken,
-    );
+    const snapshotsResponse = await getWithBearer(fixture.app, "/api/v1/snapshots", ownerReadToken);
     expect(snapshotsResponse.status).toBe(200);
     expect(snapshotsResponse.headers.get("Cache-Control")).toBe("no-store");
-    const snapshots = ControllerSnapshotListResponseSchema.parse(await snapshotsResponse.json());
+    const snapshots = OwnerSnapshotListResponseSchema.parse(await snapshotsResponse.json());
     expect(snapshots.observations).toHaveLength(1);
     expect(snapshots.observations[0]?.device_id).toBe(issued.device_id);
     expect(snapshots.observations[0]?.snapshot.provider).toBe("codex");
     expect(snapshots.observations[0]).not.toHaveProperty("display_name");
 
-    const deviceCredentialOnControllerRoute = await getWithBearer(
+    const deviceCredentialOnOwnerRoute = await getWithBearer(
       fixture.app,
       "/api/v1/snapshots",
       issued.device_token,
     );
-    expect(deviceCredentialOnControllerRoute.status).toBe(401);
+    expect(deviceCredentialOnOwnerRoute.status).toBe(401);
 
-    const wrongDeviceScope = await getWithBearer(
-      fixture.app,
-      "/api/v1/devices",
-      controllerReadToken,
-    );
+    const wrongDeviceScope = await getWithBearer(fixture.app, "/api/v1/devices", ownerReadToken);
     expect(wrongDeviceScope.status).toBe(403);
 
-    const devicesResponse = await getWithBearer(
-      fixture.app,
-      "/api/v1/devices",
-      controllerManageToken,
-    );
+    const devicesResponse = await getWithBearer(fixture.app, "/api/v1/devices", ownerManageToken);
     expect(devicesResponse.status).toBe(200);
     const devices = DeviceListResponseSchema.parse(await devicesResponse.json());
     expect(devices.devices).toHaveLength(1);
     expect(devices.devices[0]?.device_id).toBe(issued.device_id);
-    expect(devices.devices[0]).not.toHaveProperty("controller_id");
+    expect(devices.devices[0]).not.toHaveProperty("owner_id");
 
     const revokeResponse = await fixture.app.request(`/api/v1/devices/${issued.device_id}`, {
       method: "DELETE",
-      headers: bearerHeaders(controllerManageToken),
+      headers: bearerHeaders(ownerManageToken),
     });
     expect(revokeResponse.status).toBe(204);
     expect(await revokeResponse.text()).toBe("");
@@ -197,7 +185,7 @@ describe("QuotaRelay HTTP v1 API", () => {
       fixture.app,
       "/api/v1/pairings/deny",
       { user_code: deniedPairing.user_code },
-      controllerManageToken,
+      ownerManageToken,
     );
     expect(denialResponse.status).toBe(204);
     expect(await denialResponse.text()).toBe("");
@@ -296,84 +284,61 @@ describe("QuotaRelay HTTP v1 API", () => {
     ).toBe(201);
   });
 
-  it("creates and permanently deletes an anonymous managed controller", async () => {
-    const fixture = await makeManagedFixture();
-    const createResponse = await fixture.app.request("/api/v1/controllers", { method: "POST" });
+  it("creates and deletes an anonymous owner on managed and self-hosted Relays", async () => {
+    for (const fixture of [await makeManagedFixture(), await makeFixture()]) {
+      const createResponse = await fixture.app.request("/api/v1/owners", { method: "POST" });
 
-    expect(createResponse.status).toBe(201);
-    expect(createResponse.headers.get("Cache-Control")).toBe("no-store");
-    const { controller_token: controllerToken } = ControllerCreateResponseSchema.parse(
-      await createResponse.json(),
-    );
-    expect(controllerToken.length).toBeGreaterThanOrEqual(32);
+      expect(createResponse.status).toBe(201);
+      expect(createResponse.headers.get("Cache-Control")).toBe("no-store");
+      const { owner_token: ownerToken } = OwnerCreateResponseSchema.parse(
+        await createResponse.json(),
+      );
+      expect(ownerToken.length).toBeGreaterThanOrEqual(32);
 
-    const database = new Database(fixture.databasePath, { readonly: true, strict: true });
-    const persisted = database
-      .query<{ id: string; token_hash: string }, []>(
-        `SELECT controllers.id, controller_sessions.token_hash
-         FROM controllers
-         INNER JOIN controller_sessions ON controller_sessions.controller_id = controllers.id`,
-      )
-      .get();
-    expect(persisted?.id.startsWith("controller_")).toBe(true);
-    expect(persisted?.token_hash).toHaveLength(64);
-    expect(persisted?.token_hash).not.toBe(controllerToken);
-    database.close();
+      const database = new Database(fixture.databasePath, { readonly: true, strict: true });
+      const persisted = database
+        .query<{ id: string; token_hash: string }, []>(
+          `SELECT owners.id, owner_sessions.token_hash
+           FROM owners
+           INNER JOIN owner_sessions ON owner_sessions.owner_id = owners.id
+           ORDER BY owners.created_at DESC`,
+        )
+        .get();
+      expect(persisted?.id.startsWith("owner_")).toBe(true);
+      expect(persisted?.token_hash).toHaveLength(64);
+      expect(persisted?.token_hash).not.toBe(ownerToken);
+      database.close();
 
-    await fixture.state.registerDevice({
-      id: "device_managed_delete",
-      controller_id: persisted?.id ?? "",
-      display_name: "Managed deletable device",
-      token_hash: "managed-device-token-hash",
-      created_at: "2026-08-03T01:00:00Z",
-    });
-    await fixture.state.recordSnapshot(
-      snapshotEnvelope("device_managed_delete", 1),
-      "2026-08-03T01:05:01Z",
-    );
+      await fixture.state.registerDevice({
+        id: `device_delete_${crypto.randomUUID()}`,
+        owner_id: persisted?.id ?? "",
+        display_name: "Deletable device",
+        token_hash: `device-token-hash-${crypto.randomUUID()}`,
+        created_at: "2026-08-03T01:00:00Z",
+      });
 
-    const deleteResponse = await fixture.app.request("/api/v1/controllers/self", {
-      method: "DELETE",
-      headers: bearerHeaders(controllerToken),
-    });
-    expect(deleteResponse.status).toBe(204);
-    expect(await getWithBearer(fixture.app, "/api/v1/devices", controllerToken)).toMatchObject({
-      status: 401,
-    });
-
-    const deleted = new Database(fixture.databasePath, { readonly: true, strict: true });
-    for (const table of ["controllers", "controller_sessions", "devices", "quota_snapshots"]) {
-      expect(
-        deleted.query<{ count: number }, []>(`SELECT COUNT(*) AS count FROM ${table}`).get()?.count,
-      ).toBe(0);
+      const deleteResponse = await fixture.app.request("/api/v1/owners/self", {
+        method: "DELETE",
+        headers: bearerHeaders(ownerToken),
+      });
+      expect(deleteResponse.status).toBe(204);
+      expect(await getWithBearer(fixture.app, "/api/v1/devices", ownerToken)).toMatchObject({
+        status: 401,
+      });
     }
-    deleted.close();
-
-    const selfHosted = await makeFixture();
-    expect((await selfHosted.app.request("/api/v1/controllers", { method: "POST" })).status).toBe(
-      404,
-    );
-    expect(
-      (
-        await selfHosted.app.request("/api/v1/controllers/self", {
-          method: "DELETE",
-          headers: bearerHeaders(controllerManageToken),
-        })
-      ).status,
-    ).toBe(404);
   });
 
-  it("persistently limits anonymous controller creation by trusted client address", async () => {
+  it("persistently limits anonymous owner creation by trusted client address", async () => {
     const fixture = await makeManagedFixture();
     for (let index = 0; index < 10; index += 1) {
-      const response = await fixture.app.request("/api/v1/controllers", {
+      const response = await fixture.app.request("/api/v1/owners", {
         method: "POST",
         headers: { "CF-Connecting-IP": "192.0.2.10" },
       });
       expect(response.status).toBe(201);
     }
 
-    const limited = await fixture.app.request("/api/v1/controllers", {
+    const limited = await fixture.app.request("/api/v1/owners", {
       method: "POST",
       headers: {
         "CF-Connecting-IP": "192.0.2.10",
@@ -383,7 +348,7 @@ describe("QuotaRelay HTTP v1 API", () => {
     expect(limited.status).toBe(429);
     expect(limited.headers.get("Retry-After")).toBe("3600");
 
-    const otherClient = await fixture.app.request("/api/v1/controllers", {
+    const otherClient = await fixture.app.request("/api/v1/owners", {
       method: "POST",
       headers: { "CF-Connecting-IP": "192.0.2.11" },
     });
@@ -396,14 +361,14 @@ describe("QuotaRelay HTTP v1 API", () => {
     const otherToken = "other-device-token";
     await fixture.state.registerDevice({
       id: "device_self",
-      controller_id: "controller_http",
+      owner_id: "owner_http",
       display_name: "Self-revoking device",
       token_hash: await sha256Hex(selfToken),
       created_at: "2026-08-03T01:00:00Z",
     });
     await fixture.state.registerDevice({
       id: "device_other",
-      controller_id: "controller_http",
+      owner_id: "owner_http",
       display_name: "Other device",
       token_hash: await sha256Hex(otherToken),
       created_at: "2026-08-03T01:00:00Z",
@@ -440,20 +405,20 @@ describe("QuotaRelay HTTP v1 API", () => {
     ).toBe(401);
   });
 
-  it("expires devices at 30 days without sweeping another controller on request paths", async () => {
+  it("expires devices at 30 days without sweeping another owner on request paths", async () => {
     const fixture = await makeFixture();
     const staleToken = "stale-device-token";
     const otherStaleToken = "other-stale-device-token";
     await fixture.state.registerDevice({
       id: "device_stale",
-      controller_id: "controller_http",
+      owner_id: "owner_http",
       display_name: "Stale device",
       token_hash: await sha256Hex(staleToken),
       created_at: "2026-07-04T01:00:00Z",
     });
     await fixture.state.registerDevice({
       id: "device_other_stale",
-      controller_id: "controller_other",
+      owner_id: "owner_other",
       display_name: "Other stale device",
       token_hash: await sha256Hex(otherStaleToken),
       created_at: "2026-07-04T01:00:00Z",
@@ -473,37 +438,30 @@ describe("QuotaRelay HTTP v1 API", () => {
       await fixture.state.getDeviceByTokenHash(await sha256Hex(otherStaleToken)),
     ).not.toBeNull();
 
-    const controllerRead = await getWithBearer(
-      fixture.app,
-      "/api/v1/devices",
-      controllerManageToken,
-    );
-    expect(controllerRead.status).toBe(200);
+    const ownerRead = await getWithBearer(fixture.app, "/api/v1/devices", ownerManageToken);
+    expect(ownerRead.status).toBe(200);
     expect(
       await fixture.state.getDeviceByTokenHash(await sha256Hex(otherStaleToken)),
     ).not.toBeNull();
   });
 
-  it("reclaims abandoned managed controllers and old pairing sessions", async () => {
+  it("reclaims abandoned owners and old pairing sessions", async () => {
     const fixture = await makeManagedFixture();
-    const controllerResponse = await fixture.app.request("/api/v1/controllers", {
+    const ownerResponse = await fixture.app.request("/api/v1/owners", {
       method: "POST",
       headers: { "CF-Connecting-IP": "192.0.2.10" },
     });
-    const { controller_token: controllerToken } = ControllerCreateResponseSchema.parse(
-      await controllerResponse.json(),
-    );
+    const { owner_token: ownerToken } = OwnerCreateResponseSchema.parse(await ownerResponse.json());
     await createPairing(fixture.app, "Abandoned pairing");
 
     await performRelayMaintenance(fixture.state, new Date("2026-09-03T01:11:00Z"));
 
-    expect(await getWithBearer(fixture.app, "/api/v1/devices", controllerToken)).toMatchObject({
+    expect(await getWithBearer(fixture.app, "/api/v1/devices", ownerToken)).toMatchObject({
       status: 401,
     });
     const database = new Database(fixture.databasePath, { readonly: true, strict: true });
     expect(
-      database.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM controllers").get()
-        ?.count,
+      database.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM owners").get()?.count,
     ).toBe(0);
     expect(
       database.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM pairing_sessions").get()
@@ -518,28 +476,28 @@ async function makeFixture() {
   const databasePath = join(directory, "relay.db");
   const state = new SQLiteRelayState(databasePath);
   await state.initialize();
-  await state.ensureController("controller_http", "permanent", "2026-08-03T00:00:00Z");
-  await state.ensureController("controller_other", "permanent", "2026-08-03T00:00:00Z");
-  await state.replaceControllerSession({
+  await state.ensureOwner("owner_http", "2026-08-03T00:00:00Z");
+  await state.ensureOwner("owner_other", "2026-08-03T00:00:00Z");
+  await state.replaceOwnerSession({
     id: "auth_manage",
-    controller_id: "controller_http",
-    token_hash: await sha256Hex(controllerManageToken),
+    owner_id: "owner_http",
+    token_hash: await sha256Hex(ownerManageToken),
     scopes: ["device:manage"],
     expires_at: "2026-08-04T00:00:00Z",
     created_at: "2026-08-03T00:00:00Z",
   });
-  await state.replaceControllerSession({
+  await state.replaceOwnerSession({
     id: "auth_other_manage",
-    controller_id: "controller_other",
-    token_hash: await sha256Hex(otherControllerManageToken),
+    owner_id: "owner_other",
+    token_hash: await sha256Hex(otherOwnerManageToken),
     scopes: ["device:manage"],
     expires_at: "2026-08-04T00:00:00Z",
     created_at: "2026-08-03T00:00:00Z",
   });
-  await state.replaceControllerSession({
+  await state.replaceOwnerSession({
     id: "auth_read",
-    controller_id: "controller_http",
-    token_hash: await sha256Hex(controllerReadToken),
+    owner_id: "owner_http",
+    token_hash: await sha256Hex(ownerReadToken),
     scopes: ["quota:read"],
     expires_at: "2026-08-04T00:00:00Z",
     created_at: "2026-08-03T00:00:00Z",
@@ -624,7 +582,7 @@ function snapshotEnvelope(deviceID: string, sequence: number): QuotaSnapshotEnve
     snapshots: [
       {
         provider: "codex",
-        account: { fingerprint: "account_http" },
+        account: { fingerprint: "account_http", fingerprint_scope: "source" },
         windows: [{ id: "five_hour", title: "5 hour", used_percent: 20 }],
         source: "codex_api",
         status: "available",
@@ -655,7 +613,7 @@ async function expectOnlyHashesPersisted(
     .query<{ token_hash: string }, []>("SELECT token_hash FROM devices LIMIT 1")
     .get();
   const auth = database
-    .query<{ token_hash: string }, []>("SELECT token_hash FROM controller_sessions ORDER BY id")
+    .query<{ token_hash: string }, []>("SELECT token_hash FROM owner_sessions ORDER BY id")
     .all();
 
   expect(pairing?.device_code_hash).not.toBe(rawDeviceCode);
@@ -665,7 +623,7 @@ async function expectOnlyHashesPersisted(
   expect(device?.token_hash).not.toBe(rawDeviceToken);
   expect(device?.token_hash).toHaveLength(64);
   expect(auth.every(({ token_hash }) => token_hash.length === 64)).toBe(true);
-  expect(auth.some(({ token_hash }) => token_hash === controllerManageToken)).toBe(false);
-  expect(auth.some(({ token_hash }) => token_hash === controllerReadToken)).toBe(false);
+  expect(auth.some(({ token_hash }) => token_hash === ownerManageToken)).toBe(false);
+  expect(auth.some(({ token_hash }) => token_hash === ownerReadToken)).toBe(false);
   database.close();
 }

@@ -1,60 +1,13 @@
 import SwiftUI
 
-struct ValidatedRelayAddForm: Equatable {
-  let name: String
-  let origin: String
-  let controllerBearer: String
-}
-
-enum RelayAddFormValidation {
-  static func validate(
-    name: String,
-    origin: String,
-    controllerBearer: String
-  ) throws -> ValidatedRelayAddForm {
-    let canonicalName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !canonicalName.isEmpty else {
-      throw RelayFormValidationError.missingName
-    }
-
-    let canonicalOrigin: URL
-    do {
-      canonicalOrigin = try RelayOrigin.canonicalURL(from: origin)
-    } catch let error as RelayOriginError {
-      throw RelayFormValidationError.invalidOrigin(
-        error.errorDescription ?? "The Relay address is invalid."
-      )
-    }
-
-    guard !controllerBearer.isEmpty,
-      controllerBearer == controllerBearer.trimmingCharacters(in: .whitespacesAndNewlines),
-      controllerBearer.unicodeScalars.allSatisfy({ $0.value >= 0x20 && $0.value != 0x7f })
-    else {
-      throw RelayFormValidationError.invalidControllerCredential
-    }
-
-    return ValidatedRelayAddForm(
-      name: canonicalName,
-      origin: canonicalOrigin.absoluteString,
-      controllerBearer: controllerBearer
-    )
-  }
-}
-
 enum RelayFormValidationError: LocalizedError, Equatable {
-  case missingName
   case invalidOrigin(String)
-  case invalidControllerCredential
   case missingPairingCode
 
   var errorDescription: String? {
     switch self {
-    case .missingName:
-      "Enter a Relay profile name."
     case .invalidOrigin(let message):
       message
-    case .invalidControllerCredential:
-      "Enter a valid Relay controller credential."
     case .missingPairingCode:
       "Enter the pairing code shown by QuotaCLI."
     }
@@ -111,6 +64,33 @@ enum RelaySettingsErrorPresentation {
   }
 }
 
+struct RelayPairCommandPresentation: Equatable {
+  let command: String
+  let canCopy: Bool
+
+  static func make(
+    selectedURL: URL?,
+    officialURL: URL,
+    isOtherChoice: Bool
+  ) -> RelayPairCommandPresentation {
+    guard let selectedURL else {
+      return RelayPairCommandPresentation(
+        command: isOtherChoice
+          ? "quotacli relay pair --relay <relay-url>"
+          : "quotacli relay pair",
+        canCopy: false
+      )
+    }
+
+    return RelayPairCommandPresentation(
+      command: selectedURL == officialURL
+        ? "quotacli relay pair"
+        : "quotacli relay pair --relay \(selectedURL.absoluteString)",
+      canCopy: true
+    )
+  }
+}
+
 struct RelayCard<Content: View>: View {
   let content: Content
 
@@ -135,7 +115,7 @@ struct RelaySecondaryButtonStyle: ButtonStyle {
 
   func makeBody(configuration: Configuration) -> some View {
     configuration.label
-      .font(QuotaDesign.Typography.rowTitle)
+      .quotaFont(.rowTitle)
       .foregroundStyle(isEnabled ? QuotaPalette.ink : QuotaPalette.body)
       .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
       .frame(minHeight: 34)
@@ -150,22 +130,7 @@ struct RelaySecondaryButtonStyle: ButtonStyle {
   }
 }
 
-struct RelayPillTextFieldStyle: TextFieldStyle {
-  func _body(configuration: TextField<Self._Label>) -> some View {
-    configuration
-      .textFieldStyle(.plain)
-      .padding(.horizontal, QuotaDesign.Spacing.sectionBody)
-      .frame(minHeight: 32)
-      .background(QuotaPalette.soft)
-      .clipShape(Capsule())
-      .overlay {
-        Capsule()
-          .stroke(QuotaPalette.hairlineBorder, lineWidth: 1)
-      }
-  }
-}
-
-/// Compact single-line field with small corner radius (for Advanced forms).
+/// Compact single-line field with a small corner radius.
 struct RelayRoundedTextFieldStyle: TextFieldStyle {
   private let cornerRadius: CGFloat = 6
 
@@ -198,7 +163,7 @@ struct PairingCodeEntryView: View {
 
   // Fit eight boxes inside panelContentWidth (320 - 16*2 = 288):
   // 8*box + 6*boxGap + 2*groupGap + dash ≈ content width.
-  private let boxSize: CGFloat = 28
+  private let boxSize = QuotaDesign.Layout.minimumInteractiveDimension
   private let boxGap: CGFloat = 5
   private let groupGap: CGFloat = 8
 
@@ -219,9 +184,8 @@ struct PairingCodeEntryView: View {
       }
     }
     .frame(maxWidth: .infinity)
-    .accessibilityElement(children: .combine)
+    .accessibilityElement(children: .contain)
     .accessibilityLabel("Pairing code")
-    .accessibilityValue(displayCode)
     .onAppear {
       applyNormalized(RelayPairingCodeValidation.normalize(code), emitComplete: false)
       focusedIndex = isDisabled ? nil : firstEmptyIndex
@@ -244,14 +208,6 @@ struct PairingCodeEntryView: View {
     }
   }
 
-  private var displayCode: String {
-    let normalized = cells.joined()
-    guard normalized.count == RelayPairingCodeValidation.codeLength else {
-      return normalized
-    }
-    return (try? RelayPairingCodeValidation.validate(normalized)) ?? normalized
-  }
-
   private var firstEmptyIndex: Int {
     cells.firstIndex(where: \.isEmpty) ?? (RelayPairingCodeValidation.codeLength - 1)
   }
@@ -268,15 +224,20 @@ struct PairingCodeEntryView: View {
         RoundedRectangle(cornerRadius: 8, style: .continuous)
           .stroke(
             showsError
-              ? QuotaPalette.usageCritical.opacity(0.85)
+              ? QuotaPalette.critical.opacity(0.85)
               : (focusedIndex == index
-                ? QuotaPalette.ink.opacity(0.45)
+                ? QuotaPalette.accent.opacity(0.75)
                 : QuotaPalette.hairlineBorder),
             lineWidth: focusedIndex == index || showsError ? 1.5 : 1
           )
       }
       .focused($focusedIndex, equals: index)
       .disabled(isDisabled)
+      .accessibilityLabel("Pairing code character \(index + 1) of 8")
+      .accessibilityValue(cells[index].isEmpty ? "Empty" : cells[index])
+      .accessibilityHint(
+        index == 0 ? "You can paste the complete pairing code into this field." : "Enter one character."
+      )
       .onChange(of: cells[index]) { _, newValue in
         handleEdit(at: index, raw: newValue)
       }
@@ -354,40 +315,5 @@ struct PairingCodeEntryView: View {
     if let canonical = try? RelayPairingCodeValidation.validate(normalized) {
       onComplete?(canonical)
     }
-  }
-}
-
-extension RelayMode {
-  var displayName: String {
-    switch self {
-    case .managed: "Managed"
-    case .selfHosted: "Self-Hosted"
-    }
-  }
-}
-
-extension RelayProfileState {
-  var refreshLabel: String {
-    if isRefreshing { return "Refreshing…" }
-    if refreshIssue != nil { return isStale ? "Stale" : "Unavailable" }
-    guard let lastSuccessfulRefreshAt else { return "Not Refreshed" }
-    return "Updated \(lastSuccessfulRefreshAt.formatted(date: .omitted, time: .shortened))"
-  }
-
-  var refreshIcon: String? {
-    if isRefreshing { return "arrow.clockwise" }
-    if refreshIssue != nil { return isStale ? "clock" : "exclamationmark.circle" }
-    return lastSuccessfulRefreshAt == nil ? nil : "checkmark"
-  }
-}
-
-extension RelayDevice {
-  var shortID: String {
-    guard deviceID.count > 12 else { return deviceID }
-    return "\(deviceID.prefix(8))…\(deviceID.suffix(4))"
-  }
-
-  var sequenceLabel: String {
-    lastSequence < 0 ? "No reports yet" : "Sequence \(lastSequence)"
   }
 }

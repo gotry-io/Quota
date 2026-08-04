@@ -1,14 +1,14 @@
 import {
-  CONTROLLER_AUTH_SCOPES,
-  type ControllerAuthScope,
-  type ControllerSessionRecord,
+  OWNER_AUTH_SCOPES,
+  type OwnerAuthScope,
+  type OwnerSessionRecord,
   type PairingConsumeOutcome,
   type PairingDecisionOutcome,
   type RateLimitInput,
 } from "@gotry-io/relay-core";
 
-export interface ControllerSessionRow {
-  controller_id: string;
+export interface OwnerSessionRow {
+  owner_id: string;
   scopes_json: string;
 }
 
@@ -24,33 +24,33 @@ export interface RateLimitRow {
   window_expires_at: string;
 }
 
-export function encodeControllerScopes(scopes: ControllerAuthScope[]): string {
+export function encodeOwnerScopes(scopes: OwnerAuthScope[]): string {
   const uniqueScopes = [...new Set(scopes)];
   if (
     uniqueScopes.length !== scopes.length ||
-    uniqueScopes.some((scope) => !(CONTROLLER_AUTH_SCOPES as readonly string[]).includes(scope))
+    uniqueScopes.some((scope) => !(OWNER_AUTH_SCOPES as readonly string[]).includes(scope))
   ) {
-    throw new Error("Controller session contains invalid scopes");
+    throw new Error("Owner session contains invalid scopes");
   }
   return JSON.stringify(uniqueScopes);
 }
 
-export function decodeControllerSession(row: ControllerSessionRow): ControllerSessionRecord {
+export function decodeOwnerSession(row: OwnerSessionRow): OwnerSessionRecord {
   const value: unknown = JSON.parse(row.scopes_json);
   if (
     !Array.isArray(value) ||
     new Set(value).size !== value.length ||
     value.some(
       (scope) =>
-        typeof scope !== "string" || !(CONTROLLER_AUTH_SCOPES as readonly string[]).includes(scope),
+        typeof scope !== "string" || !(OWNER_AUTH_SCOPES as readonly string[]).includes(scope),
     )
   ) {
-    throw new Error("Controller session contains invalid scopes");
+    throw new Error("Owner session contains invalid scopes");
   }
 
   return {
-    controller_id: row.controller_id,
-    scopes: value as ControllerAuthScope[],
+    owner_id: row.owner_id,
+    scopes: value as OwnerAuthScope[],
   };
 }
 

@@ -93,19 +93,6 @@ func sourceScopedAccountsStaySeparateAcrossObservationSources() {
 }
 
 @Test
-func missingScopeAccountsStaySeparateAcrossObservationSources() {
-  let observations = [
-    observation(source: remoteA, fingerprint: "account-1", scope: nil),
-    observation(source: remoteB, fingerprint: "account-1", scope: nil),
-  ]
-
-  let subscriptions = SubscriptionResolver().resolve(observations, now: resolverNow)
-
-  #expect(subscriptions.count == 2)
-  #expect(subscriptions.map(\.sources) == [[remoteA], [remoteB]])
-}
-
-@Test
 func globalAndSourceScopesNeverShareAGroup() {
   let observations = [
     observation(source: remoteA, fingerprint: "account-1", scope: .global),
@@ -282,7 +269,7 @@ func inputOrderDoesNotChangeResolvedSubscriptions() {
       source: remoteB,
       provider: .grok,
       fingerprint: "gamma",
-      scope: nil
+      scope: .source
     ),
   ]
   let resolver = SubscriptionResolver()
@@ -297,7 +284,7 @@ private func observation(
   source: QuotaObservationSource,
   provider: ProviderID = .codex,
   fingerprint: String,
-  scope: FingerprintScope?,
+  scope: FingerprintScope,
   status: QuotaStatus = .available,
   usedPercent: Double = 50,
   observedAt: Date = resolverNow,

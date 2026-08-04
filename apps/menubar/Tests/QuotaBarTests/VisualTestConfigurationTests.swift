@@ -67,13 +67,10 @@
   }
 
   @Test
-  func relayVisualRoutesParseIntoOneTypedStackWithMatchingTitles() throws {
+  func remoteDeviceVisualRoutesParseIntoOneTypedStackWithMatchingTitles() throws {
     let routeExpectations: [(rawValue: String, title: String, depth: Int)] = [
-      ("relays", "Relays", 2),
-      ("add", "Pair Device", 3),
-      ("detail", "Relay", 3),
-      ("pairing", "Pair Device", 4),
-      ("devices", "Devices", 4),
+      ("remote-devices", "Remote Devices", 2),
+      ("pair-device", "Pair Device", 3),
     ]
 
     for expectation in routeExpectations {
@@ -179,7 +176,7 @@
     let referenceDate = Date(timeIntervalSince1970: 1_785_752_430)
     let configuration = try #require(
       VisualTestConfiguration(
-        arguments: ["QuotaBar", "--route", "devices"],
+        arguments: ["QuotaBar", "--route", "remote-devices"],
         referenceDate: referenceDate
       )
     )
@@ -201,6 +198,9 @@
     #expect(profile.capabilities.multiTenant)
     #expect(state.observations.count == 2)
     #expect(state.devices.map(\.displayName) == ["Studio Mac", "Old build host"])
+    #expect(relayModel.ownedDevices.map(\.device.displayName) == ["Studio Mac"])
+    #expect(relayModel.remoteDeviceSummary == "1 device")
+    #expect(configuration.initialPath == [.settings, .remoteDevices])
     #expect(state.lastSuccessfulRefreshAt == referenceDate.addingTimeInterval(-45))
     #expect(!relayModel.isPolling)
     #expect(!configuration.performsRelayRefreshes)

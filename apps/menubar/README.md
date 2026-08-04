@@ -1,33 +1,28 @@
 # QuotaBar
 
 QuotaBar is the native SwiftUI macOS menu bar client. It displays local QuotaCLI snapshots and
-remote snapshots from one or more persistent QuotaRelay profiles.
+remote snapshots from devices this QuotaBar has paired through one or more Relay endpoints.
 
-When polling starts, QuotaBar ensures there is one managed `Quota Relay` profile for
-`https://quota.gotry.io`. If none exists, it verifies discovery, registers an anonymous controller,
-stores the returned controller token only in Keychain, and persists non-secret profile metadata.
-An unavailable managed service remains retryable on the next polling cycle and never blocks local
-quota collection. Users may also add independent self-hosted Relay profiles by entering their base
-URL and externally managed controller token.
+Pair Device enrolls an isolated anonymous owner capability for the selected Relay URL (official or
+custom), stores the returned bearer only in Keychain, and keeps endpoint records as internal state.
+Users never enter owner tokens, profile names, or admin credentials. Local collection is independent
+of Relay availability.
 
-The Relay core stores profile metadata separately from controller bearers, binds profiles to a
-discovered Relay instance, and implements pairing decisions, snapshot reads, device listing, and
-device revocation. It accepts protocol v1 Relays only when they advertise bearer authentication,
-persistent snapshots, and instant device revocation. Credential and transport requirements are
-defined in [`docs/security.md`](../../docs/security.md).
+The Relay core binds each endpoint to a discovered instance and implements pairing decisions,
+snapshot reads, device listing, and device revocation for that QuotaBar's private group only. It
+accepts protocol v1 Relays that advertise bearer authentication, persistent snapshots, instant
+device revocation, and isolated multi-owner groups. Credential and transport requirements are
+defined in [`docs/security.md`](../../docs/security.md) and
+[`docs/decisions/0005-url-only-relay-enrollment.md`](../../docs/decisions/0005-url-only-relay-enrollment.md).
 
-Deleting a managed profile first deletes its anonymous controller and linked Relay data; deleting a
-self-hosted profile removes only QuotaBar's local profile and Keychain token because that controller
-is managed externally. Removing the managed profile persists an enrollment opt-out across restarts;
-**Reconnect Quota Relay** is the explicit action that creates a new anonymous controller. Settings
-also provides **Delete all QuotaBar data**, which deletes managed controllers before clearing all
-QuotaBar controller Keychain items, profiles, cached quota, and user preferences while retaining
-only that opt-out. If the managed Relay cannot be reached, the confirmation flow offers an explicit
-local-only fallback; the managed controller and Relay data may remain remotely while paired devices
-continue reporting. Startup reconciliation removes orphaned QuotaBar controller Keychain items that
-have no profile metadata.
+Settings exposes **Remote Devices** (aggregated own devices) and **Pair Device**. **Delete all
+QuotaBar data** deletes each reachable owner group before clearing Keychain items, endpoint records,
+cached quota, and preferences. If a Relay is unreachable, the confirmation flow offers an explicit
+local-only fallback. Startup reconciliation removes orphaned Keychain items that have no endpoint
+record. When an explicitly selected endpoint has lost or expired private access, Pair Device replaces
+that unusable local record with a newly isolated owner; background polling never enrolls on its own.
 
-The Relay state model coordinates profile mutation, pairing, last-known-good snapshot and device
+The Relay state model coordinates endpoint enrollment, pairing, last-known-good snapshot and device
 state, explicit refresh, and a cancellable five-minute polling loop. The production app creates one
 shared model for its lifecycle, Overview, and Settings stack and starts polling when the app starts.
 
@@ -39,10 +34,10 @@ Overview presents that resolved result with compact local and remote provenance.
 The current menu panel invokes its bundled QuotaCLI helper, combines its normalized results with
 configured Relay observations, and supports manual refresh plus explicit loading, authentication,
 unavailable, and error states. The panel is a window-style `MenuBarExtra` with an overview-rooted,
-strongly typed page stack rendered inside one shared shell. Settings, Relay profiles, pairing, and
-devices use the shell's single custom back control rather than a system navigation bar. The panel
-keeps flat provider rows, system-material chrome, brand-tinted provider marks, and semantic usage
-meters described in [`DESIGN.md`](./DESIGN.md). Appearance inherits the current macOS color scheme
+strongly typed page stack rendered inside one shared shell. Settings, Remote Devices, and Pair
+Device use the shell's single custom back control rather than a system navigation bar. The panel
+keeps flat provider rows, system-material chrome, monochrome provider marks, and restrained
+semantic usage meters described in [`DESIGN.md`](./DESIGN.md). Appearance inherits the current macOS color scheme
 through SwiftUI and has no app-level appearance override. Do not apply `apps/web/DESIGN.md` tokens
 to the menu panel.
 Agents without an authenticated session are omitted from the overview. A provider row requires a
@@ -73,9 +68,12 @@ Run the deterministic launch-and-screenshot acceptance matrix with `pnpm test:me
 Screenshots default to `dist/menubar-visual/screenshots`; use
 `pnpm test:menubar:visual --no-build` to reuse the existing app or pass
 `--output-dir <directory>` to select another screenshot directory. The visual app captures its own
-window content via AppKit (no Screen Recording permission). Pass
+window content via AppKit (no Screen Recording permission). Its deterministic window background is
+opaque so pixel validation can detect blank or transparent captures and lost foreground/background
+contrast. Standard and accessibility renders of the same routes must also differ. Pass
 `--screenshot-output <absolute path>` to request a PNG; relative paths are rejected and the default
-is no capture. The matrix fails instead of accepting missing or empty captures.
+is no capture. The matrix validates fixed panel dimensions, opaque pixels, luminance range, and
+meaningful accessibility-size rendering in addition to rejecting missing or empty captures.
 
 `QuotaBarVisual.app` uses the real menu-panel views inside an independently identified, ordinary
 macOS window. Its default `fixture` data source is deterministic: it does not invoke QuotaCLI or read
@@ -88,9 +86,8 @@ open -n dist/menubar-visual/QuotaBarVisual.app --args \
 ```
 
 Fixtures are `loading`, `content`, `cached-refresh-error`, `empty`, and `unavailable`. Routes are
-`overview`, `settings`, `relays`, `add`, `detail`, `pairing`, and `devices`; appearances are
-`system`, `light`, and `dark`. Text sizes are `standard`, `extra-large`, and `accessibility`, selected
-with `--text-size`.
+`overview`, `settings`, `remote-devices`, and `pair-device`; appearances are `system`, `light`, and
+`dark`. Text sizes are `standard`, `extra-large`, and `accessibility`, selected with `--text-size`.
 
 The visual bundle also contains the same arm64 standalone QuotaCLI helper as the production app. An
 explicit live run invokes that bundled helper and may read local Codex, Claude Code, or Grok provider
@@ -107,8 +104,8 @@ process execution, wire decoding, and the shared menu-panel UI together. It does
 menu-bar icon, popover anchor, click-outside dismissal, or other `MenuBarExtra` window chrome, which
 retain a small manual smoke test.
 
-Run `pnpm test:relay:e2e` from the repository root for the real self-hosted and managed
-controller-path acceptance flows. It launches the signed Visual App through LaunchServices and uses
+Run `pnpm test:relay:e2e` from the repository root for the real self-hosted and managed owner-path
+acceptance flows. It launches the signed Visual App through LaunchServices and uses
 the production URLSession, `RelayStateModel`, UserDefaults, and system Keychain boundaries against a
 temporary loopback Relay.
 A test-only CLI runner injects one normalized non-empty collection report at the existing command

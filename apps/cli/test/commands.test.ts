@@ -22,7 +22,7 @@ const { collectQuotaReport, diagnoseProviderSessions } = vi.hoisted(() => ({
         }
         const snapshot: QuotaSnapshot = {
           provider: provider as "codex" | "claude" | "grok",
-          account: { fingerprint: `${provider}-fp`, plan: "plus" },
+          account: { fingerprint: `${provider}-fp`, fingerprint_scope: "source", plan: "plus" },
           windows: [
             {
               id: "five_hour",
@@ -124,11 +124,9 @@ describe("QuotaCLI", () => {
 
   it("renders auth failures as explicit sign-in recovery copy", async () => {
     const capture = captureOutput();
-    const code = await runCli(
-      ["quota", "--provider", "all", "--format", "text"],
-      capture.output,
-      { isTty: true },
-    );
+    const code = await runCli(["quota", "--provider", "all", "--format", "text"], capture.output, {
+      isTty: true,
+    });
 
     expect(code).toBe(1);
     const text = capture.stdout.join("");

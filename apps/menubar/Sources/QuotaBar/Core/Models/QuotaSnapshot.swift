@@ -34,22 +34,18 @@ struct QuotaAccount: Codable, Equatable, Sendable {
   let fingerprint: String
   let label: String?
   let plan: String?
-  let fingerprintScope: FingerprintScope?
+  let fingerprintScope: FingerprintScope
 
   init(
     fingerprint: String,
     label: String?,
     plan: String?,
-    fingerprintScope: FingerprintScope? = nil
+    fingerprintScope: FingerprintScope
   ) {
     self.fingerprint = fingerprint
     self.label = label
     self.plan = plan
     self.fingerprintScope = fingerprintScope
-  }
-
-  var effectiveFingerprintScope: FingerprintScope {
-    fingerprintScope ?? .source
   }
 }
 

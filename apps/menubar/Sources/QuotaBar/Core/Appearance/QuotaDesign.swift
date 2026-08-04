@@ -16,7 +16,12 @@ enum QuotaDesign {
 
     static let headerHeight: CGFloat = 44
     static let footerHeight: CGFloat = 36
-    static let headerControlWidth: CGFloat = 28
+    /// Apple HIG's recommended minimum pointer target on macOS.
+    static let minimumInteractiveDimension: CGFloat = 28
+    /// Visual footprint between the back glyph's content edge and the title.
+    /// The button itself remains `headerControlWidth` wide and overlaps this slot inward.
+    static let backTitleOffset: CGFloat = 20
+    static let headerControlWidth: CGFloat = minimumInteractiveDimension
     static let providerRowVerticalPadding: CGFloat = 10
     static let progressHeight: CGFloat = 8
     static let tagCornerRadius: CGFloat = 3
@@ -50,18 +55,43 @@ enum QuotaDesign {
   /// Hierarchy (strong → quiet):
   /// panelTitle ≥ emptyTitle > rowTitle > sectionHeader > secondary > meta
   enum Typography {
-    static let panelTitle = Font.system(.headline, design: .rounded, weight: .semibold)
-    /// Same size as panelTitle, lighter weight.
-    static let emptyTitle = Font.system(.headline, design: .rounded, weight: .medium)
-    static let rowTitle = Font.system(.subheadline, weight: .medium)
-    static let sectionHeader = Font.system(.caption, weight: .semibold)
-    static let secondary = Font.system(.caption)
-    static let meta = Font.system(.caption2)
-    static let metaMedium = Font.system(.caption2, weight: .medium)
-    static let mono = Font.system(.caption, design: .monospaced)
-    static let monoMeta = Font.system(.caption2, design: .monospaced)
-    static let quotaLabel = Font.system(.caption, weight: .medium)
-    static let remainingValue = Font.system(.subheadline, weight: .semibold)
+    enum Role {
+      case panelTitle
+      case emptyTitle
+      case rowTitle
+      case sectionHeader
+      case secondary
+      case meta
+      case metaMedium
+      case mono
+      case monoMeta
+      case quotaLabel
+      case remainingValue
+
+      fileprivate var baseSize: CGFloat {
+        switch self {
+        case .panelTitle, .emptyTitle, .rowTitle, .remainingValue: 13
+        case .sectionHeader, .secondary, .mono, .quotaLabel: 11
+        case .meta, .metaMedium, .monoMeta: 10
+        }
+      }
+
+      fileprivate var weight: Font.Weight {
+        switch self {
+        case .panelTitle, .sectionHeader, .remainingValue: .semibold
+        case .emptyTitle, .rowTitle, .metaMedium, .quotaLabel: .medium
+        case .secondary, .meta, .mono, .monoMeta: .regular
+        }
+      }
+
+      fileprivate var design: Font.Design {
+        switch self {
+        case .panelTitle, .emptyTitle: .rounded
+        case .mono, .monoMeta: .monospaced
+        default: .default
+        }
+      }
+    }
 
     static let chevron = Font.system(size: 11, weight: .semibold)
     static let affordance = Font.system(size: 10, weight: .medium)
@@ -75,39 +105,43 @@ enum QuotaDesign {
 // MARK: - Semantic text styles (one helper per font+color pair)
 
 extension View {
+  func quotaFont(_ role: QuotaDesign.Typography.Role) -> some View {
+    modifier(QuotaScaledFontModifier(role: role))
+  }
+
   func quotaSectionHeaderStyle() -> some View {
-    font(QuotaDesign.Typography.sectionHeader)
+    quotaFont(.sectionHeader)
       .foregroundStyle(QuotaPalette.mute)
   }
 
   func quotaRowTitleStyle() -> some View {
-    font(QuotaDesign.Typography.rowTitle)
+    quotaFont(.rowTitle)
       .foregroundStyle(QuotaPalette.ink)
   }
 
   func quotaSecondaryStyle() -> some View {
-    font(QuotaDesign.Typography.secondary)
+    quotaFont(.secondary)
       .foregroundStyle(QuotaPalette.body)
   }
 
   func quotaMetaStyle() -> some View {
-    font(QuotaDesign.Typography.meta)
+    quotaFont(.meta)
       .foregroundStyle(QuotaPalette.mute)
   }
 
   /// Technical mono string (URL, command, id) — never stronger than body.
   func quotaMonoStyle() -> some View {
-    font(QuotaDesign.Typography.mono)
+    quotaFont(.mono)
       .foregroundStyle(QuotaPalette.body)
   }
 
   func quotaMonoMetaStyle() -> some View {
-    font(QuotaDesign.Typography.monoMeta)
+    quotaFont(.monoMeta)
       .foregroundStyle(QuotaPalette.mute)
   }
 
   func quotaEmptyTitleStyle() -> some View {
-    font(QuotaDesign.Typography.emptyTitle)
+    quotaFont(.emptyTitle)
       .foregroundStyle(QuotaPalette.ink)
   }
 
@@ -127,9 +161,41 @@ extension View {
   }
 }
 
+private struct QuotaScaledFontModifier: ViewModifier {
+  @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+  let role: QuotaDesign.Typography.Role
+
+  func body(content: Content) -> some View {
+    content.font(
+      .system(
+        size: role.baseSize * dynamicTypeSize.quotaScale,
+        weight: role.weight,
+        design: role.design
+      )
+    )
+  }
+}
+
+private extension DynamicTypeSize {
+  var quotaScale: CGFloat {
+    switch self {
+    case .xSmall, .small, .medium, .large: 1
+    case .xLarge: 1.08
+    case .xxLarge: 1.16
+    case .xxxLarge: 1.24
+    case .accessibility1: 1.32
+    case .accessibility2: 1.4
+    case .accessibility3: 1.48
+    case .accessibility4: 1.56
+    case .accessibility5: 1.64
+    @unknown default: 1
+    }
+  }
+}
+
 // MARK: - Shared chrome
 
-/// Compact mute status chip (Stale, Default, Managed, …).
+/// Compact mute status chip reserved for stale quota data.
 struct QuotaStatusTag: View {
   let text: String
   var systemImage: String?
@@ -141,7 +207,7 @@ struct QuotaStatusTag: View {
       }
       Text(text)
     }
-    .font(QuotaDesign.Typography.meta)
+    .quotaFont(.meta)
     .foregroundStyle(QuotaPalette.mute)
     .padding(.horizontal, 5)
     .padding(.vertical, 2)
@@ -154,18 +220,18 @@ struct QuotaStatusTag: View {
 
 struct QuotaPrimaryButtonStyle: ButtonStyle {
   @Environment(\.isEnabled) private var isEnabled
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   func makeBody(configuration: Configuration) -> some View {
     configuration.label
-      .font(QuotaDesign.Typography.rowTitle)
-      .foregroundStyle(isEnabled ? QuotaPalette.onPrimary : QuotaPalette.body)
+      .quotaFont(.rowTitle)
+      .foregroundStyle(isEnabled ? QuotaPalette.onAccent : QuotaPalette.body)
       .padding(.horizontal, 18)
       .frame(minHeight: QuotaDesign.Layout.controlMinHeight)
       .background(
-        isEnabled
-          ? (configuration.isPressed ? QuotaPalette.ink.opacity(0.85) : QuotaPalette.ink)
-          : QuotaPalette.soft
+        isEnabled ? QuotaPalette.accent : QuotaPalette.soft
       )
       .clipShape(Capsule())
+      .scaleEffect(configuration.isPressed && isEnabled && !reduceMotion ? 0.98 : 1)
   }
 }

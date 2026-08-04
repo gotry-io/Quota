@@ -1,8 +1,8 @@
 # QuotaRelay
 
-QuotaRelay has two supported persistent runtimes:
+QuotaRelay has two supported persistent runtime targets:
 
-- A Cloudflare Worker with Static Assets + D1 for the managed service at
+- A Cloudflare Worker with Static Assets + D1 for the planned managed service at
   [quota.gotry.io](https://quota.gotry.io).
 - Bun + SQLite for user self-hosting.
 
@@ -29,7 +29,7 @@ pnpm d1:migrate:local
 pnpm dev
 ```
 
-For the first production deployment, apply the remote migration before deploying the Worker and
+For the planned first production deployment, apply the remote migration before deploying the Worker and
 its website together:
 
 ```bash
@@ -43,55 +43,49 @@ record and certificate during deployment.
 ## Self-hosted development
 
 ```bash
-export QUOTA_RELAY_CONTROLLER_TOKEN="$(openssl rand -hex 32)"
 pnpm dev:relay:self-hosted
 ```
 
 The SQLite database defaults to `./data/quota-relay.db`. Set `QUOTA_RELAY_DATABASE_PATH` to move
-it. `QUOTA_RELAY_CONTROLLER_TOKEN` is required, must contain at least 32 characters, and must not
-have leading or trailing whitespace. It authenticates the fixed self-hosted controller with
-`quota:read` and `device:manage`; restarting with a different value immediately replaces the old
-controller bearer.
-QuotaRelay persists only its SHA-256 hash. Provider credentials must never be stored in this
-database.
+it. No bootstrap owner token is required: each QuotaBar registers an isolated anonymous owner
+capability when pairing. Provider credentials must never be stored in this database.
 
-For the container deployment, copy `deploy/.env.example` to the ignored `deploy/.env`, generate and
-set `QUOTA_RELAY_CONTROLLER_TOKEN`, then run from the repository root:
+For the container deployment, copy `deploy/.env.example` to the ignored `deploy/.env` if you need
+to set `QUOTA_RELAY_INSTANCE_ID`, then run from the repository root:
 
 ```bash
 docker compose --env-file deploy/.env -f deploy/docker-compose.yml up --build
 ```
 
-Compose refuses to render the service when the required token is unset or empty; the example file
-does not contain a default secret.
+Operators who need a private service should restrict network access at the reverse proxy, firewall,
+VPN, or identity-aware gateway.
 
 ## HTTP API v1
 
 The shared Hono server core implements these routes under `/api/v1`:
 
 - `POST /api/v1/pairings` and `POST /api/v1/pairings/token` create and poll a device-code pairing.
-- `POST /api/v1/controllers` anonymously creates a controller on the managed Relay and returns its
-  bearer once. `DELETE /api/v1/controllers/self` deletes that controller and its data.
-- `POST /api/v1/pairings/approve` and `POST /api/v1/pairings/deny` require a controller bearer with
+- `POST /api/v1/owners` anonymously creates an owner capability on any Relay and returns its
+  bearer once. `DELETE /api/v1/owners/self` deletes that owner group and its data.
+- `POST /api/v1/pairings/approve` and `POST /api/v1/pairings/deny` require an owner bearer with
   `device:manage`.
 - `POST /api/v1/snapshots` requires the paired device bearer and accepts snapshots only for that
   device.
-- `GET /api/v1/snapshots` requires a controller bearer with `quota:read`.
-- `GET /api/v1/devices` and `DELETE /api/v1/devices/:device_id` require a controller bearer with
+- `GET /api/v1/snapshots` requires an owner bearer with `quota:read`.
+- `GET /api/v1/devices` and `DELETE /api/v1/devices/:device_id` require an owner bearer with
   `device:manage`.
 - `DELETE /api/v1/devices/self` lets a device revoke its own bearer.
 
 Payloads are validated by `@gotry-io/quota-protocol`; pairing behavior and credential ownership are
-defined in [ADR 0002](../../docs/decisions/0002-relay-device-code-pairing.md), and security rules are
-defined in the [security baseline](../../docs/security.md). D1 and SQLite implement the same
-persistent server behavior.
+defined in [ADR 0002](../../docs/decisions/0002-relay-device-code-pairing.md) and
+[ADR 0005](../../docs/decisions/0005-url-only-relay-enrollment.md), and security rules are defined in
+the [security baseline](../../docs/security.md). D1 and SQLite implement the same persistent server
+behavior.
 
-The self-hosted runtime bootstraps its controller from `QUOTA_RELAY_CONTROLLER_TOKEN`. Both runtimes
-advertise bearer authentication, persistent snapshots, and instant device revocation; managed Relay
-also advertises multi-controller support. Devices that have not uploaded for 30 days are revoked.
-Hourly maintenance deletes managed controllers with no device activity in the same 30-day window
-and pairing sessions 24 hours after expiry; it never deletes the permanent self-hosted controller.
-Snapshot envelopes accept at most 32 observations.
+Both runtimes advertise bearer authentication, persistent snapshots, instant device revocation, and
+isolated multi-owner groups. Devices that have not uploaded for 30 days are revoked. Hourly
+maintenance deletes inactive owner groups with no device activity in the same 30-day window
+and pairing sessions 24 hours after expiry. Snapshot envelopes accept at most 32 observations.
 QuotaCLI uses the device pairing, snapshot-write, and self-revocation routes. QuotaBar uses the
-controller bearer for pairing decisions, snapshot reads, device listing, and revocation. Realtime
+hidden owner bearer for pairing decisions, snapshot reads, device listing, and revocation. Realtime
 WebSocket routing and Durable Objects are not part of v1.

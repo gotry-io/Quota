@@ -50,7 +50,7 @@ bodies.
 
 ## Distribution artifacts
 
-`build:npm` creates the Node-based `dist/npm/quotacli.js` published as
+`build:npm` creates the Node-based `dist/npm/quotacli.js` intended for publication as
 `@gotry-io/quotacli`. `build:standalone` creates `dist/standalone/quotacli` for the QuotaBar app
 bundle and direct release downloads. The npm package installs the same `quotacli` command and does
 not require Bun at runtime. A `v*` Git tag publishes the package from `release-cli.yml` through npm
@@ -71,10 +71,9 @@ quotacli status
 `pair` discovers and validates Relay capabilities, displays a Relay-generated user code for
 approval in QuotaBar, and stores the issued Relay-bound device credential. It does not accept a
 manually created token. After the credential is saved, macOS installs the background LaunchAgent,
-which runs `relay push` immediately on load and every five minutes. QuotaBar automatically creates
-an anonymous controller on the managed Relay without a user account; a self-hosted Relay bootstraps
-its controller from the operator-provided environment token. Either controller can approve the
-displayed pairing code.
+which runs `relay push` immediately on load and every five minutes. QuotaBar registers an isolated
+anonymous owner capability for the selected Relay URL (managed or self-hosted) without a user
+account or bootstrap token, then approves the displayed pairing code.
 
 `unpair` stops and removes the macOS background service, verifies the saved Relay instance, revokes
 the current device with its device credential, and then deletes the local credential. If discovery

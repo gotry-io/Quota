@@ -5,7 +5,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_PATH="${ROOT_DIR}/dist/menubar-visual/QuotaBarVisual.app"
 APP_BINARY="${APP_PATH}/Contents/MacOS/QuotaBar"
-REPORT_FIXTURE="${ROOT_DIR}/apps/cli/test/fixtures/relay-controller-e2e-report.json"
+REPORT_FIXTURE="${ROOT_DIR}/apps/cli/test/fixtures/relay-owner-e2e-report.json"
 REPORT_RUNNER="${ROOT_DIR}/apps/cli/test/support/relay-push-e2e.ts"
 MANAGED_RELAY_SERVER="${ROOT_DIR}/apps/relay/test/support/managed-relay-e2e.ts"
 OUTPUT_DIR="${ROOT_DIR}/dist/menubar-relay-e2e"
@@ -18,9 +18,9 @@ CURRENT_MODE=""
 
 usage() {
   cat <<'EOF'
-Usage: test-relay-controller-e2e.sh [--mode self-hosted|managed]
+Usage: test-relay-owner-e2e.sh [--mode self-hosted|managed]
 
-Runs the real QuotaBar controller path against loopback QuotaRelay instances and
+Runs the real QuotaBar owner path against loopback QuotaRelay instances and
 isolated QuotaCLI relay state. With no --mode, self-hosted and managed run in order.
 The LaunchServices-started Visual App uses production URLSession, Relay state,
 Defaults, and Keychain boundaries. No provider credentials are read. Screenshots
@@ -29,7 +29,7 @@ EOF
 }
 
 fail() {
-  local prefix="relay controller e2e"
+  local prefix="relay owner e2e"
   if [[ -n "$CURRENT_MODE" ]]; then
     prefix="${prefix} (${CURRENT_MODE})"
   fi
@@ -185,7 +185,7 @@ run_mode() {
   APP_PID=""
   CLI_PID=""
   RELAY_PID=""
-  WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/quota-relay-controller-e2e.${CURRENT_MODE}.XXXXXX")"
+  WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/quota-relay-owner-e2e.${CURRENT_MODE}.XXXXXX")"
   chmod 700 "$WORK_DIR"
   mkdir -m 700 \
     "${WORK_DIR}/coordination" \
@@ -197,33 +197,26 @@ run_mode() {
     "${WORK_DIR}/grok"
 
   local run_id
-  local controller_token=""
-  local controller_token_file=""
   local defaults_suite
   local keychain_service
   local coordination_dir="${WORK_DIR}/coordination"
   local screenshot_path="${WORK_DIR}/relay-overview.png"
   run_id="$(uuidgen | tr '[:upper:]' '[:lower:]')"
   defaults_suite="io.gotry.quotabar.e2e.${run_id}"
-  keychain_service="io.gotry.quotabar.relay-controller.e2e.${run_id}"
+  keychain_service="io.gotry.quotabar.relay-owner.e2e.${run_id}"
 
   if [[ "$CURRENT_MODE" == "self-hosted" ]]; then
-    controller_token="$(/usr/bin/openssl rand -hex 32)"
-    controller_token_file="${WORK_DIR}/controller-token"
-    printf '%s' "$controller_token" >"$controller_token_file"
-    chmod 600 "$controller_token_file"
     HOST=127.0.0.1 \
       PORT=0 \
-      QUOTA_RELAY_CONTROLLER_TOKEN="$controller_token" \
       QUOTA_RELAY_DATABASE_PATH="${WORK_DIR}/relay.db" \
-      QUOTA_RELAY_INSTANCE_ID="self-hosted-controller-e2e-${run_id}" \
+      QUOTA_RELAY_INSTANCE_ID="self-hosted-owner-e2e-${run_id}" \
       "$BUN_PATH" apps/relay/src/self-hosted.ts \
       >"${WORK_DIR}/relay.stdout.log" 2>"${WORK_DIR}/relay.stderr.log" &
   else
     HOST=127.0.0.1 \
       PORT=0 \
       QUOTA_RELAY_DATABASE_PATH="${WORK_DIR}/relay.db" \
-      QUOTA_RELAY_INSTANCE_ID="managed-controller-e2e-${run_id}" \
+      QUOTA_RELAY_INSTANCE_ID="managed-owner-e2e-${run_id}" \
       "$BUN_PATH" "$MANAGED_RELAY_SERVER" \
       >"${WORK_DIR}/relay.stdout.log" 2>"${WORK_DIR}/relay.stderr.log" &
   fi
@@ -257,9 +250,6 @@ run_mode() {
     --relay-acceptance-defaults-suite "$defaults_suite"
     --relay-acceptance-keychain-service "$keychain_service"
   )
-  if [[ "$CURRENT_MODE" == "self-hosted" ]]; then
-    app_arguments+=(--relay-acceptance-controller-token-file "$controller_token_file")
-  fi
   /usr/bin/open -n "$APP_PATH" --args "${app_arguments[@]}"
 
   wait_for_file "${coordination_dir}/app.pid" "QuotaBar process identity"
@@ -312,9 +302,9 @@ run_mode() {
   rg -F "Background relay push is loaded, runs immediately, and every 5 minutes." \
     "${WORK_DIR}/pair.stdout.log" >/dev/null \
     || fail "QuotaCLI did not enable background relay push"
-  if [[ -n "$controller_token" ]] && \
-    rg -F "$controller_token" "${WORK_DIR}/pair.stdout.log" "${WORK_DIR}/pair.stderr.log" >/dev/null; then
-    fail "QuotaCLI pairing output exposed the controller credential"
+  if rg -i --regexp 'owner_token|Authorization:|Bearer [A-Za-z0-9_-]{20,}' \
+    "${WORK_DIR}/pair.stdout.log" "${WORK_DIR}/pair.stderr.log" >/dev/null; then
+    fail "QuotaCLI pairing output exposed credential material"
   fi
 
   # Stop the just-installed agent so RunAtLoad cannot race the deterministic fixture push.
@@ -418,7 +408,7 @@ run_mode() {
   WORK_DIR=""
   [[ ! -e "$completed_work_dir" ]] || fail "temporary E2E state was not removed"
 
-  printf 'Relay controller E2E passed (%s): pair → non-empty report → Remote Overview → device revoke → reject → CLI unpair → controller/local cleanup (%sx%s): %s\n' \
+  printf 'Relay owner E2E passed (%s): pair → non-empty report → Remote Overview → device revoke → reject → CLI unpair → owner/local cleanup (%sx%s): %s\n' \
     "$CURRENT_MODE" "$pixel_width" "$pixel_height" "$output_path"
 }
 

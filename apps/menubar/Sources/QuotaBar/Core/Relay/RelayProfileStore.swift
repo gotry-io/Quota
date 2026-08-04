@@ -7,9 +7,9 @@ enum RelayProfileStoreError: LocalizedError, Equatable, Sendable {
   var errorDescription: String? {
     switch self {
     case .invalidData:
-      "The saved Relay profiles are invalid."
+      "The saved Relay endpoints are invalid."
     case .couldNotSave:
-      "QuotaBar could not save the Relay profiles."
+      "QuotaBar could not save its Relay endpoints."
     }
   }
 }
@@ -56,8 +56,7 @@ struct RelayProfileStore {
 
   private func validate(_ profiles: [RelayProfile]) throws {
     guard Set(profiles.map(\.id)).count == profiles.count,
-      Set(profiles.map(\.credentialReference)).count == profiles.count,
-      profiles.filter(\.isDefault).count == (profiles.isEmpty ? 0 : 1)
+      Set(profiles.map(\.credentialReference)).count == profiles.count
     else {
       throw RelayProfileStoreError.invalidData
     }
@@ -101,7 +100,7 @@ private struct RelayProfilePayload: Codable {
       throw DecodingError.dataCorruptedError(
         forKey: .schemaVersion,
         in: container,
-        debugDescription: "Unsupported Relay profile schema version."
+        debugDescription: "Unsupported Relay endpoint schema version."
       )
     }
   }

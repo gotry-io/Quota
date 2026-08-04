@@ -26,7 +26,7 @@ struct SubscriptionResolver: Sendable {
   private func identity(for observation: QuotaObservation) -> QuotaSubscriptionIdentity {
     let snapshot = observation.snapshot
     let scope: QuotaSubscriptionIdentity.Scope =
-      switch snapshot.account.effectiveFingerprintScope {
+      switch snapshot.account.fingerprintScope {
       case .global:
         .global
       case .source:

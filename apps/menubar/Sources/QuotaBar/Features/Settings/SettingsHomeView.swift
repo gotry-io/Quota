@@ -6,7 +6,7 @@ struct SettingsHomeView: View {
   @Binding var showsCodex: Bool
   @Binding var showsClaude: Bool
   @Binding var showsGrok: Bool
-  let onOpenRelays: () -> Void
+  let onOpenRemoteDevices: () -> Void
   var deleteAllErrorMessage: String? = nil
 
   var body: some View {
@@ -19,23 +19,23 @@ struct SettingsHomeView: View {
             providerToggle(.grok, isOn: $showsGrok)
           }
 
-          Text("Turn on signed-in agents to show them in Overview.")
+          Text("Choose which agents appear in Overview.")
             .quotaMetaStyle()
             .fixedSize(horizontal: false, vertical: true)
         }
 
         Divider()
 
-        settingsSection("Remote Quota") {
-          Button(action: onOpenRelays) {
+        settingsSection("Remote Devices") {
+          Button(action: onOpenRemoteDevices) {
             HStack(spacing: QuotaDesign.Spacing.sectionBody) {
-              Image(systemName: "network")
+              Image(systemName: "laptopcomputer.and.iphone")
                 .frame(width: 18)
 
               VStack(alignment: .leading, spacing: QuotaDesign.Spacing.xxs) {
-                Text("Relays")
+                Text("Remote Devices")
                   .quotaRowTitleStyle()
-                Text(relaySummary)
+                Text(deviceSummary)
                   .quotaMetaStyle()
                   .lineLimit(2)
               }
@@ -45,11 +45,16 @@ struct SettingsHomeView: View {
               Image(systemName: "chevron.right")
                 .quotaChevronStyle()
             }
+            .frame(
+              maxWidth: .infinity,
+              minHeight: QuotaDesign.Layout.minimumInteractiveDimension,
+              alignment: .leading
+            )
             .contentShape(Rectangle())
           }
           .buttonStyle(.plain)
-          .accessibilityLabel("Manage Relays")
-          .accessibilityHint(relaySummary)
+          .accessibilityLabel("Remote Devices")
+          .accessibilityHint(deviceSummary)
         }
 
         Divider()
@@ -75,9 +80,8 @@ struct SettingsHomeView: View {
     }
   }
 
-  private var relaySummary: String {
-    let count = model.relayStateModel.profiles.count
-    return count == 1 ? "1 configured Relay" : "\(count) configured Relays"
+  private var deviceSummary: String {
+    model.relayStateModel.remoteDeviceSummary
   }
 
   private func providerToggle(_ provider: ProviderID, isOn: Binding<Bool>) -> some View {
@@ -101,13 +105,16 @@ struct SettingsHomeView: View {
 
       Spacer(minLength: QuotaDesign.Spacing.sm)
 
-      // Visibility is user preference only — auth/unavailable still show in Overview
-      // when enabled, so the toggle stays interactive for every agent.
       Toggle("Show \(provider.displayName)", isOn: isOn)
         .labelsHidden()
         .controlSize(.small)
+        .frame(
+          minWidth: QuotaDesign.Layout.minimumInteractiveDimension,
+          minHeight: QuotaDesign.Layout.minimumInteractiveDimension
+        )
         .accessibilityHint(status.accessibilityHint)
     }
+    .frame(minHeight: QuotaDesign.Layout.minimumInteractiveDimension)
     .accessibilityElement(children: .combine)
   }
 
@@ -148,6 +155,11 @@ struct SettingsHomeView: View {
         Image(systemName: "arrow.up.right")
           .quotaAffordanceStyle()
       }
+      .frame(
+        maxWidth: .infinity,
+        minHeight: QuotaDesign.Layout.minimumInteractiveDimension,
+        alignment: .leading
+      )
       .contentShape(Rectangle())
     }
     .buttonStyle(.plain)

@@ -63,11 +63,15 @@ struct MenuBarFooterView: View {
       Button {
         Task { await model.refresh() }
       } label: {
-        if model.isRefreshing {
-          Text("Refreshing…")
-        } else {
-          Text(lastRefreshLabel)
+        Group {
+          if model.isRefreshing {
+            Text("Refreshing…")
+          } else {
+            Text(lastRefreshLabel)
+          }
         }
+        .frame(minHeight: QuotaDesign.Layout.minimumInteractiveDimension)
+        .contentShape(Rectangle())
       }
       .buttonStyle(.plain)
       .disabled(model.isRefreshing)

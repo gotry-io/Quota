@@ -85,7 +85,32 @@ func decodesQuotaSnapshotEnvelope() throws {
   #expect(envelope.deviceID == "device_01")
   #expect(envelope.snapshots.first?.provider == .codex)
   #expect(envelope.snapshots.first?.account.fingerprintScope == .global)
-  #expect(envelope.snapshots.first?.account.effectiveFingerprintScope == .global)
+}
+
+@Test
+func rejectsQuotaSnapshotWithoutFingerprintScope() {
+  let data = Data(
+    #"""
+    {
+      "schema_version": 1,
+      "device_id": "device_01",
+      "sequence": 1,
+      "captured_at": "2026-08-02T01:00:00Z",
+      "snapshots": [{
+        "provider": "codex",
+        "account": { "fingerprint": "account_01" },
+        "windows": [],
+        "source": "codex_api",
+        "status": "available",
+        "observed_at": "2026-08-02T01:00:00Z"
+      }]
+    }
+    """#.utf8
+  )
+
+  #expect(throws: DecodingError.self) {
+    _ = try QuotaWireCodec.makeDecoder().decode(QuotaSnapshotEnvelope.self, from: data)
+  }
 }
 
 @Test
@@ -102,6 +127,7 @@ func decodesCollectionReportAndCalculatesRemainingQuota() throws {
           "provider": "codex",
           "account": {
             "fingerprint": "account_01",
+            "fingerprint_scope": "source",
             "label": "ad***@example.com",
             "plan": "pro"
           },
@@ -130,8 +156,7 @@ func decodesCollectionReportAndCalculatesRemainingQuota() throws {
 
   #expect(report.schemaVersion == 1)
   #expect(report.results.first?.snapshots.first?.windows.first?.remainingPercent == 84)
-  #expect(report.results.first?.snapshots.first?.account.fingerprintScope == nil)
-  #expect(report.results.first?.snapshots.first?.account.effectiveFingerprintScope == .source)
+  #expect(report.results.first?.snapshots.first?.account.fingerprintScope == .source)
   #expect(report.results.last?.outcome == .authRequired)
 }
 
@@ -350,7 +375,12 @@ private func sampleSnapshot(
 ) -> QuotaSnapshot {
   QuotaSnapshot(
     provider: provider,
-    account: QuotaAccount(fingerprint: fingerprint, label: nil, plan: "Pro"),
+    account: QuotaAccount(
+      fingerprint: fingerprint,
+      label: nil,
+      plan: "Pro",
+      fingerprintScope: .global
+    ),
     windows: [
       QuotaWindow(
         id: "weekly",
@@ -392,7 +422,12 @@ private func sampleCollectionReport() -> QuotaCollectionReport {
         snapshots: [
           QuotaSnapshot(
             provider: .grok,
-            account: QuotaAccount(fingerprint: "account_grok", label: nil, plan: "SuperGrok"),
+            account: QuotaAccount(
+              fingerprint: "account_grok",
+              label: nil,
+              plan: "SuperGrok",
+              fingerprintScope: .global
+            ),
             windows: [
               QuotaWindow(
                 id: "monthly",

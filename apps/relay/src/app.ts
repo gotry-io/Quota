@@ -1,6 +1,6 @@
 import {
-  ControllerCreateResponseSchema,
-  ControllerSnapshotListResponseSchema,
+  OwnerCreateResponseSchema,
+  OwnerSnapshotListResponseSchema,
   DeviceListResponseSchema,
   PairingApprovalRequestSchema,
   PairingCreateRequestSchema,
@@ -15,8 +15,8 @@ import {
   type RelayInfo,
 } from "@gotry-io/quota-protocol";
 import type {
-  ControllerAuthScope,
-  ControllerSessionRecord,
+  OwnerAuthScope,
+  OwnerSessionRecord,
   DeviceRecord,
   RelayState,
 } from "@gotry-io/relay-core";
@@ -28,11 +28,11 @@ const pairingLifetimeSeconds = 10 * 60;
 const pairingSessionRetentionSeconds = 24 * 60 * 60;
 const pairingPollIntervalSeconds = 5;
 const maximumJSONBodyBytes = 64 * 1024;
-const controllerSessionExpiresAt = "9999-12-31T23:59:59.999Z";
+const ownerSessionExpiresAt = "9999-12-31T23:59:59.999Z";
 export const deviceInactivitySeconds = 30 * 24 * 60 * 60;
 
 const rateLimits = {
-  controllerCreate: { limit: 10, windowSeconds: 60 * 60 },
+  ownerCreate: { limit: 10, windowSeconds: 60 * 60 },
   pairingCreate: { limit: 300, windowSeconds: 10 * 60 },
   pairingPollClient: { limit: 10_000, windowSeconds: 10 * 60 },
   pairingPollPerCode: { limit: 130, windowSeconds: 10 * 60 },
@@ -89,47 +89,43 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     }),
   );
 
-  if (options.relayInfo.mode === "managed") {
-    app.post("/api/v1/controllers", async (context) => {
-      const limited = await enforceRateLimit(
-        context,
-        options.state,
-        "controller_create",
-        context.req.header("CF-Connecting-IP") ?? "relay_global",
-        rateLimits.controllerCreate,
-        now(),
-      );
-      if (limited) {
-        return limited;
-      }
+  // Anonymous owner registration is available on managed and self-hosted Relays.
+  // Each registration creates an isolated ephemeral group; the bearer is returned once.
+  app.post("/api/v1/owners", async (context) => {
+    const limited = await enforceRateLimit(
+      context,
+      options.state,
+      "owner_create",
+      anonymousClientSubject(context, options.relayInfo),
+      rateLimits.ownerCreate,
+      now(),
+    );
+    if (limited) {
+      return limited;
+    }
 
-      const createdAt = now().toISOString();
-      const controllerToken = randomOpaqueSecret();
-      await options.state.createController({
-        id: `controller_${crypto.randomUUID()}`,
-        kind: "managed",
-        session_id: `controller_session_${crypto.randomUUID()}`,
-        token_hash: await sha256Hex(controllerToken),
-        scopes: ["quota:read", "device:manage"],
-        expires_at: controllerSessionExpiresAt,
-        created_at: createdAt,
-      });
-
-      return context.json(
-        ControllerCreateResponseSchema.parse({ controller_token: controllerToken }),
-        201,
-      );
+    const createdAt = now().toISOString();
+    const ownerToken = randomOpaqueSecret();
+    await options.state.createOwner({
+      id: `owner_${crypto.randomUUID()}`,
+      session_id: `owner_session_${crypto.randomUUID()}`,
+      token_hash: await sha256Hex(ownerToken),
+      scopes: ["quota:read", "device:manage"],
+      expires_at: ownerSessionExpiresAt,
+      created_at: createdAt,
     });
 
-    app.delete("/api/v1/controllers/self", async (context) => {
-      const principal = await authorizeController(context, options.state, "device:manage", now());
-      if (principal instanceof Response) {
-        return principal;
-      }
-      await options.state.deleteController(principal.controller_id);
-      return context.body(null, 204);
-    });
-  }
+    return context.json(OwnerCreateResponseSchema.parse({ owner_token: ownerToken }), 201);
+  });
+
+  app.delete("/api/v1/owners/self", async (context) => {
+    const principal = await authorizeOwner(context, options.state, "device:manage", now());
+    if (principal instanceof Response) {
+      return principal;
+    }
+    await options.state.deleteOwner(principal.owner_id);
+    return context.body(null, 204);
+  });
 
   app.post("/api/v1/pairings", async (context) => {
     const limited = await enforceRateLimit(
@@ -281,25 +277,25 @@ export function createRelayApp(options: RelayAppOptions): Hono {
 
   app.get("/api/v1/snapshots", async (context) => {
     const checkedAt = now();
-    const principal = await authorizeController(context, options.state, "quota:read", checkedAt);
+    const principal = await authorizeOwner(context, options.state, "quota:read", checkedAt);
     if (principal instanceof Response) {
       return principal;
     }
-    await revokeInactiveDevicesForController(options.state, principal.controller_id, checkedAt);
-    const response = ControllerSnapshotListResponseSchema.parse({
-      observations: await options.state.listLatestSnapshots(principal.controller_id),
+    await revokeInactiveDevicesForOwner(options.state, principal.owner_id, checkedAt);
+    const response = OwnerSnapshotListResponseSchema.parse({
+      observations: await options.state.listLatestSnapshots(principal.owner_id),
     });
     return context.json(response);
   });
 
   app.get("/api/v1/devices", async (context) => {
     const checkedAt = now();
-    const principal = await authorizeController(context, options.state, "device:manage", checkedAt);
+    const principal = await authorizeOwner(context, options.state, "device:manage", checkedAt);
     if (principal instanceof Response) {
       return principal;
     }
-    await revokeInactiveDevicesForController(options.state, principal.controller_id, checkedAt);
-    const devices = await options.state.listDevices(principal.controller_id);
+    await revokeInactiveDevicesForOwner(options.state, principal.owner_id, checkedAt);
+    const devices = await options.state.listDevices(principal.owner_id);
     const response = DeviceListResponseSchema.parse({
       devices: devices.map((device) => ({
         device_id: device.id,
@@ -324,20 +320,20 @@ export function createRelayApp(options: RelayAppOptions): Hono {
       return unauthorized(context);
     }
     if (!device.revoked_at) {
-      await options.state.revokeDevice(device.controller_id, device.id, revokedAt.toISOString());
+      await options.state.revokeDevice(device.owner_id, device.id, revokedAt.toISOString());
     }
     return context.body(null, 204);
   });
 
   app.delete("/api/v1/devices/:device_id", async (context) => {
     const checkedAt = now();
-    const principal = await authorizeController(context, options.state, "device:manage", checkedAt);
+    const principal = await authorizeOwner(context, options.state, "device:manage", checkedAt);
     if (principal instanceof Response) {
       return principal;
     }
-    await revokeInactiveDevicesForController(options.state, principal.controller_id, checkedAt);
+    await revokeInactiveDevicesForOwner(options.state, principal.owner_id, checkedAt);
     const revoked = await options.state.revokeDevice(
-      principal.controller_id,
+      principal.owner_id,
       context.req.param("device_id"),
       checkedAt.toISOString(),
     );
@@ -364,7 +360,7 @@ async function decidePairing(
   decision: "approve" | "deny",
   now: () => Date,
 ): Promise<Response> {
-  const principal = await authorizeController(context, state, "device:manage", now());
+  const principal = await authorizeOwner(context, state, "device:manage", now());
   if (principal instanceof Response) {
     return principal;
   }
@@ -372,7 +368,7 @@ async function decidePairing(
     context,
     state,
     "pairing_decision",
-    principal.controller_id,
+    principal.owner_id,
     rateLimits.pairingDecision,
     now(),
   );
@@ -386,7 +382,7 @@ async function decidePairing(
   }
   const outcome = await state.decidePairingSession({
     user_code_hash: await sha256Hex(normalizeUserCode(body.user_code)),
-    controller_id: principal.controller_id,
+    owner_id: principal.owner_id,
     decision,
     decided_at: now().toISOString(),
   });
@@ -416,17 +412,17 @@ async function decidePairing(
   }
 }
 
-async function authorizeController(
+async function authorizeOwner(
   context: Context,
   state: RelayState,
-  requiredScope: ControllerAuthScope,
+  requiredScope: OwnerAuthScope,
   checkedAt: Date,
-): Promise<ControllerSessionRecord | Response> {
+): Promise<OwnerSessionRecord | Response> {
   const token = bearerToken(context.req.header("Authorization"));
   if (!token) {
     return unauthorized(context);
   }
-  const session = await state.getActiveControllerSessionByTokenHash(
+  const session = await state.getActiveOwnerSessionByTokenHash(
     await sha256Hex(token),
     checkedAt.toISOString(),
   );
@@ -481,13 +477,13 @@ export async function performRelayMaintenance(state: RelayState, checkedAt: Date
   });
 }
 
-async function revokeInactiveDevicesForController(
+async function revokeInactiveDevicesForOwner(
   state: RelayState,
-  controllerId: string,
+  ownerId: string,
   checkedAt: Date,
 ): Promise<number> {
-  return state.revokeInactiveDevicesForController(
-    controllerId,
+  return state.revokeInactiveDevicesForOwner(
+    ownerId,
     inactivityCutoff(checkedAt),
     checkedAt.toISOString(),
   );

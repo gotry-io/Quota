@@ -1,9 +1,8 @@
 import type { QuotaSnapshotEnvelope, RelayInfo } from "@gotry-io/quota-protocol";
 import type {
   ConsumePairingSessionInput,
-  ControllerKind,
-  ControllerSessionRecord,
-  CreateControllerInput,
+  OwnerSessionRecord,
+  CreateOwnerInput,
   CreatePairingSessionInput,
   DecidePairingSessionInput,
   DeviceRecord,
@@ -14,12 +13,12 @@ import type {
   RegisterDeviceInput,
   RelayMaintenanceInput,
   RelayState,
-  ReplaceControllerSessionInput,
+  ReplaceOwnerSessionInput,
   StoredQuotaSnapshot,
 } from "@gotry-io/relay-core";
 import { describe, expect, it } from "vitest";
 import { createRelayApp } from "../src/app.ts";
-import { managedRelayInfo } from "../src/config.ts";
+import { managedRelayInfo, selfHostedRelayInfo } from "../src/config.ts";
 
 class TestRelayState implements RelayState {
   ready = true;
@@ -33,20 +32,16 @@ class TestRelayState implements RelayState {
     }
   }
 
-  async createController(_input: CreateControllerInput): Promise<void> {}
-  async deleteController(_controllerId: string): Promise<boolean> {
+  async createOwner(_input: CreateOwnerInput): Promise<void> {}
+  async deleteOwner(_ownerId: string): Promise<boolean> {
     return false;
   }
-  async ensureController(
-    _controllerId: string,
-    _kind: ControllerKind,
-    _createdAt: string,
-  ): Promise<void> {}
-  async replaceControllerSession(_input: ReplaceControllerSessionInput): Promise<void> {}
-  async getActiveControllerSessionByTokenHash(
+  async ensureOwner(_ownerId: string, _createdAt: string): Promise<void> {}
+  async replaceOwnerSession(_input: ReplaceOwnerSessionInput): Promise<void> {}
+  async getActiveOwnerSessionByTokenHash(
     _tokenHash: string,
     _checkedAt: string,
-  ): Promise<ControllerSessionRecord | null> {
+  ): Promise<OwnerSessionRecord | null> {
     return null;
   }
   async registerDevice(_input: RegisterDeviceInput): Promise<void> {}
@@ -56,14 +51,10 @@ class TestRelayState implements RelayState {
   async getDeviceByTokenHash(_tokenHash: string): Promise<DeviceRecord | null> {
     return null;
   }
-  async listDevices(_controllerId: string): Promise<DeviceRecord[]> {
+  async listDevices(_ownerId: string): Promise<DeviceRecord[]> {
     return [];
   }
-  async revokeDevice(
-    _controllerId: string,
-    _deviceId: string,
-    _revokedAt: string,
-  ): Promise<boolean> {
+  async revokeDevice(_ownerId: string, _deviceId: string, _revokedAt: string): Promise<boolean> {
     return false;
   }
   async revokeDeviceIfInactive(
@@ -73,8 +64,8 @@ class TestRelayState implements RelayState {
   ): Promise<boolean> {
     return false;
   }
-  async revokeInactiveDevicesForController(
-    _controllerId: string,
+  async revokeInactiveDevicesForOwner(
+    _ownerId: string,
     _inactiveBefore: string,
     _revokedAt: string,
   ): Promise<number> {
@@ -93,7 +84,7 @@ class TestRelayState implements RelayState {
     return { allowed: true, retry_after: 0 };
   }
   async recordSnapshot(_envelope: QuotaSnapshotEnvelope, _receivedAt: string): Promise<void> {}
-  async listLatestSnapshots(_controllerId: string): Promise<StoredQuotaSnapshot[]> {
+  async listLatestSnapshots(_ownerId: string): Promise<StoredQuotaSnapshot[]> {
     return [];
   }
 }
@@ -101,7 +92,7 @@ class TestRelayState implements RelayState {
 class ActivityRaceRelayState extends TestRelayState {
   device: DeviceRecord = {
     id: "device_race",
-    controller_id: "controller_race",
+    owner_id: "owner_race",
     display_name: "Racing device",
     created_at: "2026-07-04T01:00:00Z",
     last_seen_at: null,
@@ -155,22 +146,27 @@ describe("QuotaRelay app", () => {
     expect(await response.json()).toEqual(relayInfo);
   });
 
-  it("publishes the managed controller capabilities", async () => {
-    const app = createRelayApp({
-      state: new TestRelayState(),
-      relayInfo: managedRelayInfo("managed-test"),
-    });
-    const response = await app.request("/.well-known/quotabar-relay");
-    const discovery = (await response.json()) as RelayInfo;
+  it("publishes isolated multi-owner capabilities for managed and self-hosted modes", async () => {
+    for (const info of [
+      managedRelayInfo("managed-test"),
+      selfHostedRelayInfo("self-hosted-test"),
+    ]) {
+      const app = createRelayApp({
+        state: new TestRelayState(),
+        relayInfo: info,
+      });
+      const response = await app.request("/.well-known/quotabar-relay");
+      const discovery = (await response.json()) as RelayInfo;
 
-    expect(discovery.auth_methods).toEqual(["bearer"]);
-    expect(discovery.capabilities).toEqual({
-      realtime: false,
-      persistent_snapshots: true,
-      instant_device_revocation: true,
-      history: false,
-      multi_tenant: true,
-    });
+      expect(discovery.auth_methods).toEqual(["bearer"]);
+      expect(discovery.capabilities).toEqual({
+        realtime: false,
+        persistent_snapshots: true,
+        instant_device_revocation: true,
+        history: false,
+        multi_tenant: true,
+      });
+    }
   });
 
   it("reports a storage readiness failure", async () => {

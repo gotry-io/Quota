@@ -8,7 +8,8 @@ export function managedRelayInfo(instanceId: string): RelayInfo {
 }
 
 export function selfHostedRelayInfo(instanceId: string): RelayInfo {
-  return relayInfo(instanceId, "self_hosted", false);
+  // multi_tenant advertises isolated owner groups on one instance, not user accounts.
+  return relayInfo(instanceId, "self_hosted", true);
 }
 
 function relayInfo(instanceId: string, mode: RelayInfo["mode"], multiTenant: boolean): RelayInfo {

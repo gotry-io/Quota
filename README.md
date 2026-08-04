@@ -19,7 +19,8 @@ The canonical system description is in [architecture](docs/architecture.md). See
 [security baseline](docs/security.md), [provider strategies](docs/provider-collection.md),
 [persistent storage decision](docs/decisions/0001-persistent-relay-storage.md),
 [device pairing decision](docs/decisions/0002-relay-device-code-pairing.md),
-[anonymous controller decision](docs/decisions/0004-anonymous-relay-controllers.md), and
+[anonymous owner decision](docs/decisions/0004-anonymous-relay-owners.md),
+[URL-only Relay enrollment](docs/decisions/0005-url-only-relay-enrollment.md), and
 [website design system](apps/web/DESIGN.md) and
 [QuotaBar design system](apps/menubar/DESIGN.md) for their respective concerns.
 
@@ -56,7 +57,6 @@ pnpm test:relay:e2e
 Run the self-hosted Relay with persistent SQLite storage:
 
 ```bash
-export QUOTA_RELAY_CONTROLLER_TOKEN="$(openssl rand -hex 32)"
 pnpm dev:relay:self-hosted
 ```
 
@@ -79,9 +79,11 @@ collection report. Credentials never leave the local machine and are never print
 
 ## Distribution targets
 
-- QuotaBar is distributed as a Homebrew Cask from `gotry-io/homebrew-tap`. Its signed app bundle
+- QuotaBar is intended for distribution as a Homebrew Cask from `gotry-io/homebrew-tap`. Its signed
+  app bundle
   includes a private QuotaCLI helper, so desktop users do not install the CLI separately.
-- QuotaCLI is published as `@gotry-io/quotacli`; `npm install -g @gotry-io/quotacli` installs the
+- QuotaCLI is intended for publication as `@gotry-io/quotacli`;
+  `npm install -g @gotry-io/quotacli` will install the
   `quotacli` command for developers and relay machines.
 - The same CLI source also produces a Bun standalone executable for the QuotaBar helper and release
   artifacts.
@@ -94,31 +96,31 @@ publishes QuotaCLI independently through npm Trusted Publishing, without a long-
 
 This repository implements local provider collection for Codex, Claude Code, and Grok, normalized
 protocol validation, persistent D1/SQLite Relay storage, Relay discovery, and the initial public
-website. QuotaBar ships its bundled helper and now resolves local and remote observations into one
+website. QuotaBar ships its bundled helper and resolves local and remote observations into one
 stable Overview without accumulating conflicting quota values. One Relay state model is shared by
-five-minute app-lifecycle polling and the typed Settings stack for Relay profiles, pairing decisions,
-device listing, and revocation. Controller capabilities remain in Keychain.
+five-minute app-lifecycle polling and the typed Settings stack for **Remote Devices** and **Pair
+Device**. A Relay is only an endpoint URL; each QuotaBar holds a hidden owner capability in Keychain
+and sees only the devices it paired.
 
 The macOS Relay acceptance test exercises a real LaunchServices-started QuotaBar and QuotaCLI
-against isolated managed and self-hosted Relay runtimes. It covers anonymous managed enrollment,
-controller persistence, device pairing, a non-empty report, Remote Overview rendering, device
+against isolated managed and self-hosted Relay runtimes. It covers anonymous owner enrollment on both
+runtimes, Keychain persistence, device pairing, a non-empty report, Remote Overview rendering, device
 revocation and rejection, remote self-unpairing, restart restoration, and credential cleanup.
 
 QuotaRelay implements its protocol-validated `/api/v1` server core for device-code pairing, scoped
 Bearer authentication, snapshot upload and reads, device management, and persistent rate limiting.
-The managed runtime issues anonymous controller capabilities without a user account; the
-self-hosted runtime bootstraps one controller from its environment. Controllers can revoke devices
-or delete their managed data, devices can revoke themselves, and devices inactive for 30 days are
-automatically revoked. Abandoned managed controllers and expired pairing state are reclaimed by
-scheduled maintenance, while self-hosted controllers remain permanent. QuotaCLI implements Relay pairing, one-shot `relay push`, remote unpairing, and a macOS LaunchAgent
-that runs push at load and every five minutes after pairing. Top-level `status` summarizes local
-provider readiness and Relay background state. QuotaCLI 0.1.0 is published on npm and later tags
-publish through OIDC.
+Both managed and self-hosted runtimes issue the same anonymous, isolated, expiring owner capabilities
+without user accounts or a bootstrap token. Owners can revoke their own devices or delete their
+group; devices can revoke themselves; devices and owner groups inactive for 30 days are reclaimed by
+scheduled maintenance. QuotaCLI implements Relay pairing, one-shot `relay push`, remote unpairing,
+and a macOS LaunchAgent that runs push at load and every five minutes after pairing. Top-level
+`status` summarizes local provider readiness and Relay background state. No Quota artifact has been
+published or deployed; the first tagged release will publish QuotaCLI through OIDC.
 
 The deterministic Visual App captures its own window without Screen Recording permission, and its
-automated acceptance harness validates twelve Overview and Settings scenes across appearance and
-text-size variants. Background-service support outside macOS and the first published Homebrew
-artifact remain incomplete. Realtime delivery is optional and not part of v1.
+automated acceptance harness validates Overview and Settings scenes across appearance and text-size
+variants. Background-service support outside macOS and the first Homebrew artifact remain
+incomplete. Realtime delivery is optional and not part of v1.
 
 ## License
 

@@ -2,7 +2,7 @@ import type { QuotaSnapshot, QuotaSnapshotEnvelope } from "@gotry-io/quota-proto
 
 export interface DeviceRecord {
   id: string;
-  controller_id: string;
+  owner_id: string;
   display_name: string;
   created_at: string;
   last_seen_at: string | null;
@@ -12,41 +12,38 @@ export interface DeviceRecord {
 
 export interface RegisterDeviceInput {
   id: string;
-  controller_id: string;
+  owner_id: string;
   display_name: string;
   token_hash: string;
   created_at: string;
 }
 
-export const CONTROLLER_AUTH_SCOPES = ["quota:read", "device:manage"] as const;
+export const OWNER_AUTH_SCOPES = ["quota:read", "device:manage"] as const;
 
-export type ControllerAuthScope = (typeof CONTROLLER_AUTH_SCOPES)[number];
+export type OwnerAuthScope = (typeof OWNER_AUTH_SCOPES)[number];
 
-export interface ControllerSessionRecord {
-  controller_id: string;
-  scopes: ControllerAuthScope[];
+export interface OwnerSessionRecord {
+  owner_id: string;
+  scopes: OwnerAuthScope[];
 }
 
-export interface ReplaceControllerSessionInput {
+export interface ReplaceOwnerSessionInput {
   id: string;
-  controller_id: string;
+  owner_id: string;
   token_hash: string;
-  scopes: ControllerAuthScope[];
+  scopes: OwnerAuthScope[];
   expires_at: string;
   created_at: string;
 }
 
-export interface CreateControllerInput {
+export interface CreateOwnerInput {
   id: string;
-  kind: ControllerKind;
   session_id: string;
   token_hash: string;
-  scopes: ControllerAuthScope[];
+  scopes: OwnerAuthScope[];
   expires_at: string;
   created_at: string;
 }
-
-export type ControllerKind = "managed" | "permanent";
 
 export interface RelayMaintenanceInput {
   inactive_before: string;
@@ -65,7 +62,7 @@ export interface CreatePairingSessionInput {
 
 export interface DecidePairingSessionInput {
   user_code_hash: string;
-  controller_id: string;
+  owner_id: string;
   decision: "approve" | "deny";
   decided_at: string;
 }
@@ -117,26 +114,26 @@ export interface StoredQuotaSnapshot {
 export interface RelayState {
   initialize(): Promise<void>;
   ping(): Promise<void>;
-  createController(input: CreateControllerInput): Promise<void>;
-  deleteController(controllerId: string): Promise<boolean>;
-  ensureController(controllerId: string, kind: ControllerKind, createdAt: string): Promise<void>;
-  replaceControllerSession(input: ReplaceControllerSessionInput): Promise<void>;
-  getActiveControllerSessionByTokenHash(
+  createOwner(input: CreateOwnerInput): Promise<void>;
+  deleteOwner(ownerId: string): Promise<boolean>;
+  ensureOwner(ownerId: string, createdAt: string): Promise<void>;
+  replaceOwnerSession(input: ReplaceOwnerSessionInput): Promise<void>;
+  getActiveOwnerSessionByTokenHash(
     tokenHash: string,
     checkedAt: string,
-  ): Promise<ControllerSessionRecord | null>;
+  ): Promise<OwnerSessionRecord | null>;
   registerDevice(input: RegisterDeviceInput): Promise<void>;
   getDevice(deviceId: string): Promise<DeviceRecord | null>;
   getDeviceByTokenHash(tokenHash: string): Promise<DeviceRecord | null>;
-  listDevices(controllerId: string): Promise<DeviceRecord[]>;
-  revokeDevice(controllerId: string, deviceId: string, revokedAt: string): Promise<boolean>;
+  listDevices(ownerId: string): Promise<DeviceRecord[]>;
+  revokeDevice(ownerId: string, deviceId: string, revokedAt: string): Promise<boolean>;
   revokeDeviceIfInactive(
     tokenHash: string,
     inactiveBefore: string,
     revokedAt: string,
   ): Promise<boolean>;
-  revokeInactiveDevicesForController(
-    controllerId: string,
+  revokeInactiveDevicesForOwner(
+    ownerId: string,
     inactiveBefore: string,
     revokedAt: string,
   ): Promise<number>;
@@ -146,5 +143,5 @@ export interface RelayState {
   consumePairingSession(input: ConsumePairingSessionInput): Promise<PairingConsumeOutcome>;
   consumeRateLimit(input: RateLimitInput): Promise<RateLimitResult>;
   recordSnapshot(envelope: QuotaSnapshotEnvelope, receivedAt: string): Promise<void>;
-  listLatestSnapshots(controllerId: string): Promise<StoredQuotaSnapshot[]>;
+  listLatestSnapshots(ownerId: string): Promise<StoredQuotaSnapshot[]>;
 }

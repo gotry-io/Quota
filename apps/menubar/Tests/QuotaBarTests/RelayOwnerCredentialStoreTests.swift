@@ -5,39 +5,39 @@ import Testing
 @testable import QuotaBar
 
 @Test
-func addsControllerCredentialWithThisDeviceOnlyAccessibility() throws {
+func addsOwnerCredentialWithThisDeviceOnlyAccessibility() throws {
   let operations = FakeRelayKeychainOperations([
     RelayKeychainResult(status: errSecSuccess, data: nil)
   ])
-  let store = RelayControllerCredentialStore(operations: operations)
-  let reference = RelayControllerCredentialStore.reference(
+  let store = RelayOwnerCredentialStore(operations: operations)
+  let reference = RelayOwnerCredentialStore.reference(
     for: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
   )
 
-  try store.save("controller_synthetic_secret", reference: reference)
+  try store.save("owner_synthetic_secret", reference: reference)
 
   let operation = try #require(operations.operations.first)
   guard case .add(let item) = operation else {
     Issue.record("Expected a Keychain add operation.")
     return
   }
-  #expect(item.query.service == "io.gotry.quotabar.relay-controller")
+  #expect(item.query.service == "io.gotry.quotabar.relay-owner")
   #expect(item.query.account == reference)
   #expect(!item.query.returnsData)
   #expect(!item.query.matchesOne)
-  #expect(item.value == Data("controller_synthetic_secret".utf8))
+  #expect(item.value == Data("owner_synthetic_secret".utf8))
   #expect(item.accessibility == .afterFirstUnlockThisDeviceOnly)
 }
 
 @Test
-func scopesControllerCredentialQueriesToTheConfiguredService() throws {
+func scopesOwnerCredentialQueriesToTheConfiguredService() throws {
   let operations = FakeRelayKeychainOperations([
     RelayKeychainResult(status: errSecSuccess, data: nil)
   ])
-  let service = "io.gotry.quotabar.relay-controller.e2e.synthetic"
-  let store = RelayControllerCredentialStore(operations: operations, service: service)
+  let service = "io.gotry.quotabar.relay-owner.e2e.synthetic"
+  let store = RelayOwnerCredentialStore(operations: operations, service: service)
 
-  try store.save("controller_synthetic_secret", reference: "relay-controller:profile")
+  try store.save("owner_synthetic_secret", reference: "relay-owner:profile")
 
   guard case .add(let item) = try #require(operations.operations.first) else {
     Issue.record("Expected a Keychain add operation.")
@@ -47,14 +47,14 @@ func scopesControllerCredentialQueriesToTheConfiguredService() throws {
 }
 
 @Test
-func updatesExistingControllerCredentialWithThisDeviceOnlyAccessibility() throws {
+func updatesExistingOwnerCredentialWithThisDeviceOnlyAccessibility() throws {
   let operations = FakeRelayKeychainOperations([
     RelayKeychainResult(status: errSecDuplicateItem, data: nil),
     RelayKeychainResult(status: errSecSuccess, data: nil),
   ])
-  let store = RelayControllerCredentialStore(operations: operations)
+  let store = RelayOwnerCredentialStore(operations: operations)
 
-  try store.save("replacement_secret", reference: "relay-controller:profile")
+  try store.save("replacement_secret", reference: "relay-owner:profile")
 
   #expect(operations.operations.count == 2)
   guard case .update(let item) = operations.operations[1] else {
@@ -66,57 +66,57 @@ func updatesExistingControllerCredentialWithThisDeviceOnlyAccessibility() throws
 }
 
 @Test
-func loadsControllerCredentialWithAnExactSingleItemQuery() throws {
+func loadsOwnerCredentialWithAnExactSingleItemQuery() throws {
   let operations = FakeRelayKeychainOperations([
-    RelayKeychainResult(status: errSecSuccess, data: Data("controller_synthetic_secret".utf8))
+    RelayKeychainResult(status: errSecSuccess, data: Data("owner_synthetic_secret".utf8))
   ])
-  let store = RelayControllerCredentialStore(operations: operations)
+  let store = RelayOwnerCredentialStore(operations: operations)
 
-  let controllerBearer = try store.load(reference: "relay-controller:profile")
+  let ownerBearer = try store.load(reference: "relay-owner:profile")
 
-  #expect(controllerBearer == "controller_synthetic_secret")
+  #expect(ownerBearer == "owner_synthetic_secret")
   guard case .load(let query) = try #require(operations.operations.first) else {
     Issue.record("Expected a Keychain load operation.")
     return
   }
-  #expect(query.service == "io.gotry.quotabar.relay-controller")
-  #expect(query.account == "relay-controller:profile")
+  #expect(query.service == "io.gotry.quotabar.relay-owner")
+  #expect(query.account == "relay-owner:profile")
   #expect(query.returnsData)
   #expect(query.matchesOne)
 }
 
 @Test
-func deletesOnlyTheReferencedControllerCredential() throws {
+func deletesOnlyTheReferencedOwnerCredential() throws {
   let operations = FakeRelayKeychainOperations([
     RelayKeychainResult(status: errSecSuccess, data: nil)
   ])
-  let store = RelayControllerCredentialStore(operations: operations)
+  let store = RelayOwnerCredentialStore(operations: operations)
 
-  try store.delete(reference: "relay-controller:profile")
+  try store.delete(reference: "relay-owner:profile")
 
   guard case .delete(let query) = try #require(operations.operations.first) else {
     Issue.record("Expected a Keychain delete operation.")
     return
   }
-  #expect(query.service == "io.gotry.quotabar.relay-controller")
-  #expect(query.account == "relay-controller:profile")
+  #expect(query.service == "io.gotry.quotabar.relay-owner")
+  #expect(query.account == "relay-owner:profile")
   #expect(!query.returnsData)
   #expect(!query.matchesOne)
 }
 
 @Test
-func reconcilesControllerCredentialsByDeletingOnlyOrphanedAccounts() throws {
-  let kept = "relay-controller:kept"
-  let orphan = "relay-controller:orphan"
+func reconcilesOwnerCredentialsByDeletingOnlyOrphanedAccounts() throws {
+  let kept = "relay-owner:kept"
+  let orphan = "relay-owner:orphan"
   let operations = FakeRelayKeychainOperations([
     RelayKeychainResult(status: errSecSuccess, data: nil, accounts: [kept, orphan]),
     RelayKeychainResult(status: errSecSuccess, data: nil),
   ])
 
-  try RelayControllerCredentialStore(operations: operations).reconcile(retaining: [kept])
+  try RelayOwnerCredentialStore(operations: operations).reconcile(retaining: [kept])
 
   #expect(operations.operations.count == 2)
-  #expect(operations.operations[0] == .listAccounts(service: RelayControllerCredentialStore.service))
+  #expect(operations.operations[0] == .listAccounts(service: RelayOwnerCredentialStore.service))
   guard case .delete(let query) = operations.operations[1] else {
     Issue.record("Expected the orphaned Keychain item to be deleted.")
     return
@@ -125,15 +125,15 @@ func reconcilesControllerCredentialsByDeletingOnlyOrphanedAccounts() throws {
 }
 
 @Test
-func deletesAllControllerCredentialsWithinTheQuotaBarService() throws {
+func deletesAllOwnerCredentialsWithinTheQuotaBarService() throws {
   let operations = FakeRelayKeychainOperations([
     RelayKeychainResult(status: errSecSuccess, data: nil)
   ])
 
-  try RelayControllerCredentialStore(operations: operations).deleteAll()
+  try RelayOwnerCredentialStore(operations: operations).deleteAll()
 
   #expect(operations.operations == [
-    .deleteAll(service: RelayControllerCredentialStore.service)
+    .deleteAll(service: RelayOwnerCredentialStore.service)
   ])
 }
 
@@ -146,11 +146,11 @@ func reportsFixedMissingAndCorruptCredentialErrors() throws {
     RelayKeychainResult(status: errSecSuccess, data: Data([0xff]))
   ])
 
-  #expect(throws: RelayControllerCredentialStoreError.missingCredential) {
-    try RelayControllerCredentialStore(operations: missingOperations).load(reference: "relay-controller:p")
+  #expect(throws: RelayOwnerCredentialStoreError.missingCredential) {
+    try RelayOwnerCredentialStore(operations: missingOperations).load(reference: "relay-owner:p")
   }
-  #expect(throws: RelayControllerCredentialStoreError.corruptCredential) {
-    try RelayControllerCredentialStore(operations: corruptOperations).load(reference: "relay-controller:p")
+  #expect(throws: RelayOwnerCredentialStoreError.corruptCredential) {
+    try RelayOwnerCredentialStore(operations: corruptOperations).load(reference: "relay-owner:p")
   }
 }
 
@@ -170,23 +170,23 @@ func mapsKeychainFailuresToFixedErrors() {
     RelayKeychainResult(status: errSecInteractionNotAllowed, data: nil)
   ])
 
-  #expect(throws: RelayControllerCredentialStoreError.couldNotStore) {
-    try RelayControllerCredentialStore(operations: addFailure).save(
-      "controller_synthetic_secret",
-      reference: "relay-controller:profile"
+  #expect(throws: RelayOwnerCredentialStoreError.couldNotStore) {
+    try RelayOwnerCredentialStore(operations: addFailure).save(
+      "owner_synthetic_secret",
+      reference: "relay-owner:profile"
     )
   }
-  #expect(throws: RelayControllerCredentialStoreError.couldNotStore) {
-    try RelayControllerCredentialStore(operations: updateFailure).save(
-      "controller_synthetic_secret",
-      reference: "relay-controller:profile"
+  #expect(throws: RelayOwnerCredentialStoreError.couldNotStore) {
+    try RelayOwnerCredentialStore(operations: updateFailure).save(
+      "owner_synthetic_secret",
+      reference: "relay-owner:profile"
     )
   }
-  #expect(throws: RelayControllerCredentialStoreError.couldNotRead) {
-    try RelayControllerCredentialStore(operations: readFailure).load(reference: "relay-controller:profile")
+  #expect(throws: RelayOwnerCredentialStoreError.couldNotRead) {
+    try RelayOwnerCredentialStore(operations: readFailure).load(reference: "relay-owner:profile")
   }
-  #expect(throws: RelayControllerCredentialStoreError.couldNotDelete) {
-    try RelayControllerCredentialStore(operations: deleteFailure).delete(reference: "relay-controller:profile")
+  #expect(throws: RelayOwnerCredentialStoreError.couldNotDelete) {
+    try RelayOwnerCredentialStore(operations: deleteFailure).delete(reference: "relay-owner:profile")
   }
 }
 
@@ -194,10 +194,10 @@ func mapsKeychainFailuresToFixedErrors() {
 func rejectsCredentialsWithSurroundingWhitespace() {
   let operations = FakeRelayKeychainOperations([])
 
-  #expect(throws: RelayControllerCredentialStoreError.invalidCredential) {
-    try RelayControllerCredentialStore(operations: operations).save(
-      " controller_synthetic_secret",
-      reference: "relay-controller:p"
+  #expect(throws: RelayOwnerCredentialStoreError.invalidCredential) {
+    try RelayOwnerCredentialStore(operations: operations).save(
+      " owner_synthetic_secret",
+      reference: "relay-owner:p"
     )
   }
   #expect(operations.operations.isEmpty)

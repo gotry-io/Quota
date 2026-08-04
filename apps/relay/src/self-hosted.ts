@@ -2,19 +2,13 @@ import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { createRelayApp, performRelayMaintenance } from "./app.ts";
 import { selfHostedRelayInfo } from "./config.ts";
-import {
-  bootstrapSelfHostedController,
-  requireSelfHostedControllerToken,
-} from "./self-hosted-bootstrap.ts";
 import { SQLiteRelayState } from "./state/sqlite-state.ts";
 
-const controllerToken = requireSelfHostedControllerToken(process.env.QUOTA_RELAY_CONTROLLER_TOKEN);
 const databasePath = resolve(process.env.QUOTA_RELAY_DATABASE_PATH ?? "./data/quota-relay.db");
 mkdirSync(dirname(databasePath), { recursive: true, mode: 0o700 });
 
 const state = new SQLiteRelayState(databasePath);
 await state.initialize();
-await bootstrapSelfHostedController(state, controllerToken, new Date());
 await performRelayMaintenance(state, new Date());
 
 const relayInfo = selfHostedRelayInfo(process.env.QUOTA_RELAY_INSTANCE_ID ?? "self-hosted-primary");

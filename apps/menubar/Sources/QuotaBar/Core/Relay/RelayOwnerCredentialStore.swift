@@ -121,7 +121,7 @@ struct SystemRelayKeychainOperations: RelayKeychainOperating {
   }
 }
 
-enum RelayControllerCredentialStoreError: LocalizedError, Equatable, Sendable {
+enum RelayOwnerCredentialStoreError: LocalizedError, Equatable, Sendable {
   case invalidCredential
   case missingCredential
   case corruptCredential
@@ -132,30 +132,30 @@ enum RelayControllerCredentialStoreError: LocalizedError, Equatable, Sendable {
   var errorDescription: String? {
     switch self {
     case .invalidCredential:
-      "The Relay controller credential is invalid."
+      "QuotaBar's private Relay access is invalid."
     case .missingCredential:
-      "The Relay controller credential is missing."
+      "QuotaBar's private access to this Relay is missing."
     case .corruptCredential:
-      "The saved Relay controller credential is invalid."
+      "QuotaBar's saved private Relay access is invalid."
     case .couldNotRead:
-      "QuotaBar could not read the Relay controller credential."
+      "QuotaBar could not read its private Relay access."
     case .couldNotStore:
-      "QuotaBar could not save the Relay controller credential."
+      "QuotaBar could not save its private Relay access."
     case .couldNotDelete:
-      "QuotaBar could not delete the Relay controller credential."
+      "QuotaBar could not delete its private Relay access."
     }
   }
 }
 
-struct RelayControllerCredentialStore: Sendable {
-  static let service = "io.gotry.quotabar.relay-controller"
+struct RelayOwnerCredentialStore: Sendable {
+  static let service = "io.gotry.quotabar.relay-owner"
 
   private let operations: any RelayKeychainOperating
   private let service: String
 
   init(
     operations: any RelayKeychainOperating = SystemRelayKeychainOperations(),
-    service: String = RelayControllerCredentialStore.service
+    service: String = RelayOwnerCredentialStore.service
   ) {
     self.operations = operations
     self.service = service
@@ -165,13 +165,13 @@ struct RelayControllerCredentialStore: Sendable {
     RelayProfile.credentialReference(for: profileID)
   }
 
-  func save(_ controllerBearer: String, reference: String) throws {
-    guard isValid(controllerBearer), !reference.isEmpty else {
-      throw RelayControllerCredentialStoreError.invalidCredential
+  func save(_ ownerBearer: String, reference: String) throws {
+    guard isValid(ownerBearer), !reference.isEmpty else {
+      throw RelayOwnerCredentialStoreError.invalidCredential
     }
     let item = RelayKeychainItem(
       query: query(reference: reference),
-      value: Data(controllerBearer.utf8),
+      value: Data(ownerBearer.utf8),
       accessibility: .afterFirstUnlockThisDeviceOnly
     )
     let added = operations.perform(.add(item))
@@ -179,40 +179,40 @@ struct RelayControllerCredentialStore: Sendable {
       return
     }
     guard added.status == errSecDuplicateItem else {
-      throw RelayControllerCredentialStoreError.couldNotStore
+      throw RelayOwnerCredentialStoreError.couldNotStore
     }
     guard operations.perform(.update(item)).status == errSecSuccess else {
-      throw RelayControllerCredentialStoreError.couldNotStore
+      throw RelayOwnerCredentialStoreError.couldNotStore
     }
   }
 
   func load(reference: String) throws -> String {
     guard !reference.isEmpty else {
-      throw RelayControllerCredentialStoreError.missingCredential
+      throw RelayOwnerCredentialStoreError.missingCredential
     }
     let result = operations.perform(.load(query(reference: reference, forLoad: true)))
     if result.status == errSecItemNotFound {
-      throw RelayControllerCredentialStoreError.missingCredential
+      throw RelayOwnerCredentialStoreError.missingCredential
     }
     guard result.status == errSecSuccess else {
-      throw RelayControllerCredentialStoreError.couldNotRead
+      throw RelayOwnerCredentialStoreError.couldNotRead
     }
     guard let data = result.data,
-      let controllerBearer = String(data: data, encoding: .utf8),
-      isValid(controllerBearer)
+      let ownerBearer = String(data: data, encoding: .utf8),
+      isValid(ownerBearer)
     else {
-      throw RelayControllerCredentialStoreError.corruptCredential
+      throw RelayOwnerCredentialStoreError.corruptCredential
     }
-    return controllerBearer
+    return ownerBearer
   }
 
   func delete(reference: String) throws {
     guard !reference.isEmpty else {
-      throw RelayControllerCredentialStoreError.missingCredential
+      throw RelayOwnerCredentialStoreError.missingCredential
     }
     let status = operations.perform(.delete(query(reference: reference))).status
     guard status == errSecSuccess || status == errSecItemNotFound else {
-      throw RelayControllerCredentialStoreError.couldNotDelete
+      throw RelayOwnerCredentialStoreError.couldNotDelete
     }
   }
 
@@ -222,7 +222,7 @@ struct RelayControllerCredentialStore: Sendable {
       return
     }
     guard result.status == errSecSuccess, let accounts = result.accounts else {
-      throw RelayControllerCredentialStoreError.couldNotRead
+      throw RelayOwnerCredentialStoreError.couldNotRead
     }
     for reference in Set(accounts).subtracting(references) {
       try delete(reference: reference)
@@ -232,7 +232,7 @@ struct RelayControllerCredentialStore: Sendable {
   func deleteAll() throws {
     let status = operations.perform(.deleteAll(service: service)).status
     guard status == errSecSuccess || status == errSecItemNotFound else {
-      throw RelayControllerCredentialStoreError.couldNotDelete
+      throw RelayOwnerCredentialStoreError.couldNotDelete
     }
   }
 
@@ -245,9 +245,9 @@ struct RelayControllerCredentialStore: Sendable {
     )
   }
 
-  private func isValid(_ controllerBearer: String) -> Bool {
-    !controllerBearer.isEmpty
-      && controllerBearer == controllerBearer.trimmingCharacters(in: .whitespacesAndNewlines)
-      && controllerBearer.unicodeScalars.allSatisfy { $0.value >= 0x20 && $0.value != 0x7f }
+  private func isValid(_ ownerBearer: String) -> Bool {
+    !ownerBearer.isEmpty
+      && ownerBearer == ownerBearer.trimmingCharacters(in: .whitespacesAndNewlines)
+      && ownerBearer.unicodeScalars.allSatisfy { $0.value >= 0x20 && $0.value != 0x7f }
   }
 }

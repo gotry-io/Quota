@@ -52,11 +52,11 @@ enum RelayClientError: LocalizedError, Equatable, Sendable {
     case .unsupportedRelay:
       "This Relay does not support secure QuotaBar access."
     case .instanceMismatch:
-      "The Relay instance no longer matches this profile."
+      "The Relay at this URL is a different instance."
     case .credentialRejected:
-      "The Relay controller credential is no longer valid."
+      "QuotaBar's private access to this Relay is no longer valid."
     case .permissionDenied:
-      "The Relay controller credential lacks the required permission."
+      "QuotaBar's private access to this Relay lacks the required permission."
     case .resourceNotFound:
       "The requested Relay item was not found."
     case .pairingUnavailable:
@@ -115,7 +115,7 @@ actor RelayClient {
     return relayInfo
   }
 
-  func registerController(baseURL: URL) async throws -> ControllerRegistrationResponse {
+  func registerOwner(baseURL: URL) async throws -> OwnerRegistrationResponse {
     let canonicalURL: URL
     do {
       canonicalURL = try RelayOrigin.canonicalURL(from: baseURL)
@@ -123,64 +123,64 @@ actor RelayClient {
       throw RelayClientError.invalidRelayURL
     }
     let request = makeRequest(
-      url: canonicalURL.appending(path: "api/v1/controllers"),
+      url: canonicalURL.appending(path: "api/v1/owners"),
       method: "POST"
     )
     let response = try await send(request)
     try requireStatus(response.statusCode, expected: 201, authenticated: false)
-    return try decode(ControllerRegistrationResponse.self, from: response.body)
+    return try decode(OwnerRegistrationResponse.self, from: response.body)
   }
 
   func approvePairing(
     userCode: String,
     profile: RelayProfile,
-    controllerBearer: String
+    ownerBearer: String
   ) async throws {
     try await decidePairing(
       action: "approve",
       userCode: userCode,
       profile: profile,
-      controllerBearer: controllerBearer
+      ownerBearer: ownerBearer
     )
   }
 
   func denyPairing(
     userCode: String,
     profile: RelayProfile,
-    controllerBearer: String
+    ownerBearer: String
   ) async throws {
     try await decidePairing(
       action: "deny",
       userCode: userCode,
       profile: profile,
-      controllerBearer: controllerBearer
+      ownerBearer: ownerBearer
     )
   }
 
   func fetchLatestSnapshots(
     profile: RelayProfile,
-    controllerBearer: String
-  ) async throws -> ControllerSnapshotListResponse {
+    ownerBearer: String
+  ) async throws -> OwnerSnapshotListResponse {
     let boundURL = try await verifyInstance(for: profile)
     let request = try authenticatedRequest(
       url: boundURL.appending(path: "api/v1/snapshots"),
       method: "GET",
-      controllerBearer: controllerBearer
+      ownerBearer: ownerBearer
     )
     let response = try await send(request)
     try requireStatus(response.statusCode, expected: 200, authenticated: true)
-    return try decode(ControllerSnapshotListResponse.self, from: response.body)
+    return try decode(OwnerSnapshotListResponse.self, from: response.body)
   }
 
   func listDevices(
     profile: RelayProfile,
-    controllerBearer: String
+    ownerBearer: String
   ) async throws -> DeviceListResponse {
     let boundURL = try await verifyInstance(for: profile)
     let request = try authenticatedRequest(
       url: boundURL.appending(path: "api/v1/devices"),
       method: "GET",
-      controllerBearer: controllerBearer
+      ownerBearer: ownerBearer
     )
     let response = try await send(request)
     try requireStatus(response.statusCode, expected: 200, authenticated: true)
@@ -190,7 +190,7 @@ actor RelayClient {
   func revokeDevice(
     deviceID: String,
     profile: RelayProfile,
-    controllerBearer: String
+    ownerBearer: String
   ) async throws {
     let boundURL = try await verifyInstance(for: profile)
     guard !deviceID.isEmpty,
@@ -207,21 +207,21 @@ actor RelayClient {
     let request = try authenticatedRequest(
       url: url,
       method: "DELETE",
-      controllerBearer: controllerBearer
+      ownerBearer: ownerBearer
     )
     let response = try await send(request)
     try requireStatus(response.statusCode, expected: 204, authenticated: true)
   }
 
-  func deleteController(
+  func deleteOwner(
     profile: RelayProfile,
-    controllerBearer: String
+    ownerBearer: String
   ) async throws {
     let boundURL = try await verifyInstance(for: profile)
     let request = try authenticatedRequest(
-      url: boundURL.appending(path: "api/v1/controllers/self"),
+      url: boundURL.appending(path: "api/v1/owners/self"),
       method: "DELETE",
-      controllerBearer: controllerBearer
+      ownerBearer: ownerBearer
     )
     let response = try await send(request)
     try requireStatus(response.statusCode, expected: 204, authenticated: true)
@@ -231,7 +231,7 @@ actor RelayClient {
     action: String,
     userCode: String,
     profile: RelayProfile,
-    controllerBearer: String
+    ownerBearer: String
   ) async throws {
     let normalizedCode = userCode.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !normalizedCode.isEmpty else {
@@ -250,7 +250,7 @@ actor RelayClient {
     let request = try authenticatedRequest(
       url: boundURL.appending(path: "api/v1/pairings/\(action)"),
       method: "POST",
-      controllerBearer: controllerBearer,
+      ownerBearer: ownerBearer,
       body: body
     )
     let response = try await send(request)
@@ -292,17 +292,17 @@ actor RelayClient {
   private func authenticatedRequest(
     url: URL,
     method: String,
-    controllerBearer: String,
+    ownerBearer: String,
     body: Data? = nil
   ) throws -> URLRequest {
-    guard !controllerBearer.isEmpty,
-      controllerBearer == controllerBearer.trimmingCharacters(in: .whitespacesAndNewlines),
-      controllerBearer.unicodeScalars.allSatisfy({ $0.value >= 0x20 && $0.value != 0x7f })
+    guard !ownerBearer.isEmpty,
+      ownerBearer == ownerBearer.trimmingCharacters(in: .whitespacesAndNewlines),
+      ownerBearer.unicodeScalars.allSatisfy({ $0.value >= 0x20 && $0.value != 0x7f })
     else {
       throw RelayClientError.credentialRejected
     }
     var request = makeRequest(url: url, method: method, body: body)
-    request.setValue("Bearer \(controllerBearer)", forHTTPHeaderField: "Authorization")
+    request.setValue("Bearer \(ownerBearer)", forHTTPHeaderField: "Authorization")
     return request
   }
 

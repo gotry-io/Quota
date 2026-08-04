@@ -43,6 +43,12 @@ struct QuotaBarApp: App {
         )
         .preferredColorScheme(visualTestConfiguration.colorScheme)
         .dynamicTypeSize(visualTestConfiguration.dynamicTypeSize)
+        // A MenuBarExtra panel has no title-bar safe area. Match that geometry in the ordinary
+        // Visual QA window so large text cannot be obscured by hidden title-bar chrome.
+        .ignoresSafeArea()
+        // MenuBarExtra supplies material in production. The ordinary Visual QA window instead
+        // uses an opaque system background so screenshots can validate text and control contrast.
+        .background(Color(nsColor: .windowBackgroundColor))
         .onAppear {
           NSApplication.shared.setActivationPolicy(.regular)
           NSApplication.shared.activate(ignoringOtherApps: true)

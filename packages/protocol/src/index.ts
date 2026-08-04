@@ -33,7 +33,7 @@ export type QuotaWindow = z.infer<typeof QuotaWindowSchema>;
 export const QuotaAccountSchema = z
   .object({
     fingerprint: z.string().min(1),
-    fingerprint_scope: FingerprintScopeSchema.optional(),
+    fingerprint_scope: FingerprintScopeSchema,
     label: z.string().min(1).optional(),
     plan: z.string().min(1).optional(),
   })
@@ -169,12 +169,12 @@ export const RelayErrorEnvelopeSchema = z
   .strict();
 export type RelayErrorEnvelope = z.infer<typeof RelayErrorEnvelopeSchema>;
 
-export const ControllerCreateResponseSchema = z
+export const OwnerCreateResponseSchema = z
   .object({
-    controller_token: z.string().min(1),
+    owner_token: z.string().min(1),
   })
   .strict();
-export type ControllerCreateResponse = z.infer<typeof ControllerCreateResponseSchema>;
+export type OwnerCreateResponse = z.infer<typeof OwnerCreateResponseSchema>;
 
 export const PairingCreateRequestSchema = z
   .object({
@@ -230,7 +230,7 @@ export const PairingDenialRequestSchema = z
   .strict();
 export type PairingDenialRequest = z.infer<typeof PairingDenialRequestSchema>;
 
-export const ControllerSnapshotObservationSchema = z
+export const OwnerSnapshotObservationSchema = z
   .object({
     device_id: z.string().min(1),
     sequence: z.number().int().nonnegative(),
@@ -239,14 +239,14 @@ export const ControllerSnapshotObservationSchema = z
     updated_at: z.string().datetime({ offset: true }),
   })
   .strict();
-export type ControllerSnapshotObservation = z.infer<typeof ControllerSnapshotObservationSchema>;
+export type OwnerSnapshotObservation = z.infer<typeof OwnerSnapshotObservationSchema>;
 
-export const ControllerSnapshotListResponseSchema = z
+export const OwnerSnapshotListResponseSchema = z
   .object({
-    observations: z.array(ControllerSnapshotObservationSchema),
+    observations: z.array(OwnerSnapshotObservationSchema),
   })
   .strict();
-export type ControllerSnapshotListResponse = z.infer<typeof ControllerSnapshotListResponseSchema>;
+export type OwnerSnapshotListResponse = z.infer<typeof OwnerSnapshotListResponseSchema>;
 
 export const RelayDeviceSchema = z
   .object({

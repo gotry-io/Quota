@@ -16,9 +16,9 @@ func decodesFractionalAndOffsetISODateTimes() throws {
 }
 
 @Test
-func decodesControllerSnapshotObservations() throws {
+func decodesOwnerSnapshotObservations() throws {
   let response = try QuotaWireCodec.makeDecoder().decode(
-    ControllerSnapshotListResponse.self,
+    OwnerSnapshotListResponse.self,
     from: validObservationResponse
   )
 
@@ -56,7 +56,7 @@ func decodesRelayDevices() throws {
 }
 
 @Test(arguments: ["\"device_id\":\"\"", "\"sequence\":-1", "\"used_percent\":101"])
-func rejectsInvalidControllerObservations(replacement: String) throws {
+func rejectsInvalidOwnerObservations(replacement: String) throws {
   let original: String
   switch replacement {
   case "\"device_id\":\"\"":
@@ -71,7 +71,7 @@ func rejectsInvalidControllerObservations(replacement: String) throws {
 
   #expect(throws: DecodingError.self) {
     try QuotaWireCodec.makeDecoder().decode(
-      ControllerSnapshotListResponse.self,
+      OwnerSnapshotListResponse.self,
       from: Data(invalid.utf8)
     )
   }

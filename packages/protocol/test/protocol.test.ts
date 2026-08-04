@@ -3,8 +3,8 @@ import { basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
-  ControllerCreateResponseSchema,
-  ControllerSnapshotListResponseSchema,
+  OwnerCreateResponseSchema,
+  OwnerSnapshotListResponseSchema,
   DeviceListResponseSchema,
   MAXIMUM_SNAPSHOTS_PER_ENVELOPE,
   PairingApprovalRequestSchema,
@@ -21,19 +21,19 @@ import {
 } from "../src/index.ts";
 
 describe("quota protocol", () => {
-  it("validates the one-time anonymous controller credential response", () => {
+  it("validates the one-time anonymous owner credential response", () => {
     expect(
-      ControllerCreateResponseSchema.safeParse({
-        controller_token: "synthetic-controller-token",
+      OwnerCreateResponseSchema.safeParse({
+        owner_token: "synthetic-owner-token",
       }).success,
     ).toBe(true);
     expect(
-      ControllerCreateResponseSchema.safeParse({
-        controller_token: "synthetic-controller-token",
-        controller_id: "controller_01",
+      OwnerCreateResponseSchema.safeParse({
+        owner_token: "synthetic-owner-token",
+        owner_id: "owner_01",
       }).success,
     ).toBe(false);
-    expect(ControllerCreateResponseSchema.safeParse({ controller_token: "" }).success).toBe(false);
+    expect(OwnerCreateResponseSchema.safeParse({ owner_token: "" }).success).toBe(false);
   });
 
   it("accepts a normalized quota envelope", () => {
@@ -69,7 +69,10 @@ describe("quota protocol", () => {
   });
 
   it("bounds a snapshot envelope to the D1 request query budget", () => {
-    const envelope = envelopeWithAccount({ fingerprint: "account_01" });
+    const envelope = envelopeWithAccount({
+      fingerprint: "account_01",
+      fingerprint_scope: "source",
+    });
     const item = envelope.snapshots[0];
     expect(item).toBeDefined();
     expect(
@@ -124,11 +127,11 @@ describe("quota protocol", () => {
     expect(result.success).toBe(true);
   });
 
-  it("accepts an omitted fingerprint scope and rejects unknown scopes", () => {
+  it("requires a valid fingerprint scope", () => {
     expect(
       QuotaSnapshotEnvelopeSchema.safeParse(envelopeWithAccount({ fingerprint: "v1-account" }))
         .success,
-    ).toBe(true);
+    ).toBe(false);
     expect(
       QuotaSnapshotEnvelopeSchema.safeParse(
         envelopeWithAccount({ fingerprint: "account_01", fingerprint_scope: "provider" }),
@@ -302,9 +305,9 @@ describe("quota protocol", () => {
     ).toBe(false);
   });
 
-  it("validates controller observations and device lists without leaking controller fields", () => {
+  it("validates owner observations and device lists without leaking owner fields", () => {
     expect(
-      ControllerSnapshotListResponseSchema.safeParse({
+      OwnerSnapshotListResponseSchema.safeParse({
         observations: [
           {
             device_id: "device_01",
@@ -317,7 +320,7 @@ describe("quota protocol", () => {
       }).success,
     ).toBe(true);
     expect(
-      ControllerSnapshotListResponseSchema.safeParse({
+      OwnerSnapshotListResponseSchema.safeParse({
         observations: [
           {
             device_id: "device_01",
@@ -350,7 +353,7 @@ describe("quota protocol", () => {
         devices: [
           {
             device_id: "device_01",
-            controller_id: "controller_01",
+            owner_id: "owner_01",
             display_name: "Kitchen Mac",
             created_at: "2026-08-02T12:00:00Z",
             last_seen_at: null,
@@ -401,7 +404,7 @@ describe("quota protocol", () => {
 function snapshot(provider: "codex" | "claude" | "grok") {
   return {
     provider,
-    account: { fingerprint: `${provider}-fixture` },
+    account: { fingerprint: `${provider}-fixture`, fingerprint_scope: "source" as const },
     windows: [{ id: "five_hour", title: "5 hour", used_percent: 10 }],
     source: "fixture",
     status: "available" as const,

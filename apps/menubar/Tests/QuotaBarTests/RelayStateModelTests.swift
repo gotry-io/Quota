@@ -7,23 +7,8 @@ import Testing
 @MainActor
 struct RelayStateModelTests {
   @Test
-  func managedEnrollmentOptOutPersistsInItsOwnNonSecretPreference() throws {
-    let suite = "io.gotry.quotabar.tests.managed-enrollment.\(UUID().uuidString)"
-    let defaults = try #require(UserDefaults(suiteName: suite))
-    defer { defaults.removePersistentDomain(forName: suite) }
-
-    let store = ManagedRelayEnrollmentStore(defaults: defaults)
-    #expect(!store.isDisabled)
-
-    store.setDisabled(true)
-
-    #expect(ManagedRelayEnrollmentStore(defaults: defaults).isDisabled)
-    #expect(defaults.object(forKey: ManagedRelayEnrollmentStore.storageKey) as? Bool == true)
-  }
-
-  @Test
   func loadsProfilesAndReportsFixedLoadFailure() throws {
-    let profile = try sampleRelayProfile(id: profileID1, isDefault: true)
+    let profile = try sampleRelayProfile(id: profileID1)
     let loadedModel = RelayStateModel(
       client: FakeRelayStateClient(),
       profileStore: FakeRelayProfileStore(loadedProfiles: .success([profile])),
@@ -41,259 +26,154 @@ struct RelayStateModelTests {
     )
     #expect(failedModel.profiles.isEmpty)
     #expect(failedModel.globalIssue?.category == .persistence)
-    #expect(failedModel.globalIssue?.message == "The saved Relay profiles are invalid.")
+    #expect(failedModel.globalIssue?.message == "The saved Relay endpoints are invalid.")
   }
 
   @Test
-  func addsSelfHostedProfileAndMakesTheFirstProfileDefault() async throws {
+  func ensureEndpointRegistersAnonymousOwnerAndReusesSameURL() async throws {
     let operations = RelayPersistenceRecorder()
     let profileStore = FakeRelayProfileStore(operations: operations)
     let credentialStore = FakeRelayCredentialStore(operations: operations)
     let client = FakeRelayStateClient(
-      discoveryResults: [.success(sampleRelayInfo())]
+      discoveryResults: [.success(sampleRelayInfo())],
+      registrationResults: [
+        .success(OwnerRegistrationResponse(ownerToken: syntheticOwnerBearer))
+      ]
     )
     let model = RelayStateModel(
       client: client,
       profileStore: profileStore,
       credentialStore: credentialStore,
+      officialRelay: nil,
       makeProfileID: { profileID1 }
     )
 
-    let profile = try await model.addSelfHostedProfile(
-      name: " Primary ",
-      origin: "HTTPS://Relay.EXAMPLE:443/",
-      controllerBearer: syntheticControllerBearer
-    )
+    let profile = try await model.ensureEndpoint(origin: "HTTPS://Relay.EXAMPLE:443/")
+    let again = try await model.ensureEndpoint(origin: "https://relay.example")
 
     #expect(profile.id == profileID1)
-    #expect(profile.name == "Primary")
+    #expect(again.id == profileID1)
+    #expect(profile.name == "relay.example")
     #expect(profile.baseURL.absoluteString == "https://relay.example")
-    #expect(profile.instanceID == "relay_primary")
-    #expect(profile.isDefault)
     #expect(model.profiles == [profile])
-    #expect(model.state(for: profile.id) == RelayProfileState())
-    #expect(credentialStore.token(reference: profile.credentialReference) == syntheticControllerBearer)
-    #expect(profileStore.savedProfiles == [[profile]])
-    #expect(operations.values == [
-      .credentialSave(profile.credentialReference),
-      .metadataSave,
-    ])
-    #expect(await client.calls == [.discover("https://relay.example")])
-  }
-
-  @Test
-  func updateControllerCredentialReplacesStoredBearerForSelfHostedProfile() async throws {
-    let operations = RelayPersistenceRecorder()
-    let credentialStore = FakeRelayCredentialStore(operations: operations)
-    let model = RelayStateModel(
-      client: FakeRelayStateClient(discoveryResults: [.success(sampleRelayInfo())]),
-      profileStore: FakeRelayProfileStore(operations: operations),
-      credentialStore: credentialStore,
-      makeProfileID: { profileID1 }
-    )
-    let profile = try await model.addSelfHostedProfile(
-      name: "Primary",
-      origin: "https://relay.example",
-      controllerBearer: syntheticControllerBearer
-    )
-
-    let replacement = "replacement_controller_credential_0123456789"
-    try model.updateControllerCredential(
-      profileID: profile.id,
-      controllerBearer: replacement
-    )
-
-    #expect(credentialStore.token(reference: profile.credentialReference) == replacement)
-    #expect(operations.values.contains(.credentialSave(profile.credentialReference)))
-  }
-
-  @Test
-  func rollsBackCredentialWhenAddedProfileMetadataCannotBeSaved() async throws {
-    let operations = RelayPersistenceRecorder()
-    let profileStore = FakeRelayProfileStore(
-      saveErrors: [.couldNotSave],
-      operations: operations
-    )
-    let credentialStore = FakeRelayCredentialStore(operations: operations)
-    let model = RelayStateModel(
-      client: FakeRelayStateClient(discoveryResults: [.success(sampleRelayInfo())]),
-      profileStore: profileStore,
-      credentialStore: credentialStore,
-      makeProfileID: { profileID1 }
-    )
-    let reference = RelayProfile.credentialReference(for: profileID1)
-
-    do {
-      _ = try await model.addSelfHostedProfile(
-        name: "Primary",
-        origin: "https://relay.example",
-        controllerBearer: syntheticControllerBearer
-      )
-      Issue.record("Expected profile metadata storage to fail.")
-    } catch let error as RelayStateModelError {
-      #expect(error.issue.category == .persistence)
-      #expect(error.errorDescription == "QuotaBar could not save the Relay profiles.")
-    }
-
-    #expect(model.profiles.isEmpty)
-    #expect(credentialStore.token(reference: reference) == nil)
-    #expect(operations.values == [
-      .credentialSave(reference),
-      .metadataSave,
-      .credentialDelete(reference),
-    ])
-  }
-
-  @Test
-  func rejectsManagedRelayFromSelfHostedProfileFlowBeforeCredentialStorage() async throws {
-    let managedInfo = RelayInfo(
-      instanceID: "managed_primary",
-      mode: .managed,
-      version: "0.1.0",
-      apiVersions: [1],
-      authMethods: ["bearer"],
-      capabilities: sampleRelayCapabilities
-    )
-    let credentialStore = FakeRelayCredentialStore()
-    let model = RelayStateModel(
-      client: FakeRelayStateClient(discoveryResults: [.success(managedInfo)]),
-      profileStore: FakeRelayProfileStore(),
-      credentialStore: credentialStore
-    )
-
-    do {
-      _ = try await model.addSelfHostedProfile(
-        name: "Managed",
-        origin: "https://quota.example",
-        controllerBearer: syntheticControllerBearer
-      )
-      Issue.record("Expected the self-hosted controller flow to reject a managed Relay.")
-    } catch let error as RelayStateModelError {
-      #expect(error.issue.category == .unsupported)
-      #expect(error.errorDescription == "Only self-hosted Relays can be added with a controller bearer.")
-    }
-
-    #expect(model.profiles.isEmpty)
-    #expect(
-      credentialStore.token(reference: RelayProfile.credentialReference(for: profileID1)) == nil
-    )
-  }
-
-  @Test
-  func registersAndPersistsManagedControllerWhenNoManagedProfileExists() async throws {
-    let info = RelayInfo(
-      instanceID: "managed_primary",
-      mode: .managed,
-      version: "0.1.0",
-      apiVersions: [1],
-      authMethods: ["bearer"],
-      capabilities: sampleManagedRelayCapabilities
-    )
-    let profileStore = FakeRelayProfileStore()
-    let credentialStore = FakeRelayCredentialStore()
-    let client = FakeRelayStateClient(
-      discoveryResults: [.success(info)],
-      registrationResults: [
-        .success(ControllerRegistrationResponse(controllerToken: syntheticControllerBearer))
-      ]
-    )
-    let model = RelayStateModel(
-      client: client,
-      profileStore: profileStore,
-      credentialStore: credentialStore,
-      makeProfileID: { profileID1 }
-    )
-
-    await model.ensureManagedControllerProfile()
-
-    let profile = try #require(model.profiles.first)
-    #expect(profile.id == profileID1)
-    #expect(profile.name == "Quota Relay")
-    #expect(profile.baseURL.absoluteString == "https://quota.gotry.io")
-    #expect(profile.mode == .managed)
-    #expect(profile.isDefault)
-    #expect(credentialStore.token(reference: profile.credentialReference) == syntheticControllerBearer)
-    #expect(profileStore.savedProfiles == [[profile]])
+    #expect(credentialStore.token(reference: profile.credentialReference) == syntheticOwnerBearer)
     #expect(await client.calls == [
-      .discover("https://quota.gotry.io"),
-      .register("https://quota.gotry.io"),
+      .discover("https://relay.example"),
+      .register("https://relay.example"),
+      .devices(profileID1, syntheticOwnerBearer),
     ])
   }
 
   @Test
-  func managedControllerEnrollmentFailureRemainsRetryable() async throws {
-    let info = RelayInfo(
-      instanceID: "managed_primary",
-      mode: .managed,
-      version: "0.1.0",
-      apiVersions: [1],
-      authMethods: ["bearer"],
-      capabilities: sampleManagedRelayCapabilities
+  func explicitPairingReenrollsAnExpiredOwnerForAnExistingEndpoint() async throws {
+    let expired = try sampleRelayProfile(id: profileID1)
+    let profileStore = FakeRelayProfileStore(loadedProfiles: .success([expired]))
+    let credentialStore = FakeRelayCredentialStore(
+      tokens: [expired.credentialReference: "expired-owner-access"]
     )
     let client = FakeRelayStateClient(
-      discoveryResults: [.failure(.unavailable), .success(info)],
+      discoveryResults: [.success(sampleRelayInfo())],
       registrationResults: [
-        .success(ControllerRegistrationResponse(controllerToken: syntheticControllerBearer))
-      ]
+        .success(OwnerRegistrationResponse(ownerToken: syntheticOwnerBearer))
+      ],
+      deviceResults: [.failure(.credentialRejected)]
     )
     let model = RelayStateModel(
       client: client,
-      profileStore: FakeRelayProfileStore(),
-      credentialStore: FakeRelayCredentialStore(),
-      makeProfileID: { profileID1 }
+      profileStore: profileStore,
+      credentialStore: credentialStore,
+      officialRelay: nil,
+      makeProfileID: { profileID2 }
     )
 
-    await model.ensureManagedControllerProfile()
-    #expect(model.profiles.isEmpty)
-    #expect(model.globalIssue?.category == .unavailable)
+    let replacement = try await model.ensureEndpoint(origin: "https://relay.example")
 
-    await model.ensureManagedControllerProfile()
-    #expect(model.profiles.count == 1)
-    #expect(model.globalIssue == nil)
+    #expect(replacement.id == profileID2)
+    #expect(model.profiles == [replacement])
+    #expect(model.state(for: expired.id) == nil)
+    #expect(model.state(for: replacement.id) == RelayProfileState())
+    #expect(credentialStore.token(reference: expired.credentialReference) == nil)
+    #expect(
+      credentialStore.token(reference: replacement.credentialReference)
+        == syntheticOwnerBearer
+    )
+    #expect(profileStore.savedProfiles == [[], [replacement]])
+    #expect(await client.calls == [
+      .devices(expired.id, "expired-owner-access"),
+      .discover("https://relay.example"),
+      .register("https://relay.example"),
+    ])
   }
 
   @Test
-  func managedEnrollmentRollsBackRemoteControllerWhenProfilePersistenceFails() async throws {
-    let info = RelayInfo(
-      instanceID: "managed_primary",
-      mode: .managed,
-      version: "0.1.0",
-      apiVersions: [1],
-      authMethods: ["bearer"],
-      capabilities: sampleManagedRelayCapabilities
-    )
+  func ensureEndpointRollsBackWhenLocalPersistenceFails() async throws {
     let profileStore = FakeRelayProfileStore(saveErrors: [.couldNotSave])
     let credentialStore = FakeRelayCredentialStore()
     let client = FakeRelayStateClient(
-      discoveryResults: [.success(info)],
+      discoveryResults: [.success(sampleRelayInfo())],
       registrationResults: [
-        .success(ControllerRegistrationResponse(controllerToken: syntheticControllerBearer))
+        .success(OwnerRegistrationResponse(ownerToken: syntheticOwnerBearer))
       ]
     )
     let model = RelayStateModel(
       client: client,
       profileStore: profileStore,
       credentialStore: credentialStore,
+      officialRelay: nil,
       makeProfileID: { profileID1 }
     )
 
-    await model.ensureManagedControllerProfile()
+    do {
+      _ = try await model.ensureEndpoint(origin: "https://relay.example")
+      Issue.record("Expected persistence failure.")
+    } catch let error as RelayStateModelError {
+      #expect(error.issue.category == .persistence)
+    }
 
     #expect(model.profiles.isEmpty)
-    #expect(model.globalIssue?.category == .persistence)
-    #expect(
-      credentialStore.token(reference: RelayProfile.credentialReference(for: profileID1)) == nil
-    )
+    #expect(credentialStore.token(reference: RelayProfile.credentialReference(for: profileID1)) == nil)
     #expect(await client.calls == [
-      .discover("https://quota.gotry.io"),
-      .register("https://quota.gotry.io"),
-      .deleteController(profileID1, syntheticControllerBearer),
+      .discover("https://relay.example"),
+      .register("https://relay.example"),
+      .deleteOwner(profileID1, syntheticOwnerBearer),
     ])
   }
 
   @Test
-  func startupReconcilesControllerCredentialsAgainstLoadedProfiles() throws {
-    let profile = try sampleRelayProfile(id: profileID1, isDefault: true)
+  func ensureEndpointRejectsRelaysWithoutIsolatedOwnerSupport() async throws {
+    let unsupported = RelayInfo(
+      instanceID: "unsupported",
+      mode: .selfHosted,
+      version: "0.1.0",
+      apiVersions: [1],
+      authMethods: ["bearer"],
+      capabilities: RelayCapabilities(
+        realtime: false,
+        persistentSnapshots: true,
+        instantDeviceRevocation: true,
+        history: false,
+        multiTenant: false
+      )
+    )
+    let model = RelayStateModel(
+      client: FakeRelayStateClient(discoveryResults: [.success(unsupported)]),
+      profileStore: FakeRelayProfileStore(),
+      credentialStore: FakeRelayCredentialStore(),
+      officialRelay: nil
+    )
+
+    do {
+      _ = try await model.ensureEndpoint(origin: "https://relay.example")
+      Issue.record("Expected unsupported Relay.")
+    } catch let error as RelayStateModelError {
+      #expect(error.issue.category == .unsupported)
+    }
+    #expect(model.profiles.isEmpty)
+  }
+
+  @Test
+  func startupReconcilesOwnerCredentialsAgainstLoadedProfiles() throws {
+    let profile = try sampleRelayProfile(id: profileID1)
     let credentialStore = FakeRelayCredentialStore()
 
     _ = RelayStateModel(
@@ -306,8 +186,8 @@ struct RelayStateModelTests {
   }
 
   @Test
-  func deletesMetadataBeforeCredentialAndPromotesTheNextDefault() async throws {
-    let first = try sampleRelayProfile(id: profileID1, isDefault: true)
+  func deletesMetadataBeforeCredential() async throws {
+    let first = try sampleRelayProfile(id: profileID1)
     let second = try sampleRelayProfile(id: profileID2, host: "relay-two.example")
     let operations = RelayPersistenceRecorder()
     let profileStore = FakeRelayProfileStore(
@@ -316,8 +196,8 @@ struct RelayStateModelTests {
     )
     let credentialStore = FakeRelayCredentialStore(
       tokens: [
-        first.credentialReference: syntheticControllerBearer,
-        second.credentialReference: "controller_second_synthetic",
+        first.credentialReference: syntheticOwnerBearer,
+        second.credentialReference: "owner_second_synthetic",
       ],
       operations: operations
     )
@@ -333,108 +213,58 @@ struct RelayStateModelTests {
     #expect(credentialStore.token(reference: first.credentialReference) == nil)
     #expect(model.profiles.count == 1)
     #expect(model.profiles[0].id == second.id)
-    #expect(model.profiles[0].isDefault)
     #expect(model.state(for: first.id) == nil)
     #expect(operations.values == [
       .metadataSave,
       .credentialDelete(first.credentialReference),
     ])
-    #expect(await client.calls.isEmpty)
+    #expect(await client.calls == [
+      .deleteOwner(first.id, syntheticOwnerBearer)
+    ])
   }
 
   @Test
-  func deletingManagedProfileDeletesControllerAndPersistsEnrollmentOptOut() async throws {
+  func deletingAnyEndpointDeletesRemoteOwnerAndLocalState() async throws {
     let profile = try sampleRelayProfile(
       id: profileID1,
       host: "quota.gotry.io",
-      mode: .managed,
-      isDefault: true
+      mode: .managed
     )
     let client = FakeRelayStateClient()
     let credentialStore = FakeRelayCredentialStore(
-      tokens: [profile.credentialReference: syntheticControllerBearer]
+      tokens: [profile.credentialReference: syntheticOwnerBearer]
     )
-    let enrollmentStore = FakeManagedRelayEnrollmentStore()
     let model = RelayStateModel(
       client: client,
       profileStore: FakeRelayProfileStore(loadedProfiles: .success([profile])),
       credentialStore: credentialStore,
-      managedEnrollmentStore: enrollmentStore
+      officialRelay: nil
     )
 
     try await model.deleteProfile(profile.id)
-    await model.ensureManagedControllerProfile()
 
     #expect(model.profiles.isEmpty)
-    #expect(model.managedEnrollmentDisabled)
-    #expect(enrollmentStore.isDisabled)
     #expect(credentialStore.token(reference: profile.credentialReference) == nil)
     #expect(await client.calls == [
-      .deleteController(profile.id, syntheticControllerBearer)
+      .deleteOwner(profile.id, syntheticOwnerBearer)
     ])
-
-    let restartedModel = RelayStateModel(
-      client: client,
-      profileStore: FakeRelayProfileStore(),
-      credentialStore: credentialStore,
-      managedEnrollmentStore: enrollmentStore
-    )
-    await restartedModel.ensureManagedControllerProfile()
-
-    #expect(restartedModel.profiles.isEmpty)
-    #expect(await client.calls == [.deleteController(profile.id, syntheticControllerBearer)])
   }
 
   @Test
-  func reconnectingManagedRelayClearsThePersistentOptOutAndEnrolls() async throws {
-    let info = RelayInfo(
-      instanceID: "managed_primary",
-      mode: .managed,
-      version: "0.1.0",
-      apiVersions: [1],
-      authMethods: ["bearer"],
-      capabilities: sampleManagedRelayCapabilities
-    )
-    let enrollmentStore = FakeManagedRelayEnrollmentStore(isDisabled: true)
-    let model = RelayStateModel(
-      client: FakeRelayStateClient(
-        discoveryResults: [.success(info)],
-        registrationResults: [
-          .success(ControllerRegistrationResponse(controllerToken: syntheticControllerBearer))
-        ],
-        snapshotResults: [.success(ControllerSnapshotListResponse(observations: []))],
-        deviceResults: [.success(DeviceListResponse(devices: []))]
-      ),
-      profileStore: FakeRelayProfileStore(),
-      credentialStore: FakeRelayCredentialStore(),
-      managedEnrollmentStore: enrollmentStore,
-      makeProfileID: { profileID1 }
-    )
-
-    await model.enableManagedControllerProfile()
-
-    #expect(!model.managedEnrollmentDisabled)
-    #expect(!enrollmentStore.isDisabled)
-    #expect(model.profiles.map(\.id) == [profileID1])
-  }
-
-  @Test
-  func managedProfileCanBeExplicitlyDeletedLocallyAfterRemoteDeletionFails() async throws {
+  func endpointCanBeExplicitlyDeletedLocallyAfterRemoteDeletionFails() async throws {
     let profile = try sampleRelayProfile(
       id: profileID1,
       host: "quota.gotry.io",
-      mode: .managed,
-      isDefault: true
+      mode: .managed
     )
     let credentialStore = FakeRelayCredentialStore(
-      tokens: [profile.credentialReference: syntheticControllerBearer]
+      tokens: [profile.credentialReference: syntheticOwnerBearer]
     )
-    let enrollmentStore = FakeManagedRelayEnrollmentStore()
     let model = RelayStateModel(
-      client: FakeRelayStateClient(controllerDeleteResults: [.failure(.credentialRejected)]),
+      client: FakeRelayStateClient(ownerDeleteResults: [.failure(.credentialRejected)]),
       profileStore: FakeRelayProfileStore(loadedProfiles: .success([profile])),
       credentialStore: credentialStore,
-      managedEnrollmentStore: enrollmentStore
+      officialRelay: nil
     )
 
     await #expect(throws: RelayStateModelError.self) {
@@ -443,18 +273,15 @@ struct RelayStateModelTests {
     try model.deleteProfileLocally(profile.id)
 
     #expect(model.profiles.isEmpty)
-    #expect(model.managedEnrollmentDisabled)
-    #expect(enrollmentStore.isDisabled)
     #expect(credentialStore.token(reference: profile.credentialReference) == nil)
   }
 
   @Test
-  func fullResetDeletesOnlyManagedControllersStopsPollingAndClearsLocalData() async throws {
+  func fullResetDeletesAllOwnersStopsPollingAndClearsLocalData() async throws {
     let managed = try sampleRelayProfile(
       id: profileID1,
       host: "quota.gotry.io",
-      mode: .managed,
-      isDefault: true
+      mode: .managed
     )
     let selfHosted = try sampleRelayProfile(id: profileID2, host: "relay.example")
     let client = FakeRelayStateClient(
@@ -464,8 +291,8 @@ struct RelayStateModelTests {
       ]
     )
     let credentialStore = FakeRelayCredentialStore(tokens: [
-      managed.credentialReference: syntheticControllerBearer,
-      selfHosted.credentialReference: "controller_self_hosted",
+      managed.credentialReference: syntheticOwnerBearer,
+      selfHosted.credentialReference: "owner_self_hosted",
     ])
     let defaultsResetter = FakeQuotaBarDefaultsResetter()
     let sleepProbe = RelaySleepProbe()
@@ -474,45 +301,46 @@ struct RelayStateModelTests {
       profileStore: FakeRelayProfileStore(loadedProfiles: .success([managed, selfHosted])),
       credentialStore: credentialStore,
       defaultsResetter: defaultsResetter,
+      officialRelay: nil,
       sleep: { duration in try await sleepProbe.sleep(duration) }
     )
     model.startPolling()
     try await waitForSleepCount(1, probe: sleepProbe)
 
     try await model.deleteAllQuotaBarData()
-    await model.ensureManagedControllerProfile()
 
     #expect(model.profiles.isEmpty)
     #expect(!model.isPolling)
     #expect(credentialStore.deleteAllCount == 1)
     #expect(defaultsResetter.deleteAllCount == 1)
     #expect(await client.calls == [
-      .snapshots(managed.id, syntheticControllerBearer),
-      .devices(managed.id, syntheticControllerBearer),
-      .snapshots(selfHosted.id, "controller_self_hosted"),
-      .devices(selfHosted.id, "controller_self_hosted"),
-      .deleteController(managed.id, syntheticControllerBearer),
+      .snapshots(managed.id, syntheticOwnerBearer),
+      .devices(managed.id, syntheticOwnerBearer),
+      .snapshots(selfHosted.id, "owner_self_hosted"),
+      .devices(selfHosted.id, "owner_self_hosted"),
+      .deleteOwner(managed.id, syntheticOwnerBearer),
+      .deleteOwner(selfHosted.id, "owner_self_hosted"),
     ])
   }
 
   @Test
-  func failedManagedResetCanBeExplicitlyCompletedLocally() async throws {
+  func failedResetCanBeExplicitlyCompletedLocally() async throws {
     let profile = try sampleRelayProfile(
       id: profileID1,
       host: "quota.gotry.io",
-      mode: .managed,
-      isDefault: true
+      mode: .managed
     )
     let credentialStore = FakeRelayCredentialStore(
-      tokens: [profile.credentialReference: syntheticControllerBearer]
+      tokens: [profile.credentialReference: syntheticOwnerBearer]
     )
     let defaultsResetter = FakeQuotaBarDefaultsResetter()
-    let client = FakeRelayStateClient(controllerDeleteResults: [.failure(.unavailable)])
+    let client = FakeRelayStateClient(ownerDeleteResults: [.failure(.unavailable)])
     let model = RelayStateModel(
       client: client,
       profileStore: FakeRelayProfileStore(loadedProfiles: .success([profile])),
       credentialStore: credentialStore,
-      defaultsResetter: defaultsResetter
+      defaultsResetter: defaultsResetter,
+      officialRelay: nil
     )
 
     await #expect(throws: RelayStateModelError.self) {
@@ -522,23 +350,22 @@ struct RelayStateModelTests {
     #expect(credentialStore.deleteAllCount == 0)
 
     try model.deleteAllQuotaBarDataLocally()
-    await model.ensureManagedControllerProfile()
 
     #expect(model.profiles.isEmpty)
     #expect(credentialStore.deleteAllCount == 1)
     #expect(defaultsResetter.deleteAllCount == 1)
-    #expect(await client.calls == [.deleteController(profile.id, syntheticControllerBearer)])
+    #expect(await client.calls == [.deleteOwner(profile.id, syntheticOwnerBearer)])
   }
 
   @Test
   func keepsProfileAndReportsPersistenceFailureWhenDeleteMetadataSaveFails() async throws {
-    let profile = try sampleRelayProfile(id: profileID1, isDefault: true)
+    let profile = try sampleRelayProfile(id: profileID1)
     let profileStore = FakeRelayProfileStore(
       loadedProfiles: .success([profile]),
       saveErrors: [.couldNotSave]
     )
     let credentialStore = FakeRelayCredentialStore(
-      tokens: [profile.credentialReference: syntheticControllerBearer]
+      tokens: [profile.credentialReference: syntheticOwnerBearer]
     )
     let model = RelayStateModel(
       client: FakeRelayStateClient(),
@@ -551,22 +378,22 @@ struct RelayStateModelTests {
       Issue.record("Expected metadata deletion to fail.")
     } catch let error as RelayStateModelError {
       #expect(error.issue.category == .persistence)
-      #expect(error.errorDescription == "QuotaBar could not save the Relay profiles.")
+      #expect(error.errorDescription == "QuotaBar could not save its Relay endpoints.")
     }
 
     #expect(model.profiles == [profile])
     #expect(
-      credentialStore.token(reference: profile.credentialReference) == syntheticControllerBearer
+      credentialStore.token(reference: profile.credentialReference) == syntheticOwnerBearer
     )
     #expect(model.state(for: profile.id)?.operationIssue?.category == .persistence)
   }
 
   @Test
   func retriesCredentialDeletionAfterMetadataWasAlreadyRemoved() async throws {
-    let profile = try sampleRelayProfile(id: profileID1, isDefault: true)
+    let profile = try sampleRelayProfile(id: profileID1)
     let profileStore = FakeRelayProfileStore(loadedProfiles: .success([profile]))
     let credentialStore = FakeRelayCredentialStore(
-      tokens: [profile.credentialReference: syntheticControllerBearer],
+      tokens: [profile.credentialReference: syntheticOwnerBearer],
       deleteErrors: [.couldNotDelete]
     )
     let model = RelayStateModel(
@@ -582,7 +409,7 @@ struct RelayStateModelTests {
     #expect(model.profiles == [profile])
     #expect(profileStore.savedProfiles == [[]])
     #expect(
-      credentialStore.token(reference: profile.credentialReference) == syntheticControllerBearer
+      credentialStore.token(reference: profile.credentialReference) == syntheticOwnerBearer
     )
 
     try await model.deleteProfile(profile.id)
@@ -593,36 +420,14 @@ struct RelayStateModelTests {
   }
 
   @Test
-  func keepsOneDefaultAndRenamesWithCanonicalName() throws {
-    let first = try sampleRelayProfile(id: profileID1, isDefault: true)
-    let second = try sampleRelayProfile(id: profileID2, host: "relay-two.example")
-    let profileStore = FakeRelayProfileStore(loadedProfiles: .success([first, second]))
-    let model = RelayStateModel(
-      client: FakeRelayStateClient(),
-      profileStore: profileStore,
-      credentialStore: FakeRelayCredentialStore()
-    )
-
-    try model.setDefaultProfile(second.id)
-    try model.renameProfile(second.id, to: " Edge Relay ")
-
-    #expect(model.profiles.filter(\.isDefault).map(\.id) == [second.id])
-    #expect(model.profiles.first(where: { $0.id == second.id })?.name == "Edge Relay")
-    #expect(profileStore.savedProfiles.count == 2)
-    #expect(throws: RelayStateModelError.self) {
-      try model.renameProfile(second.id, to: "   ")
-    }
-  }
-
-  @Test
   func approvesAndDeniesPairingThroughTheBoundProfile() async throws {
-    let profile = try sampleRelayProfile(id: profileID1, isDefault: true)
+    let profile = try sampleRelayProfile(id: profileID1)
     let client = FakeRelayStateClient()
     let model = RelayStateModel(
       client: client,
       profileStore: FakeRelayProfileStore(loadedProfiles: .success([profile])),
       credentialStore: FakeRelayCredentialStore(
-        tokens: [profile.credentialReference: syntheticControllerBearer]
+        tokens: [profile.credentialReference: syntheticOwnerBearer]
       )
     )
 
@@ -630,14 +435,14 @@ struct RelayStateModelTests {
     try await model.denyPairing(profileID: profile.id, userCode: "IJKL-MNOP")
 
     #expect(await client.calls == [
-      .approve(profile.id, "ABCD-EFGH", syntheticControllerBearer),
-      .deny(profile.id, "IJKL-MNOP", syntheticControllerBearer),
+      .approve(profile.id, "ABCD-EFGH", syntheticOwnerBearer),
+      .deny(profile.id, "IJKL-MNOP", syntheticOwnerBearer),
     ])
   }
 
   @Test
   func pairingFailureUsesFixedSafeIssue() async throws {
-    let profile = try sampleRelayProfile(id: profileID1, isDefault: true)
+    let profile = try sampleRelayProfile(id: profileID1)
     let client = FakeRelayStateClient(
       approvalResults: [.failure(.permissionDenied)]
     )
@@ -645,7 +450,7 @@ struct RelayStateModelTests {
       client: client,
       profileStore: FakeRelayProfileStore(loadedProfiles: .success([profile])),
       credentialStore: FakeRelayCredentialStore(
-        tokens: [profile.credentialReference: syntheticControllerBearer]
+        tokens: [profile.credentialReference: syntheticOwnerBearer]
       )
     )
 
@@ -655,7 +460,7 @@ struct RelayStateModelTests {
     } catch let error as RelayStateModelError {
       #expect(error.issue.category == .authorization)
       let message = try #require(error.errorDescription)
-      #expect(!message.contains(syntheticControllerBearer))
+      #expect(!message.contains(syntheticOwnerBearer))
       #expect(!message.contains("ABCD-EFGH"))
       #expect(!message.contains(profile.id.uuidString))
       #expect(!message.contains("alice@example.com"))
@@ -666,7 +471,7 @@ struct RelayStateModelTests {
   func operationIssueDoesNotMarkLastKnownQuotaDataStale() {
     let operationIssue = RelayStateIssue(
       category: .authorization,
-      message: "The Relay controller credential lacks the required permission."
+      message: "QuotaBar's private access to this Relay lacks the required permission."
     )
     let refreshIssue = RelayStateIssue(
       category: .unavailable,
@@ -684,13 +489,13 @@ struct RelayStateModelTests {
 
   @Test
   func refreshPreservesLastKnownGoodDataAndMarksItStaleAfterFailure() async throws {
-    let profile = try sampleRelayProfile(id: profileID1, isDefault: true)
+    let profile = try sampleRelayProfile(id: profileID1)
     let observation = try sampleObservation(deviceID: "device_01", sequence: 4)
     let device = try sampleDevice(deviceID: "device_01", sequence: 4)
     let refreshedAt = Date(timeIntervalSince1970: 1_785_752_430)
     let client = FakeRelayStateClient(
       snapshotResults: [
-        .success(ControllerSnapshotListResponse(observations: [observation])),
+        .success(OwnerSnapshotListResponse(observations: [observation])),
         .failure(.unavailable),
       ],
       deviceResults: [.success(DeviceListResponse(devices: [device]))]
@@ -699,7 +504,7 @@ struct RelayStateModelTests {
       client: client,
       profileStore: FakeRelayProfileStore(loadedProfiles: .success([profile])),
       credentialStore: FakeRelayCredentialStore(
-        tokens: [profile.credentialReference: syntheticControllerBearer]
+        tokens: [profile.credentialReference: syntheticOwnerBearer]
       ),
       now: { refreshedAt }
     )
@@ -724,7 +529,7 @@ struct RelayStateModelTests {
 
   @Test
   func refreshReportsMissingAndRejectedCredentialsExplicitly() async throws {
-    let missingProfile = try sampleRelayProfile(id: profileID1, isDefault: true)
+    let missingProfile = try sampleRelayProfile(id: profileID1)
     let missingClient = FakeRelayStateClient()
     let missingModel = RelayStateModel(
       client: missingClient,
@@ -737,11 +542,11 @@ struct RelayStateModelTests {
     #expect(missingModel.state(for: missingProfile.id)?.issue?.category == .credentialMissing)
     #expect(
       missingModel.state(for: missingProfile.id)?.issue?.message
-        == "The Relay controller credential is missing."
+        == "QuotaBar's private access to this Relay is missing."
     )
     #expect(await missingClient.calls.isEmpty)
 
-    let rejectedProfile = try sampleRelayProfile(id: profileID2, isDefault: true)
+    let rejectedProfile = try sampleRelayProfile(id: profileID2)
     let rejectedClient = FakeRelayStateClient(
       snapshotResults: [.failure(.credentialRejected)]
     )
@@ -749,7 +554,7 @@ struct RelayStateModelTests {
       client: rejectedClient,
       profileStore: FakeRelayProfileStore(loadedProfiles: .success([rejectedProfile])),
       credentialStore: FakeRelayCredentialStore(
-        tokens: [rejectedProfile.credentialReference: syntheticControllerBearer]
+        tokens: [rejectedProfile.credentialReference: syntheticOwnerBearer]
       )
     )
 
@@ -758,13 +563,13 @@ struct RelayStateModelTests {
     #expect(rejectedModel.state(for: rejectedProfile.id)?.issue?.category == .authentication)
     #expect(
       rejectedModel.state(for: rejectedProfile.id)?.issue?.message
-        == "The Relay controller credential is no longer valid."
+        == "QuotaBar's private access to this Relay is no longer valid."
     )
   }
 
   @Test
   func revokeRefreshesDevicesAndKeepsSnapshots() async throws {
-    let profile = try sampleRelayProfile(id: profileID1, isDefault: true)
+    let profile = try sampleRelayProfile(id: profileID1)
     let remainingDevice = try sampleDevice(deviceID: "device_02", sequence: 2)
     let refreshedAt = Date(timeIntervalSince1970: 1_785_752_430)
     let client = FakeRelayStateClient(
@@ -774,7 +579,7 @@ struct RelayStateModelTests {
       client: client,
       profileStore: FakeRelayProfileStore(loadedProfiles: .success([profile])),
       credentialStore: FakeRelayCredentialStore(
-        tokens: [profile.credentialReference: syntheticControllerBearer]
+        tokens: [profile.credentialReference: syntheticOwnerBearer]
       ),
       now: { refreshedAt }
     )
@@ -784,19 +589,19 @@ struct RelayStateModelTests {
     #expect(model.state(for: profile.id)?.devices == [remainingDevice])
     #expect(model.state(for: profile.id)?.lastSuccessfulRefreshAt == nil)
     #expect(await client.calls == [
-      .revoke(profile.id, "device_01", syntheticControllerBearer),
-      .devices(profile.id, syntheticControllerBearer),
+      .revoke(profile.id, "device_01", syntheticOwnerBearer),
+      .devices(profile.id, syntheticOwnerBearer),
     ])
   }
 
   @Test
   func refreshesAllProfilesSequentially() async throws {
-    let first = try sampleRelayProfile(id: profileID1, isDefault: true)
+    let first = try sampleRelayProfile(id: profileID1)
     let second = try sampleRelayProfile(id: profileID2, host: "relay-two.example")
     let client = FakeRelayStateClient(
       snapshotResults: [
-        .success(ControllerSnapshotListResponse(observations: [])),
-        .success(ControllerSnapshotListResponse(observations: [])),
+        .success(OwnerSnapshotListResponse(observations: [])),
+        .success(OwnerSnapshotListResponse(observations: [])),
       ],
       deviceResults: [
         .success(DeviceListResponse(devices: [])),
@@ -807,33 +612,33 @@ struct RelayStateModelTests {
       client: client,
       profileStore: FakeRelayProfileStore(loadedProfiles: .success([first, second])),
       credentialStore: FakeRelayCredentialStore(tokens: [
-        first.credentialReference: syntheticControllerBearer,
-        second.credentialReference: "controller_second_synthetic",
+        first.credentialReference: syntheticOwnerBearer,
+        second.credentialReference: "owner_second_synthetic",
       ])
     )
 
     await model.refreshAllProfiles()
 
     #expect(await client.calls == [
-      .snapshots(first.id, syntheticControllerBearer),
-      .devices(first.id, syntheticControllerBearer),
-      .snapshots(second.id, "controller_second_synthetic"),
-      .devices(second.id, "controller_second_synthetic"),
+      .snapshots(first.id, syntheticOwnerBearer),
+      .devices(first.id, syntheticOwnerBearer),
+      .snapshots(second.id, "owner_second_synthetic"),
+      .devices(second.id, "owner_second_synthetic"),
     ])
   }
 
   @Test
   func pollingStartIsIdempotentAndStopIsCancellationSafe() async throws {
-    let profile = try sampleRelayProfile(id: profileID1, isDefault: true)
+    let profile = try sampleRelayProfile(id: profileID1)
     let client = FakeRelayStateClient()
     let sleepProbe = RelaySleepProbe()
     let model = RelayStateModel(
       client: client,
       profileStore: FakeRelayProfileStore(loadedProfiles: .success([profile])),
       credentialStore: FakeRelayCredentialStore(
-        tokens: [profile.credentialReference: syntheticControllerBearer]
+        tokens: [profile.credentialReference: syntheticOwnerBearer]
       ),
-      managedRelayConfiguration: nil,
+      officialRelay: nil,
       pollInterval: .seconds(123),
       sleep: { duration in try await sleepProbe.sleep(duration) }
     )
@@ -845,8 +650,8 @@ struct RelayStateModelTests {
     #expect(model.isPolling)
     #expect(await sleepProbe.durations == [.seconds(123)])
     #expect(await client.calls == [
-      .snapshots(profile.id, syntheticControllerBearer),
-      .devices(profile.id, syntheticControllerBearer),
+      .snapshots(profile.id, syntheticOwnerBearer),
+      .devices(profile.id, syntheticOwnerBearer),
     ])
 
     model.stopPolling()
@@ -862,15 +667,15 @@ struct RelayStateModelTests {
 
   @Test
   func releasingPollingModelCancelsSleeperWithoutARetainCycle() async throws {
-    let profile = try sampleRelayProfile(id: profileID1, isDefault: true)
+    let profile = try sampleRelayProfile(id: profileID1)
     let sleepProbe = RelaySleepProbe()
     var model: RelayStateModel? = RelayStateModel(
       client: FakeRelayStateClient(),
       profileStore: FakeRelayProfileStore(loadedProfiles: .success([profile])),
       credentialStore: FakeRelayCredentialStore(
-        tokens: [profile.credentialReference: syntheticControllerBearer]
+        tokens: [profile.credentialReference: syntheticOwnerBearer]
       ),
-      managedRelayConfiguration: nil,
+      officialRelay: nil,
       sleep: { duration in try await sleepProbe.sleep(duration) }
     )
     weak let weakModel = model
@@ -893,29 +698,29 @@ private enum FakeRelayClientCall: Equatable, Sendable {
   case snapshots(UUID, String)
   case devices(UUID, String)
   case revoke(UUID, String, String)
-  case deleteController(UUID, String)
+  case deleteOwner(UUID, String)
 }
 
-private actor FakeRelayStateClient: RelayControllerClientServing {
+private actor FakeRelayStateClient: RelayOwnerClientServing {
   private(set) var calls: [FakeRelayClientCall] = []
   private var discoveryResults: [Result<RelayInfo, RelayClientError>]
-  private var registrationResults: [Result<ControllerRegistrationResponse, RelayClientError>]
+  private var registrationResults: [Result<OwnerRegistrationResponse, RelayClientError>]
   private var approvalResults: [Result<Void, RelayClientError>]
   private var denialResults: [Result<Void, RelayClientError>]
-  private var snapshotResults: [Result<ControllerSnapshotListResponse, RelayClientError>]
+  private var snapshotResults: [Result<OwnerSnapshotListResponse, RelayClientError>]
   private var deviceResults: [Result<DeviceListResponse, RelayClientError>]
   private var revokeResults: [Result<Void, RelayClientError>]
-  private var controllerDeleteResults: [Result<Void, RelayClientError>]
+  private var ownerDeleteResults: [Result<Void, RelayClientError>]
 
   init(
     discoveryResults: [Result<RelayInfo, RelayClientError>] = [],
-    registrationResults: [Result<ControllerRegistrationResponse, RelayClientError>] = [],
+    registrationResults: [Result<OwnerRegistrationResponse, RelayClientError>] = [],
     approvalResults: [Result<Void, RelayClientError>] = [],
     denialResults: [Result<Void, RelayClientError>] = [],
-    snapshotResults: [Result<ControllerSnapshotListResponse, RelayClientError>] = [],
+    snapshotResults: [Result<OwnerSnapshotListResponse, RelayClientError>] = [],
     deviceResults: [Result<DeviceListResponse, RelayClientError>] = [],
     revokeResults: [Result<Void, RelayClientError>] = [],
-    controllerDeleteResults: [Result<Void, RelayClientError>] = []
+    ownerDeleteResults: [Result<Void, RelayClientError>] = []
   ) {
     self.discoveryResults = discoveryResults
     self.registrationResults = registrationResults
@@ -924,7 +729,7 @@ private actor FakeRelayStateClient: RelayControllerClientServing {
     self.snapshotResults = snapshotResults
     self.deviceResults = deviceResults
     self.revokeResults = revokeResults
-    self.controllerDeleteResults = controllerDeleteResults
+    self.ownerDeleteResults = ownerDeleteResults
   }
 
   func discover(baseURL: URL) async throws -> RelayInfo {
@@ -933,7 +738,7 @@ private actor FakeRelayStateClient: RelayControllerClientServing {
     return try discoveryResults.removeFirst().get()
   }
 
-  func registerController(baseURL: URL) async throws -> ControllerRegistrationResponse {
+  func registerOwner(baseURL: URL) async throws -> OwnerRegistrationResponse {
     calls.append(.register(baseURL.absoluteString))
     guard !registrationResults.isEmpty else { throw RelayClientError.unavailable }
     return try registrationResults.removeFirst().get()
@@ -942,9 +747,9 @@ private actor FakeRelayStateClient: RelayControllerClientServing {
   func approvePairing(
     userCode: String,
     profile: RelayProfile,
-    controllerBearer: String
+    ownerBearer: String
   ) async throws {
-    calls.append(.approve(profile.id, userCode, controllerBearer))
+    calls.append(.approve(profile.id, userCode, ownerBearer))
     if !approvalResults.isEmpty {
       try approvalResults.removeFirst().get()
     }
@@ -953,9 +758,9 @@ private actor FakeRelayStateClient: RelayControllerClientServing {
   func denyPairing(
     userCode: String,
     profile: RelayProfile,
-    controllerBearer: String
+    ownerBearer: String
   ) async throws {
-    calls.append(.deny(profile.id, userCode, controllerBearer))
+    calls.append(.deny(profile.id, userCode, ownerBearer))
     if !denialResults.isEmpty {
       try denialResults.removeFirst().get()
     }
@@ -963,20 +768,20 @@ private actor FakeRelayStateClient: RelayControllerClientServing {
 
   func fetchLatestSnapshots(
     profile: RelayProfile,
-    controllerBearer: String
-  ) async throws -> ControllerSnapshotListResponse {
-    calls.append(.snapshots(profile.id, controllerBearer))
+    ownerBearer: String
+  ) async throws -> OwnerSnapshotListResponse {
+    calls.append(.snapshots(profile.id, ownerBearer))
     guard !snapshotResults.isEmpty else {
-      return ControllerSnapshotListResponse(observations: [])
+      return OwnerSnapshotListResponse(observations: [])
     }
     return try snapshotResults.removeFirst().get()
   }
 
   func listDevices(
     profile: RelayProfile,
-    controllerBearer: String
+    ownerBearer: String
   ) async throws -> DeviceListResponse {
-    calls.append(.devices(profile.id, controllerBearer))
+    calls.append(.devices(profile.id, ownerBearer))
     guard !deviceResults.isEmpty else {
       return DeviceListResponse(devices: [])
     }
@@ -986,21 +791,21 @@ private actor FakeRelayStateClient: RelayControllerClientServing {
   func revokeDevice(
     deviceID: String,
     profile: RelayProfile,
-    controllerBearer: String
+    ownerBearer: String
   ) async throws {
-    calls.append(.revoke(profile.id, deviceID, controllerBearer))
+    calls.append(.revoke(profile.id, deviceID, ownerBearer))
     if !revokeResults.isEmpty {
       try revokeResults.removeFirst().get()
     }
   }
 
-  func deleteController(
+  func deleteOwner(
     profile: RelayProfile,
-    controllerBearer: String
+    ownerBearer: String
   ) async throws {
-    calls.append(.deleteController(profile.id, controllerBearer))
-    if !controllerDeleteResults.isEmpty {
-      try controllerDeleteResults.removeFirst().get()
+    calls.append(.deleteOwner(profile.id, ownerBearer))
+    if !ownerDeleteResults.isEmpty {
+      try ownerDeleteResults.removeFirst().get()
     }
   }
 }
@@ -1035,25 +840,25 @@ private final class FakeRelayProfileStore: RelayProfilePersisting {
   }
 }
 
-private final class FakeRelayCredentialStore: RelayControllerCredentialPersisting, @unchecked Sendable {
+private final class FakeRelayCredentialStore: RelayOwnerCredentialPersisting, @unchecked Sendable {
   private let lock = NSLock()
   private var tokens: [String: String]
-  private let saveError: RelayControllerCredentialStoreError?
-  private let loadError: RelayControllerCredentialStoreError?
-  private var deleteErrors: [RelayControllerCredentialStoreError]
-  private let reconcileError: RelayControllerCredentialStoreError?
-  private let deleteAllError: RelayControllerCredentialStoreError?
+  private let saveError: RelayOwnerCredentialStoreError?
+  private let loadError: RelayOwnerCredentialStoreError?
+  private var deleteErrors: [RelayOwnerCredentialStoreError]
+  private let reconcileError: RelayOwnerCredentialStoreError?
+  private let deleteAllError: RelayOwnerCredentialStoreError?
   private let operations: RelayPersistenceRecorder?
   private(set) var reconciledReferences: Set<String>?
   private(set) var deleteAllCount = 0
 
   init(
     tokens: [String: String] = [:],
-    saveError: RelayControllerCredentialStoreError? = nil,
-    loadError: RelayControllerCredentialStoreError? = nil,
-    deleteErrors: [RelayControllerCredentialStoreError] = [],
-    reconcileError: RelayControllerCredentialStoreError? = nil,
-    deleteAllError: RelayControllerCredentialStoreError? = nil,
+    saveError: RelayOwnerCredentialStoreError? = nil,
+    loadError: RelayOwnerCredentialStoreError? = nil,
+    deleteErrors: [RelayOwnerCredentialStoreError] = [],
+    reconcileError: RelayOwnerCredentialStoreError? = nil,
+    deleteAllError: RelayOwnerCredentialStoreError? = nil,
     operations: RelayPersistenceRecorder? = nil
   ) {
     self.tokens = tokens
@@ -1065,11 +870,11 @@ private final class FakeRelayCredentialStore: RelayControllerCredentialPersistin
     self.operations = operations
   }
 
-  func save(_ controllerBearer: String, reference: String) throws {
+  func save(_ ownerBearer: String, reference: String) throws {
     try lock.withLock {
       operations?.record(.credentialSave(reference))
       if let saveError { throw saveError }
-      tokens[reference] = controllerBearer
+      tokens[reference] = ownerBearer
     }
   }
 
@@ -1077,7 +882,7 @@ private final class FakeRelayCredentialStore: RelayControllerCredentialPersistin
     try lock.withLock {
       if let loadError { throw loadError }
       guard let token = tokens[reference] else {
-        throw RelayControllerCredentialStoreError.missingCredential
+        throw RelayOwnerCredentialStoreError.missingCredential
       }
       return token
     }
@@ -1108,19 +913,6 @@ private final class FakeRelayCredentialStore: RelayControllerCredentialPersistin
 
   func token(reference: String) -> String? {
     lock.withLock { tokens[reference] }
-  }
-}
-
-@MainActor
-private final class FakeManagedRelayEnrollmentStore: ManagedRelayEnrollmentPersisting {
-  private(set) var isDisabled: Bool
-
-  init(isDisabled: Bool = false) {
-    self.isDisabled = isDisabled
-  }
-
-  func setDisabled(_ disabled: Bool) {
-    isDisabled = disabled
   }
 }
 
@@ -1186,8 +978,7 @@ private func waitForSleepCount(_ expected: Int, probe: RelaySleepProbe) async th
 private func sampleRelayProfile(
   id: UUID,
   host: String = "relay.example",
-  mode: RelayMode = .selfHosted,
-  isDefault: Bool = false
+  mode: RelayMode = .selfHosted
 ) throws -> RelayProfile {
   try RelayProfile(
     id: id,
@@ -1195,8 +986,7 @@ private func sampleRelayProfile(
     baseURL: URL(string: "https://\(host)")!,
     instanceID: "instance_\(id.uuidString.lowercased())",
     mode: mode,
-    capabilities: mode == .managed ? sampleManagedRelayCapabilities : sampleRelayCapabilities,
-    isDefault: isDefault
+    capabilities: mode == .managed ? sampleManagedRelayCapabilities : sampleRelayCapabilities
   )
 }
 
@@ -1211,12 +1001,12 @@ private func sampleRelayInfo() -> RelayInfo {
   )
 }
 
-private func sampleObservation(deviceID: String, sequence: Int) throws -> ControllerSnapshotObservation {
+private func sampleObservation(deviceID: String, sequence: Int) throws -> OwnerSnapshotObservation {
   let data = Data(
     #"{"observations":[{"device_id":"\#(deviceID)","sequence":\#(sequence),"captured_at":"2026-08-03T10:20:30Z","snapshot":{"provider":"codex","account":{"fingerprint":"account_synthetic","fingerprint_scope":"global"},"windows":[{"id":"weekly","title":"Weekly","used_percent":20}],"source":"synthetic","status":"available","observed_at":"2026-08-03T10:20:30Z"},"updated_at":"2026-08-03T10:20:31Z"}]}"#.utf8
   )
   let response = try QuotaWireCodec.makeDecoder().decode(
-    ControllerSnapshotListResponse.self,
+    OwnerSnapshotListResponse.self,
     from: data
   )
   return try #require(response.observations.first)
@@ -1232,13 +1022,13 @@ private func sampleDevice(deviceID: String, sequence: Int) throws -> RelayDevice
 
 private let profileID1 = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
 private let profileID2 = UUID(uuidString: "22222222-2222-2222-2222-222222222222")!
-private let syntheticControllerBearer = "controller_synthetic_0123456789"
+private let syntheticOwnerBearer = "owner_synthetic_0123456789"
 private let sampleRelayCapabilities = RelayCapabilities(
   realtime: false,
   persistentSnapshots: true,
   instantDeviceRevocation: true,
   history: false,
-  multiTenant: false
+  multiTenant: true
 )
 private let sampleManagedRelayCapabilities = RelayCapabilities(
   realtime: false,

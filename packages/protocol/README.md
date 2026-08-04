@@ -4,7 +4,7 @@ Versioned wire contracts shared by QuotaCLI and QuotaRelay. QuotaBar mirrors the
 Swift `Codable` models.
 
 - TypeScript runtime validation lives in `src`.
-- Language-neutral, versioned JSON Schemas live in `schema` and are published by Quota Web under
+- Language-neutral, versioned JSON Schemas live in `schema` and are served by Quota Web under
   `/schema/`.
-- Published schema identifiers use `https://quota.gotry.io/schema/`.
+- Canonical schema identifiers use `https://quota.gotry.io/schema/`.
 - Wire fields use `snake_case`. Once a schema version is released, it remains backward compatible.
