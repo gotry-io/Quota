@@ -1,8 +1,9 @@
 name: release-menubar
 
-# A v* tag builds one Apple Silicon artifact, signs and notarizes it, publishes the GitHub Release,
-# then pushes the generated Cask to gotry-io/homebrew-tap. A manual run may only republish an
-# existing tag; it never builds an untagged main commit.
+# A v* tag builds one Apple Silicon artifact, signs and notarizes it, and publishes a GitHub Release.
+# Stable tags also push the generated Cask to gotry-io/homebrew-tap.
+# Prerelease tags (v0.0.2-beta.1) create a GitHub prerelease only and skip Homebrew.
+# A manual run may only republish an existing tag; it never builds an untagged main commit.
 on:
   push:
     tags: ["v*"]
@@ -44,8 +45,19 @@ jobs:
             echo "invalid version: $VERSION" >&2
             exit 1
           fi
+          # Prerelease versions use a hyphen suffix (semver), e.g. 0.0.2-beta.1.
+          # Only stable releases update the Homebrew Cask.
+          if [[ "$VERSION" == *-* ]]; then
+            CHANNEL=beta
+            PRERELEASE=true
+          else
+            CHANNEL=stable
+            PRERELEASE=false
+          fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+          echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
 
       - name: Install pinned toolchain packages
         run: |
@@ -155,10 +167,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.version.outputs.tag }}
           ARCHIVE: ${{ steps.artifact.outputs.archive }}
+          PRERELEASE: ${{ steps.version.outputs.prerelease }}
+          CHANNEL: ${{ steps.version.outputs.channel }}
         run: |
           set -euo pipefail
           if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TAG" --generate-notes
+            CREATE_ARGS=(--repo "$GITHUB_REPOSITORY" --title "$TAG" --generate-notes)
+            if [ "$PRERELEASE" = "true" ]; then
+              CREATE_ARGS+=(--prerelease)
+            fi
+            echo "Creating GitHub release channel=${CHANNEL} prerelease=${PRERELEASE}"
+            gh release create "$TAG" "${CREATE_ARGS[@]}"
           fi
           gh release upload "$TAG" \
             "dist/release/$ARCHIVE" \
@@ -167,6 +186,7 @@ jobs:
             --clobber
 
       - name: Publish Homebrew Cask
+        if: steps.version.outputs.prerelease != 'true'
         env:
           TAP_PUSH_TOKEN: ${{ secrets.TAP_PUSH_TOKEN }}
           VERSION: ${{ steps.version.outputs.version }}
@@ -191,3 +211,12 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "quotabar ${VERSION}"
           git push
+
+      - name: Skip Homebrew Cask for prerelease
+        if: steps.version.outputs.prerelease == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          echo "Skipping Homebrew Cask update for prerelease ${VERSION}"
+          echo "Install the signed ZIP from the GitHub prerelease instead."

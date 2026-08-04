@@ -89,8 +89,11 @@ collection report. Credentials never leave the local machine and are never print
   artifacts.
 
 QuotaBar's arm64 release channel is automated from a `v*` tag: GitHub Actions signs and notarizes
-the app, publishes its ZIP, and pushes the matching Cask to `gotry-io/homebrew-tap`. The same tag
-publishes QuotaCLI independently through npm Trusted Publishing, without a long-lived npm token.
+the app and publishes its ZIP. **Stable** tags also push the matching Cask to
+`gotry-io/homebrew-tap`. The same tag publishes QuotaCLI independently through npm Trusted
+Publishing, without a long-lived npm token. **Prerelease** tags (for example `v0.0.2-beta.1`)
+publish QuotaCLI under the npm `beta` dist-tag, mark the GitHub Release as a prerelease, and do
+**not** update Homebrew.
 
 ## Status
 
@@ -112,14 +115,34 @@ Bearer authentication, snapshot upload and reads, device management, and persist
 Both managed and self-hosted runtimes issue the same anonymous, isolated, expiring owner capabilities
 without user accounts or a bootstrap token. Owners can revoke their own devices or delete their
 group; devices can revoke themselves; devices and owner groups inactive for 30 days are reclaimed by
-scheduled maintenance. QuotaCLI implements Relay pairing, one-shot `relay push`, remote unpairing,
-and a macOS LaunchAgent that runs push at load and every five minutes after pairing. Top-level
-`status` summarizes local provider readiness and Relay background state.
+scheduled maintenance. QuotaCLI implements Relay pairing with one foreground upload after join,
+one-shot `relay push`, remote unpairing, and a macOS LaunchAgent that continues push every five
+minutes after pairing. Top-level `status` summarizes local provider readiness and Relay background
+state.
 
-The first public release is **0.0.1**. Tagging `v0.0.1` publishes QuotaCLI to npm through OIDC
-Trusted Publishing, signs and notarizes QuotaBar for GitHub Releases and the
-`gotry-io/homebrew-tap` Cask, and the managed Relay plus website deploy to
-[quota.gotry.io](https://quota.gotry.io).
+The first public release is **0.0.1**. Tagging a stable version such as `v0.0.2` publishes
+QuotaCLI to npm `latest`, signs and notarizes QuotaBar for a full GitHub Release and the
+`gotry-io/homebrew-tap` Cask. Tagging a prerelease such as `v0.0.2-beta.1` publishes QuotaCLI to
+npm `beta` and a GitHub prerelease ZIP only. Managed Relay plus website deploy to
+[quota.gotry.io](https://quota.gotry.io) is separate from app tags.
+
+### Version channels
+
+| Tag example | Channel | npm | GitHub Release | Homebrew Cask |
+| --- | --- | --- | --- | --- |
+| `v0.0.2` | stable | `@gotry-io/quotacli@latest` | full release | updates `quotabar` |
+| `v0.0.2-beta.1` | beta | `@gotry-io/quotacli@beta` | prerelease ZIP | skipped |
+
+Rules:
+
+- Use semver. Prerelease **must** include a hyphen suffix (`0.0.2-beta.1`, not `0.0.2beta1`).
+- Prefer `beta.N` for public validation builds. Other hyphen suffixes are treated the same as beta
+  for publish routing (npm `beta` tag, GitHub prerelease, no Homebrew).
+- Install stable CLI with `npm install -g @gotry-io/quotacli`.
+- Install beta CLI with `npm install -g @gotry-io/quotacli@beta` or pin
+  `@gotry-io/quotacli@0.0.2-beta.1`.
+- Install stable QuotaBar with Homebrew Cask or the latest full GitHub Release.
+- Install beta QuotaBar from the GitHub prerelease ZIP only; do not `brew upgrade` for beta.
 
 The deterministic Visual App captures its own window without Screen Recording permission, and its
 automated acceptance harness validates Overview and Settings scenes across appearance and text-size

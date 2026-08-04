@@ -45,11 +45,13 @@ successful result with at least one available or stale quota window; Settings re
 visibility controls for all supported agents. QuotaBar caches only the last normalized, redacted
 local report so subsequent launches render immediately while a background refresh runs. The release
 workflow packages an arm64-only app with its helper, signs every executable with Developer ID,
-notarizes and staples the bundle, publishes a GitHub Release, and updates the Homebrew Cask.
+notarizes and staples the bundle, and publishes a GitHub Release. **Stable** tags also update the
+Homebrew Cask; **prerelease** tags publish a GitHub prerelease ZIP only and skip Homebrew.
 
-The release target is a Homebrew Cask from `gotry-io/homebrew-tap`. The signed `.app` contains the
-standalone QuotaCLI helper at a fixed bundle path and invokes that copy instead of a `quotacli`
-found on `PATH`. Users installing QuotaBar therefore do not install the npm CLI separately.
+The stable release target is a Homebrew Cask from `gotry-io/homebrew-tap`. Beta builds are installed
+from the GitHub prerelease ZIP. The signed `.app` contains the standalone QuotaCLI helper at a fixed
+bundle path and invokes that copy instead of a `quotacli` found on `PATH`. Users installing QuotaBar
+therefore do not install the npm CLI separately.
 
 Provider artwork uses the monochrome OpenAI, Claude, and Grok SVG assets from Lobe Icons
 (https://lobehub.com/icons). The source SVGs remain vector resources and render as semantic template

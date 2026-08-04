@@ -1,7 +1,10 @@
 name: release-cli
 
-# A v* tag publishes the architecture-neutral Node.js QuotaCLI package. npm authenticates this
-# exact workflow through Trusted Publishing (OIDC), so no long-lived npm token is stored in GitHub.
+# A v* tag publishes the architecture-neutral Node.js QuotaCLI package.
+# Stable tags (v0.0.2) publish to npm dist-tag "latest".
+# Prerelease tags (v0.0.2-beta.1) publish to npm dist-tag "beta".
+# npm authenticates this exact workflow through Trusted Publishing (OIDC), so no long-lived npm
+# token is stored in GitHub.
 on:
   push:
     tags: ["v*"]
@@ -44,7 +47,17 @@ jobs:
             echo "invalid version: $VERSION" >&2
             exit 1
           fi
+          # Prerelease versions use a hyphen suffix (semver), e.g. 0.0.2-beta.1.
+          if [[ "$VERSION" == *-* ]]; then
+            CHANNEL=beta
+            NPM_TAG=beta
+          else
+            CHANNEL=stable
+            NPM_TAG=latest
+          fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
+          echo "npm_tag=$NPM_TAG" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-node@v6
         with:
@@ -95,4 +108,10 @@ jobs:
       - name: Publish QuotaCLI
         if: steps.registry.outputs.publish == 'true'
         working-directory: apps/cli
-        run: npm publish
+        env:
+          NPM_TAG: ${{ steps.version.outputs.npm_tag }}
+          CHANNEL: ${{ steps.version.outputs.channel }}
+        run: |
+          set -euo pipefail
+          echo "Publishing @gotry-io/quotacli as channel=${CHANNEL} tag=${NPM_TAG}"
+          npm publish --tag "$NPM_TAG"
