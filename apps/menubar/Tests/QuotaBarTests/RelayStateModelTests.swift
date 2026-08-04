@@ -144,7 +144,7 @@ struct RelayStateModelTests {
     let unsupported = RelayInfo(
       instanceID: "unsupported",
       mode: .selfHosted,
-      version: "0.1.0",
+      version: "0.0.1",
       apiVersions: [1],
       authMethods: ["bearer"],
       capabilities: RelayCapabilities(
@@ -994,7 +994,7 @@ private func sampleRelayInfo() -> RelayInfo {
   RelayInfo(
     instanceID: "relay_primary",
     mode: .selfHosted,
-    version: "0.1.0",
+    version: "0.0.1",
     apiVersions: [1],
     authMethods: ["bearer"],
     capabilities: sampleRelayCapabilities

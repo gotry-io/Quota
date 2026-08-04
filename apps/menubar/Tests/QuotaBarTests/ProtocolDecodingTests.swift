@@ -32,7 +32,7 @@ func decodesRelayCapabilities() throws {
     {
       "instance_id": "self-hosted-primary",
       "mode": "self_hosted",
-      "version": "0.1.0",
+      "version": "0.0.1",
       "api_versions": [1],
       "auth_methods": [],
       "capabilities": {

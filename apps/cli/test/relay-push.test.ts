@@ -31,7 +31,7 @@ const boundCredential: RelayCredential = {
 const boundRelay: RelayInfo = {
   instance_id: boundCredential.instance_id,
   mode: "self_hosted",
-  version: "0.1.0",
+  version: "0.0.1",
   api_versions: [1],
   auth_methods: ["bearer"],
   capabilities: {

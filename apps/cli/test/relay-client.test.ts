@@ -5,7 +5,7 @@ import { RelayClient, RelayClientError, type RelayFetch } from "../src/relay/cli
 const discovery = {
   instance_id: "relay_test",
   mode: "self_hosted",
-  version: "0.1.0",
+  version: "0.0.1",
   api_versions: [1],
   auth_methods: ["bearer"],
   capabilities: {

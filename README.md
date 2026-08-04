@@ -114,13 +114,17 @@ without user accounts or a bootstrap token. Owners can revoke their own devices 
 group; devices can revoke themselves; devices and owner groups inactive for 30 days are reclaimed by
 scheduled maintenance. QuotaCLI implements Relay pairing, one-shot `relay push`, remote unpairing,
 and a macOS LaunchAgent that runs push at load and every five minutes after pairing. Top-level
-`status` summarizes local provider readiness and Relay background state. No Quota artifact has been
-published or deployed; the first tagged release will publish QuotaCLI through OIDC.
+`status` summarizes local provider readiness and Relay background state.
+
+The first public release is **0.0.1**. Tagging `v0.0.1` publishes QuotaCLI to npm through OIDC
+Trusted Publishing, signs and notarizes QuotaBar for GitHub Releases and the
+`gotry-io/homebrew-tap` Cask, and the managed Relay plus website deploy to
+[quota.gotry.io](https://quota.gotry.io).
 
 The deterministic Visual App captures its own window without Screen Recording permission, and its
 automated acceptance harness validates Overview and Settings scenes across appearance and text-size
-variants. Background-service support outside macOS and the first Homebrew artifact remain
-incomplete. Realtime delivery is optional and not part of v1.
+variants. Background-service support outside macOS remains incomplete. Realtime delivery is optional
+and not part of v1.
 
 ## License
 

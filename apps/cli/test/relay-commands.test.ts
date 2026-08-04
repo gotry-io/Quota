@@ -19,7 +19,7 @@ import type { RelayCredential } from "../src/relay/store.ts";
 const relayInfo: RelayInfo = {
   instance_id: "relay_test",
   mode: "self_hosted",
-  version: "0.1.0",
+  version: "0.0.1",
   api_versions: [1],
   auth_methods: ["bearer"],
   capabilities: {
@@ -278,7 +278,7 @@ describe("status", () => {
 
     expect(await runStatusCommand(capture.output, dependencies)).toBe(0);
     expect(capture.stdout).toEqual([
-      `CLI version: 0.1.0`,
+      `CLI version: 0.0.1`,
       "Providers:",
       "  codex\tfound\t~/.codex/auth.json\tCodex auth file",
       "Relay:",

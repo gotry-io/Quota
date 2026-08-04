@@ -1,6 +1,6 @@
 {
   "name": "@gotry-io/quotacli",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "description": "Inspect Codex, Claude Code, and Grok quota locally from one CLI.",
   "license": "MIT",
   "private": false,
@@ -49,7 +49,7 @@
   },
   "devDependencies": {
     "@gotry-io/quota-model": "workspace:*",
-    "@gotry-io/quota-provider": "workspace:*",
-    "@gotry-io/quota-protocol": "workspace:*"
+    "@gotry-io/quota-protocol": "workspace:*",
+    "@gotry-io/quota-provider": "workspace:*"
   }
 }

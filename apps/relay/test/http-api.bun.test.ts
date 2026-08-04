@@ -25,7 +25,7 @@ const otherOwnerManageToken = "other-owner-manage-token-for-http-tests";
 const relayInfo: RelayInfo = {
   instance_id: "http-test-relay",
   mode: "self_hosted",
-  version: "0.1.0",
+  version: "0.0.1",
   api_versions: [1],
   auth_methods: [],
   capabilities: {

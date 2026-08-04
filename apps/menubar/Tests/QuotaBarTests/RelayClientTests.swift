@@ -373,7 +373,7 @@ private func makeProfile() throws -> RelayProfile {
 
 private func discovery(instanceID: String) -> Data {
   Data(
-    #"{"instance_id":"\#(instanceID)","mode":"self_hosted","version":"0.1.0","api_versions":[1],"auth_methods":["bearer"],"capabilities":{"realtime":false,"persistent_snapshots":true,"instant_device_revocation":true,"history":false,"multi_tenant":false}}"#.utf8
+    #"{"instance_id":"\#(instanceID)","mode":"self_hosted","version":"0.0.1","api_versions":[1],"auth_methods":["bearer"],"capabilities":{"realtime":false,"persistent_snapshots":true,"instant_device_revocation":true,"history":false,"multi_tenant":false}}"#.utf8
   )
 }
 

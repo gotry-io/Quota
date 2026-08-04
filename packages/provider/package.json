@@ -1,6 +1,6 @@
 {
   "name": "@gotry-io/quota-provider",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "description": "Node and Bun provider collection for QuotaCLI.",
   "license": "MIT",
   "private": true,

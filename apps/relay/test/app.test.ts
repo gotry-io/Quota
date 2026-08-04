@@ -125,7 +125,7 @@ class ActivityRaceRelayState extends TestRelayState {
 const relayInfo: RelayInfo = {
   instance_id: "test-relay",
   mode: "self_hosted",
-  version: "0.1.0",
+  version: "0.0.1",
   api_versions: [1],
   auth_methods: [],
   capabilities: {

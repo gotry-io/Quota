@@ -34,4 +34,4 @@ jobs:
           pnpm build
 
       - name: Package unsigned arm64 app
-        run: ./scripts/package-menubar.sh 0.1.0 "${{ github.run_number }}"
+        run: ./scripts/package-menubar.sh 0.0.1 "${{ github.run_number }}"

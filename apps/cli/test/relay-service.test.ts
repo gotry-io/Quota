@@ -46,7 +46,7 @@ describe("relay background lifecycle", () => {
 
     expect(await runStatusCommand(capture.output, dependencies)).toBe(0);
     expect(capture.stdout).toEqual([
-      "CLI version: 0.1.0",
+      "CLI version: 0.0.1",
       "Providers:",
       "  codex\tfound\t~/.codex/auth.json\tCodex auth file",
       "Relay:",
@@ -250,7 +250,7 @@ function serviceDependencies(options: ServiceDependencyOptions = {}): RelayComma
         return {
           instance_id: options.relayInstanceID ?? pairedCredential.instance_id,
           mode: "self_hosted" as const,
-          version: "0.1.0",
+          version: "0.0.1",
           api_versions: [1 as const],
           auth_methods: ["bearer" as const],
           capabilities: {
