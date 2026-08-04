@@ -102,6 +102,11 @@ Static Assets. Path filters cover `apps/relay`, `apps/web`, `packages/protocol`,
 `packages/relay-core`. Manual `workflow_dispatch` is available. Requires repository secrets
 `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`, and uses the `production` GitHub Environment.
 
+Pull requests run AI review through `.github/workflows/pr-agent.yml` (PR-Agent over a
+LiteLLM-compatible OpenAI API). Configure repository secrets `LITELLM_API_BASE`,
+`LITELLM_API_KEY`, `LITELLM_MODEL`, and `LITELLM_FALLBACK_MODELS`. On each non-draft PR,
+PR-Agent auto-runs `/describe` and `/review`; comment `/improve` or `/ask …` for on-demand tools.
+
 ## Status
 
 This repository implements local provider collection for Codex, Claude Code, and Grok, normalized

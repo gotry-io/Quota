@@ -1,0 +1,88 @@
+name: pr-agent
+
+# AI PR review via PR-Agent, routed through a LiteLLM-compatible OpenAI API.
+#
+# Required repository secrets (GitHub → Settings → Secrets and variables → Actions):
+#   LITELLM_API_BASE         e.g. https://llm.example.com/v1
+#   LITELLM_API_KEY          API key accepted by that gateway
+#   LITELLM_MODEL            model id for LiteLLM, e.g. openai/gpt-4.1-mini
+#   LITELLM_FALLBACK_MODELS JSON array string, e.g. ["openai/gpt-4.1-mini"]
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review, synchronize]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: pr-agent-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  pr_agent:
+    # Skip draft PRs and non-command issue comments.
+    if: |
+      (github.event_name == 'pull_request' && github.event.pull_request.draft == false) ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request &&
+       (
+         startsWith(github.event.comment.body, '/review') ||
+         startsWith(github.event.comment.body, '/describe') ||
+         startsWith(github.event.comment.body, '/improve') ||
+         startsWith(github.event.comment.body, '/ask')
+       ))
+    runs-on: ubuntu-24.04
+    name: PR Agent
+    steps:
+      - name: Require LiteLLM secrets
+        env:
+          LITELLM_API_BASE: ${{ secrets.LITELLM_API_BASE }}
+          LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
+          LITELLM_MODEL: ${{ secrets.LITELLM_MODEL }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for name in LITELLM_API_BASE LITELLM_API_KEY LITELLM_MODEL; do
+            if [ -z "${!name:-}" ]; then
+              echo "Missing repository secret: $name" >&2
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "Configure LiteLLM secrets before PR-Agent can run." >&2
+            exit 1
+          fi
+
+      - name: Run PR-Agent
+        uses: the-pr-agent/pr-agent@main
+        env:
+          # OpenAI-compatible LiteLLM gateway
+          OPENAI_KEY: ${{ secrets.LITELLM_API_KEY }}
+          OPENAI.API_BASE: ${{ secrets.LITELLM_API_BASE }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+          # Model ids must be valid for your LiteLLM route. Prefer an openai/... id when the
+          # gateway exposes OpenAI-compatible chat completions.
+          config.model: ${{ secrets.LITELLM_MODEL }}
+          # JSON array string. Example: ["openai/gpt-4.1-mini"]
+          config.fallback_models: ${{ secrets.LITELLM_FALLBACK_MODELS }}
+
+          # Custom/gateway model ids are usually absent from PR-Agent's built-in token table.
+          config.custom_model_max_tokens: "128000"
+
+          # Auto tools on PR open/sync. Comment commands still work: /review /describe /improve /ask
+          github_action_config.auto_review: "true"
+          github_action_config.auto_describe: "true"
+          github_action_config.auto_improve: "false"
+          github_action_config.pr_actions: '["opened", "reopened", "ready_for_review", "synchronize"]'
+
+          # Prefer high-signal review; cut noisy helper chrome.
+          PR_REVIEWER.REQUIRE_TESTS_REVIEW: "true"
+          PR_REVIEWER.REQUIRE_SECURITY_REVIEW: "true"
+          PR_REVIEWER.ENABLE_HELP_TEXT: "false"
+          PR_DESCRIPTION.ENABLE_HELP_TEXT: "false"
+          config.publish_output_progress: "false"
