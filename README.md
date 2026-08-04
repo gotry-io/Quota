@@ -95,6 +95,13 @@ Publishing, without a long-lived npm token. **Prerelease** tags (for example `v0
 publish QuotaCLI under the npm `beta` dist-tag, mark the GitHub Release as a prerelease, and do
 **not** update Homebrew.
 
+Managed Relay and the public website deploy together from `main` through
+`.github/workflows/deploy-cloudflare.yml`. The job applies remote D1 migrations, builds
+`apps/web`, and runs `wrangler deploy` so `quota.gotry.io` serves both the API Worker and website
+Static Assets. Path filters cover `apps/relay`, `apps/web`, `packages/protocol`, and
+`packages/relay-core`. Manual `workflow_dispatch` is available. Requires repository secrets
+`CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`, and uses the `production` GitHub Environment.
+
 ## Status
 
 This repository implements local provider collection for Codex, Claude Code, and Grok, normalized
@@ -124,7 +131,8 @@ The first public release is **0.0.1**. Tagging a stable version such as `v0.0.2`
 QuotaCLI to npm `latest`, signs and notarizes QuotaBar for a full GitHub Release and the
 `gotry-io/homebrew-tap` Cask. Tagging a prerelease such as `v0.0.2-beta.1` publishes QuotaCLI to
 npm `beta` and a GitHub prerelease ZIP only. Managed Relay plus website deploy to
-[quota.gotry.io](https://quota.gotry.io) is separate from app tags.
+[quota.gotry.io](https://quota.gotry.io) is separate from app tags: pushes to `main` that touch
+Relay/web/protocol inputs run `deploy-cloudflare.yml` (D1 migrate + Worker/Static Assets).
 
 ### Version channels
 

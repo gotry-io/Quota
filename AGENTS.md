@@ -117,9 +117,10 @@ If platform-specific verification cannot run, report exactly what was skipped an
 
 ## Deployment safety
 
-- Local builds and Wrangler dry runs are verification. Do not deploy Workers, apply remote D1
-  migrations, publish packages, push images, create releases, or change DNS without explicit user
-  authorization.
+- Local builds and Wrangler dry runs are verification. Do not manually deploy Workers, apply remote
+  D1 migrations, publish packages, push images, create releases, or change DNS without explicit user
+  authorization. The checked-in `deploy-cloudflare.yml` workflow is the authorized path for managed
+  Relay/website production deploys from `main` once Cloudflare secrets are configured.
 - Keep production identifiers and secrets out of tracked files.
 - Treat migration and retained-data changes as security-sensitive and review them against
   `docs/security.md`.

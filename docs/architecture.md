@@ -103,6 +103,8 @@ storage requirements are defined only in [`security.md`](security.md).
 
 - Static Vite application built independently into `apps/web/dist`.
 - Shares the managed `quota.gotry.io` hostname and `quota` Worker deployment with Relay APIs.
+- Managed production deploys ship website assets with the Relay Worker (`deploy-cloudflare.yml` /
+  `pnpm deploy:cloudflare`); there is no separate website-only Cloudflare project.
 - Is not included in the self-hosted Relay executable or container image.
 
 ## Package dependency rules

@@ -29,13 +29,20 @@ pnpm d1:migrate:local
 pnpm dev
 ```
 
-For the planned first production deployment, apply the remote migration before deploying the Worker and
-its website together:
+For a manual production deployment, apply the remote migration before deploying the Worker and its
+website together:
 
 ```bash
 pnpm d1:migrate:remote
 pnpm deploy:cloudflare
 ```
+
+CI deploys the same pair automatically from `main` when Relay, website, protocol, or relay-core
+inputs change (workflow `deploy-cloudflare.yml`), and on manual `workflow_dispatch`. The job applies
+remote D1 migrations, then runs `deploy:cloudflare`, which builds `apps/web` and publishes the
+Worker plus Static Assets in one step. Configure repository secrets `CLOUDFLARE_API_TOKEN` and
+`CLOUDFLARE_ACCOUNT_ID`, and approve the `production` GitHub Environment if protection rules are
+enabled.
 
 The `quota.gotry.io` Custom Domain is declared in `wrangler.jsonc`; Cloudflare manages its DNS
 record and certificate during deployment.
