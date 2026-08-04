@@ -213,9 +213,17 @@ export function resolveRelayPushProgramArguments(input: RelayPushInvocationInput
   if (!isAbsolute(entry)) {
     throw new LaunchAgentError("QuotaCLI could not resolve its entry path.");
   }
-  return entry === executable
-    ? [executable, "relay", "push"]
-    : [executable, entry, "relay", "push"];
+  // Prefer the installed CLI path as ProgramArguments[0] so macOS Background Items show
+  // "quotacli" instead of the Node/Bun runtime. launchd follows the script shebang.
+  if (entry === executable || isInstalledCLIEntry(entry)) {
+    return [entry, "relay", "push"];
+  }
+  return [executable, entry, "relay", "push"];
+}
+
+function isInstalledCLIEntry(entry: string): boolean {
+  const name = basename(entry);
+  return name === "quotacli" || name === "quotacli.js";
 }
 
 export function renderLaunchAgentPlist(

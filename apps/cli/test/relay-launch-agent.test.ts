@@ -47,14 +47,24 @@ describe("relay push invocation resolution", () => {
     ).toEqual(["/private/tmp/quota-argv-probe", "relay", "push"]);
   });
 
-  it("preserves an absolute Node entry module", () => {
+  it("uses an installed npm CLI entry directly so Background Items show quotacli", () => {
+    expect(
+      resolveRelayPushProgramArguments({
+        execPath: "/usr/local/bin/node",
+        argv1: "/opt/homebrew/bin/quotacli",
+        cwd: "/tmp",
+      }),
+    ).toEqual(["/opt/homebrew/bin/quotacli", "relay", "push"]);
+  });
+
+  it("uses an absolute quotacli.js package entry directly", () => {
     expect(
       resolveRelayPushProgramArguments({
         execPath: "/usr/local/bin/node",
         argv1: "/opt/quota/quotacli.js",
         cwd: "/tmp",
       }),
-    ).toEqual(["/usr/local/bin/node", "/opt/quota/quotacli.js", "relay", "push"]);
+    ).toEqual(["/opt/quota/quotacli.js", "relay", "push"]);
   });
 
   it("resolves a relative development entry from an absolute cwd", () => {
@@ -160,8 +170,8 @@ describe("macOS LaunchAgent lifecycle", () => {
       },
     ]);
     const contents = await readFile(plistPath, "utf8");
-    expect(contents).toContain("<string>/usr/local/bin/node</string>");
     expect(contents).toContain("<string>/opt/quota/quotacli.js</string>");
+    expect(contents).not.toContain("<string>/usr/local/bin/node</string>");
     expect(contents).toContain("<string>/private/config</string>");
     expect(contents).not.toContain("must-not-be-written");
     expect((await lstat(plistPath)).mode & 0o777).toBe(0o600);
