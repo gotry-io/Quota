@@ -347,9 +347,9 @@ final class RelayStateModel {
           throw RelayStateModelError(issue: issue)
         }
 
-        // Pair Device is an explicit enrollment action. If the Keychain item or remote ephemeral
-        // owner has expired, discard only the unusable local endpoint record and create a new
-        // isolated owner below. The inaccessible remote group remains bounded by Relay GC.
+        // Pair Device is an explicit enrollment action. If the local owner credential or remote
+        // ephemeral owner has expired, discard only the unusable local endpoint record and create
+        // a new isolated owner below. The inaccessible remote group remains bounded by Relay GC.
         try deleteLocalProfile(at: existingIndex)
       }
     }

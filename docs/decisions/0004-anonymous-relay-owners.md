@@ -15,8 +15,8 @@ and revoke them. A device bearer may upload snapshots for only its own device an
 itself. Creating a pairing remains unauthenticated: its single-use verification code is the explicit
 capability by which QuotaBar associates the requesting device with its owner.
 
-The Relay returns an owner bearer once, stores only its hash, and QuotaBar stores it only in local
-Keychain. Owner deletion atomically invalidates the capability and cascades its devices, sessions,
+The Relay returns an owner bearer once, stores only its hash, and QuotaBar stores it only in a
+user-only local Application Support file. Owner deletion atomically invalidates the capability and cascades its devices, sessions,
 pairing state, and snapshots.
 
 The Relay revokes a device after 30 days without a successful report, using `created_at` until the
@@ -40,7 +40,7 @@ therefore an authorization grouping, not a representation of a person.
 - Anonymous Relay setup requires no sign-in and retains no account identity.
 - Losing QuotaBar's capability loses access to that owner group; v1 has no recovery or cross-Mac
   synchronization path. Explicit pairing may create a new group but does not recover the old one.
-- Removing an owner group locally deletes it from the Relay before erasing its Keychain capability
+- Removing an owner group locally deletes it from the Relay before erasing its local owner capability
   whenever the Relay is reachable. If local state is erased while offline, inactivity expiry bounds
   the orphaned group and device lifetime.
 - `multi_tenant` describes isolated anonymous owners sharing one runtime, not user accounts.

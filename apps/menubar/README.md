@@ -4,9 +4,9 @@ QuotaBar is the native SwiftUI macOS menu bar client. It displays local QuotaCLI
 remote snapshots from devices this QuotaBar has paired through one or more Relay endpoints.
 
 Pair Device enrolls an isolated anonymous owner capability for the selected Relay URL (official or
-custom), stores the returned bearer only in Keychain, and keeps endpoint records as internal state.
-Users never enter owner tokens, profile names, or admin credentials. Local collection is independent
-of Relay availability.
+custom), stores the returned bearer only in a user-only Application Support file, and keeps endpoint
+records as internal state. Users never enter owner tokens, profile names, or admin credentials. Local
+collection is independent of Relay availability.
 
 The Relay core binds each endpoint to a discovered instance and implements pairing decisions,
 snapshot reads, device listing, and device revocation for that QuotaBar's private group only. It
@@ -16,11 +16,12 @@ defined in [`docs/security.md`](../../docs/security.md) and
 [`docs/decisions/0005-url-only-relay-enrollment.md`](../../docs/decisions/0005-url-only-relay-enrollment.md).
 
 Settings exposes **Remote Devices** (aggregated own devices) and **Pair Device**. **Delete all
-QuotaBar data** deletes each reachable owner group before clearing Keychain items, endpoint records,
-cached quota, and preferences. If a Relay is unreachable, the confirmation flow offers an explicit
-local-only fallback. Startup reconciliation removes orphaned Keychain items that have no endpoint
-record. When an explicitly selected endpoint has lost or expired private access, Pair Device replaces
-that unusable local record with a newly isolated owner; background polling never enrolls on its own.
+QuotaBar data** deletes each reachable owner group before clearing the local owners file, endpoint
+records, cached quota, and preferences. If a Relay is unreachable, the confirmation flow offers an
+explicit local-only fallback. Startup reconciliation removes orphaned owner records that have no
+endpoint record. When an explicitly selected endpoint has lost or expired private access, Pair Device
+replaces that unusable local record with a newly isolated owner; background polling never enrolls on
+its own.
 
 The Relay state model coordinates endpoint enrollment, pairing, last-known-good snapshot and device
 state, explicit refresh, and a cancellable five-minute polling loop. The production app creates one
@@ -108,15 +109,14 @@ retain a small manual smoke test.
 
 Run `pnpm test:relay:e2e` from the repository root for the real self-hosted and managed owner-path
 acceptance flows. It launches the signed Visual App through LaunchServices and uses
-the production URLSession, `RelayStateModel`, UserDefaults, and system Keychain boundaries against a
+the production URLSession, `RelayStateModel`, UserDefaults, and an isolated owners file against a
 temporary loopback Relay.
 A test-only CLI runner injects one normalized non-empty collection report at the existing command
 dependency boundary; pairing, credential persistence, upload sequencing, Relay storage, Overview
 resolution, device revocation, rejection, restart restoration, and cleanup remain real. The flow
-does not read ambient provider credentials or modify production QuotaBar preferences or Keychain
-items.
+does not read ambient provider credentials or modify production QuotaBar preferences or owners file.
 
 Before uninstalling QuotaBar, use **Settings → Delete all QuotaBar data** while online. Dragging the
 app to Trash cannot run cleanup code, and Homebrew Cask `zap` can remove preferences and saved window
-state but cannot safely perform authenticated device revocation or delete signed Keychain items on
-the app's behalf.
+state but cannot safely perform authenticated device revocation or delete the owners file on the
+app's behalf.

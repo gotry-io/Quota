@@ -21,31 +21,29 @@ data requirements.
 - QuotaBar may cache one last normalized local collection report in its application preferences for
   immediate startup. The cache may contain masked labels and account fingerprints, but never raw
   provider responses, credential payloads, access tokens, refresh tokens, cookies, or headers.
-- Store each QuotaBar Relay owner bearer only in Keychain under the fixed
-  `io.gotry.quotabar.relay-owner` service with
-  `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`. Internal Relay endpoint metadata in
-  UserDefaults stores only its derived Keychain reference, never the bearer. Store Relay device
-  credentials in the platform credential store or a user-only (`0600`) file.
+- Store each QuotaBar Relay owner bearer only in a user-only (`0600`) file at
+  `~/Library/Application Support/io.gotry.quotabar/owners.json` (directory `0700`). Internal Relay
+  endpoint metadata in UserDefaults stores only its derived credential reference, never the bearer.
+  Store Relay device credentials in the platform credential store or a user-only (`0600`) file.
 - QuotaBar registers an anonymous owner capability for any discovered Relay URL without an account
-  and moves the returned bearer directly into Keychain. Users never enter, view, or name that
+  and moves the returned bearer directly into `owners.json`. Users never enter, view, or name that
   capability. QuotaBar must canonicalize and verify the Relay through discovery before registration,
-  then store the bearer only in Keychain. The bearer must never enter endpoint metadata or other
-  application preferences.
+  then store the bearer only in that file. The bearer must never enter endpoint metadata, UserDefaults,
+  or other application preferences.
 - Relay setup failures, safe error presentation, fixtures, logs, and screenshots must never echo or
   persist an owner bearer or an Authorization header.
-- Choosing Delete All QuotaBar Data deletes each reachable owner group remotely before deleting
-  local Keychain items; owner deletion cascades its devices and snapshots. QuotaBar deletes orphaned
-  items under its owner Keychain service at startup. Background polling never recreates an
+- Choosing Delete All QuotaBar Data deletes each reachable owner group remotely before deleting the
+  local owners file; owner deletion cascades its devices and snapshots. QuotaBar deletes orphaned
+  owner records that have no endpoint reference at startup. Background polling never recreates an
   endpoint the user did not pair again. When the user explicitly starts Pair Device, a missing,
   rejected, expired, or instance-mismatched owner capability may be replaced with a new isolated
   owner after its unusable local endpoint record is removed; the inaccessible old group remains
   bounded by inactivity collection. Ordinary Finder app removal has no uninstall callback, so
   guaranteed credential cleanup remains an explicit in-app operation.
-- The `VISUAL_TEST` Relay owner-path acceptance flow uses a random Keychain service under the
-  `io.gotry.quotabar.relay-owner.e2e.*` prefix, a unique UserDefaults suite, loopback networking,
-  and isolated CLI storage. It must remove the endpoint record, Keychain item, defaults domain, CLI
-  credential, SQLite database, and child processes on completion or cooperative cancellation.
-  Production builds continue to use only the fixed Keychain service above.
+- The `VISUAL_TEST` Relay owner-path acceptance flow uses an isolated `owners.json` path, a unique
+  UserDefaults suite, loopback networking, and isolated CLI storage. It must remove the endpoint
+  record, owners file, defaults domain, CLI credential, SQLite database, and child processes on
+  completion or cooperative cancellation.
 - Only the provider-specific, stable quota-owner identifiers documented in
   [`provider-collection.md`](provider-collection.md) may produce a globally scoped account
   fingerprint. Namespace the identifier type before hashing it.

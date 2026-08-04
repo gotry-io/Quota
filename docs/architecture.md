@@ -60,7 +60,8 @@ storage requirements are defined only in [`security.md`](security.md).
   [`decisions/0003-observation-preserving-subscription-merge.md`](decisions/0003-observation-preserving-subscription-merge.md).
 - Ships its exact compatible QuotaCLI helper inside the signed app bundle and never resolves it from
   the user's `PATH`.
-- Stores hidden owner capabilities in Keychain and keeps endpoint records as internal state only.
+- Stores hidden owner capabilities in a user-only Application Support file and keeps endpoint
+  records as internal state only.
   Pairing through any Relay URL automatically registers an isolated anonymous owner capability;
   users never enter tokens, profile names, or admin credentials.
 - Discovers and binds each endpoint before using its versioned owner endpoints. The owner client

@@ -29,9 +29,9 @@ There is no user-facing owner, owner credential, Relay profile administration, s
 token, capability list, or global device registry. A custom Relay differs from the official Relay
 only by its URL.
 
-QuotaBar may retain endpoint/profile records internally to bind discovery metadata and Keychain
-items to the correct Relay instance. Those records are implementation state, not a product object
-that users name, make default, or manage on a separate screen.
+QuotaBar may retain endpoint/profile records internally to bind discovery metadata and local owner
+credential references to the correct Relay instance. Those records are implementation state, not a
+product object that users name, make default, or manage on a separate screen.
 
 ### Private authorization boundary
 
@@ -39,7 +39,7 @@ For each QuotaBar installation and Relay endpoint, QuotaBar automatically regist
 opaque owner capability. Protocol v1 represents this boundary with owner endpoints and wire fields.
 The capability is never requested from the user, rendered in UI, written to profile metadata,
 logged, or treated as a Relay-administration credential. The plaintext value is returned once and
-stored only in Keychain; Relay stores only its hash.
+stored only in a user-only local Application Support file; Relay stores only its hash.
 
 The capability authorizes only the private group created by that QuotaBar on that Relay: approving
 or denying its pairing sessions, reading snapshots from its paired devices, listing those devices,
@@ -91,8 +91,8 @@ Relay…** and enter its URL. QuotaBar validates Relay discovery and instance bi
 private capability when necessary, then accepts the pairing code. There is no separate **Add
 Relay** flow and no advanced credential section.
 
-Deleting all QuotaBar data still attempts to delete each reachable owner group before erasing local
-Keychain items. If the Relay is unreachable and the user explicitly chooses local-only deletion,
+Deleting all QuotaBar data still attempts to delete each reachable owner group before erasing the
+local owners file. If the Relay is unreachable and the user explicitly chooses local-only deletion,
 inactivity collection bounds the orphaned remote data lifetime.
 
 ### Protocol and persistence
@@ -110,8 +110,8 @@ initial migration.
 
 - Managed and self-hosted pairing have one mental model and one QuotaBar flow.
 - Users never copy, label, rotate, or reason about owner credentials.
-- QuotaBar still holds a least-privileged Keychain capability because private reads and lost-device
-  revocation cannot be secured by URL knowledge alone.
+- QuotaBar still holds a least-privileged local owner capability because private reads and
+  lost-device revocation cannot be secured by URL knowledge alone.
 - Losing local QuotaBar state loses access to that isolated device group; v1 still has no identity,
   recovery, or cross-Mac synchronization model. An explicit Pair Device action may create a fresh
   isolated owner for the same URL when saved access is missing, rejected, expired, or bound to an
