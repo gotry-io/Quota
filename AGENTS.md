@@ -12,7 +12,8 @@ Read the relevant source before changing that area:
 | Product overview, repository layout, commands, current status | `README.md` |
 | System boundaries, data paths, package dependencies, runtime split | `docs/architecture.md` |
 | Credentials, trust, redaction, transport, storage safety | `docs/security.md` |
-| Codex, Claude Code, and Grok collection strategies | `docs/provider-collection.md` |
+| Provider registration catalog (ids, defaults, config) | `packages/provider/src/catalog.ts` |
+| Codex, Claude Code, Grok, and OpenRouter collection strategies | `docs/provider-collection.md` |
 | Persistent Relay storage decision and rationale | `docs/decisions/0001-persistent-relay-storage.md` |
 | Relay pairing, code control, and credential issuance | `docs/decisions/0002-relay-device-code-pairing.md` |
 | Anonymous Relay owner lifecycle | `docs/decisions/0004-anonymous-relay-owners.md` |
@@ -37,7 +38,9 @@ Do not create a second description of a canonical rule. Update its source and li
 - Protocol changes start in `packages/protocol`. Keep runtime schemas, exported JSON Schemas, tests,
   and Swift decoding aligned. An already released protocol version remains compatible; breaking
   released behavior requires a new protocol version.
-- Provider changes must follow both `docs/provider-collection.md` and `docs/security.md`.
+- Provider changes must update `packages/provider/src/catalog.ts`, the collector, and
+  `docs/provider-collection.md`, then run `pnpm generate:provider-catalog` so protocol ids and Swift
+  `ProviderID` stay aligned. Follow `docs/security.md` for credentials and redaction.
 - Persistence changes require a new explicit migration. Do not rewrite an applied migration.
 - Architecture, trust boundary, retention, provider strategy, layout, command, and current-status
   changes must update their canonical document in the same change.
@@ -91,6 +94,9 @@ pnpm format:check
 pnpm check
 pnpm test
 pnpm build
+pnpm version:bump:cli patch       # or minor|major|semver — apps/cli only; commits (use --no-commit to skip)
+pnpm version:bump:menubar patch   # QuotaBar CFBundleShortVersionString only
+# Publish: git tag cli-vX.Y.Z or menubar-vX.Y.Z (independent; bare v* is legacy)
 ```
 
 Targeted development entry points are defined by the root `package.json` scripts and each app's
@@ -104,7 +110,8 @@ SQLite files, logs, or local credentials.
 - TypeScript-only change: run the affected workspace's type check and tests, plus root formatting.
 - Provider change: run quota-provider and QuotaCLI tests, including relevant failure and redaction
   cases.
-- Protocol change: run protocol, model, provider, Relay, and Swift decoding tests.
+- Protocol change: run protocol, model, provider, Relay, and Swift decoding tests. After catalog id
+  changes, run `pnpm generate:provider-catalog` before type check and Swift tests.
 - Relay change: run Vitest, Bun SQLite tests, and the Cloudflare dry-run build.
 - QuotaBar Relay owner-path change: on macOS, run `pnpm test:relay:e2e` in addition to the
   affected Swift and Relay tests.

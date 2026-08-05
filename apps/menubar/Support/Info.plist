@@ -2,33 +2,33 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CFBundleDevelopmentRegion</key>
-  <string>en</string>
-  <key>CFBundleDisplayName</key>
-  <string>QuotaBar</string>
-  <key>CFBundleExecutable</key>
-  <string>QuotaBar</string>
-  <key>CFBundleIconFile</key>
-  <string>QuotaBar</string>
-  <key>CFBundleIdentifier</key>
-  <string>io.gotry.quotabar</string>
-  <key>CFBundleInfoDictionaryVersion</key>
-  <string>6.0</string>
-  <key>CFBundleName</key>
-  <string>QuotaBar</string>
-  <key>CFBundlePackageType</key>
-  <string>APPL</string>
-  <key>CFBundleShortVersionString</key>
-  <string>0.0.1</string>
-  <key>CFBundleVersion</key>
-  <string>0</string>
-  <key>LSMinimumSystemVersion</key>
-  <string>14.0</string>
-  <key>LSUIElement</key>
-  <true/>
-  <key>NSHighResolutionCapable</key>
-  <true/>
-  <key>NSHumanReadableCopyright</key>
-  <string>Copyright © 2026 gotry-io contributors</string>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>QuotaBar</string>
+	<key>CFBundleExecutable</key>
+	<string>QuotaBar</string>
+	<key>CFBundleIconFile</key>
+	<string>QuotaBar</string>
+	<key>CFBundleIdentifier</key>
+	<string>io.gotry.quotabar</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>QuotaBar</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.0.3</string>
+	<key>CFBundleVersion</key>
+	<string>0</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string>Copyright © 2026 gotry-io contributors</string>
 </dict>
 </plist>

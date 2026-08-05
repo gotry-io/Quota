@@ -7,7 +7,7 @@ subscription quotas.
 - **QuotaCLI** — standalone local collector and installable Relay agent.
 - **QuotaRelay** — persistent device registry and normalized snapshot relay.
 
-The initial providers are Codex, Claude Code, and Grok.
+The initial providers are Codex, Claude Code, Grok, and OpenRouter.
 
 ## Architecture
 
@@ -74,26 +74,29 @@ Run the public website:
 pnpm dev:web
 ```
 
-`quotacli quota` collects read-only ambient Codex, Claude Code, and Grok sessions into a versioned
-collection report. Credentials never leave the local machine and are never printed.
+`quotacli quota` collects read-only ambient Codex, Claude Code, and Grok sessions plus OpenRouter API
+key credits into a versioned collection report. Credentials never leave the local machine and are
+never printed.
 
 ## Distribution targets
 
 - QuotaBar is intended for distribution as a Homebrew Cask from `gotry-io/homebrew-tap`. Its signed
   app bundle
   includes a private QuotaCLI helper, so desktop users do not install the CLI separately.
-- QuotaCLI is intended for publication as `@gotry-io/quotacli`;
-  `npm install -g @gotry-io/quotacli` will install the
-  `quotacli` command for developers and relay machines.
+- QuotaCLI is published as `@gotry-io/quotacli` on npm and as a Homebrew Formula
+  (`gotry-io/tap/quotacli`) that installs that npm package. Developers and Relay machines can use
+  either channel for the `quotacli` command.
 - The same CLI source also produces a Bun standalone executable for the QuotaBar helper and release
   artifacts.
 
-QuotaBar's arm64 release channel is automated from a `v*` tag: GitHub Actions signs and notarizes
-the app and publishes its ZIP. **Stable** tags also push the matching Cask to
-`gotry-io/homebrew-tap`. The same tag publishes QuotaCLI independently through npm Trusted
-Publishing, without a long-lived npm token. **Prerelease** tags (for example `v0.0.2-beta.1`)
-publish QuotaCLI under the npm `beta` dist-tag, mark the GitHub Release as a prerelease, and do
-**not** update Homebrew.
+QuotaCLI and QuotaBar use **independent semver and release tags**. A `cli-v*` tag runs only
+`release-cli.yml` (npm Trusted Publishing; stable also updates Homebrew Formula
+`gotry-io/tap/quotacli`). A `menubar-v*` tag runs only `release-menubar.yml` (sign, notarize, GitHub
+Release ZIP; stable also updates the Cask). QuotaBar still ships a **bundled** QuotaCLI helper built
+from the same commit's `apps/cli` sources; the helper reports the CLI package version, which may
+differ from the App marketing version. **Prerelease** tags use a hyphen suffix (for example
+`cli-v0.0.2-beta.1`, `menubar-v0.0.2-beta.1`): CLI goes to npm `beta`, App becomes a GitHub
+prerelease, and Homebrew is not updated.
 
 Managed Relay and the public website deploy together from `main` through
 `.github/workflows/deploy-cloudflare.yml`. The job applies remote D1 migrations, builds
@@ -109,9 +112,9 @@ PR-Agent auto-runs `/describe` and `/review`; comment `/improve` or `/ask …` f
 
 ## Status
 
-This repository implements local provider collection for Codex, Claude Code, and Grok, normalized
-protocol validation, persistent D1/SQLite Relay storage, Relay discovery, and the initial public
-website. QuotaBar ships its bundled helper and resolves local and remote observations into one
+This repository implements local provider collection for Codex, Claude Code, Grok, and OpenRouter,
+normalized protocol validation, persistent D1/SQLite Relay storage, Relay discovery, and the initial
+public website. QuotaBar ships its bundled helper and resolves local and remote observations into one
 stable Overview without accumulating conflicting quota values. One Relay state model is shared by
 five-minute app-lifecycle polling and the typed Settings stack for **Remote Devices** and **Pair
 Device**. A Relay is only an endpoint URL; each QuotaBar holds a hidden owner capability in Keychain
@@ -132,29 +135,49 @@ one-shot `relay push`, remote unpairing, and a macOS LaunchAgent that continues 
 minutes after pairing. Top-level `status` summarizes local provider readiness and Relay background
 state.
 
-The first public release is **0.0.1**. Tagging a stable version such as `v0.0.2` publishes
-QuotaCLI to npm `latest`, signs and notarizes QuotaBar for a full GitHub Release and the
-`gotry-io/homebrew-tap` Cask. Tagging a prerelease such as `v0.0.2-beta.1` publishes QuotaCLI to
-npm `beta` and a GitHub prerelease ZIP only. Managed Relay plus website deploy to
-[quota.gotry.io](https://quota.gotry.io) is separate from app tags: pushes to `main` that touch
-Relay/web/protocol inputs run `deploy-cloudflare.yml` (D1 migrate + Worker/Static Assets).
+The first public releases used bare `v*` tags that shipped CLI and QuotaBar together. **Current**
+releases use product-prefixed tags so either product can ship alone (for example a CLI-only bugfix).
+Managed Relay plus website deploy remains separate: pushes to `main` that touch Relay/web/protocol
+inputs run `deploy-cloudflare.yml`.
 
 ### Version channels
 
-| Tag example | Channel | npm | GitHub Release | Homebrew Cask |
-| --- | --- | --- | --- | --- |
-| `v0.0.2` | stable | `@gotry-io/quotacli@latest` | full release | updates `quotabar` |
-| `v0.0.2-beta.1` | beta | `@gotry-io/quotacli@beta` | prerelease ZIP | skipped |
+| Tag example | Product | Channel | Artifacts |
+| --- | --- | --- | --- |
+| `cli-v0.0.4` | QuotaCLI | stable | npm `@latest`, Homebrew Formula `quotacli` |
+| `cli-v0.0.4-beta.1` | QuotaCLI | beta | npm `@beta` only |
+| `menubar-v0.0.3` | QuotaBar | stable | GitHub Release ZIP, Homebrew Cask `quotabar` |
+| `menubar-v0.0.3-beta.1` | QuotaBar | beta | GitHub prerelease ZIP only |
 
 Rules:
 
-- Use semver. Prerelease **must** include a hyphen suffix (`0.0.2-beta.1`, not `0.0.2beta1`).
-- Prefer `beta.N` for public validation builds. Other hyphen suffixes are treated the same as beta
-  for publish routing (npm `beta` tag, GitHub prerelease, no Homebrew).
-- Install stable CLI with `npm install -g @gotry-io/quotacli`.
+- Use semver per product. Prerelease **must** include a hyphen suffix (`0.0.4-beta.1`, not
+  `0.0.4beta1`). Prefer `beta.N` for public validation builds.
+- CLI version lives in `apps/cli/package.json`. QuotaBar marketing version lives in
+  `apps/menubar/Support/Info.plist` (`CFBundleShortVersionString`). Internal packages and managed
+  Relay/web do **not** drive client tags.
+- Bump (same idea as `npm version`):
+
+  ```bash
+  pnpm version:bump:cli patch          # or minor | major | 0.1.0
+  pnpm version:bump:menubar patch
+  pnpm version:bump:cli patch --no-commit
+  ```
+
+  Default commits only the touched product file. Then publish:
+
+  ```bash
+  git tag -a cli-v0.0.4 -m "QuotaCLI 0.0.4" && git push origin cli-v0.0.4
+  git tag -a menubar-v0.0.3 -m "QuotaBar 0.0.3" && git push origin menubar-v0.0.3
+  ```
+
+- A CLI-only tag does **not** update QuotaBar's bundled helper. Ship a `menubar-v*` release when
+  menu-bar local collection must pick up the fix (Release notes should mention the helper version).
+- Install stable CLI with Homebrew (`brew install gotry-io/tap/quotacli`) or
+  `npm install -g @gotry-io/quotacli`.
 - Install beta CLI with `npm install -g @gotry-io/quotacli@beta` or pin
-  `@gotry-io/quotacli@0.0.2-beta.1`.
-- Install stable QuotaBar with Homebrew Cask or the latest full GitHub Release.
+  `@gotry-io/quotacli@0.0.4-beta.1` (no Homebrew Formula for beta).
+- Install stable QuotaBar with Homebrew Cask or the latest stable GitHub Release for `menubar-v*`.
 - Install beta QuotaBar from the GitHub prerelease ZIP only; do not `brew upgrade` for beta.
 
 The deterministic Visual App captures its own window without Screen Recording permission, and its

@@ -1,16 +1,18 @@
 name: release-menubar
 
-# A v* tag builds one Apple Silicon artifact, signs and notarizes it, and publishes a GitHub Release.
+# A menubar-v* tag builds one Apple Silicon artifact, signs and notarizes it, and publishes a GitHub Release.
 # Stable tags also push the generated Cask to gotry-io/homebrew-tap.
-# Prerelease tags (v0.0.2-beta.1) create a GitHub prerelease only and skip Homebrew.
+# Prerelease tags (menubar-v0.0.2-beta.1) create a GitHub prerelease only and skip Homebrew.
+# QuotaCLI releases use cli-v* and do not run this workflow.
 # A manual run may only republish an existing tag; it never builds an untagged main commit.
+# The bundled Helpers/quotacli reports apps/cli package.json (not the menubar marketing version).
 on:
   push:
-    tags: ["v*"]
+    tags: ["menubar-v*"]
   workflow_dispatch:
     inputs:
       version:
-        description: "Existing version to re-publish, without the leading v"
+        description: "Existing QuotaBar semver to re-publish (e.g. 0.0.4), without menubar-v prefix"
         required: true
 
 permissions:
@@ -26,7 +28,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && format('v{0}', github.event.inputs.version) || github.ref }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('menubar-v{0}', github.event.inputs.version) || github.ref }}
 
       - name: Resolve version
         id: version
@@ -38,8 +40,11 @@ jobs:
           set -euo pipefail
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             VERSION="$INPUT_VERSION"
+          elif [[ "$REF_NAME" == menubar-v* ]]; then
+            VERSION="${REF_NAME#menubar-v}"
           else
-            VERSION="${REF_NAME#v}"
+            echo "expected tag menubar-v*, got: $REF_NAME" >&2
+            exit 1
           fi
           if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.]+)?$'; then
             echo "invalid version: $VERSION" >&2
@@ -55,7 +60,7 @@ jobs:
             PRERELEASE=false
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=menubar-v$VERSION" >> "$GITHUB_OUTPUT"
           echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
           echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
 
@@ -77,18 +82,15 @@ jobs:
           pnpm check
           pnpm test
 
-      - name: Stamp QuotaCLI version
+      - name: Package arm64 app
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
-          npm pkg set "version=${VERSION}" --prefix apps/cli
-          test "$(node -p "require('./apps/cli/package.json').version")" = "$VERSION"
-
-      - name: Package arm64 app
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: ./scripts/package-menubar.sh "$VERSION" "${{ github.run_number }}"
+          # App marketing version = menubar tag. Bundled helper keeps apps/cli package.json.
+          HELPER_VERSION="$(node -p "require('./apps/cli/package.json').version")"
+          echo "Packaging QuotaBar ${VERSION} with helper quotacli ${HELPER_VERSION}"
+          ./scripts/package-menubar.sh "$VERSION" "${{ github.run_number }}"
 
       - name: Import Developer ID identity
         env:
@@ -195,7 +197,7 @@ jobs:
           set -euo pipefail
           test -n "$TAP_PUSH_TOKEN"
           ARCHIVE="QuotaBar-${VERSION}-macos-arm64.zip"
-          URL="https://github.com/gotry-io/Quota/releases/download/v${VERSION}/${ARCHIVE}"
+          URL="https://github.com/gotry-io/Quota/releases/download/menubar-v${VERSION}/${ARCHIVE}"
           git clone --depth 1 \
             "https://x-access-token:${TAP_PUSH_TOKEN}@github.com/gotry-io/homebrew-tap.git" \
             "$RUNNER_TEMP/homebrew-tap"
@@ -210,6 +212,8 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "quotabar ${VERSION}"
+          # Formula and Cask may land from concurrent release jobs; rebase before push.
+          git pull --rebase origin main
           git push
 
       - name: Skip Homebrew Cask for prerelease

@@ -1,6 +1,6 @@
 {
   "name": "@gotry-io/quota",
-  "version": "0.0.1",
+  "version": "0.0.3",
   "license": "MIT",
   "homepage": "https://quota.gotry.io",
   "private": true,
@@ -17,6 +17,10 @@
   "scripts": {
     "build": "pnpm --filter @gotry-io/quotacli build && pnpm --filter @gotry-io/quota-relay build && swift build --package-path apps/menubar",
     "check": "pnpm -r --if-present check",
+    "generate:provider-catalog": "node --experimental-strip-types scripts/generate-provider-catalog.mjs",
+    "version:bump": "node scripts/bump-version.mjs",
+    "version:bump:cli": "node scripts/bump-version.mjs cli",
+    "version:bump:menubar": "node scripts/bump-version.mjs menubar",
     "format": "biome format --write .",
     "format:check": "biome format .",
     "test": "pnpm -r --if-present test && swift test --package-path apps/menubar",

@@ -1,17 +1,18 @@
 name: release-cli
 
-# A v* tag publishes the architecture-neutral Node.js QuotaCLI package.
-# Stable tags (v0.0.2) publish to npm dist-tag "latest".
-# Prerelease tags (v0.0.2-beta.1) publish to npm dist-tag "beta".
+# A cli-v* tag publishes the architecture-neutral Node.js QuotaCLI package only.
+# Stable tags (cli-v0.0.2) publish to npm dist-tag "latest".
+# Prerelease tags (cli-v0.0.2-beta.1) publish to npm dist-tag "beta".
+# Menubar releases use menubar-v* and do not run this workflow.
 # npm authenticates this exact workflow through Trusted Publishing (OIDC), so no long-lived npm
 # token is stored in GitHub.
 on:
   push:
-    tags: ["v*"]
+    tags: ["cli-v*"]
   workflow_dispatch:
     inputs:
       version:
-        description: "Existing version to publish, without the leading v"
+        description: "Existing QuotaCLI semver to re-publish (e.g. 0.0.4), without cli-v prefix"
         required: true
 
 permissions:
@@ -28,7 +29,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && format('v{0}', github.event.inputs.version) || github.ref }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('cli-v{0}', github.event.inputs.version) || github.ref }}
 
       - name: Resolve version
         id: version
@@ -40,8 +41,11 @@ jobs:
           set -euo pipefail
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             VERSION="$INPUT_VERSION"
+          elif [[ "$REF_NAME" == cli-v* ]]; then
+            VERSION="${REF_NAME#cli-v}"
           else
-            VERSION="${REF_NAME#v}"
+            echo "expected tag cli-v*, got: $REF_NAME" >&2
+            exit 1
           fi
           if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.]+)?$'; then
             echo "invalid version: $VERSION" >&2
@@ -115,3 +119,50 @@ jobs:
           set -euo pipefail
           echo "Publishing @gotry-io/quotacli as channel=${CHANNEL} tag=${NPM_TAG}"
           npm publish --tag "$NPM_TAG"
+
+      # Stable tags also push Formula/quotacli.rb to gotry-io/homebrew-tap (npm tarball install).
+      # Prerelease tags skip Homebrew; use npm @beta instead.
+      - name: Publish Homebrew Formula
+        if: steps.version.outputs.channel == 'stable'
+        env:
+          TAP_PUSH_TOKEN: ${{ secrets.TAP_PUSH_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          test -n "$TAP_PUSH_TOKEN"
+          # Package must already be on npm (this run or a prior publish).
+          if ! npm view "@gotry-io/quotacli@${VERSION}" version >/dev/null 2>&1; then
+            echo "@gotry-io/quotacli@${VERSION} is not on npm; cannot render Formula" >&2
+            exit 1
+          fi
+          TARBALL_URL="$(npm view "@gotry-io/quotacli@${VERSION}" dist.tarball)"
+          EXPECTED_URL="https://registry.npmjs.org/@gotry-io/quotacli/-/quotacli-${VERSION}.tgz"
+          test "$TARBALL_URL" = "$EXPECTED_URL"
+          SHA256="$(curl -fsSL "$TARBALL_URL" | sha256sum | cut -d' ' -f1)"
+          git clone --depth 1 \
+            "https://x-access-token:${TAP_PUSH_TOKEN}@github.com/gotry-io/homebrew-tap.git" \
+            "$RUNNER_TEMP/homebrew-tap"
+          mkdir -p "$RUNNER_TEMP/homebrew-tap/Formula"
+          ./scripts/render-homebrew-formula.sh \
+            "$VERSION" "$SHA256" "$RUNNER_TEMP/homebrew-tap/Formula/quotacli.rb"
+          cd "$RUNNER_TEMP/homebrew-tap"
+          git add Formula/quotacli.rb
+          if git diff --cached --quiet; then
+            echo "QuotaCLI Formula is already at ${VERSION}"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "quotacli ${VERSION}"
+          # Cask and Formula may land from concurrent release jobs; rebase before push.
+          git pull --rebase origin main
+          git push
+
+      - name: Skip Homebrew Formula for prerelease
+        if: steps.version.outputs.channel == 'beta'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          echo "Skipping Homebrew Formula update for prerelease ${VERSION}"
+          echo "Install with: npm install -g @gotry-io/quotacli@beta"
