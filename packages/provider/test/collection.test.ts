@@ -1,8 +1,8 @@
-import { ProviderCollectionError, type ProviderCollector } from "../src/contracts.ts";
 import type { QuotaSnapshot } from "@gotry-io/quota-protocol";
 import { QuotaCollectionReportSchema } from "@gotry-io/quota-protocol";
 import { describe, expect, it } from "vitest";
 import { collectionExitCode, collectQuotaReport } from "../src/collection.ts";
+import { ProviderCollectionError, type ProviderCollector } from "../src/contracts.ts";
 
 const NOW = new Date("2026-08-02T12:00:00.000Z");
 
@@ -14,14 +14,21 @@ describe("collection report", () => {
         codex: successCollector("codex", "chatgpt_usage_api"),
         claude: failingCollector("claude", "auth_required", "Sign in again"),
         grok: successCollector("grok", "grok_billing_api"),
+        openrouter: successCollector("openrouter", "openrouter_api"),
       },
     });
 
     const validated = QuotaCollectionReportSchema.parse(report);
-    expect(validated.results.map((result) => result.provider)).toEqual(["codex", "claude", "grok"]);
+    expect(validated.results.map((result) => result.provider)).toEqual([
+      "codex",
+      "claude",
+      "grok",
+      "openrouter",
+    ]);
     expect(validated.results[0]?.outcome).toBe("success");
     expect(validated.results[1]?.outcome).toBe("auth_required");
     expect(validated.results[2]?.outcome).toBe("success");
+    expect(validated.results[3]?.outcome).toBe("success");
     expect(collectionExitCode(validated)).toBe(1);
     expect(JSON.stringify(validated)).not.toMatch(/Bearer |eyJ|access_token|refresh_token/i);
   });
@@ -75,7 +82,7 @@ describe("collection report", () => {
 });
 
 function successCollector(
-  provider: "codex" | "claude" | "grok",
+  provider: "codex" | "claude" | "grok" | "openrouter",
   source: string,
 ): ProviderCollector {
   const snapshot = snapshotFixture(provider, source);
@@ -93,7 +100,10 @@ function successCollector(
   };
 }
 
-function snapshotFixture(provider: "codex" | "claude" | "grok", source: string): QuotaSnapshot {
+function snapshotFixture(
+  provider: "codex" | "claude" | "grok" | "openrouter",
+  source: string,
+): QuotaSnapshot {
   return {
     provider,
     account: { fingerprint: `${provider}-fp`, fingerprint_scope: "source" },
@@ -105,7 +115,7 @@ function snapshotFixture(provider: "codex" | "claude" | "grok", source: string):
 }
 
 function failingCollector(
-  provider: "codex" | "claude" | "grok",
+  provider: "codex" | "claude" | "grok" | "openrouter",
   category: "auth_required" | "unavailable" | "unsupported" | "error",
   message: string,
 ): ProviderCollector {

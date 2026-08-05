@@ -172,6 +172,14 @@ private struct QuotaWindowRow: View {
     isStale ? QuotaPalette.mute : QuotaPalette.ink
   }
 
+  /// Prefer absolute remaining when protocol provides value_unit + remaining_value.
+  private var remainingLabel: String {
+    if let absolute = window.absoluteRemainingLabel {
+      return absolute
+    }
+    return "\(percent(window.remainingPercent)) left"
+  }
+
   var body: some View {
     VStack(alignment: .leading, spacing: QuotaDesign.Spacing.meta) {
       HStack(alignment: .firstTextBaseline, spacing: QuotaDesign.Spacing.inline) {
@@ -179,11 +187,11 @@ private struct QuotaWindowRow: View {
           .quotaFont(.quotaLabel)
           .foregroundStyle(QuotaPalette.body)
         Spacer(minLength: 8)
-        Text("\(percent(window.remainingPercent)) left")
+        Text(remainingLabel)
           .quotaFont(.remainingValue)
           .monospacedDigit()
           .foregroundStyle(valueColor)
-          .accessibilityLabel("\(percent(window.remainingPercent)) left")
+          .accessibilityLabel(remainingLabel)
       }
 
       QuotaProgressBar(value: window.remainingPercent, fill: meterColor)

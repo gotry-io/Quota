@@ -48,4 +48,17 @@ extension QuotaWindow {
   var remainingPercent: Double {
     min(max(100 - usedPercent, 0), 100)
   }
+
+  /// e.g. "$4.61 left" when value_unit/remaining_value are present.
+  var absoluteRemainingLabel: String? {
+    guard let remainingValue, let valueUnit else { return nil }
+    switch valueUnit {
+    case .usd:
+      return String(format: "$%.2f left", remainingValue)
+    case .credits:
+      return String(format: "%.2f credits left", remainingValue)
+    case .count:
+      return String(format: "%.0f left", remainingValue)
+    }
+  }
 }

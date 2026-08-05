@@ -190,7 +190,7 @@
 
     func prepareEnvironment() {
       for provider in ProviderID.allCases {
-        UserDefaults.standard.set(true, forKey: "provider.\(provider.rawValue).visible")
+        ProviderVisibility.setVisible(provider, true)
       }
     }
 

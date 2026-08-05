@@ -6,7 +6,7 @@ const { collectQuotaReport, diagnoseProviderSessions } = vi.hoisted(() => ({
   collectQuotaReport: vi.fn(async (options: { providers?: "all" | string[] }) => {
     const providers =
       options.providers === undefined || options.providers === "all"
-        ? ["codex", "claude", "grok"]
+        ? ["codex", "claude", "grok", "openrouter"]
         : options.providers;
     return {
       schema_version: 1 as const,
@@ -21,7 +21,7 @@ const { collectQuotaReport, diagnoseProviderSessions } = vi.hoisted(() => ({
           };
         }
         const snapshot: QuotaSnapshot = {
-          provider: provider as "codex" | "claude" | "grok",
+          provider: provider as "codex" | "claude" | "grok" | "openrouter",
           account: { fingerprint: `${provider}-fp`, fingerprint_scope: "source", plan: "plus" },
           windows: [
             {
@@ -114,6 +114,7 @@ describe("QuotaCLI", () => {
       "codex",
       "claude",
       "grok",
+      "openrouter",
     ]);
     expect(payload.results[1].outcome).toBe("auth_required");
     expect(JSON.stringify(payload)).not.toMatch(/Bearer |eyJ[a-zA-Z0-9]/i);

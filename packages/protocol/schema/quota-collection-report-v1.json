@@ -17,7 +17,7 @@
       "type": "object",
       "required": ["provider", "outcome", "snapshots"],
       "properties": {
-        "provider": { "enum": ["codex", "claude", "grok"] },
+        "provider": { "enum": ["codex", "claude", "grok", "openrouter"] },
         "outcome": {
           "enum": ["success", "auth_required", "unavailable", "unsupported", "error"]
         },
@@ -93,6 +93,24 @@
                   "allOf": [
                     { "$ref": "quota-snapshot-v1.json#/$defs/snapshot" },
                     { "properties": { "provider": { "const": "grok" } } }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "provider": { "const": "openrouter" } },
+            "required": ["provider"]
+          },
+          "then": {
+            "properties": {
+              "snapshots": {
+                "items": {
+                  "allOf": [
+                    { "$ref": "quota-snapshot-v1.json#/$defs/snapshot" },
+                    { "properties": { "provider": { "const": "openrouter" } } }
                   ]
                 }
               }

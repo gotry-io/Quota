@@ -2,6 +2,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { refreshGrokAuthWithCli } from "../src/providers/grok/auth-refresh.ts";
 import { GROK_BILLING_URL, GrokCollector } from "../src/providers/grok/collector.ts";
 import {
   GROK_LEGACY_SESSION_SCOPE,
@@ -10,7 +11,6 @@ import {
   grokPlanHint,
   parseGrokCredentials,
 } from "../src/providers/grok/credentials.ts";
-import { refreshGrokAuthWithCli } from "../src/providers/grok/auth-refresh.ts";
 import { buildGrokSnapshot, mapGrokBillingResponse } from "../src/providers/grok/map.ts";
 import type { HttpRequest, HttpResponse } from "../src/runtime/http.ts";
 

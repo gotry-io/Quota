@@ -1,57 +1,63 @@
 import type { ProviderId } from "@gotry-io/quota-protocol";
-import type { ProviderCollector, ProviderDescriptor } from "./contracts.ts";
+import { PROVIDER_ORDER } from "./catalog.ts";
+import type { ProviderCollector } from "./contracts.ts";
 import { ClaudeCollector, type ClaudeCollectorOptions } from "./providers/claude/collector.ts";
 import { CodexCollector, type CodexCollectorOptions } from "./providers/codex/collector.ts";
 import { GrokCollector, type GrokCollectorOptions } from "./providers/grok/collector.ts";
+import {
+  OpenRouterCollector,
+  type OpenRouterCollectorOptions,
+} from "./providers/openrouter/collector.ts";
 
-export const providerDescriptors = [
-  {
-    id: "codex",
-    display_name: "Codex",
-    credential_sources: ["$CODEX_HOME/auth.json", "~/.codex/auth.json"],
-    collection_strategies: ["chatgpt_usage_api", "codex_app_server"],
-  },
-  {
-    id: "claude",
-    display_name: "Claude Code",
-    credential_sources: ["~/.claude/.credentials.json", "macOS Keychain: Claude Code-credentials"],
-    collection_strategies: ["anthropic_oauth_usage_api", "claude_cli_auth_refresh"],
-  },
-  {
-    id: "grok",
-    display_name: "Grok",
-    credential_sources: ["$GROK_HOME/auth.json", "~/.grok/auth.json"],
-    collection_strategies: ["grok_billing_api", "grok_cli_auth_refresh"],
-  },
-] as const satisfies readonly ProviderDescriptor[];
-
-export const PROVIDER_ORDER = ["codex", "claude", "grok"] as const satisfies readonly ProviderId[];
+export { PROVIDER_ORDER } from "./catalog.ts";
 
 export interface CollectorFactoryOptions {
   clientVersion?: string;
   codex?: CodexCollectorOptions;
   claude?: ClaudeCollectorOptions;
   grok?: GrokCollectorOptions;
+  openrouter?: OpenRouterCollectorOptions;
 }
+
+type CollectorFactory = (options: CollectorFactoryOptions) => ProviderCollector;
+
+/** One factory per catalog id. */
+const COLLECTOR_FACTORIES = {
+  codex: (options) =>
+    new CodexCollector({
+      ...options.codex,
+      ...(options.clientVersion ? { clientVersion: options.clientVersion } : {}),
+    }),
+  claude: (options) => new ClaudeCollector(options.claude),
+  grok: (options) =>
+    new GrokCollector({
+      ...options.grok,
+      ...(options.clientVersion ? { clientVersion: options.clientVersion } : {}),
+    }),
+  openrouter: (options) =>
+    new OpenRouterCollector({
+      ...options.openrouter,
+      ...(options.clientVersion ? { clientVersion: options.clientVersion } : {}),
+    }),
+} as const satisfies Record<ProviderId, CollectorFactory>;
 
 export function createDefaultCollectors(
   options: CollectorFactoryOptions = {},
 ): Record<ProviderId, ProviderCollector> {
-  const client = options.clientVersion ? { clientVersion: options.clientVersion } : {};
-  return {
-    codex: new CodexCollector({ ...options.codex, ...client }),
-    claude: new ClaudeCollector(options.claude),
-    grok: new GrokCollector({ ...options.grok, ...client }),
-  };
+  const collectors = {} as Record<ProviderId, ProviderCollector>;
+  for (const id of PROVIDER_ORDER) {
+    collectors[id] = COLLECTOR_FACTORIES[id](options);
+  }
+  return collectors;
 }
 
 export function resolveProviders(selection: "all" | ProviderId | ProviderId[]): ProviderId[] {
   if (selection === "all") {
-    return [...PROVIDER_ORDER];
+    return [...PROVIDER_ORDER] as ProviderId[];
   }
   if (typeof selection === "string") {
     return [selection];
   }
   const selected = new Set(selection);
-  return PROVIDER_ORDER.filter((id) => selected.has(id));
+  return (PROVIDER_ORDER as readonly ProviderId[]).filter((id) => selected.has(id));
 }

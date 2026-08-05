@@ -1,12 +1,12 @@
 import { homedir } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
+import type { QuotaSnapshot } from "@gotry-io/quota-protocol";
 import {
   type CollectionContext,
   ProviderCollectionError,
   type ProviderCollector,
   type ProviderSession,
 } from "../../contracts.ts";
-import type { QuotaSnapshot } from "@gotry-io/quota-protocol";
 import { classifyProviderError } from "../../runtime/errors.ts";
 import {
   createFetchTransport,

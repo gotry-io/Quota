@@ -106,10 +106,6 @@ struct SubscriptionResolver: Sendable {
   }
 
   private func providerOrder(_ provider: ProviderID) -> Int {
-    switch provider {
-    case .codex: 0
-    case .claude: 1
-    case .grok: 2
-    }
+    provider.sortOrder
   }
 }

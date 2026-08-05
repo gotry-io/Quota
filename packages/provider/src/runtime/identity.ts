@@ -10,7 +10,13 @@ export interface AccountIdentity {
   scope: FingerprintScope;
 }
 
-export type QuotaOwnerNamespace = "account_id" | "organization_id" | "team_id" | "user_id";
+export type QuotaOwnerNamespace =
+  | "account_id"
+  | "organization_id"
+  | "team_id"
+  | "user_id"
+  /** Stable hash of an API key (OpenRouter). Never the raw key material. */
+  | "api_key";
 
 /**
  * Builds a redacted identity together with the scope in which it is safe to deduplicate.

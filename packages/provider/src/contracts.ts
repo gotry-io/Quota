@@ -40,10 +40,3 @@ export interface ProviderCollector {
   discover(): Promise<ProviderSession[]>;
   collect(session: ProviderSession, context?: CollectionContext): Promise<QuotaSnapshot>;
 }
-
-export interface ProviderDescriptor {
-  readonly id: ProviderId;
-  readonly display_name: string;
-  readonly credential_sources: readonly string[];
-  readonly collection_strategies: readonly string[];
-}

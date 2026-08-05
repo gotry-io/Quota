@@ -1,7 +1,7 @@
 {
   "name": "@gotry-io/quotacli",
-  "version": "0.0.1",
-  "description": "Inspect Codex, Claude Code, and Grok quota locally from one CLI.",
+  "version": "0.0.3",
+  "description": "Inspect Codex, Claude Code, Grok, and OpenRouter quota locally from one CLI.",
   "license": "MIT",
   "private": false,
   "type": "module",

@@ -1,10 +1,13 @@
 import { access } from "node:fs/promises";
 import { homedir } from "node:os";
 import type { ProviderDiagnostic } from "./contracts.ts";
-import { CLAUDE_KEYCHAIN_SERVICE } from "./providers/claude/credentials.ts";
-import { claudeCredentialPaths } from "./providers/claude/credentials.ts";
+import { CLAUDE_KEYCHAIN_SERVICE, claudeCredentialPaths } from "./providers/claude/credentials.ts";
 import { codexAuthPaths } from "./providers/codex/credentials.ts";
 import { grokAuthPaths } from "./providers/grok/credentials.ts";
+import {
+  OPENROUTER_ENV_KEY,
+  resolveOpenRouterCredentials,
+} from "./providers/openrouter/credentials.ts";
 import { readGenericPassword } from "./runtime/keychain.ts";
 
 interface DiscoveryOptions {
@@ -60,6 +63,14 @@ export async function diagnoseProviderSessions(
       available: await canAccess(path),
     });
   }
+
+  const openrouter = await resolveOpenRouterCredentials({ environment });
+  diagnostics.push({
+    provider: "openrouter",
+    credential_source: openrouter?.source ?? `config|env:${OPENROUTER_ENV_KEY}`,
+    detail: "OpenRouter API key (config or env)",
+    available: openrouter !== undefined,
+  });
 
   if (platform === "darwin") {
     let available = false;

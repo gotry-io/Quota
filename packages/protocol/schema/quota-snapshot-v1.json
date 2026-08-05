@@ -20,7 +20,7 @@
       "type": "object",
       "required": ["provider", "account", "windows", "source", "status", "observed_at"],
       "properties": {
-        "provider": { "enum": ["codex", "claude", "grok"] },
+        "provider": { "enum": ["codex", "claude", "grok", "openrouter"] },
         "account": {
           "type": "object",
           "required": ["fingerprint", "fingerprint_scope"],
@@ -42,7 +42,10 @@
               "title": { "type": "string", "minLength": 1 },
               "used_percent": { "type": "number", "minimum": 0, "maximum": 100 },
               "resets_at": { "type": "string", "format": "date-time" },
-              "duration_seconds": { "type": "integer", "minimum": 0 }
+              "duration_seconds": { "type": "integer", "minimum": 0 },
+              "remaining_value": { "type": "number" },
+              "limit_value": { "type": "number", "minimum": 0 },
+              "value_unit": { "enum": ["usd", "credits", "count"] }
             },
             "additionalProperties": false
           }

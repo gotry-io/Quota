@@ -1,6 +1,6 @@
 {
   "name": "@gotry-io/quota-web",
-  "version": "0.0.1",
+  "version": "0.0.3",
   "license": "MIT",
   "homepage": "https://quota.gotry.io",
   "private": true,

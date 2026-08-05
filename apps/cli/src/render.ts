@@ -3,7 +3,9 @@ import type {
   ProviderId,
   QuotaCollectionReport,
   QuotaCollectionResult,
+  QuotaWindow,
 } from "@gotry-io/quota-protocol";
+import { PROVIDER_CATALOG } from "@gotry-io/quota-provider";
 
 export function renderJson(report: QuotaCollectionReport, pretty: boolean): string {
   return `${JSON.stringify(report, null, pretty ? 2 : undefined)}\n`;
@@ -36,15 +38,33 @@ function renderResultText(result: QuotaCollectionResult): string[] {
       continue;
     }
     for (const window of snapshot.windows) {
-      const remaining = remainingPercent(window.used_percent);
-      const reset = window.resets_at ? ` resets ${window.resets_at}` : "";
-      lines.push(
-        `  ${window.title}: ${formatPercent(remaining)}% remaining (${formatPercent(window.used_percent)}% used)${reset}`,
-      );
+      lines.push(`  ${window.title}: ${formatWindowLine(window)}`);
     }
     lines.push(`  source: ${snapshot.source}`);
   }
   return lines;
+}
+
+function formatWindowLine(window: QuotaWindow): string {
+  const remaining = remainingPercent(window.used_percent);
+  const percentPart = `${formatPercent(remaining)}% remaining (${formatPercent(window.used_percent)}% used)`;
+  const absolute = formatAbsolute(window);
+  const reset = window.resets_at ? ` resets ${window.resets_at}` : "";
+  return absolute ? `${percentPart}; ${absolute}${reset}` : `${percentPart}${reset}`;
+}
+
+function formatAbsolute(window: QuotaWindow): string | undefined {
+  if (window.remaining_value === undefined || !window.value_unit) {
+    return undefined;
+  }
+  const unit = window.value_unit === "usd" ? "$" : "";
+  const suffix = window.value_unit === "usd" ? "" : ` ${window.value_unit}`;
+  const remaining = `${unit}${formatQuantity(window.remaining_value)}${suffix}`;
+  if (window.limit_value !== undefined) {
+    const limit = `${unit}${formatQuantity(window.limit_value)}${suffix}`;
+    return `${remaining} / ${limit}`;
+  }
+  return remaining;
 }
 
 function renderFailureLine(title: string, result: QuotaCollectionResult): string {
@@ -61,39 +81,16 @@ function renderFailureLine(title: string, result: QuotaCollectionResult): string
 }
 
 function loginCommand(provider: ProviderId, message: string | undefined): string {
+  const catalog = PROVIDER_CATALOG[provider].loginCommand;
   const fromMessage = message?.match(/`([^`]+)`/)?.[1]?.trim();
-  if (fromMessage) {
-    return normalizeLoginCommand(fromMessage, provider);
+  if (!fromMessage) {
+    return catalog;
   }
-  return defaultLoginCommand(provider);
-}
-
-function defaultLoginCommand(provider: ProviderId): string {
-  switch (provider) {
-    case "codex":
-      return "codex login";
-    case "claude":
-      return "claude auth login";
-    case "grok":
-      return "grok login";
+  // Prefer the backticked command when it looks like a real shell command.
+  if (fromMessage.includes(" ") || fromMessage === catalog) {
+    return fromMessage;
   }
-}
-
-function normalizeLoginCommand(command: string, provider: ProviderId): string {
-  switch (command) {
-    case "codex":
-    case "codex login":
-      return "codex login";
-    case "claude":
-    case "claude login":
-    case "claude auth login":
-      return "claude auth login";
-    case "grok":
-    case "grok login":
-      return "grok login";
-    default:
-      return command.includes(" ") ? command : defaultLoginCommand(provider);
-  }
+  return catalog;
 }
 
 function conciseFailureDetail(message: string | undefined): string | undefined {
@@ -101,7 +98,6 @@ function conciseFailureDetail(message: string | undefined): string | undefined {
   if (!trimmed) {
     return undefined;
   }
-  // Auth failures already collapse to the login command above.
   if (trimmed.includes("`")) {
     const withoutCommand = trimmed
       .replace(/`[^`]+`/g, "")
@@ -126,16 +122,10 @@ function conciseFailureDetail(message: string | undefined): string | undefined {
 }
 
 function providerTitle(provider: string): string {
-  switch (provider) {
-    case "codex":
-      return "Codex";
-    case "claude":
-      return "Claude Code";
-    case "grok":
-      return "Grok";
-    default:
-      return provider;
+  if (provider in PROVIDER_CATALOG) {
+    return PROVIDER_CATALOG[provider as ProviderId].displayName;
   }
+  return provider;
 }
 
 function formatPercent(value: number): string {
@@ -143,4 +133,11 @@ function formatPercent(value: number): string {
     return String(value);
   }
   return value.toFixed(1);
+}
+
+function formatQuantity(value: number): string {
+  if (Number.isInteger(value)) {
+    return String(value);
+  }
+  return value.toFixed(2);
 }

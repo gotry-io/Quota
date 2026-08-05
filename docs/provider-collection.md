@@ -7,6 +7,25 @@ in [`security.md`](security.md).
 QuotaCLI owns provider access and emits normalized protocol models. QuotaRelay never handles the
 provider-specific inputs described here.
 
+## Registration (monorepo)
+
+Product metadata and wiring live in `packages/provider/src/catalog.ts` (not in this file). Collection
+**strategy** for each provider is documented in the sections below.
+
+To add a provider:
+
+1. Catalog row in `packages/provider/src/catalog.ts`.
+2. Strategy section in this document.
+3. Collector implementation under `packages/provider/src/providers/<id>/`.
+4. Factory entry in `packages/provider/src/registry.ts` (`COLLECTOR_FACTORIES`).
+5. `pnpm generate:provider-catalog` for protocol `ProviderId` and Swift `ProviderID`.
+6. Optional QuotaBar brand SVG named by `brandIconAsset`.
+
+API-key providers set `config.kind: "api_key"` so `quotacli config` and QuotaBar Settings pick them up
+automatically. Ambient session providers leave `config: null`.
+
+Supported order today: Codex, Claude Code, Grok, OpenRouter.
+
 ## Codex
 
 1. Discover `$CODEX_HOME/auth.json` or `~/.codex/auth.json`.
@@ -79,11 +98,43 @@ installer directory, common user-local paths, and Homebrew paths for GUI launche
 Local context-token or session totals are not subscription quota. Browser-cookie and browser billing
 fallbacks are out of scope.
 
+## OpenRouter
+
+Aligned with CodexBar's OpenRouter provider (credits + API-key limit meters).
+
+1. Resolve the API key in order:
+   1. Owner-only config at `$XDG_CONFIG_HOME/quotacli/providers.json` or
+      `~/.config/quotacli/providers.json` (`schema_version: 1`, `providers.openrouter.api_key`),
+      written by `quotacli config set openrouter --api-key-stdin` or QuotaBar Settings.
+   2. Else `OPENROUTER_API_KEY` from the process environment.
+   Optional base URL: config `base_url`, else `OPENROUTER_API_URL` (HTTPS only; default
+   `https://openrouter.ai/api/v1`).
+2. Call `GET {base}/credits` with `Authorization: Bearer <key>` and a product `X-Title` header.
+3. Best-effort call `GET {base}/key` for per-key limit, remaining, reset window, and spend fields.
+   Key failure must not discard a usable credits result.
+4. Map windows (remaining is always `100 - used_percent` in consumers). Absolute USD fields are
+   optional protocol extensions for credits-class UIs:
+   - **API key budget** (primary when present): when `limit > 0`, used amount prefers
+     `limit - clamp(limit_remaining)`, else the spend field matching `limit_reset`
+     (`usage_daily` / `usage_weekly` / `usage_monthly`), else cumulative `usage`. Emit
+     `remaining_value` / `limit_value` / `value_unit: "usd"` alongside `used_percent`.
+   - **Credits**: when `total_credits > 0`, used percent is `total_usage / total_credits * 100`
+     (balance = `total_credits - total_usage` on OpenRouter's side; values may be up to ~60s stale).
+     Emit the same absolute USD fields for the credits window.
+5. Absent key → `auth_required` with guidance to run
+   `quotacli config set openrouter --api-key-stdin` (or set `OPENROUTER_API_KEY`). HTTP 401/403 →
+   `auth_required`. Never print the API key, Authorization header, or response bodies.
+   `config get` / `list` and menubar UI only show a masked tip (`OpenRouter ···abcd`).
+
+Config directory is `0700` and `providers.json` is `0600`. Multi-account labeled keys are out of
+scope for v1. Dashboard cookies and browser scrapes are not strategies.
+
 ## Identity and normalization
 
 - A global `account.fingerprint` is SHA-256 over the provider, the identifier namespace, and the
   stable quota-owner identifier: Codex uses account ID; Claude Code uses organization ID; Grok uses
-  team ID when present and otherwise user ID.
+  team ID when present and otherwise user ID; OpenRouter uses a SHA-256 of the API key under the
+  `api_key` namespace (never the raw key).
 - Email is display enrichment only and never a global deduplication identity. If the provider does
   not expose its quota-owner identifier, collection still succeeds with a stable source-scoped
   fingerprint. Consumers interpret an absent `fingerprint_scope` as source-scoped for version 1
@@ -91,4 +142,5 @@ fallbacks are out of scope.
 - Account labels use a masked email or a non-sensitive display name.
 - A collection attempt records its stable source identifier and an explicit outcome.
 - One provider failure does not discard successful results from other requested providers.
-- The CLI preserves provider order: Codex, Claude Code, then Grok.
+- The CLI preserves provider order from the catalog (`PROVIDER_ORDER`): Codex, Claude Code, Grok,
+  then OpenRouter.

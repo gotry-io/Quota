@@ -53,7 +53,7 @@ export function classifyProviderError(
 export function sanitizeMessage(message: string): string {
   let cleaned = message
     .replace(/Bearer\s+[A-Za-z0-9._\-+=/]+/gi, "Bearer [redacted]")
-    .replace(/eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+/g, "[redacted-jwt]")
+    .replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, "[redacted-jwt]")
     .replace(
       /((?:access[_-]?token|refresh[_-]?token|authorization|cookie)["']?\s*[=:]\s*["']?)[^\s"',}]+/gi,
       "$1[redacted]",

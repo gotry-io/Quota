@@ -1,6 +1,6 @@
 {
   "name": "@gotry-io/quota-protocol",
-  "version": "0.0.1",
+  "version": "0.0.3",
   "license": "MIT",
   "private": true,
   "type": "module",

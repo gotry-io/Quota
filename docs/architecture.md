@@ -52,6 +52,25 @@ storage requirements are defined only in [`security.md`](security.md).
 
 ## Runtime boundaries
 
+### Provider catalog
+
+- `packages/provider/src/catalog.ts` is the single registration table: display name, product order,
+  menubar default visibility, login recovery command, auth message, brand icon asset, credential
+  sources, collection strategies, and optional API-key config metadata.
+- Adding a provider:
+  1. Catalog row (+ strategy section in [`provider-collection.md`](provider-collection.md)).
+  2. Collector under `packages/provider/src/providers/<id>/`.
+  3. `COLLECTOR_FACTORIES` entry in `packages/provider/src/registry.ts`.
+  4. `pnpm generate:provider-catalog` (writes `packages/protocol/src/provider-ids.generated.ts`
+     and `apps/menubar/.../ProviderID.generated.swift`).
+  5. Optional monochrome brand SVG under `apps/menubar/.../BrandIcons/`.
+- Do not hand-edit generated id files; re-run the generator after catalog changes.
+- `quotacli config set <provider>` and QuotaBar Settings API-key sections are table-driven from
+  catalog entries with `config.kind === "api_key"`. Ambient OAuth/session providers use `config: null`.
+- Agent visibility defaults and wipe keys follow the catalog via QuotaBar `ProviderVisibility`.
+- Windows may carry optional absolute `remaining_value` / `limit_value` / `value_unit` for credits
+  budgets; primary UI meters still use `used_percent` / remaining percent.
+
 ### QuotaBar
 
 - Swift 6.2 and SwiftUI, targeting macOS 14 or newer.
@@ -69,6 +88,13 @@ storage requirements are defined only in [`security.md`](security.md).
   QuotaBar's private group only.
 - Shares one `RelayStateModel` between five-minute app-lifecycle polling, the Overview, and the
   panel's single typed Settings stack for Remote Devices and Pair Device.
+- Settings **General** Launch at Login mirrors `SMAppService.mainApp` system status (one-shot
+  first-run default-on seed when still unregistered).
+- Settings **Agents** visibility toggles and **API-key** sections follow generated catalog
+  bindings (`ProviderID.allCases` / `configurableCases`). API keys write the same owner-only
+  `~/.config/quotacli/providers.json` file as QuotaCLI.
+- Provider metadata (names, defaults, login commands, brand icons) comes from the generated catalog
+  bindings; do not hardcode parallel provider switch tables in views.
 - Its macOS owner-path acceptance flow launches the real app boundary and composes the same
   `RelayStateModel`, stores, owner client, resolver, and Settings actions against isolated
   managed and self-hosted Relay runtimes; no second test implementation of the Relay protocol is
@@ -78,8 +104,12 @@ storage requirements are defined only in [`security.md`](security.md).
 
 - TypeScript bundled as a Node ESM npm package and as a standalone Bun executable from the same
   entry point.
-- Owns all provider credential discovery and quota collection.
+- Owns all provider credential discovery and quota collection via `@gotry-io/quota-provider`.
 - Uses the same normalized schemas for local output and Relay uploads.
+- `quotacli config` stores API-key provider secrets in owner-only
+  `$XDG_CONFIG_HOME/quotacli/providers.json` or `~/.config/quotacli/providers.json` (directory
+  `0700`, file `0600`). Collection prefers that file over env fallbacks. Keys are accepted only via
+  stdin (`--api-key-stdin`); get/list never print full secrets.
 - Owns Relay discovery, Device Code pairing, and the single Relay-bound local device credential.
   Successful pairing enables recurring push on macOS.
 - Provides an explicit one-shot `relay push` path that validates the bound Relay instance, collects

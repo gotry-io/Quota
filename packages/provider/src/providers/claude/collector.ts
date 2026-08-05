@@ -1,12 +1,12 @@
 import { homedir } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
+import type { QuotaSnapshot } from "@gotry-io/quota-protocol";
 import {
-  ProviderCollectionError,
   type CollectionContext,
+  ProviderCollectionError,
   type ProviderCollector,
   type ProviderSession,
 } from "../../contracts.ts";
-import type { QuotaSnapshot } from "@gotry-io/quota-protocol";
 import { classifyProviderError } from "../../runtime/errors.ts";
 import {
   createFetchTransport,
@@ -14,14 +14,14 @@ import {
   type HttpTransport,
   readJsonObject,
 } from "../../runtime/http.ts";
+import { type ClaudeCliAuthRefreshOptions, refreshClaudeAuthWithCli } from "./auth-refresh.ts";
 import {
   CLAUDE_SOURCE_API,
+  type ClaudeCredentials,
   hasUserProfileScope,
   loadClaudeCredentials,
   shouldRefreshClaudeCredentials,
-  type ClaudeCredentials,
 } from "./credentials.ts";
-import { refreshClaudeAuthWithCli, type ClaudeCliAuthRefreshOptions } from "./auth-refresh.ts";
 import {
   buildClaudeSnapshot,
   claudePlanLabel,
