@@ -4,9 +4,6 @@ import SwiftUI
 struct MenuBarContentView: View {
   @Bindable var model: MenuBarViewModel
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  @AppStorage("provider.codex.visible") private var showsCodex = true
-  @AppStorage("provider.claude.visible") private var showsClaude = true
-  @AppStorage("provider.grok.visible") private var showsGrok = true
   @State private var navigation: MenuBarNavigationState
   @State private var navigationDirection: NavigationDirection = .forward
   @State private var showsDeleteAllConfirmation = false
@@ -15,16 +12,20 @@ struct MenuBarContentView: View {
   @State private var deleteAllErrorMessage: String?
   private let performsInitialRefresh: Bool
   private let performsRelayRefreshes: Bool
+  /// Production only: one-shot default-on Login Item seed. Visual QA leaves system Login Items alone.
+  private let seedsLaunchAtLogin: Bool
 
   init(
     model: MenuBarViewModel,
     initialPath: [MenuBarRoute] = [],
     performsInitialRefresh: Bool = true,
-    performsRelayRefreshes: Bool = true
+    performsRelayRefreshes: Bool = true,
+    seedsLaunchAtLogin: Bool = true
   ) {
     self.model = model
     self.performsInitialRefresh = performsInitialRefresh
     self.performsRelayRefreshes = performsRelayRefreshes
+    self.seedsLaunchAtLogin = seedsLaunchAtLogin
     _navigation = State(initialValue: MenuBarNavigationState(path: initialPath))
   }
 
@@ -76,6 +77,9 @@ struct MenuBarContentView: View {
       )
     }
     .task {
+      if seedsLaunchAtLogin {
+        LaunchAtLoginController.seedDefaultOnIfNeeded()
+      }
       guard performsInitialRefresh else { return }
       await model.refreshIfNeeded()
     }
@@ -130,9 +134,6 @@ struct MenuBarContentView: View {
     case .settings:
       SettingsHomeView(
         model: model,
-        showsCodex: $showsCodex,
-        showsClaude: $showsClaude,
-        showsGrok: $showsGrok,
         onOpenRemoteDevices: { navigate(to: .remoteDevices) },
         deleteAllErrorMessage: deleteAllErrorMessage
       )
@@ -147,11 +148,7 @@ struct MenuBarContentView: View {
   }
 
   private var enabledProviders: Set<ProviderID> {
-    var providers = Set<ProviderID>()
-    if showsCodex { providers.insert(.codex) }
-    if showsClaude { providers.insert(.claude) }
-    if showsGrok { providers.insert(.grok) }
-    return providers
+    ProviderVisibility.enabledSet()
   }
 
   private func openSettings() {

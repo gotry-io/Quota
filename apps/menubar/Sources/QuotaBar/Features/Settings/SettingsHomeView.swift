@@ -3,30 +3,76 @@ import SwiftUI
 
 struct SettingsHomeView: View {
   let model: MenuBarViewModel
-  @Binding var showsCodex: Bool
-  @Binding var showsClaude: Bool
-  @Binding var showsGrok: Bool
   let onOpenRemoteDevices: () -> Void
   var deleteAllErrorMessage: String? = nil
+
+  @State private var launchAtLoginEnabled = LaunchAtLoginController.isEnabled
+  @State private var launchAtLoginMessage: String?
+  /// Bump to re-read UserDefaults-backed visibility toggles.
+  @State private var visibilityEpoch = 0
 
   var body: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: QuotaDesign.Spacing.section) {
-        settingsSection("Agents") {
+        SettingsSection(title: "General") {
+          HStack(alignment: .center, spacing: QuotaDesign.Spacing.sm) {
+            VStack(alignment: .leading, spacing: 2) {
+              Text("Launch at Login")
+                .quotaRowTitleStyle()
+              if let launchAtLoginMessage {
+                Text(launchAtLoginMessage)
+                  .quotaMetaStyle()
+                  .fixedSize(horizontal: false, vertical: true)
+              }
+            }
+            Spacer(minLength: QuotaDesign.Spacing.sm)
+            Toggle(
+              "Launch at Login",
+              isOn: Binding(
+                get: { launchAtLoginEnabled },
+                set: { desired in
+                  launchAtLoginMessage = LaunchAtLoginController.apply(enabled: desired)
+                  launchAtLoginEnabled = LaunchAtLoginController.isEnabled
+                }
+              )
+            )
+            .labelsHidden()
+            .controlSize(.small)
+            .frame(
+              minWidth: QuotaDesign.Layout.minimumInteractiveDimension,
+              minHeight: QuotaDesign.Layout.minimumInteractiveDimension
+            )
+          }
+          .padding(.vertical, QuotaDesign.Spacing.xxs)
+          .accessibilityElement(children: .combine)
+        }
+
+        Divider()
+
+        SettingsSection(title: "Agents") {
           Text("Choose which agents appear in Overview.")
             .quotaMetaStyle()
             .fixedSize(horizontal: false, vertical: true)
 
           VStack(alignment: .leading, spacing: 0) {
-            providerToggle(.codex, isOn: $showsCodex)
-            providerToggle(.claude, isOn: $showsClaude)
-            providerToggle(.grok, isOn: $showsGrok)
+            ForEach(ProviderID.allCases) { provider in
+              providerToggle(provider, isOn: visibilityBinding(for: provider))
+            }
           }
+          .id(visibilityEpoch)
+        }
+
+        ForEach(ProviderID.configurableCases) { provider in
+          Divider()
+          ApiKeyProviderSettingsSection(
+            provider: provider,
+            isVisible: visibilityBinding(for: provider)
+          )
         }
 
         Divider()
 
-        settingsSection("Remote Devices") {
+        SettingsSection(title: "Remote Devices") {
           Button(action: onOpenRemoteDevices) {
             HStack(spacing: QuotaDesign.Spacing.sectionBody) {
               Image(systemName: "laptopcomputer.and.iphone")
@@ -59,7 +105,7 @@ struct SettingsHomeView: View {
 
         Divider()
 
-        settingsSection("About") {
+        SettingsSection(title: "About") {
           VStack(alignment: .leading, spacing: 0) {
             aboutValueRow(title: "Version", value: AppMetadata.versionLabel)
             aboutLinkRow(title: "Website", url: AppMetadata.websiteURL)
@@ -77,10 +123,24 @@ struct SettingsHomeView: View {
       .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
       .padding(.vertical, QuotaDesign.Layout.pageVerticalPadding)
     }
+    .onAppear {
+      launchAtLoginEnabled = LaunchAtLoginController.isEnabled
+      launchAtLoginMessage = LaunchAtLoginController.statusMessage
+    }
   }
 
   private var deviceSummary: String {
     model.relayStateModel.remoteDeviceSummary
+  }
+
+  private func visibilityBinding(for provider: ProviderID) -> Binding<Bool> {
+    Binding(
+      get: { ProviderVisibility.isVisible(provider) },
+      set: { newValue in
+        ProviderVisibility.setVisible(provider, newValue)
+        visibilityEpoch &+= 1
+      }
+    )
   }
 
   private func providerToggle(_ provider: ProviderID, isOn: Binding<Bool>) -> some View {
@@ -115,18 +175,6 @@ struct SettingsHomeView: View {
     }
     .padding(.vertical, QuotaDesign.Spacing.xxs)
     .accessibilityElement(children: .combine)
-  }
-
-  private func settingsSection<Content: View>(
-    _ title: String,
-    @ViewBuilder content: () -> Content
-  ) -> some View {
-    VStack(alignment: .leading, spacing: QuotaDesign.Spacing.xs) {
-      Text(title)
-        .quotaSectionHeaderStyle()
-
-      content()
-    }
   }
 
   private func aboutValueRow(title: String, value: String) -> some View {

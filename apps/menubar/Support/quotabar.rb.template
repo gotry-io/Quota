@@ -8,7 +8,7 @@ cask "quotabar" do
   homepage "https://quota.gotry.io"
 
   depends_on arch: :arm64
-  depends_on macos: ">= :sonoma"
+  depends_on macos: :sonoma
 
   app "QuotaBar.app"
 

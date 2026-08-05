@@ -131,7 +131,9 @@ Rules:
 
 | Section | Content |
 | --- | --- |
-| **Agents** | Quiet helper under the section title (`Choose which agents appear in Overview.`), then provider visibility toggles. |
+| **General** | Launch at Login toggle mirrors `SMAppService` system status (default on via one-shot first-run seed). Optional recovery detail when System Settings approval is required. |
+| **Agents** | Quiet helper under the section title (`Choose which agents appear in Overview.`), then one visibility toggle per catalog provider (`ProviderID.allCases`). Defaults from `defaultVisible` (OpenRouter off). |
+| **API key providers** | One Settings section per `ProviderID.configurableCases` (API-key catalog providers; currently OpenRouter): SecureField + Save/Clear writing `~/.config/quotacli/providers.json` (shared with QuotaCLI). Masked tip only. |
 | **Remote Devices** | Single destination; secondary value is a device count (`3 devices` / `No devices`). |
 | **About** | Version, website, feedback. |
 
@@ -337,12 +339,17 @@ Rules:
 
 ### Settings
 
-- Sections: Agents, Remote Devices, About.
-- Agents: helper copy sits directly under the section title, then rows (brand icon, name,
-  optional recovery detail, visibility toggle).
+- Sections: General, Agents, zero or more API-key provider sections, Remote Devices, About.
+- General: native Launch at Login toggle. Same dense toggle row pattern as Agents (title + optional
+  meta detail + small Toggle, 28pt response). UI reads/writes `SMAppService.mainApp` only — not a
+  separate UserDefaults preference — so System Settings changes stay aligned on next Settings open.
+  First production launch seeds default-on once when still unregistered.
+- Agents: helper copy sits directly under the section title, then rows for every catalog provider
+  (brand icon, name, optional recovery detail, visibility toggle). Defaults from `defaultVisible`.
   - Visibility toggle is always interactive (auth failures still appear in Overview when enabled).
   - Signed-in / success: no status chrome — only the toggle.
-  - Not signed in / error / unavailable: short recovery detail (e.g. `Run \`claude auth login\``).
+  - Not signed in / error / unavailable: short recovery detail (catalog `loginCommand`).
+- API-key sections: one per `configurableCases`; SecureField + Save/Clear; never show the full key.
 - Overflow menu (ellipsis): Delete all QuotaBar data…, Quit QuotaBar.
 - About: Version, Website, Feedback rows (no product-name label, no copyright blurb). Rows share
   compact text height; do not force `minimumInteractiveDimension` as the About row body height.
