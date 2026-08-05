@@ -27,11 +27,13 @@ enum RelayOwnerCredentialStoreError: LocalizedError, Equatable, Sendable {
 }
 
 /// User-only Application Support file for owner bearers. Never UserDefaults.
-struct RelayOwnerCredentialStore: Sendable {
+/// Mutations are serialized in-process so concurrent save/delete/reconcile cannot clobber each other.
+final class RelayOwnerCredentialStore: @unchecked Sendable {
   static let fileName = "owners.json"
   static let applicationSupportDirectoryName = "io.gotry.quotabar"
 
   private let fileURL: URL
+  private let lock = NSLock()
 
   init(fileURL: URL? = nil) {
     self.fileURL = fileURL ?? Self.defaultFileURL()
@@ -54,57 +56,73 @@ struct RelayOwnerCredentialStore: Sendable {
     guard isValid(ownerBearer), isValidReference(reference) else {
       throw RelayOwnerCredentialStoreError.invalidCredential
     }
-    var document = try loadDocument()
-    document.owners[reference] = ownerBearer
-    try writeDocument(document)
+    try withLock {
+      var document = try loadDocumentUnlocked()
+      document.owners[reference] = ownerBearer
+      try writeDocumentUnlocked(document)
+    }
   }
 
   func load(reference: String) throws -> String {
     guard isValidReference(reference) else {
       throw RelayOwnerCredentialStoreError.missingCredential
     }
-    let document = try loadDocument()
-    guard let ownerBearer = document.owners[reference] else {
-      throw RelayOwnerCredentialStoreError.missingCredential
+    return try withLock {
+      let document = try loadDocumentUnlocked()
+      guard let ownerBearer = document.owners[reference] else {
+        throw RelayOwnerCredentialStoreError.missingCredential
+      }
+      guard isValid(ownerBearer) else {
+        throw RelayOwnerCredentialStoreError.corruptCredential
+      }
+      return ownerBearer
     }
-    guard isValid(ownerBearer) else {
-      throw RelayOwnerCredentialStoreError.corruptCredential
-    }
-    return ownerBearer
   }
 
   func delete(reference: String) throws {
     guard isValidReference(reference) else {
       throw RelayOwnerCredentialStoreError.missingCredential
     }
-    var document = try loadDocument()
-    guard document.owners.removeValue(forKey: reference) != nil else {
-      return
+    try withLock {
+      var document = try loadDocumentUnlocked()
+      guard document.owners.removeValue(forKey: reference) != nil else {
+        return
+      }
+      try writeDocumentUnlocked(document)
     }
-    try writeDocument(document)
   }
 
   func reconcile(retaining references: Set<String>) throws {
-    var document = try loadDocument()
-    let orphans = Set(document.owners.keys).subtracting(references)
-    guard !orphans.isEmpty else { return }
-    for reference in orphans {
-      document.owners.removeValue(forKey: reference)
+    try withLock {
+      var document = try loadDocumentUnlocked()
+      let orphans = Set(document.owners.keys).subtracting(references)
+      guard !orphans.isEmpty else { return }
+      for reference in orphans {
+        document.owners.removeValue(forKey: reference)
+      }
+      try writeDocumentUnlocked(document)
     }
-    try writeDocument(document)
   }
 
   func deleteAll() throws {
-    let fileManager = FileManager.default
-    guard fileManager.fileExists(atPath: fileURL.path) else { return }
-    do {
-      try fileManager.removeItem(at: fileURL)
-    } catch {
-      throw RelayOwnerCredentialStoreError.couldNotDelete
+    try withLock {
+      let fileManager = FileManager.default
+      guard fileManager.fileExists(atPath: fileURL.path) else { return }
+      do {
+        try fileManager.removeItem(at: fileURL)
+      } catch {
+        throw RelayOwnerCredentialStoreError.couldNotDelete
+      }
     }
   }
 
-  private func loadDocument() throws -> OwnersDocument {
+  private func withLock<T>(_ body: () throws -> T) throws -> T {
+    lock.lock()
+    defer { lock.unlock() }
+    return try body()
+  }
+
+  private func loadDocumentUnlocked() throws -> OwnersDocument {
     let fileManager = FileManager.default
     guard fileManager.fileExists(atPath: fileURL.path) else {
       return OwnersDocument(version: 1, owners: [:])
@@ -129,7 +147,7 @@ struct RelayOwnerCredentialStore: Sendable {
     }
   }
 
-  private func writeDocument(_ document: OwnersDocument) throws {
+  private func writeDocumentUnlocked(_ document: OwnersDocument) throws {
     let fileManager = FileManager.default
     let directory = fileURL.deletingLastPathComponent()
     do {

@@ -74,9 +74,6 @@ jobs:
           # Custom gateway models are usually absent from PR-Agent's built-in table.
           config.custom_model_max_tokens: "128000"
           config.max_model_tokens: "128000"
-          # Surface provider failures in Actions logs.
-          config.log_level: "DEBUG"
-          config.verbosity_level: "2"
           config.propagate_tool_errors: "true"
           config.ai_timeout: "180"
 
