@@ -62,7 +62,8 @@ jobs:
           echo "LiteLLM fallback_models=${LITELLM_FALLBACK_MODELS}"
 
       - name: Run PR-Agent
-        uses: the-pr-agent/pr-agent@main
+        # Pin to release tag rather than floating @main.
+        uses: the-pr-agent/pr-agent@v0.41.1
         env:
           OPENAI_KEY: ${{ secrets.LITELLM_API_KEY }}
           OPENAI.API_BASE: ${{ vars.LITELLM_API_BASE }}
