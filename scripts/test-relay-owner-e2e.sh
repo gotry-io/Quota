@@ -23,8 +23,8 @@ Usage: test-relay-owner-e2e.sh [--mode self-hosted|managed]
 Runs the real QuotaBar owner path against loopback QuotaRelay instances and
 isolated QuotaCLI relay state. With no --mode, self-hosted and managed run in order.
 The LaunchServices-started Visual App uses production URLSession, Relay state,
-Defaults, and Keychain boundaries. No provider credentials are read. Screenshots
-are written to dist/menubar-relay-e2e.
+Defaults, and an isolated owners.json file. No provider credentials are read.
+Screenshots are written to dist/menubar-relay-e2e.
 EOF
 }
 
@@ -161,7 +161,7 @@ if [[ -n "$REQUESTED_MODE" && "$REQUESTED_MODE" != "self-hosted" && "$REQUESTED_
   fail "--mode must be self-hosted or managed"
 fi
 
-[[ "$(uname -s)" == "Darwin" ]] || fail "this E2E requires macOS (QuotaBar + Keychain)"
+[[ "$(uname -s)" == "Darwin" ]] || fail "this E2E requires macOS (QuotaBar)"
 
 BUN_PATH="$(command -v bun || true)"
 NODE_PATH="$(command -v node || true)"
@@ -198,12 +198,12 @@ run_mode() {
 
   local run_id
   local defaults_suite
-  local keychain_service
+  local owners_file
   local coordination_dir="${WORK_DIR}/coordination"
   local screenshot_path="${WORK_DIR}/relay-overview.png"
   run_id="$(uuidgen | tr '[:upper:]' '[:lower:]')"
   defaults_suite="io.gotry.quotabar.e2e.${run_id}"
-  keychain_service="io.gotry.quotabar.relay-owner.e2e.${run_id}"
+  owners_file="${WORK_DIR}/owners.json"
 
   if [[ "$CURRENT_MODE" == "self-hosted" ]]; then
     HOST=127.0.0.1 \
@@ -248,7 +248,7 @@ run_mode() {
     --relay-acceptance-origin "$relay_origin"
     --relay-acceptance-directory "$coordination_dir"
     --relay-acceptance-defaults-suite "$defaults_suite"
-    --relay-acceptance-keychain-service "$keychain_service"
+    --relay-acceptance-owners-file "$owners_file"
   )
   /usr/bin/open -n "$APP_PATH" --args "${app_arguments[@]}"
 
@@ -258,7 +258,7 @@ run_mode() {
   local app_command
   app_command="$(ps -p "$APP_PID" -o command= 2>/dev/null || true)"
   [[ "$app_command" == *"$APP_BINARY"* ]] || fail "QuotaBar process identity did not match the app bundle"
-  wait_for_file "${coordination_dir}/ready.json" "QuotaBar Relay profile and Keychain persistence"
+  wait_for_file "${coordination_dir}/ready.json" "QuotaBar Relay profile and owners file persistence"
   "$NODE_PATH" -e '
     const fs = require("node:fs");
     const result = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));

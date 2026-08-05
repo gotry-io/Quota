@@ -87,18 +87,20 @@ struct RemoteDevicesView: View {
 
   private func deviceRow(_ owned: OwnedRemoteDevice) -> some View {
     let device = owned.device
-    return VStack(alignment: .leading, spacing: QuotaDesign.Spacing.sectionRows) {
-      HStack(alignment: .firstTextBaseline, spacing: QuotaDesign.Spacing.iconLabel) {
-        Text(device.displayName)
-          .quotaRowTitleStyle()
-          .lineLimit(2)
-        Spacer(minLength: QuotaDesign.Spacing.sm)
-        healthLabel(for: device)
-      }
-
+    return HStack(alignment: .center, spacing: QuotaDesign.Spacing.inline) {
       VStack(alignment: .leading, spacing: QuotaDesign.Spacing.xxs) {
+        HStack(alignment: .firstTextBaseline, spacing: QuotaDesign.Spacing.iconLabel) {
+          Text(device.displayName)
+            .quotaRowTitleStyle()
+            .lineLimit(1)
+          Spacer(minLength: QuotaDesign.Spacing.sm)
+          healthLabel(for: device)
+        }
+
         Text(lastSeenLabel(device))
           .quotaMetaStyle()
+          .lineLimit(1)
+
         if model.showsEndpointLabelOnDevices {
           Text(owned.endpointLabel)
             .quotaMonoMetaStyle()
@@ -106,17 +108,20 @@ struct RemoteDevicesView: View {
         }
       }
 
-      Button("Remove Device", role: .destructive) {
+      Button("Remove", role: .destructive) {
         pendingRemoval = owned
       }
       .buttonStyle(.plain)
       .quotaSecondaryStyle()
-      .frame(minHeight: QuotaDesign.Layout.minimumInteractiveDimension)
+      .frame(
+        minWidth: QuotaDesign.Layout.minimumInteractiveDimension,
+        minHeight: QuotaDesign.Layout.minimumInteractiveDimension
+      )
       .disabled(isRemoving)
       .accessibilityLabel("Remove \(device.displayName)")
     }
     .frame(maxWidth: .infinity, alignment: .leading)
-    .padding(.vertical, QuotaDesign.Layout.providerRowVerticalPadding)
+    .padding(.vertical, QuotaDesign.Spacing.sm)
     .accessibilityElement(children: .contain)
   }
 

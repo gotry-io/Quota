@@ -1,25 +1,36 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
   <title>QuotaBar</title>
-  <rect width="1024" height="1024" fill="#fff"/>
-  <path
-    d="M631.707 840.893A350 350 0 1 1 840.893 631.707"
-    fill="none"
-    stroke="#a3a3a3"
-    stroke-width="62"
-    stroke-linecap="round"
-  />
-  <path
-    d="M560.656 762.311A255 255 0 1 1 762.311 560.656"
-    fill="none"
-    stroke="#000"
-    stroke-width="86"
-    stroke-linecap="round"
-  />
-  <path
-    d="m556 556 162 162"
-    fill="none"
-    stroke="#000"
-    stroke-width="76"
-    stroke-linecap="round"
-  />
+  <!--
+    macOS app icon layout (1024 master):
+    - Transparent canvas
+    - Centered rounded plate with ~100px margin/side (plate ≈ 824×824)
+    - Continuous-looking corner radius ≈ 185 on the plate (~22.4%)
+    - Glyph kept inside the plate safe area
+    System may still apply effects; silhouette and optical size come from this inset plate.
+  -->
+  <rect x="100" y="100" width="824" height="824" rx="185" ry="185" fill="#ffffff"/>
+  <!-- Center glyph on the plate; ~62% of full canvas keeps strokes clear of corners -->
+  <g transform="translate(512 512) scale(0.62) translate(-512 -512)">
+    <path
+      d="M631.707 840.893A350 350 0 1 1 840.893 631.707"
+      fill="none"
+      stroke="#a3a3a3"
+      stroke-width="62"
+      stroke-linecap="round"
+    />
+    <path
+      d="M560.656 762.311A255 255 0 1 1 762.311 560.656"
+      fill="none"
+      stroke="#000000"
+      stroke-width="86"
+      stroke-linecap="round"
+    />
+    <path
+      d="m556 556 162 162"
+      fill="none"
+      stroke="#000000"
+      stroke-width="76"
+      stroke-linecap="round"
+    />
+  </g>
 </svg>

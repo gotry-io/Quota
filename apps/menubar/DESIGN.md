@@ -131,22 +131,34 @@ Rules:
 
 | Section | Content |
 | --- | --- |
-| **Agents** | Provider visibility toggles; quiet helper: `Choose which agents appear in Overview.` |
+| **Agents** | Quiet helper under the section title (`Choose which agents appear in Overview.`), then provider visibility toggles. |
 | **Remote Devices** | Single destination; secondary value is a device count (`3 devices` / `No devices`). |
 | **About** | Version, website, feedback. |
 
 ### Remote Devices
 
 - Aggregate devices this QuotaBar owns across internal endpoint records.
-- Rows are flat list items separated by system `Divider`s — not rounded cards. Match Overview
-  provider-row density (`providerRowVerticalPadding`) rather than marketing card chrome.
+- Rows are flat list items separated by system `Divider`s — not rounded cards. Keep a compact
+  two-line body (name + health, last report) with an 8pt vertical pad; do not stack a full-width
+  action row under each device.
 - Row priority: device name and a quiet health/last-report label. Show the Relay endpoint as subdued
   metadata only when more than one endpoint needs disambiguation; use the canonical URL so ports
   and schemes cannot collapse to the same label.
 - Empty state: `Pair a device to see its quota in QuotaBar.` The header `plus` is the only
   **Pair Device** action; do not repeat it as a colored body button.
-- **Remove Device** is a plain destructive text action that confirms the device will stop reporting
-  to this QuotaBar.
+- **Remove** is a short trailing plain destructive text action (not a full-width button) that
+  confirms the device will stop reporting to this QuotaBar.
+
+### Settings density
+
+- Section title → body uses `Spacing.xs` (6).
+- Agents stack with **0** inter-row spacing; each row uses tight vertical padding. The toggle control
+  keeps a 28pt response size, but the row must not also force a second 28pt min height or three
+  healthy agents look padded.
+- About is a **dense key/value list**, not three control-sized rows. Version / Website / Feedback
+  share the same compact text-row padding (~3pt/side). Links stay full-row tappable via
+  `contentShape`, **without** `minHeight: minimumInteractiveDimension` on the row body — that token
+  is for discrete controls, and applying it per About row was the root cause of the sparse list.
 
 ### Pair Device
 
@@ -243,9 +255,12 @@ No website display scale (30–36px) inside the panel.
 - **Menu bar status item:** the custom Q gauge in `Resources/BrandIcons/quota.svg`, rendered at
   18pt as one solid gauge arc and an inward diagonal tail. Small template marks omit the muted outer
   arc because partial-alpha strokes become soft at menu-bar resolution.
-- **Application icon:** `Support/QuotaBarIcon.svg` is the editable double-ring source;
-  `Support/QuotaBarSmallIcon.svg` is the single-ring 16–64px optical source. The generated
-  `Support/QuotaBar.icns` combines them through `scripts/generate-brand-assets.sh`.
+- **Application icon:** 1024×1024 master on a **transparent** canvas. The white rounded plate is
+  drawn inset (~100px margin / side → ~824×824 plate, corner radius ~185) so Dock/Finder optical
+  size matches other macOS icons; the Q mark sits smaller inside that plate. Do not fill the full
+  canvas edge-to-edge. `generate-brand-assets.sh` bakes a soft contact drop shadow after
+  rasterization (similar to News/Photos icns soft-alpha rim). `Support/QuotaBarIcon.svg` is the
+  double-ring master; `Support/QuotaBarSmallIcon.svg` is the single-ring 16–64px optical master.
 - **Provider marks:** Lobe monochrome SVGs (`openai`, `claude`, `grok` from lobehub.com/icons),
   pre-rasterized to 24pt@2x template bitmaps and tinted with system label ink.
 - **Source labels:** SF Symbols — `laptopcomputer` (Local), `network` (Remote),
@@ -323,13 +338,14 @@ Rules:
 ### Settings
 
 - Sections: Agents, Remote Devices, About.
-- Agents rows: brand icon, name, optional recovery detail, visibility toggle.
+- Agents: helper copy sits directly under the section title, then rows (brand icon, name,
+  optional recovery detail, visibility toggle).
   - Visibility toggle is always interactive (auth failures still appear in Overview when enabled).
   - Signed-in / success: no status chrome — only the toggle.
   - Not signed in / error / unavailable: short recovery detail (e.g. `Run \`claude auth login\``).
 - Overflow menu (ellipsis): Delete all QuotaBar data…, Quit QuotaBar.
-- About: Version, Website, Feedback rows (no product-name label, no copyright blurb). Each About
-  row uses the same `minimumInteractiveDimension` height so Version matches the link rows.
+- About: Version, Website, Feedback rows (no product-name label, no copyright blurb). Rows share
+  compact text height; do not force `minimumInteractiveDimension` as the About row body height.
 
 ### Navigation motion
 

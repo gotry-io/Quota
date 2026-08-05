@@ -13,15 +13,15 @@ struct SettingsHomeView: View {
     ScrollView {
       VStack(alignment: .leading, spacing: QuotaDesign.Spacing.section) {
         settingsSection("Agents") {
-          VStack(alignment: .leading, spacing: QuotaDesign.Spacing.sectionBody) {
+          Text("Choose which agents appear in Overview.")
+            .quotaMetaStyle()
+            .fixedSize(horizontal: false, vertical: true)
+
+          VStack(alignment: .leading, spacing: 0) {
             providerToggle(.codex, isOn: $showsCodex)
             providerToggle(.claude, isOn: $showsClaude)
             providerToggle(.grok, isOn: $showsGrok)
           }
-
-          Text("Choose which agents appear in Overview.")
-            .quotaMetaStyle()
-            .fixedSize(horizontal: false, vertical: true)
         }
 
         Divider()
@@ -88,10 +88,10 @@ struct SettingsHomeView: View {
       result: model.result(for: provider)
     )
 
-    return HStack(alignment: .center, spacing: QuotaDesign.Spacing.sectionBody) {
+    return HStack(alignment: .center, spacing: QuotaDesign.Spacing.sm) {
       ProviderBrandIcon(provider: provider, size: 16)
 
-      VStack(alignment: .leading, spacing: QuotaDesign.Spacing.xxs) {
+      VStack(alignment: .leading, spacing: 2) {
         Text(provider.displayName)
           .quotaRowTitleStyle()
 
@@ -113,7 +113,7 @@ struct SettingsHomeView: View {
         )
         .accessibilityHint(status.accessibilityHint)
     }
-    .frame(minHeight: QuotaDesign.Layout.minimumInteractiveDimension)
+    .padding(.vertical, QuotaDesign.Spacing.xxs)
     .accessibilityElement(children: .combine)
   }
 
@@ -121,7 +121,7 @@ struct SettingsHomeView: View {
     _ title: String,
     @ViewBuilder content: () -> Content
   ) -> some View {
-    VStack(alignment: .leading, spacing: QuotaDesign.Spacing.sectionRows) {
+    VStack(alignment: .leading, spacing: QuotaDesign.Spacing.xs) {
       Text(title)
         .quotaSectionHeaderStyle()
 
@@ -130,7 +130,7 @@ struct SettingsHomeView: View {
   }
 
   private func aboutValueRow(title: String, value: String) -> some View {
-    HStack(spacing: QuotaDesign.Spacing.sectionBody) {
+    HStack(spacing: QuotaDesign.Spacing.sm) {
       // Labels stay quieter than the section title ("About").
       Text(title)
         .quotaSecondaryStyle()
@@ -139,11 +139,8 @@ struct SettingsHomeView: View {
         .quotaMonoMetaStyle()
         .textSelection(.enabled)
     }
-    .frame(
-      maxWidth: .infinity,
-      minHeight: QuotaDesign.Layout.minimumInteractiveDimension,
-      alignment: .leading
-    )
+    .padding(.vertical, aboutRowVerticalPadding)
+    .frame(maxWidth: .infinity, alignment: .leading)
     .accessibilityElement(children: .combine)
     .accessibilityLabel("\(title) \(value)")
   }
@@ -152,24 +149,24 @@ struct SettingsHomeView: View {
     Button {
       NSWorkspace.shared.open(url)
     } label: {
-      HStack(spacing: QuotaDesign.Spacing.sectionBody) {
+      HStack(spacing: QuotaDesign.Spacing.sm) {
         Text(title)
           .quotaSecondaryStyle()
         Spacer(minLength: QuotaDesign.Spacing.sm)
         Image(systemName: "arrow.up.right")
           .quotaAffordanceStyle()
       }
-      .frame(
-        maxWidth: .infinity,
-        minHeight: QuotaDesign.Layout.minimumInteractiveDimension,
-        alignment: .leading
-      )
+      .padding(.vertical, aboutRowVerticalPadding)
+      .frame(maxWidth: .infinity, alignment: .leading)
       .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
     .accessibilityLabel(title)
     .accessibilityHint("Opens in browser")
   }
+
+  // ponytail: dense text row; keep hit target via contentShape, not minHeight 28
+  private var aboutRowVerticalPadding: CGFloat { 3 }
 }
 
 /// Settings Agents row model: visibility toggle is always interactive; non-success

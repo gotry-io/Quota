@@ -1,0 +1,89 @@
+name: pr-agent
+
+# AI PR review via PR-Agent over a LiteLLM-compatible OpenAI API.
+#
+# Secret:
+#   LITELLM_API_KEY
+# Variables:
+#   LITELLM_API_BASE           e.g. https://llm.example.com/v1
+#   LITELLM_MODEL              e.g. grok-4.5
+#   LITELLM_FALLBACK_MODELS  JSON array string, e.g. ["deepseek-v4-flash"]
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review, synchronize]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: pr-agent-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  pr_agent:
+    if: |
+      (github.event_name == 'pull_request' && github.event.pull_request.draft == false) ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request &&
+       (
+         startsWith(github.event.comment.body, '/review') ||
+         startsWith(github.event.comment.body, '/describe') ||
+         startsWith(github.event.comment.body, '/improve') ||
+         startsWith(github.event.comment.body, '/ask')
+       ))
+    runs-on: ubuntu-24.04
+    name: PR Agent
+    steps:
+      - name: Require LiteLLM configuration
+        env:
+          LITELLM_API_BASE: ${{ vars.LITELLM_API_BASE }}
+          LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
+          LITELLM_MODEL: ${{ vars.LITELLM_MODEL }}
+          LITELLM_FALLBACK_MODELS: ${{ vars.LITELLM_FALLBACK_MODELS }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for name in LITELLM_API_BASE LITELLM_API_KEY LITELLM_MODEL LITELLM_FALLBACK_MODELS; do
+            if [ -z "${!name:-}" ]; then
+              echo "Missing configuration: $name" >&2
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "Set LITELLM_API_KEY as a secret and the other LITELLM_* values as Actions variables." >&2
+            exit 1
+          fi
+          echo "LiteLLM base=${LITELLM_API_BASE}"
+          echo "LiteLLM model=${LITELLM_MODEL}"
+          echo "LiteLLM fallback_models=${LITELLM_FALLBACK_MODELS}"
+
+      - name: Run PR-Agent
+        # Pin to release tag rather than floating @main.
+        uses: the-pr-agent/pr-agent@v0.41.1
+        env:
+          OPENAI_KEY: ${{ secrets.LITELLM_API_KEY }}
+          OPENAI.API_BASE: ${{ vars.LITELLM_API_BASE }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+          config.model: ${{ vars.LITELLM_MODEL }}
+          config.fallback_models: ${{ vars.LITELLM_FALLBACK_MODELS }}
+          # Custom gateway models are usually absent from PR-Agent's built-in table.
+          config.custom_model_max_tokens: "128000"
+          config.max_model_tokens: "128000"
+          config.propagate_tool_errors: "true"
+          config.ai_timeout: "180"
+
+          github_action_config.auto_review: "true"
+          github_action_config.auto_describe: "true"
+          github_action_config.auto_improve: "false"
+          github_action_config.pr_actions: '["opened", "reopened", "ready_for_review", "synchronize"]'
+
+          PR_REVIEWER.REQUIRE_TESTS_REVIEW: "true"
+          PR_REVIEWER.REQUIRE_SECURITY_REVIEW: "true"
+          PR_REVIEWER.ENABLE_HELP_TEXT: "false"
+          PR_DESCRIPTION.ENABLE_HELP_TEXT: "false"
+          config.publish_output_progress: "false"

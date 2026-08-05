@@ -14,7 +14,7 @@
     let relayOrigin: String
     let coordinationDirectory: URL
     let defaultsSuite: String
-    let keychainService: String
+    let ownersFilePath: URL
     let screenshotOutputPath: URL
 
     init?(arguments: [String]) {
@@ -29,11 +29,10 @@
         ),
         let defaultsSuite = Self.value(for: "--relay-acceptance-defaults-suite", in: arguments),
         defaultsSuite.hasPrefix("io.gotry.quotabar.e2e."),
-        let keychainService = Self.value(
-          for: "--relay-acceptance-keychain-service",
+        let ownersFilePath = Self.absolutePath(
+          for: "--relay-acceptance-owners-file",
           in: arguments
         ),
-        keychainService.hasPrefix("io.gotry.quotabar.relay-owner.e2e."),
         let screenshotOutputPath = Self.absolutePath(for: "--screenshot-output", in: arguments)
       else {
         return nil
@@ -43,7 +42,7 @@
       self.relayOrigin = relayURL.absoluteString
       self.coordinationDirectory = coordinationDirectory
       self.defaultsSuite = defaultsSuite
-      self.keychainService = keychainService
+      self.ownersFilePath = ownersFilePath
       self.screenshotOutputPath = screenshotOutputPath
     }
 
@@ -77,10 +76,7 @@
     }
 
     var credentialStore: RelayOwnerCredentialStore {
-      RelayOwnerCredentialStore(
-        operations: SystemRelayKeychainOperations(),
-        service: keychainService
-      )
+      RelayOwnerCredentialStore(fileURL: ownersFilePath)
     }
 
     func file(_ name: String) -> URL {
