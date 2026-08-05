@@ -156,6 +156,12 @@ final class RelayOwnerCredentialStore: @unchecked Sendable {
         withIntermediateDirectories: true,
         attributes: [.posixPermissions: 0o700]
       )
+      // createDirectory only applies modes on first create; tighten on every write
+      // so an existing looser Application Support dir is corrected.
+      try fileManager.setAttributes(
+        [.posixPermissions: 0o700],
+        ofItemAtPath: directory.path
+      )
     } catch {
       throw RelayOwnerCredentialStoreError.couldNotStore
     }

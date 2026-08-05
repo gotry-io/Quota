@@ -19,10 +19,32 @@ struct RelayOwnerCredentialStoreTests {
     #expect(try store.load(reference: reference) == "owner_synthetic_secret")
     let attributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
     #expect((attributes[.posixPermissions] as? NSNumber)?.uint16Value == 0o600)
+    let directoryAttributes = try FileManager.default.attributesOfItem(
+      atPath: fileURL.deletingLastPathComponent().path
+    )
+    #expect((directoryAttributes[.posixPermissions] as? NSNumber)?.uint16Value == 0o700)
 
     let document = try decodeOwners(fileURL)
     #expect(document.version == 1)
     #expect(document.owners == [reference: "owner_synthetic_secret"])
+  }
+
+  @Test
+  func tightensExistingDirectoryPermissionsOnSave() throws {
+    let fileURL = try temporaryOwnersFile(directoryPermissions: 0o755)
+    defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
+    let store = RelayOwnerCredentialStore(fileURL: fileURL)
+    let directory = fileURL.deletingLastPathComponent()
+
+    let before = try FileManager.default.attributesOfItem(atPath: directory.path)
+    #expect((before[.posixPermissions] as? NSNumber)?.uint16Value == 0o755)
+
+    try store.save("owner_synthetic_secret", reference: "relay-owner:profile")
+
+    let after = try FileManager.default.attributesOfItem(atPath: directory.path)
+    #expect((after[.posixPermissions] as? NSNumber)?.uint16Value == 0o700)
+    let fileAttributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
+    #expect((fileAttributes[.posixPermissions] as? NSNumber)?.uint16Value == 0o600)
   }
 
   @Test
@@ -119,10 +141,16 @@ private struct OwnersFileDocument: Decodable {
   var owners: [String: String]
 }
 
-private func temporaryOwnersFile() throws -> URL {
+private func temporaryOwnersFile(directoryPermissions: Int? = nil) throws -> URL {
   let directory = FileManager.default.temporaryDirectory
     .appendingPathComponent("quotabar-owners-\(UUID().uuidString)", isDirectory: true)
   try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+  if let directoryPermissions {
+    try FileManager.default.setAttributes(
+      [.posixPermissions: directoryPermissions],
+      ofItemAtPath: directory.path
+    )
+  }
   return directory.appendingPathComponent("owners.json", isDirectory: false)
 }
 
