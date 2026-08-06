@@ -103,11 +103,17 @@ export class CodexCollector implements ProviderCollector {
     }
 
     const identity = extractCodexIdentity(credentials);
-    const now = context.now ?? new Date();
+    // Freeze only when tests inject context.now; otherwise stamp at map time.
+    const frozenNow = context.now;
 
     let directAuthFailure: ProviderCollectionError | undefined;
     try {
-      const apiSnapshot = await this.collectViaApi(credentials, identity, now, context.signal);
+      const apiSnapshot = await this.collectViaApi(
+        credentials,
+        identity,
+        frozenNow,
+        context.signal,
+      );
       if (apiSnapshot) {
         return apiSnapshot;
       }
@@ -134,7 +140,7 @@ export class CodexCollector implements ProviderCollector {
     }
 
     try {
-      return await this.collectViaRpc(identity, now, context.signal);
+      return await this.collectViaRpc(identity, frozenNow, context.signal);
     } catch (error) {
       if (directAuthFailure) {
         const fallback = classifyProviderError(error);
@@ -149,7 +155,7 @@ export class CodexCollector implements ProviderCollector {
   private async collectViaApi(
     credentials: CodexCredentials,
     identity: { email?: string; plan?: string; accountId?: string },
-    now: Date,
+    frozenNow: Date | undefined,
     signal?: AbortSignal,
   ): Promise<QuotaSnapshot | undefined> {
     const headers: Record<string, string> = {
@@ -178,7 +184,7 @@ export class CodexCollector implements ProviderCollector {
       throw new HttpRequestError(`Codex usage API returned HTTP ${status}.`, status);
     }
 
-    const mapped = mapCodexUsageResponse(json, now);
+    const mapped = mapCodexUsageResponse(json);
     if (mapped.malformedSuccess) {
       // Do not hide parser bugs behind RPC fallback.
       throw new ProviderCollectionError(
@@ -197,7 +203,7 @@ export class CodexCollector implements ProviderCollector {
     return buildCodexSnapshot({
       source: CODEX_SOURCE_API,
       windows: mapped.windows,
-      now,
+      ...(frozenNow ? { now: frozenNow } : {}),
       ...(resolvedPlan ? { plan: resolvedPlan } : {}),
       ...(resolvedEmail ? { email: resolvedEmail } : {}),
       ...(resolvedAccountId ? { accountId: resolvedAccountId } : {}),
@@ -206,7 +212,7 @@ export class CodexCollector implements ProviderCollector {
 
   private async collectViaRpc(
     identity: { email?: string; plan?: string; accountId?: string },
-    now: Date,
+    frozenNow: Date | undefined,
     signal?: AbortSignal,
   ): Promise<QuotaSnapshot> {
     const executable = await this.resolveCodexExecutable(this.environment);
@@ -263,7 +269,7 @@ export class CodexCollector implements ProviderCollector {
       return buildCodexSnapshot({
         source: CODEX_SOURCE_RPC,
         windows: mapped.windows,
-        now,
+        ...(frozenNow ? { now: frozenNow } : {}),
         ...((mapped.plan ?? accountPlan) ? { plan: mapped.plan ?? accountPlan } : {}),
         ...(accountEmail ? { email: accountEmail } : {}),
         ...(identity.accountId ? { accountId: identity.accountId } : {}),

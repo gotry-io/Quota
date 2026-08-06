@@ -32,4 +32,8 @@ struct LocalQuotaReportCache {
     guard let data = try? QuotaWireCodec.makeEncoder().encode(cached) else { return }
     defaults.set(data, forKey: Self.storageKey)
   }
+
+  func clear() {
+    defaults.removeObject(forKey: Self.storageKey)
+  }
 }

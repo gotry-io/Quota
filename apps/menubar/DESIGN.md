@@ -101,7 +101,7 @@ Rules:
 ├──────────────────────────────────────────────────┤
 │ content (scroll)                                 │
 ├──────────────────────────────────────────────────┤
-│ footer 36                         Updated 3:41 PM│
+│ footer 36                    Last checked 3:41 PM│
 └──────────────────────────────────────────────────┘
 ```
 
@@ -112,7 +112,12 @@ Rules:
 - **Other pages:** no trailing control; back returns through the stack. Back uses a compact 20pt
   visual slot so the title stays attached to the chevron, while its response region remains
   28×44pt by overlapping the otherwise noninteractive title gap.
-- Footer shows refresh affordance on the **right** only. Version lives in Settings → About.
+- Footer shows refresh affordance on the **right** only (`Last checked …` / `Not checked` /
+  `Refreshing…`). That time is **orchestration** (last local collect and/or Relay pull), not
+  per-provider data age. Version lives in Settings → About.
+- Provider observation time (`observed_at`) is **not** shown after window Resets lines. On hover
+  over a provider block, show a single `Observed … ago` at the **bottom-right** of that provider
+  (shared across its windows). VoiceOver always exposes that value.
 
 ### Interaction and accessibility
 
@@ -274,8 +279,7 @@ No website display scale (30–36px) inside the panel.
 ### Provider row
 
 ```text
-[brand] Codex                               Local
-Pro Lite · eg***@example.com
+[brand] Codex  Pro Lite · eg***@example.com     Local
 Weekly                           29% left
 ████████░░░░
 Resets Sat, 12:51 PM
@@ -284,15 +288,16 @@ Resets Sat, 12:51 PM
 Rules:
 
 1. Provider icon + name leading; source label trailing (mute).
-2. Account line: `Plan · maskedLabel` plain text (no plan chip). Plan slugs normalized for display
-   only (`prolite` → `Pro Lite`, `supergrok` → `SuperGrok`, OIDC Grok hint → SuperGrok).
+2. **Single account:** plan + masked label sit on the **same row as the provider title**
+   (`Plan · maskedLabel`, mute, plain text — no plan chip). Plan slugs normalized for display only
+   (`prolite` → `Pro Lite`, `supergrok` → `SuperGrok`, OIDC Grok hint → SuperGrok).
 3. Each window: title left, **strong remaining %** right with the explicit word `left`, 8px meter,
    then a locale-appropriate weekday/time reset without routine seconds.
 4. Percentage text stays readable ink; the meter uses accent/orange/red by threshold. Filled
    proportion is always **remaining**.
-5. Reset and stale-observation metadata share one line when they fit and stack at larger text sizes;
-   do not truncate either value to preserve density.
-6. Multi-account: per-account identity row carries its own source label and optional Stale tag.
+5. Window meta is reset timing only. Provider observation age is hover-only at the bottom-right of
+   the provider block (not after Resets).
+6. **Multi-account:** each account keeps its own identity row (plan/label + source + optional Stale).
 
 ### Source badge
 
@@ -370,6 +375,8 @@ Rules:
 - Never show raw tokens, full emails, or unredacted account ids.
 - Cache-first launch: show last local report immediately, refresh in background (plan fields may
   appear after refresh when collector semantics change).
+- Per-provider data age comes from the selected snapshot’s `observed_at` (hover on the provider
+  block). Do not stitch Observed next to per-window Resets.
 
 ## Do / Don’t
 

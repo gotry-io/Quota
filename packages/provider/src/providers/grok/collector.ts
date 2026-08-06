@@ -94,12 +94,13 @@ export class GrokCollector implements ProviderCollector {
         GROK_SOURCE_API,
       );
     }
-    const now = context.now ?? new Date();
+    // context.now freezes tests; when omitted, map stamps observed_at after HTTP.
+    const frozenNow = context.now;
     // Only a real credential rotation counts as refresh success. A failed or
     // no-op CLI handshake must not suppress the single 401 retry.
     let refreshSucceeded = false;
 
-    if (shouldRefreshGrokCredentials(credentials, now)) {
+    if (shouldRefreshGrokCredentials(credentials, frozenNow ?? new Date())) {
       const refreshed = await this.refreshAndReload(credentials, context.signal);
       if (refreshed) {
         credentials = refreshed;
@@ -108,14 +109,14 @@ export class GrokCollector implements ProviderCollector {
     }
 
     try {
-      return await this.collectWithCredentials(credentials, now, context.signal);
+      return await this.collectWithCredentials(credentials, frozenNow, context.signal);
     } catch (error) {
       let classified = classifyProviderError(error);
       if (classified.category === "auth_required" && !refreshSucceeded) {
         const refreshed = await this.refreshAndReload(credentials, context.signal);
         if (refreshed) {
           try {
-            return await this.collectWithCredentials(refreshed, now, context.signal);
+            return await this.collectWithCredentials(refreshed, frozenNow, context.signal);
           } catch (retryError) {
             classified = classifyProviderError(retryError);
           }
@@ -131,7 +132,7 @@ export class GrokCollector implements ProviderCollector {
 
   private async collectWithCredentials(
     credentials: GrokCredentials,
-    now: Date,
+    frozenNow: Date | undefined,
     signal?: AbortSignal,
   ): Promise<QuotaSnapshot> {
     const billing = await this.fetchBillingApi(credentials, signal);
@@ -146,7 +147,7 @@ export class GrokCollector implements ProviderCollector {
     return buildGrokSnapshot({
       window: mapped.window,
       credentials,
-      now,
+      ...(frozenNow ? { now: frozenNow } : {}),
     });
   }
 

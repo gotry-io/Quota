@@ -67,7 +67,7 @@ struct MenuBarFooterView: View {
           if model.isRefreshing {
             Text("Refreshing…")
           } else {
-            Text(lastRefreshLabel)
+            Text(lastCheckedLabel)
           }
         }
         .frame(minHeight: QuotaDesign.Layout.minimumInteractiveDimension)
@@ -75,17 +75,18 @@ struct MenuBarFooterView: View {
       }
       .buttonStyle(.plain)
       .disabled(model.isRefreshing)
-      .accessibilityLabel("Refresh quota, \(lastRefreshLabel)")
+      .accessibilityLabel("Refresh all quota. \(lastCheckedLabel)")
     }
     .quotaSecondaryStyle()
     .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
     .frame(height: QuotaDesign.Layout.footerHeight)
   }
 
-  private var lastRefreshLabel: String {
-    guard let refreshedAt = model.refreshedAt else {
-      return "Not Refreshed"
+  /// Orchestration clock: last local collect and/or Relay pull — not provider data age.
+  private var lastCheckedLabel: String {
+    guard let lastCheckedAt = model.lastCheckedAt else {
+      return "Not checked"
     }
-    return "Updated \(refreshedAt.formatted(date: .omitted, time: .shortened))"
+    return "Last checked \(lastCheckedAt.formatted(date: .omitted, time: .shortened))"
   }
 }

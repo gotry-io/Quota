@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ProviderQuotaView: View {
   let presentation: ProviderQuotaPresentation
+  @State private var isHovered = false
 
   var body: some View {
     VStack(alignment: .leading, spacing: QuotaDesign.Spacing.xs) {
@@ -18,7 +19,8 @@ struct ProviderQuotaView: View {
         AccountQuotaView(
           presentation: account,
           accountIndex: index,
-          showsAccountStatus: presentation.accounts.count > 1
+          // Single-account identity lives on the provider title line; multi-account keeps a row.
+          showsAccountHeader: presentation.accounts.count > 1
         )
 
         if index < presentation.accounts.count - 1 {
@@ -26,9 +28,32 @@ struct ProviderQuotaView: View {
             .padding(.vertical, 2)
         }
       }
+
+      // Provider-level observation time (same for all windows in one report).
+      // Hover-only chrome; VoiceOver always gets the value via accessibility.
+      if isHovered, let observedAt = presentation.latestObservedAt {
+        HStack(spacing: 0) {
+          Spacer(minLength: 0)
+          Text("Observed \(observedAt, style: .relative) ago")
+            .quotaMetaStyle()
+            .accessibilityHidden(true)
+        }
+        .padding(.top, 2)
+        .transition(.opacity)
+      }
     }
     .padding(.vertical, QuotaDesign.Layout.providerRowVerticalPadding)
+    .contentShape(Rectangle())
+    .onHover { hovering in
+      withAnimation(.easeInOut(duration: 0.12)) {
+        isHovered = hovering
+      }
+    }
     .accessibilityElement(children: .combine)
+    .accessibilityValue(
+      presentation.latestObservedAt.map { "Observed \($0.formatted(.relative(presentation: .named)))" }
+        ?? ""
+    )
   }
 
   private var providerHeader: some View {
@@ -38,6 +63,21 @@ struct ProviderQuotaView: View {
         Text(presentation.provider.displayName)
       }
       .quotaRowTitleStyle()
+      .layoutPriority(1)
+
+      // Single-account plan + masked label sit on the title line (not a second row).
+      if presentation.accounts.count == 1,
+        let account = presentation.accounts.first,
+        let identity = account.identitySummary
+      {
+        Text(identity)
+          .quotaFont(.quotaLabel)
+          .foregroundStyle(QuotaPalette.mute)
+          .lineLimit(1)
+          .truncationMode(.middle)
+          .layoutPriority(0)
+          .accessibilityLabel(account.accessibilityIdentityLabel)
+      }
 
       // Status sits with the provider name. Never replace trailing Local/Remote —
       // provenance answers "where from", status answers "what's wrong".
@@ -75,92 +115,72 @@ struct ProviderQuotaView: View {
   }
 }
 
+private extension AccountQuotaPresentation {
+  var identitySummary: String? {
+    PlanDisplay.accountSummary(plan: snapshot.account.plan, label: snapshot.account.label)
+  }
+
+  var accessibilityIdentityLabel: String {
+    let plan = PlanDisplay.planBadge(snapshot.account.plan)
+    let label = PlanDisplay.accountLabel(snapshot.account.label)
+    switch (plan, label) {
+    case let (plan?, label?): return "Plan: \(plan), Account: \(label)"
+    case let (plan?, nil): return "Plan: \(plan)"
+    case let (nil, label?): return "Account: \(label)"
+    case (nil, nil): return "Account"
+    }
+  }
+}
+
 private struct AccountQuotaView: View {
   let presentation: AccountQuotaPresentation
   let accountIndex: Int
-  let showsAccountStatus: Bool
-
-  private var snapshot: QuotaSnapshot { presentation.snapshot }
-
-  private var identitySummary: String? {
-    PlanDisplay.accountSummary(
-      plan: snapshot.account.plan,
-      label: snapshot.account.label
-    )
-  }
+  /// Multi-account only; single-account identity is on the provider title line.
+  let showsAccountHeader: Bool
 
   var body: some View {
     VStack(alignment: .leading, spacing: QuotaDesign.Spacing.iconLabel) {
-      if showsAccountMetadata {
+      if showsAccountHeader {
         accountHeader
       }
 
-      ForEach(snapshot.windows) { window in
-        QuotaWindowRow(
-          window: window,
-          observedAt: snapshot.observedAt,
-          isStale: presentation.isStale
-        )
+      ForEach(presentation.snapshot.windows) { window in
+        QuotaWindowRow(window: window, isStale: presentation.isStale)
       }
     }
-  }
-
-  private var showsAccountMetadata: Bool {
-    if showsAccountStatus {
-      return true
-    }
-    return identitySummary != nil
   }
 
   private var accountHeader: some View {
     HStack(alignment: .firstTextBaseline, spacing: QuotaDesign.Spacing.iconLabel) {
-      if let identitySummary {
-        Text(identitySummary)
+      if let identity = presentation.identitySummary {
+        Text(identity)
           .quotaFont(.quotaLabel)
           .foregroundStyle(QuotaPalette.body)
           .lineLimit(1)
           .truncationMode(.middle)
-          .accessibilityLabel(accessibilityIdentityLabel)
-      } else if showsAccountStatus {
+          .accessibilityLabel(presentation.accessibilityIdentityLabel)
+      } else {
         Text("Account \(accountIndex + 1)")
           .quotaSecondaryStyle()
       }
 
-      if showsAccountStatus, presentation.isStale {
+      if presentation.isStale {
         QuotaStatusTag(text: "Stale", systemImage: "clock")
       }
 
       Spacer(minLength: 8)
 
-      if showsAccountStatus {
-        SourceBadge(
-          symbolName: presentation.sourceSymbolName,
-          tooltip: presentation.sourceTooltip,
-          accessibilityLabel: presentation.sourceAccessibilityLabel
-        )
-      }
-    }
-  }
-
-  private var accessibilityIdentityLabel: String {
-    let plan = PlanDisplay.planBadge(snapshot.account.plan)
-    let label = PlanDisplay.accountLabel(snapshot.account.label)
-    switch (plan, label) {
-    case let (plan?, label?):
-      return "Plan: \(plan), Account: \(label)"
-    case let (plan?, nil):
-      return "Plan: \(plan)"
-    case let (nil, label?):
-      return "Account: \(label)"
-    case (nil, nil):
-      return "Account"
+      SourceBadge(
+        symbolName: presentation.sourceSymbolName,
+        tooltip: presentation.sourceTooltip,
+        accessibilityLabel: presentation.sourceAccessibilityLabel
+      )
     }
   }
 }
 
 private struct QuotaWindowRow: View {
   let window: QuotaWindow
-  let observedAt: Date
   let isStale: Bool
 
   private var meterColor: Color {
@@ -196,28 +216,11 @@ private struct QuotaWindowRow: View {
 
       QuotaProgressBar(value: window.remainingPercent, fill: meterColor)
 
-      quotaMetadata
+      // Window meta is reset timing only. Observation time is provider-level (hover).
+      resetText
         .quotaMetaStyle()
     }
     .padding(.top, 2)
-  }
-
-  @ViewBuilder
-  private var quotaMetadata: some View {
-    if isStale {
-      ViewThatFits(in: .horizontal) {
-        HStack(alignment: .firstTextBaseline, spacing: QuotaDesign.Spacing.inline) {
-          resetText
-          Text("· Observed \(observedAt, style: .relative) ago")
-        }
-        VStack(alignment: .leading, spacing: QuotaDesign.Spacing.meta) {
-          resetText
-          Text("Observed \(observedAt, style: .relative) ago")
-        }
-      }
-    } else {
-      resetText
-    }
   }
 
   private var resetText: Text {

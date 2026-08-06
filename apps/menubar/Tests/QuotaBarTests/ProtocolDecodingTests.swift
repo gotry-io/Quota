@@ -225,7 +225,7 @@ func refreshesMenuBarModelFromLocalCollector() async throws {
   }
   #expect(claudeOnly.map(\.provider) == [.claude])
   #expect(model.errorMessage == nil)
-  #expect(model.refreshedAt != nil)
+  #expect(model.lastCheckedAt != nil)
 }
 
 @Test @MainActor
@@ -250,7 +250,7 @@ func restoresTheLastNormalizedReportBeforeRefreshing() async throws {
     relayStateModel: makeEmptyRelayStateModel()
   )
   #expect(restoredModel.report == report)
-  #expect(restoredModel.refreshedAt != nil)
+  #expect(restoredModel.lastCheckedAt != nil)
 }
 
 @Test @MainActor

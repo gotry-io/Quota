@@ -27,7 +27,9 @@ export interface CollectQuotaOptions extends CollectorFactoryOptions {
 export async function collectQuotaReport(
   options: CollectQuotaOptions = {},
 ): Promise<QuotaCollectionReport> {
-  const now = options.now ?? options.context?.now ?? new Date();
+  // Freeze only for tests/tooling. Production must not inject a shared now —
+  // each provider stamps observed_at near successful payload mapping.
+  const frozenNow = options.now ?? options.context?.now;
   const providerIds = resolveProviders(options.providers ?? "all");
   const factoryOptions: CollectorFactoryOptions = {
     ...(options.clientVersion ? { clientVersion: options.clientVersion } : {}),
@@ -44,17 +46,22 @@ export async function collectQuotaReport(
 
   const results: QuotaCollectionResult[] = await Promise.all(
     providerIds.map(async (provider) => {
-      const context: CollectionContext = { now };
+      const context: CollectionContext = {};
       if (options.context?.signal) {
         context.signal = options.context.signal;
+      }
+      if (frozenNow) {
+        context.now = frozenNow;
       }
       return await collectOne(collectors[provider], context);
     }),
   );
 
+  // Batch assembly time (end of collection), not per-provider data age.
+  const capturedAt = frozenNow ?? new Date();
   const report = {
     schema_version: PROTOCOL_VERSION,
-    captured_at: toIsoOffset(now),
+    captured_at: toIsoOffset(capturedAt),
     results,
   };
   return QuotaCollectionReportSchema.parse(report);

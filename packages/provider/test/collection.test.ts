@@ -79,6 +79,30 @@ describe("collection report", () => {
     expect(report.results[0]?.message).not.toContain("super-secret-token");
     expect(report.results[1]?.outcome).toBe("success");
   });
+
+  it("freezes context.now and captured_at only when options.now is set", async () => {
+    const unfrozen: Array<Date | undefined> = [];
+    const unfrozenReport = await collectQuotaReport({
+      providers: ["codex", "claude"],
+      collectors: {
+        codex: contextProbeCollector("codex", "chatgpt_usage_api", unfrozen),
+        claude: contextProbeCollector("claude", "anthropic_oauth_usage_api", unfrozen),
+      },
+    });
+    expect(unfrozen).toEqual([undefined, undefined]);
+    expect(unfrozenReport.captured_at).not.toBe(NOW.toISOString().replace(/\.\d{3}Z$/, "Z"));
+
+    const frozen: Array<Date | undefined> = [];
+    const frozenReport = await collectQuotaReport({
+      providers: ["codex"],
+      now: NOW,
+      collectors: {
+        codex: contextProbeCollector("codex", "chatgpt_usage_api", frozen),
+      },
+    });
+    expect(frozen).toEqual([NOW]);
+    expect(frozenReport.captured_at).toBe(NOW.toISOString().replace(/\.\d{3}Z$/, "Z"));
+  });
 });
 
 function successCollector(
@@ -131,6 +155,28 @@ function failingCollector(
     ],
     collect: async () => {
       throw new ProviderCollectionError(category, message);
+    },
+  };
+}
+
+function contextProbeCollector(
+  provider: "codex" | "claude" | "grok" | "openrouter",
+  source: string,
+  sink: Array<Date | undefined>,
+): ProviderCollector {
+  return {
+    provider,
+    discover: async () => [
+      {
+        provider,
+        session_id: "ambient",
+        display_label: provider,
+        credential_source: "fixture",
+      },
+    ],
+    collect: async (_session, context = {}) => {
+      sink.push(context.now);
+      return snapshotFixture(provider, source);
     },
   };
 }
