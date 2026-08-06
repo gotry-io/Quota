@@ -2,8 +2,9 @@ import { mkdtemp, readFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { resolveApiKeyCredentials } from "../src/api-key/resolve.ts";
 import { ProviderConfigStore, ProviderConfigStoreError } from "../src/config/store.ts";
-import { resolveOpenRouterCredentials } from "../src/providers/openrouter/credentials.ts";
+import { openrouterSpec } from "../src/providers/openrouter/spec.ts";
 
 describe("ProviderConfigStore", () => {
   it("saves openrouter keys owner-only and prefers them over env", async () => {
@@ -19,7 +20,7 @@ describe("ProviderConfigStore", () => {
     expect(raw).toContain("sk-or-v1-config-key");
     expect(JSON.parse(raw).schema_version).toBe(1);
 
-    const resolved = await resolveOpenRouterCredentials({
+    const resolved = await resolveApiKeyCredentials(openrouterSpec, {
       path,
       environment: { OPENROUTER_API_KEY: "sk-or-v1-env-key" },
     });
@@ -31,7 +32,7 @@ describe("ProviderConfigStore", () => {
   it("falls back to env when config is empty", async () => {
     const root = await mkdtemp(join(tmpdir(), "quota-provider-config-"));
     const path = join(root, "providers.json");
-    const resolved = await resolveOpenRouterCredentials({
+    const resolved = await resolveApiKeyCredentials(openrouterSpec, {
       path,
       environment: { OPENROUTER_API_KEY: "sk-or-v1-env-only" },
     });

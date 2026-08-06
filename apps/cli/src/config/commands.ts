@@ -8,6 +8,7 @@ import {
   ProviderConfigStoreError,
 } from "@gotry-io/quota-provider";
 import type { CliOutput } from "../commands.ts";
+import { promptLine } from "./prompt.ts";
 import { readStdinText } from "./stdin.ts";
 
 export async function runConfigCommand(
@@ -51,35 +52,66 @@ async function runConfigSet(args: readonly string[], output: CliOutput): Promise
 
   let apiKey: string;
   try {
-    apiKey = (await readStdinText()).trim();
+    apiKey = (await readApiKey(parsed.mode, entry.displayName)).trim();
   } catch {
-    output.stderr("Could not read the API key from stdin.");
+    output.stderr("Could not read the API key.");
     return 1;
   }
   if (!apiKey) {
-    output.stderr(
-      `${entry.displayName} API key must not be empty. Pass it on stdin with --api-key-stdin.`,
-    );
+    output.stderr(`${entry.displayName} API key must not be empty.`);
     return 2;
   }
 
-  if (parsed.baseUrl !== undefined) {
+  let baseUrl = parsed.baseUrl;
+  if (baseUrl === undefined && spec.supportsBaseUrl && parsed.mode === "prompt") {
+    try {
+      const answer = (
+        await promptLine(
+          spec.requireBaseUrl
+            ? `${entry.displayName} base URL (required): `
+            : `${entry.displayName} base URL (optional, Enter to skip): `,
+        )
+      ).trim();
+      if (answer) {
+        baseUrl = answer;
+      } else if (spec.requireBaseUrl) {
+        output.stderr(`${entry.displayName} requires a base URL.`);
+        return 2;
+      }
+    } catch {
+      output.stderr("Could not read the base URL.");
+      return 1;
+    }
+  }
+
+  if (baseUrl !== undefined) {
     if (!spec.supportsBaseUrl) {
       output.stderr(`${entry.displayName} does not support --base-url.`);
       return 2;
     }
-    if (!normalizeBaseUrl(parsed.baseUrl)) {
+    if (
+      !normalizeBaseUrl(baseUrl, {
+        allowPrivateHttp: spec.allowPrivateHttp === true,
+      })
+    ) {
       output.stderr(
-        "Invalid --base-url. Use an HTTPS origin such as https://openrouter.ai/api/v1.",
+        spec.allowPrivateHttp
+          ? "Invalid base URL. Use HTTPS, or HTTP only for loopback/private/.local hosts."
+          : "Invalid base URL. Use an HTTPS origin such as https://openrouter.ai/api/v1.",
       );
       return 2;
     }
+  } else if (spec.requireBaseUrl) {
+    output.stderr(
+      `${entry.displayName} requires a base URL. Pass --base-url or enter it when prompted.`,
+    );
+    return 2;
   }
 
   try {
     await new ProviderConfigStore().set(parsed.provider, {
       api_key: apiKey,
-      ...(parsed.baseUrl ? { base_url: parsed.baseUrl } : {}),
+      ...(baseUrl ? { base_url: baseUrl } : {}),
     });
   } catch (error) {
     output.stderr(storeError(error, `QuotaCLI could not save the ${entry.displayName} config.`));
@@ -88,6 +120,16 @@ async function runConfigSet(args: readonly string[], output: CliOutput): Promise
 
   output.stdout(`Configured ${parsed.provider} (${maskApiKey(apiKey, spec.maskLabel)}).`);
   return 0;
+}
+
+async function readApiKey(
+  mode: "prompt" | "stdin",
+  displayName: string,
+): Promise<string> {
+  if (mode === "stdin") {
+    return await readStdinText();
+  }
+  return await promptLine(`${displayName} API key: `, { secret: true });
 }
 
 async function runConfigGet(args: readonly string[], output: CliOutput): Promise<number> {
@@ -174,13 +216,15 @@ function maskLabel(provider: ProviderId): string {
   return config?.kind === "api_key" ? config.maskLabel : PROVIDER_CATALOG[provider].displayName;
 }
 
-function parseConfigSetArgs(
-  args: readonly string[],
-): { ok: true; provider: ProviderId; baseUrl?: string } | { ok: false; error: string } {
+type ConfigSetParse =
+  | { ok: true; provider: ProviderId; mode: "prompt" | "stdin"; baseUrl?: string }
+  | { ok: false; error: string };
+
+function parseConfigSetArgs(args: readonly string[]): ConfigSetParse {
   if (args.length === 0) {
     return {
       ok: false,
-      error: "Missing provider. Usage: quotacli config set <provider> --api-key-stdin",
+      error: "Missing provider. Usage: quotacli config set <provider>",
     };
   }
 
@@ -197,12 +241,12 @@ function parseConfigSetArgs(
   }
   const provider = providerRaw;
 
-  let apiKeyStdin = false;
+  let useStdin = false;
   let baseUrl: string | undefined;
   for (let index = 1; index < args.length; index += 1) {
     const arg = args[index]!;
     if (arg === "--api-key-stdin") {
-      apiKeyStdin = true;
+      useStdin = true;
       continue;
     }
     if (arg === "--base-url" || arg.startsWith("--base-url=")) {
@@ -216,23 +260,25 @@ function parseConfigSetArgs(
     if (arg === "--api-key" || arg.startsWith("--api-key=")) {
       return {
         ok: false,
-        error: "Do not pass API keys on the command line. Use --api-key-stdin and pipe the key.",
+        error:
+          "Do not pass API keys on the command line. Run `quotacli config set <provider>` and enter the key when prompted, or pipe with --api-key-stdin.",
       };
     }
     return { ok: false, error: `Unknown option: ${arg}` };
   }
 
-  if (!apiKeyStdin) {
+  if (!useStdin && !process.stdin.isTTY) {
     return {
       ok: false,
       error:
-        "Missing --api-key-stdin. Pipe the key: printf '%s' \"$KEY\" | quotacli config set <provider> --api-key-stdin",
+        "No interactive terminal. Run in a TTY to be prompted, or pipe the key with --api-key-stdin.",
     };
   }
 
   return {
     ok: true,
     provider,
+    mode: useStdin ? "stdin" : "prompt",
     ...(baseUrl !== undefined ? { baseUrl } : {}),
   };
 }
@@ -250,7 +296,8 @@ export function configUsage(): string {
   return `QuotaCLI config
 
 Usage:
-  quotacli config set <provider> --api-key-stdin [--base-url <https-url>]
+  quotacli config set <provider> [--base-url <url>]
+  quotacli config set <provider> --api-key-stdin [--base-url <url>]
   quotacli config get <provider>
   quotacli config unset <provider>
   quotacli config list
@@ -259,10 +306,14 @@ Providers:
 ${providers || "  (none)"}
 
 Examples:
+  quotacli config set deepseek
+  quotacli config set litellm --base-url https://litellm.example.com
   printf '%s' "$OPENROUTER_API_KEY" | quotacli config set openrouter --api-key-stdin
   quotacli config get openrouter
   quotacli config unset openrouter
 
+Interactive set prompts for the API key (input is hidden). Providers that need a base URL
+prompt for it unless --base-url is passed. --api-key-stdin is for scripts/pipes only.
 Secrets are stored owner-only at ~/.config/quotacli/providers.json (or $XDG_CONFIG_HOME/quotacli/).
 get/list never print the full key. Collection prefers config over env fallbacks.`;
 }

@@ -3,10 +3,10 @@
  *
  * Adding a provider:
  * 1. Add a row here (and collection strategy docs in docs/provider-collection.md)
- * 2. Implement packages/provider/src/providers/<id>/
- * 3. Register COLLECTOR_FACTORIES in packages/provider/src/registry.ts
- * 4. pnpm generate:provider-catalog  → protocol ProviderId + Swift ProviderID
- * 5. Optional: BrandIcons/<brandIconAsset>.svg for QuotaBar
+ * 2. Ambient OAuth: implement packages/provider/src/providers/<id>/ + registry ambient factory
+ *    API-key HTTPS: add map + ApiKeyHttpCollectorSpec in providers/<id>/ and register in api-key/specs.ts
+ * 3. pnpm generate:provider-catalog  → protocol ProviderId, Swift ProviderID, JSON Schema enums
+ * 4. Optional: BrandIcons/<brandIconAsset>.svg for QuotaBar
  *
  * API-key providers set `config.kind: "api_key"` so CLI `config set/get/unset` and QuotaBar
  * Settings forms appear without further UI wiring. Ambient session providers leave `config: null`.
@@ -15,10 +15,14 @@ export type ProviderConfigKind = "api_key";
 
 export interface ProviderApiKeyConfigSpec {
   kind: "api_key";
-  /** Optional env fallback when config file has no key. */
+  /** Primary env fallback when config file has no key (display + default). */
   envKey?: string;
-  /** Allow `quotacli config set <id> --base-url`. */
+  /** Allow `quotacli config set <id> --base-url` / interactive base URL prompt. */
   supportsBaseUrl: boolean;
+  /** When true, base URL is required at config time (e.g. LiteLLM proxy). */
+  requireBaseUrl?: boolean;
+  /** Allow http:// for loopback/private/.local when validating base URLs. */
+  allowPrivateHttp?: boolean;
   /** Mask prefix for get/list (never the full secret). */
   maskLabel: string;
 }
@@ -85,9 +89,9 @@ export const PROVIDER_CATALOG = {
     displayName: "OpenRouter",
     order: 3,
     defaultVisible: false,
-    loginCommand: "quotacli config set openrouter --api-key-stdin",
+    loginCommand: "quotacli config set openrouter",
     authRequiredMessage:
-      "OpenRouter API key is missing. Run `quotacli config set openrouter --api-key-stdin` or set `OPENROUTER_API_KEY`.",
+      "OpenRouter API key is missing. Run `quotacli config set openrouter` or set `OPENROUTER_API_KEY`.",
     brandIconAsset: "openrouter",
     credentialSources: ["config:openrouter", "OPENROUTER_API_KEY"],
     collectionStrategies: ["openrouter_credits_api", "openrouter_key_api"],
@@ -96,6 +100,62 @@ export const PROVIDER_CATALOG = {
       envKey: "OPENROUTER_API_KEY",
       supportsBaseUrl: true,
       maskLabel: "OpenRouter",
+    },
+  },
+  deepseek: {
+    id: "deepseek",
+    displayName: "DeepSeek",
+    order: 4,
+    defaultVisible: false,
+    loginCommand: "quotacli config set deepseek",
+    authRequiredMessage:
+      "DeepSeek API key is missing. Run `quotacli config set deepseek` or set `DEEPSEEK_API_KEY`.",
+    brandIconAsset: "deepseek",
+    credentialSources: ["config:deepseek", "DEEPSEEK_API_KEY", "DEEPSEEK_KEY"],
+    collectionStrategies: ["deepseek_balance_api"],
+    config: {
+      kind: "api_key",
+      envKey: "DEEPSEEK_API_KEY",
+      supportsBaseUrl: true,
+      maskLabel: "DeepSeek",
+    },
+  },
+  kimi: {
+    id: "kimi",
+    displayName: "Kimi Code",
+    order: 5,
+    defaultVisible: false,
+    loginCommand: "quotacli config set kimi",
+    authRequiredMessage:
+      "Kimi Code API key is missing. Run `quotacli config set kimi` or set `KIMI_CODE_API_KEY`.",
+    brandIconAsset: "kimi",
+    credentialSources: ["config:kimi", "KIMI_CODE_API_KEY", "KIMI_API_KEY"],
+    collectionStrategies: ["kimi_code_usages_api"],
+    config: {
+      kind: "api_key",
+      envKey: "KIMI_CODE_API_KEY",
+      supportsBaseUrl: true,
+      maskLabel: "Kimi",
+    },
+  },
+  litellm: {
+    id: "litellm",
+    displayName: "LiteLLM",
+    order: 6,
+    defaultVisible: false,
+    loginCommand: "quotacli config set litellm",
+    authRequiredMessage:
+      "LiteLLM API key or base URL is missing. Run `quotacli config set litellm` or set `LITELLM_API_KEY` and `LITELLM_BASE_URL`.",
+    brandIconAsset: "litellm",
+    credentialSources: ["config:litellm", "LITELLM_API_KEY", "LITELLM_BASE_URL"],
+    collectionStrategies: ["litellm_budget_api"],
+    config: {
+      kind: "api_key",
+      envKey: "LITELLM_API_KEY",
+      supportsBaseUrl: true,
+      requireBaseUrl: true,
+      allowPrivateHttp: true,
+      maskLabel: "LiteLLM",
     },
   },
 } as const satisfies Record<string, ProviderCatalogEntry>;

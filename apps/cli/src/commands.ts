@@ -208,7 +208,8 @@ Usage:
   quotacli relay pair [--relay <url>]
   quotacli relay push
   quotacli relay unpair
-  quotacli config set <provider> --api-key-stdin [--base-url <https-url>]
+  quotacli config set <provider> [--base-url <url>]
+  quotacli config set <provider> --api-key-stdin [--base-url <url>]
   quotacli config get <provider>
   quotacli config unset <provider>
   quotacli config list
@@ -222,7 +223,7 @@ relay pair stores a device credential, uploads one snapshot immediately, then en
 background push every 5 minutes.
 relay push collects local quota and uploads one snapshot to the paired Relay.
 status summarizes local provider readiness and Relay pairing/background state.
-config stores API-key providers (openrouter) in ~/.config/quotacli/providers.json (owner-only).
+config stores API-key providers (openrouter, deepseek, kimi, litellm) in ~/.config/quotacli/providers.json (owner-only).
 
 Exit codes for quota:
   0  every requested provider returned at least one fresh snapshot

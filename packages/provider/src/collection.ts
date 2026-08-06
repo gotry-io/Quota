@@ -36,7 +36,8 @@ export async function collectQuotaReport(
     ...(options.codex ? { codex: options.codex } : {}),
     ...(options.claude ? { claude: options.claude } : {}),
     ...(options.grok ? { grok: options.grok } : {}),
-    ...(options.openrouter ? { openrouter: options.openrouter } : {}),
+    ...(options.apiKey ? { apiKey: options.apiKey } : {}),
+    ...(options.apiKeyByProvider ? { apiKeyByProvider: options.apiKeyByProvider } : {}),
   };
   const defaults = createDefaultCollectors(factoryOptions);
   const collectors = {} as Record<ProviderId, ProviderCollector>;

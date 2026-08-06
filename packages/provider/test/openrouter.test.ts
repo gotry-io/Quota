@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { OpenRouterCollector } from "../src/providers/openrouter/collector.ts";
+import { ApiKeyHttpCollector } from "../src/api-key/collector.ts";
 import {
   mapOpenRouterCreditsResponse,
   mapOpenRouterKeyResponse,
   mapOpenRouterWindows,
 } from "../src/providers/openrouter/map.ts";
+import { openrouterSpec } from "../src/providers/openrouter/spec.ts";
 import type { HttpRequest, HttpResponse } from "../src/runtime/http.ts";
 
 describe("openrouter mapping", () => {
@@ -64,7 +65,6 @@ describe("openrouter collector", () => {
     const transport = async (request: HttpRequest): Promise<HttpResponse> => {
       calls.push(request.url);
       expect(request.headers?.Authorization).toBe("Bearer sk-or-v1-fixture");
-      expect(request.headers?.Authorization).not.toMatch(/sk-or-v1-live/);
       if (request.url.endsWith("/credits")) {
         return jsonResponse(200, { data: { total_credits: 100, total_usage: 40 } });
       }
@@ -76,9 +76,8 @@ describe("openrouter collector", () => {
       return jsonResponse(404, {});
     };
 
-    const collector = new OpenRouterCollector({
+    const collector = new ApiKeyHttpCollector(openrouterSpec, {
       environment: { OPENROUTER_API_KEY: "sk-or-v1-fixture" },
-      // Empty config path so env is used in tests without a home config file.
       configPath: "/tmp/quota-openrouter-missing-config.json",
       transport,
       clientVersion: "QuotaCLI/test",
@@ -104,7 +103,7 @@ describe("openrouter collector", () => {
       }
       return jsonResponse(500, { error: "nope" });
     };
-    const collector = new OpenRouterCollector({
+    const collector = new ApiKeyHttpCollector(openrouterSpec, {
       environment: { OPENROUTER_API_KEY: "sk-or-v1-fixture" },
       configPath: "/tmp/quota-openrouter-missing-config.json",
       transport,
@@ -122,7 +121,7 @@ describe("openrouter collector", () => {
   it("reports auth_required for 401 without echoing the key", async () => {
     const transport = async (): Promise<HttpResponse> =>
       jsonResponse(401, { error: "invalid sk-or-v1-super-secret" });
-    const collector = new OpenRouterCollector({
+    const collector = new ApiKeyHttpCollector(openrouterSpec, {
       environment: { OPENROUTER_API_KEY: "sk-or-v1-super-secret" },
       configPath: "/tmp/quota-openrouter-missing-config.json",
       transport,

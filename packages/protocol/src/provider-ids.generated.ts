@@ -3,6 +3,6 @@
 
 import { z } from "zod";
 
-export const PROVIDER_IDS = ["codex", "claude", "grok", "openrouter"] as const;
+export const PROVIDER_IDS = ["codex", "claude", "grok", "openrouter", "deepseek", "kimi", "litellm"] as const;
 export type ProviderId = (typeof PROVIDER_IDS)[number];
 export const ProviderIdSchema = z.enum(PROVIDER_IDS);

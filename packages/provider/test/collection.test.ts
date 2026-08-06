@@ -15,6 +15,9 @@ describe("collection report", () => {
         claude: failingCollector("claude", "auth_required", "Sign in again"),
         grok: successCollector("grok", "grok_billing_api"),
         openrouter: successCollector("openrouter", "openrouter_api"),
+        deepseek: successCollector("deepseek", "deepseek_balance_api"),
+        kimi: successCollector("kimi", "kimi_code_usages_api"),
+        litellm: successCollector("litellm", "litellm_budget_api"),
       },
     });
 
@@ -24,11 +27,17 @@ describe("collection report", () => {
       "claude",
       "grok",
       "openrouter",
+      "deepseek",
+      "kimi",
+      "litellm",
     ]);
     expect(validated.results[0]?.outcome).toBe("success");
     expect(validated.results[1]?.outcome).toBe("auth_required");
     expect(validated.results[2]?.outcome).toBe("success");
     expect(validated.results[3]?.outcome).toBe("success");
+    expect(validated.results[4]?.outcome).toBe("success");
+    expect(validated.results[5]?.outcome).toBe("success");
+    expect(validated.results[6]?.outcome).toBe("success");
     expect(collectionExitCode(validated)).toBe(1);
     expect(JSON.stringify(validated)).not.toMatch(/Bearer |eyJ|access_token|refresh_token/i);
   });
@@ -106,7 +115,7 @@ describe("collection report", () => {
 });
 
 function successCollector(
-  provider: "codex" | "claude" | "grok" | "openrouter",
+  provider: "codex" | "claude" | "grok" | "openrouter" | "deepseek" | "kimi" | "litellm",
   source: string,
 ): ProviderCollector {
   const snapshot = snapshotFixture(provider, source);
@@ -125,7 +134,7 @@ function successCollector(
 }
 
 function snapshotFixture(
-  provider: "codex" | "claude" | "grok" | "openrouter",
+  provider: "codex" | "claude" | "grok" | "openrouter" | "deepseek" | "kimi" | "litellm",
   source: string,
 ): QuotaSnapshot {
   return {
@@ -139,7 +148,7 @@ function snapshotFixture(
 }
 
 function failingCollector(
-  provider: "codex" | "claude" | "grok" | "openrouter",
+  provider: "codex" | "claude" | "grok" | "openrouter" | "deepseek" | "kimi" | "litellm",
   category: "auth_required" | "unavailable" | "unsupported" | "error",
   message: string,
 ): ProviderCollector {
@@ -160,7 +169,7 @@ function failingCollector(
 }
 
 function contextProbeCollector(
-  provider: "codex" | "claude" | "grok" | "openrouter",
+  provider: "codex" | "claude" | "grok" | "openrouter" | "deepseek" | "kimi" | "litellm",
   source: string,
   sink: Array<Date | undefined>,
 ): ProviderCollector {

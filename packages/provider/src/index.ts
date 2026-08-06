@@ -21,8 +21,9 @@ export { diagnoseProviderSessions } from "./discovery.ts";
 export {
   maskApiKey,
   normalizeBaseUrl,
-  resolveOpenRouterCredentials,
-} from "./providers/openrouter/credentials.ts";
+  resolveApiKeyCredentials,
+} from "./api-key/resolve.ts";
+export { API_KEY_SPECS, apiKeyProviderIds, isApiKeyProviderId } from "./api-key/specs.ts";
 export {
   type CollectorFactoryOptions,
   createDefaultCollectors,

@@ -15,7 +15,7 @@ export type QuotaOwnerNamespace =
   | "organization_id"
   | "team_id"
   | "user_id"
-  /** Stable hash of an API key (OpenRouter). Never the raw key material. */
+  /** Stable hash of an API key (OpenRouter, DeepSeek). Never the raw key material. */
   | "api_key";
 
 /**

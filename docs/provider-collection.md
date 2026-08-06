@@ -24,7 +24,11 @@ To add a provider:
 API-key providers set `config.kind: "api_key"` so `quotacli config` and QuotaBar Settings pick them up
 automatically. Ambient session providers leave `config: null`.
 
-Supported order today: Codex, Claude Code, Grok, OpenRouter.
+Supported order today: Codex, Claude Code, Grok, OpenRouter, DeepSeek, Kimi Code, LiteLLM.
+
+API-key HTTPS providers share `packages/provider/src/api-key/` (`ApiKeyHttpCollector` +
+`resolveApiKeyCredentials` + `fetchBearerJson`). Add a map + `*Spec` in
+`providers/<id>/` and register it in `api-key/specs.ts`.
 
 ## Codex
 
@@ -129,12 +133,62 @@ Aligned with CodexBar's OpenRouter provider (credits + API-key limit meters).
 Config directory is `0700` and `providers.json` is `0600`. Multi-account labeled keys are out of
 scope for v1. Dashboard cookies and browser scrapes are not strategies.
 
+## DeepSeek
+
+Aligned with CodexBar's DeepSeek API-key balance path (platform session / usage detail is out of
+scope).
+
+1. Resolve the API key in order:
+   1. Owner-only config at `$XDG_CONFIG_HOME/quotacli/providers.json` or
+      `~/.config/quotacli/providers.json` (`providers.deepseek.api_key`), written by
+      `quotacli config set deepseek --api-key-stdin` or QuotaBar Settings.
+   2. Else `DEEPSEEK_API_KEY`, then `DEEPSEEK_KEY`, from the process environment.
+   Optional base URL: config `base_url`, else `DEEPSEEK_API_URL` (HTTPS only; default
+   `https://api.deepseek.com`).
+2. Call `GET {base}/user/balance` with `Authorization: Bearer <key>`.
+3. Parse every `balance_infos` row. Map each currency with `total_balance > 0` as its own
+   balance-only window (`remaining_value`; USD also sets `value_unit: "usd"`). Do **not** prefer a
+   zero USD row over a positive CNY (or other) balance. If every currency is zero, keep one zero
+   USD (or first) row so the account still appears. No lifetime spend ratio is available.
+4. Absent key → `auth_required` with guidance to run `quotacli config set deepseek` (or set
+   `DEEPSEEK_API_KEY`). HTTP 401/403 → `auth_required`. Never print the API key or Authorization
+   header. Platform-session detailed usage endpoints are not used.
+
+## Kimi Code
+
+Aligned with CodexBar's Kimi Code API-key path (browser cookies / desktop CLI enrichment out of
+scope). Distinct from Moonshot Open Platform balance.
+
+1. Resolve the API key in order:
+   1. Owner-only config `providers.kimi.api_key`.
+   2. Else `KIMI_CODE_API_KEY`, then `KIMI_API_KEY`.
+   Optional base URL: config / `KIMI_CODE_BASE_URL` (default `https://api.kimi.com`).
+2. Call `GET {base}/coding/v1/usages` with `Authorization: Bearer <key>`.
+3. Map windows:
+   - **Weekly** from top-level `usage` (request counts; `value_unit: "count"`).
+   - **5 hour** from `limits[]` where window duration is 300 minutes.
+4. Absent key → `auth_required`. HTTP 401/403 → `auth_required`.
+
+## LiteLLM
+
+Aligned with CodexBar's LiteLLM virtual-key budget path.
+
+1. Resolve API key (`providers.litellm.api_key` or `LITELLM_API_KEY`) **and** base URL
+   (`providers.litellm.base_url` or `LITELLM_BASE_URL`). Base URL is **required** (no public default).
+   HTTPS is required except loopback / RFC1918 / `.local` HTTP for self-hosted proxies. A trailing
+   `/v1` is stripped before management endpoints.
+2. `GET {root}/key/info` → `user_id` / `team_id`.
+3. When `user_id` present: `GET {root}/user/info?user_id=…` → personal spend / max_budget.
+4. When `team_id` present: `GET {root}/team/info?team_id=…` → team spend / max_budget.
+5. Map budget windows with `value_unit: "usd"` when `max_budget > 0`; otherwise surface spend-only.
+6. Missing key or base URL → `auth_required` (discovery unavailable). HTTP 401/403 → `auth_required`.
+
 ## Identity and normalization
 
 - A global `account.fingerprint` is SHA-256 over the provider, the identifier namespace, and the
   stable quota-owner identifier: Codex uses account ID; Claude Code uses organization ID; Grok uses
-  team ID when present and otherwise user ID; OpenRouter uses a SHA-256 of the API key under the
-  `api_key` namespace (never the raw key).
+  team ID when present and otherwise user ID; OpenRouter, DeepSeek, Kimi Code, and LiteLLM use a
+  SHA-256 of the API key under the `api_key` namespace (never the raw key).
 - Email is display enrichment only and never a global deduplication identity. If the provider does
   not expose its quota-owner identifier, collection still succeeds with a stable source-scoped
   fingerprint. Consumers interpret an absent `fingerprint_scope` as source-scoped for version 1

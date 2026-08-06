@@ -7,7 +7,7 @@ subscription quotas.
 - **QuotaCLI** — standalone local collector and installable Relay agent.
 - **QuotaRelay** — persistent device registry and normalized snapshot relay.
 
-The initial providers are Codex, Claude Code, Grok, and OpenRouter.
+The initial providers are Codex, Claude Code, Grok, OpenRouter, DeepSeek, Kimi Code, and LiteLLM.
 
 ## Architecture
 
@@ -74,9 +74,9 @@ Run the public website:
 pnpm dev:web
 ```
 
-`quotacli quota` collects read-only ambient Codex, Claude Code, and Grok sessions plus OpenRouter API
-key credits into a versioned collection report. Credentials never leave the local machine and are
-never printed.
+`quotacli quota` collects read-only ambient Codex, Claude Code, and Grok sessions plus API-key
+providers (OpenRouter, DeepSeek, Kimi Code, LiteLLM) into a versioned collection report. Credentials
+never leave the local machine and are never printed.
 
 ## Distribution targets
 
@@ -112,7 +112,8 @@ PR-Agent auto-runs `/describe` and `/review`; comment `/improve` or `/ask …` f
 
 ## Status
 
-This repository implements local provider collection for Codex, Claude Code, Grok, and OpenRouter,
+This repository implements local provider collection for Codex, Claude Code, Grok, OpenRouter,
+DeepSeek, Kimi Code, and LiteLLM,
 normalized protocol validation, persistent D1/SQLite Relay storage, Relay discovery, and the initial
 public website. QuotaBar ships its bundled helper and resolves local and remote observations into one
 stable Overview without accumulating conflicting quota values. One Relay state model is shared by

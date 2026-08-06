@@ -1,8 +1,9 @@
 import type { QuotaSnapshot, QuotaWindow } from "@gotry-io/quota-protocol";
+import type { ApiKeyCredentials } from "../../api-key/resolve.ts";
 import { asRecord, readNumber } from "../../runtime/files.ts";
 import { accountIdentity, sha256Hex } from "../../runtime/identity.ts";
 import { clampPercent, toIsoOffset } from "../../runtime/time.ts";
-import { OPENROUTER_SOURCE_API, type OpenRouterCredentials } from "./credentials.ts";
+export const OPENROUTER_SOURCE_API = "openrouter_api";
 
 export interface OpenRouterCreditsData {
   totalCredits: number;
@@ -99,7 +100,7 @@ export function mapOpenRouterWindows(
 
 export function buildOpenRouterSnapshot(input: {
   windows: QuotaWindow[];
-  credentials: OpenRouterCredentials;
+  credentials: ApiKeyCredentials;
   now?: Date;
 }): QuotaSnapshot {
   const now = input.now ?? new Date();

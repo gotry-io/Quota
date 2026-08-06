@@ -59,11 +59,12 @@ storage requirements are defined only in [`security.md`](security.md).
   sources, collection strategies, and optional API-key config metadata.
 - Adding a provider:
   1. Catalog row (+ strategy section in [`provider-collection.md`](provider-collection.md)).
-  2. Collector under `packages/provider/src/providers/<id>/`.
-  3. `COLLECTOR_FACTORIES` entry in `packages/provider/src/registry.ts`.
-  4. `pnpm generate:provider-catalog` (writes `packages/protocol/src/provider-ids.generated.ts`
-     and `apps/menubar/.../ProviderID.generated.swift`).
-  5. Optional monochrome brand SVG under `apps/menubar/.../BrandIcons/`.
+  2. Ambient OAuth: collector under `packages/provider/src/providers/<id>/` + ambient factory in
+     `registry.ts`. API-key HTTPS: map + `ApiKeyHttpCollectorSpec` under `providers/<id>/`, register
+     in `packages/provider/src/api-key/specs.ts` (shared resolve/fetch shell).
+  3. `pnpm generate:provider-catalog` (writes protocol `ProviderId`, Swift `ProviderID`, and JSON
+     Schema provider enums).
+  4. Optional monochrome brand SVG under `apps/menubar/.../BrandIcons/`.
 - Do not hand-edit generated id files; re-run the generator after catalog changes.
 - `quotacli config set <provider>` and QuotaBar Settings API-key sections are table-driven from
   catalog entries with `config.kind === "api_key"`. Ambient OAuth/session providers use `config: null`.
@@ -90,8 +91,9 @@ storage requirements are defined only in [`security.md`](security.md).
   panel's single typed Settings stack for Remote Devices and Pair Device.
 - Settings **General** Launch at Login mirrors `SMAppService.mainApp` system status (one-shot
   first-run default-on seed when still unregistered).
-- Settings **Agents** visibility toggles and **API-key** sections follow generated catalog
-  bindings (`ProviderID.allCases` / `configurableCases`). API keys write the same owner-only
+- Settings is multi-level: home destinations for **Agents** and **Remote Devices**; Agents lists
+  catalog providers and opens a per-provider page (visibility + API key when
+  `ProviderID.configurableCases`). API keys write the same owner-only
   `~/.config/quotacli/providers.json` file as QuotaCLI.
 - Provider metadata (names, defaults, login commands, brand icons) comes from the generated catalog
   bindings; do not hardcode parallel provider switch tables in views.

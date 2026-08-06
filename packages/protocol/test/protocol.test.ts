@@ -401,7 +401,7 @@ describe("quota protocol", () => {
   });
 });
 
-function snapshot(provider: "codex" | "claude" | "grok" | "openrouter") {
+function snapshot(provider: "codex" | "claude" | "grok" | "openrouter" | "deepseek" | "kimi" | "litellm") {
   return {
     provider,
     account: { fingerprint: `${provider}-fixture`, fingerprint_scope: "source" as const },

@@ -18,8 +18,11 @@ describe("provider catalog", () => {
   });
 
   it("lists configurable providers only when config is set", () => {
-    expect(configurableProviderIds()).toEqual(["openrouter"]);
+    expect(configurableProviderIds()).toEqual(["openrouter", "deepseek", "kimi", "litellm"]);
     expect(PROVIDER_CATALOG.openrouter.config?.kind).toBe("api_key");
+    expect(PROVIDER_CATALOG.deepseek.config?.kind).toBe("api_key");
+    expect(PROVIDER_CATALOG.kimi.config?.kind).toBe("api_key");
+    expect(PROVIDER_CATALOG.litellm.config?.kind).toBe("api_key");
     expect(PROVIDER_CATALOG.codex.config).toBeNull();
   });
 

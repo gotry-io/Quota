@@ -52,9 +52,10 @@ data requirements.
 - Optional API-key providers (catalog `config.kind === "api_key"`) may store secrets only in the
   owner-only QuotaCLI config file (`$XDG_CONFIG_HOME/quotacli/providers.json` or
   `~/.config/quotacli/providers.json`, directory `0700`, file `0600`). QuotaBar Settings writes the
-  same file. Never store provider API keys in UserDefaults, logs, or Relay payloads. Prefer stdin
-  when setting keys (`quotacli config set <provider> --api-key-stdin`); do not accept raw keys on
-  argv. `config get` / `list` and Settings UI may show only a masked tip.
+  same file. Never store provider API keys in UserDefaults, logs, or Relay payloads. Prefer
+  interactive `quotacli config set <provider>` (hidden prompt) or `--api-key-stdin` pipes for
+  scripts; do not accept raw keys on argv. `config get` / `list` and Settings UI may show only a
+  masked tip.
 - Plans, OAuth scopes, tokens, email addresses, and anonymous fallback values must not produce a
   globally scoped fingerprint. When the quota owner is unavailable, emit a source-scoped
   fingerprint. Every normalized account must declare its fingerprint scope.

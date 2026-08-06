@@ -46,10 +46,16 @@ function renderResultText(result: QuotaCollectionResult): string[] {
 }
 
 function formatWindowLine(window: QuotaWindow): string {
-  const remaining = remainingPercent(window.used_percent);
-  const percentPart = `${formatPercent(remaining)}% remaining (${formatPercent(window.used_percent)}% used)`;
   const absolute = formatAbsolute(window);
   const reset = window.resets_at ? ` resets ${window.resets_at}` : "";
+  // Balance-only: remaining $ without a budget limit — do not invent 0%/100% usage.
+  const balanceOnly =
+    window.remaining_value !== undefined && window.limit_value === undefined && window.value_unit;
+  if (balanceOnly && absolute) {
+    return `${absolute} remaining${reset}`;
+  }
+  const remaining = remainingPercent(window.used_percent);
+  const percentPart = `${formatPercent(remaining)}% remaining (${formatPercent(window.used_percent)}% used)`;
   return absolute ? `${percentPart}; ${absolute}${reset}` : `${percentPart}${reset}`;
 }
 

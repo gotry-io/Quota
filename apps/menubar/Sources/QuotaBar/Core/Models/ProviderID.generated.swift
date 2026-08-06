@@ -8,6 +8,9 @@ enum ProviderID: String, Codable, CaseIterable, Identifiable, Sendable {
   case claude
   case grok
   case openrouter
+  case deepseek
+  case kimi
+  case litellm
 
   var id: String { rawValue }
 
@@ -17,6 +20,9 @@ enum ProviderID: String, Codable, CaseIterable, Identifiable, Sendable {
     case .claude: "Claude Code"
     case .grok: "Grok"
     case .openrouter: "OpenRouter"
+    case .deepseek: "DeepSeek"
+    case .kimi: "Kimi Code"
+    case .litellm: "LiteLLM"
     }
   }
 
@@ -27,6 +33,9 @@ enum ProviderID: String, Codable, CaseIterable, Identifiable, Sendable {
     case .claude: true
     case .grok: true
     case .openrouter: false
+    case .deepseek: false
+    case .kimi: false
+    case .litellm: false
     }
   }
 
@@ -36,7 +45,10 @@ enum ProviderID: String, Codable, CaseIterable, Identifiable, Sendable {
     case .codex: "codex login"
     case .claude: "claude auth login"
     case .grok: "grok login"
-    case .openrouter: "quotacli config set openrouter --api-key-stdin"
+    case .openrouter: "quotacli config set openrouter"
+    case .deepseek: "quotacli config set deepseek"
+    case .kimi: "quotacli config set kimi"
+    case .litellm: "quotacli config set litellm"
     }
   }
 
@@ -46,6 +58,9 @@ enum ProviderID: String, Codable, CaseIterable, Identifiable, Sendable {
     case .claude: "claude"
     case .grok: "grok"
     case .openrouter: "openrouter"
+    case .deepseek: "deepseek"
+    case .kimi: "kimi"
+    case .litellm: "litellm"
     }
   }
 
@@ -55,12 +70,15 @@ enum ProviderID: String, Codable, CaseIterable, Identifiable, Sendable {
     case .claude: 1
     case .grok: 2
     case .openrouter: 3
+    case .deepseek: 4
+    case .kimi: 5
+    case .litellm: 6
     }
   }
 
   /// Providers that store secrets via quotacli config / Settings API key form.
   static var configurableCases: [ProviderID] {
-    [.openrouter]
+    [.openrouter, .deepseek, .kimi, .litellm]
   }
 
   var isConfigurable: Bool {

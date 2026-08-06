@@ -4,9 +4,9 @@ QuotaCLI is the local provider collector and remote Relay agent. One TypeScript 
 a Node ESM npm package and a standalone Bun executable.
 
 Provider credentials are read locally and never sent to QuotaRelay. Supported collectors: Codex,
-Claude Code, Grok (ambient sessions), and OpenRouter (API key credits + key limit via
-`quotacli config` or `OPENROUTER_API_KEY`). Relay mode sends only validated, normalized quota
-snapshots from `@gotry-io/quota-protocol`.
+Claude Code, Grok (ambient sessions), and API-key collectors (OpenRouter, DeepSeek, Kimi Code,
+LiteLLM via `quotacli config` / env). Relay mode sends only validated, normalized quota snapshots
+from `@gotry-io/quota-protocol`.
 
 ```bash
 pnpm --filter @gotry-io/quotacli dev -- status
@@ -20,12 +20,13 @@ pnpm --filter @gotry-io/quotacli build
 ```text
 quotacli version
 quotacli status
-quotacli quota [--provider codex|claude|grok|openrouter|all] [--format text|json] [--pretty]
+quotacli quota [--provider <id>|all] [--format text|json] [--pretty]
 quotacli relay pair [--relay <url>]
 quotacli relay push
 quotacli relay unpair
 quotacli relay --help
-quotacli config set <provider> --api-key-stdin [--base-url <https-url>]
+quotacli config set <provider> [--base-url <url>]
+quotacli config set <provider> --api-key-stdin [--base-url <url>]
 quotacli config get <provider>
 quotacli config unset <provider>
 quotacli config list
@@ -89,11 +90,12 @@ npm install -g @gotry-io/quotacli@beta
 
 ### Provider config (API keys)
 
-API-key providers (catalog `config.kind: "api_key"`, currently OpenRouter) use a shared owner-only
+API-key providers (catalog `config.kind: "api_key"`) use a shared owner-only
 file (`$XDG_CONFIG_HOME/quotacli/providers.json` or `~/.config/quotacli/providers.json`). Collection
 prefers that file over environment variables. Do not pass secrets on argv.
 
 ```bash
+quotacli config set deepseek
 printf '%s' "$OPENROUTER_API_KEY" | quotacli config set openrouter --api-key-stdin
 quotacli config get openrouter    # masked tip only
 quotacli config list
