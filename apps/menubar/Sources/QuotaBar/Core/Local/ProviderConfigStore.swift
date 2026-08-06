@@ -29,13 +29,38 @@ struct ProviderConfigStore {
   func status(for provider: ProviderID) -> ProviderApiKeyStatus {
     guard provider.isConfigurable else { return .missing }
     do {
-      guard let entry = try load().providers[provider.rawValue], !entry.apiKey.isEmpty else {
-        return .missing
-      }
-      return .configured(mask: Self.maskApiKey(entry.apiKey, label: provider.displayName))
+      return status(for: provider, file: try load())
     } catch {
       return .unreadable
     }
+  }
+
+  /// One disk read for Agents list (and similar bulk UI).
+  func statuses(for providers: [ProviderID]) -> [ProviderID: ProviderApiKeyStatus] {
+    let file: ProviderConfigFile
+    do {
+      file = try load()
+    } catch {
+      return Dictionary(uniqueKeysWithValues: providers.map { ($0, .unreadable) })
+    }
+    return Dictionary(uniqueKeysWithValues: providers.map { provider in
+      (provider, status(for: provider, file: file))
+    })
+  }
+
+  /// Saved base URL for form draft (never the API key).
+  func baseURL(for provider: ProviderID) -> String? {
+    guard provider.isConfigurable else { return nil }
+    guard let entry = try? load().providers[provider.rawValue] else { return nil }
+    return entry.baseURL
+  }
+
+  private func status(for provider: ProviderID, file: ProviderConfigFile) -> ProviderApiKeyStatus {
+    guard provider.isConfigurable else { return .missing }
+    guard let entry = file.providers[provider.rawValue], !entry.apiKey.isEmpty else {
+      return .missing
+    }
+    return .configured(mask: Self.maskApiKey(entry.apiKey, label: provider.displayName))
   }
 
   func setApiKey(_ provider: ProviderID, apiKey: String, baseURL: String? = nil) throws {

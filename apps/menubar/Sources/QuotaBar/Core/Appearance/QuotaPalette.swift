@@ -16,6 +16,8 @@ enum QuotaPalette {
   /// Shared card/tag/field border — one opacity, no per-call drift.
   static let hairlineBorder = Color(nsColor: .separatorColor).opacity(0.8)
   static let soft = Color(nsColor: .quaternaryLabelColor).opacity(0.35)
+  /// Settings grouped list fill — light translucent wash on material chrome.
+  static let settingsGroupFill = Color.primary.opacity(0.055)
   static let progressTrack = Color.primary.opacity(0.08)
 
   // MARK: Semantic (accent / warning / critical)

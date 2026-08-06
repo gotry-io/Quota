@@ -134,9 +134,17 @@ struct MenuBarContentView: View {
     case .settings:
       SettingsHomeView(
         model: model,
+        onOpenAgents: { navigate(to: .agents) },
         onOpenRemoteDevices: { navigate(to: .remoteDevices) },
         deleteAllErrorMessage: deleteAllErrorMessage
       )
+    case .agents:
+      AgentsSettingsView(
+        model: model,
+        onOpenProvider: { provider in navigate(to: .provider(provider)) }
+      )
+    case .provider(let provider):
+      ProviderSettingsView(model: model, provider: provider)
     case .remoteDevices:
       RemoteDevicesView(
         model: model.relayStateModel,
@@ -220,12 +228,16 @@ private enum NavigationDirection {
 
 enum MenuBarRoute: Hashable {
   case settings
+  case agents
+  case provider(ProviderID)
   case remoteDevices
   case pairDevice
 
   var title: String {
     switch self {
     case .settings: "Settings"
+    case .agents: "Agents"
+    case .provider(let provider): provider.displayName
     case .remoteDevices: "Remote Devices"
     case .pairDevice: "Pair Device"
     }

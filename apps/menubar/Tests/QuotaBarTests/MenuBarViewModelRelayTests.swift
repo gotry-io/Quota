@@ -163,7 +163,7 @@ struct MenuBarViewModelRelayTests {
     // Provenance follows SubscriptionResolver's selectedSource only.
     #expect(account.selectedSource == .local)
     #expect(account.sourceSummary == "Local")
-    #expect(account.sourceTooltip == "This Mac")
+    #expect(account.selectedSourceDisplayName == "This Mac")
     #expect(account.sources.count == 3)
   }
 

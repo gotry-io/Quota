@@ -3,119 +3,74 @@ import SwiftUI
 
 struct SettingsHomeView: View {
   let model: MenuBarViewModel
+  let onOpenAgents: () -> Void
   let onOpenRemoteDevices: () -> Void
   var deleteAllErrorMessage: String? = nil
 
   @State private var launchAtLoginEnabled = LaunchAtLoginController.isEnabled
-  @State private var launchAtLoginMessage: String?
-  /// Bump to re-read UserDefaults-backed visibility toggles.
-  @State private var visibilityEpoch = 0
 
   var body: some View {
     ScrollView {
-      VStack(alignment: .leading, spacing: QuotaDesign.Spacing.section) {
+      VStack(alignment: .leading, spacing: QuotaDesign.Spacing.md) {
         SettingsSection(title: "General") {
-          HStack(alignment: .center, spacing: QuotaDesign.Spacing.sm) {
-            VStack(alignment: .leading, spacing: 2) {
-              Text("Launch at Login")
-                .quotaRowTitleStyle()
-              if let launchAtLoginMessage {
-                Text(launchAtLoginMessage)
-                  .quotaMetaStyle()
-                  .fixedSize(horizontal: false, vertical: true)
+          settingsToggleRow(
+            title: "Launch at Login",
+            systemImage: "power",
+            isOn: Binding(
+              get: { launchAtLoginEnabled },
+              set: { desired in
+                _ = LaunchAtLoginController.apply(enabled: desired)
+                launchAtLoginEnabled = LaunchAtLoginController.isEnabled
               }
-            }
-            Spacer(minLength: QuotaDesign.Spacing.sm)
-            Toggle(
-              "Launch at Login",
-              isOn: Binding(
-                get: { launchAtLoginEnabled },
-                set: { desired in
-                  launchAtLoginMessage = LaunchAtLoginController.apply(enabled: desired)
-                  launchAtLoginEnabled = LaunchAtLoginController.isEnabled
-                }
-              )
-            )
-            .labelsHidden()
-            .controlSize(.small)
-            .frame(
-              minWidth: QuotaDesign.Layout.minimumInteractiveDimension,
-              minHeight: QuotaDesign.Layout.minimumInteractiveDimension
-            )
-          }
-          .padding(.vertical, QuotaDesign.Spacing.xxs)
-          .accessibilityElement(children: .combine)
-        }
-
-        Divider()
-
-        SettingsSection(title: "Agents") {
-          Text("Choose which agents appear in Overview.")
-            .quotaMetaStyle()
-            .fixedSize(horizontal: false, vertical: true)
-
-          VStack(alignment: .leading, spacing: 0) {
-            ForEach(ProviderID.allCases) { provider in
-              providerToggle(provider, isOn: visibilityBinding(for: provider))
-            }
-          }
-          .id(visibilityEpoch)
-        }
-
-        ForEach(ProviderID.configurableCases) { provider in
-          Divider()
-          ApiKeyProviderSettingsSection(
-            provider: provider,
-            isVisible: visibilityBinding(for: provider)
+            ),
+            accessibilityLabel: "Launch at Login",
+            accessibilityHint: "Start QuotaBar when you log in"
           )
         }
 
-        Divider()
-
-        SettingsSection(title: "Remote Devices") {
-          Button(action: onOpenRemoteDevices) {
-            HStack(spacing: QuotaDesign.Spacing.sectionBody) {
-              Image(systemName: "laptopcomputer.and.iphone")
-                .frame(width: 18)
-
-              VStack(alignment: .leading, spacing: QuotaDesign.Spacing.xxs) {
-                Text("Remote Devices")
-                  .quotaRowTitleStyle()
-                Text(deviceSummary)
-                  .quotaMetaStyle()
-                  .lineLimit(2)
-              }
-
-              Spacer()
-
-              Image(systemName: "chevron.right")
-                .quotaChevronStyle()
-            }
-            .frame(
-              maxWidth: .infinity,
-              minHeight: QuotaDesign.Layout.minimumInteractiveDimension,
-              alignment: .leading
+        SettingsSection(title: "Sources") {
+          VStack(alignment: .leading, spacing: 0) {
+            settingsDestinationRow(
+              title: "Agents",
+              systemImage: "cpu",
+              trailing: agentsSummary,
+              accessibilityLabel: "Agents",
+              action: onOpenAgents
             )
-            .contentShape(Rectangle())
+            settingsDestinationRow(
+              title: "Devices",
+              systemImage: "laptopcomputer.and.iphone",
+              trailing: deviceSummary,
+              accessibilityLabel: "Remote Devices",
+              action: onOpenRemoteDevices
+            )
           }
-          .buttonStyle(.plain)
-          .accessibilityLabel("Remote Devices")
-          .accessibilityHint(deviceSummary)
         }
-
-        Divider()
 
         SettingsSection(title: "About") {
           VStack(alignment: .leading, spacing: 0) {
-            aboutValueRow(title: "Version", value: AppMetadata.versionLabel)
-            aboutLinkRow(title: "Website", url: AppMetadata.websiteURL)
-            aboutLinkRow(title: "Feedback", url: AppMetadata.feedbackURL)
+            settingsValueRow(
+              title: "Version",
+              systemImage: "info.circle",
+              value: AppMetadata.versionLabel
+            )
+            settingsLinkRow(
+              title: "Website",
+              systemImage: "globe",
+              url: AppMetadata.websiteURL
+            )
+            settingsLinkRow(
+              title: "Feedback",
+              systemImage: "envelope",
+              url: AppMetadata.feedbackURL
+            )
           }
 
           if let deleteAllErrorMessage {
             Label(deleteAllErrorMessage, systemImage: "exclamationmark.circle")
-              .quotaSecondaryStyle()
+              .quotaMetaStyle()
               .fixedSize(horizontal: false, vertical: true)
+              .padding(.top, QuotaDesign.Spacing.xs)
           }
         }
       }
@@ -125,7 +80,6 @@ struct SettingsHomeView: View {
     }
     .onAppear {
       launchAtLoginEnabled = LaunchAtLoginController.isEnabled
-      launchAtLoginMessage = LaunchAtLoginController.statusMessage
     }
   }
 
@@ -133,95 +87,86 @@ struct SettingsHomeView: View {
     model.relayStateModel.remoteDeviceSummary
   }
 
-  private func visibilityBinding(for provider: ProviderID) -> Binding<Bool> {
-    Binding(
-      get: { ProviderVisibility.isVisible(provider) },
-      set: { newValue in
-        ProviderVisibility.setVisible(provider, newValue)
-        visibilityEpoch &+= 1
-      }
-    )
+  private var agentsSummary: String {
+    let visible = ProviderID.allCases.filter { ProviderVisibility.isVisible($0) }.count
+    let total = ProviderID.allCases.count
+    if visible == total {
+      return "\(total)"
+    }
+    return "\(visible)/\(total)"
   }
 
-  private func providerToggle(_ provider: ProviderID, isOn: Binding<Bool>) -> some View {
-    let status = AgentStatusPresentation.resolve(
-      result: model.result(for: provider)
-    )
+  private func settingsToggleRow(
+    title: String,
+    systemImage: String,
+    isOn: Binding<Bool>,
+    accessibilityLabel: String,
+    accessibilityHint: String
+  ) -> some View {
+    SettingsListRow(title: title, systemImage: systemImage) {
+      Toggle(accessibilityLabel, isOn: isOn)
+        .labelsHidden()
+        .controlSize(.mini)
+    }
+    .accessibilityElement(children: .combine)
+    .accessibilityLabel(accessibilityLabel)
+    .accessibilityHint(accessibilityHint)
+  }
 
-    return HStack(alignment: .center, spacing: QuotaDesign.Spacing.sm) {
-      ProviderBrandIcon(provider: provider, size: 16)
-
-      VStack(alignment: .leading, spacing: 2) {
-        Text(provider.displayName)
-          .quotaRowTitleStyle()
-
-        if let detail = status.detail {
-          Text(detail)
+  private func settingsDestinationRow(
+    title: String,
+    systemImage: String,
+    trailing: String,
+    accessibilityLabel: String,
+    action: @escaping () -> Void
+  ) -> some View {
+    Button(action: action) {
+      SettingsListRow(title: title, systemImage: systemImage) {
+        HStack(spacing: QuotaDesign.Spacing.xxs) {
+          Text(trailing)
             .quotaMetaStyle()
-            .fixedSize(horizontal: false, vertical: true)
+            .lineLimit(1)
+          Image(systemName: "chevron.right")
+            .quotaChevronStyle()
         }
       }
-
-      Spacer(minLength: QuotaDesign.Spacing.sm)
-
-      Toggle("Show \(provider.displayName)", isOn: isOn)
-        .labelsHidden()
-        .controlSize(.small)
-        .frame(
-          minWidth: QuotaDesign.Layout.minimumInteractiveDimension,
-          minHeight: QuotaDesign.Layout.minimumInteractiveDimension
-        )
-        .accessibilityHint(status.accessibilityHint)
     }
-    .padding(.vertical, QuotaDesign.Spacing.xxs)
-    .accessibilityElement(children: .combine)
+    .buttonStyle(.plain)
+    .accessibilityLabel(accessibilityLabel)
+    .accessibilityHint(trailing)
   }
 
-  private func aboutValueRow(title: String, value: String) -> some View {
-    HStack(spacing: QuotaDesign.Spacing.sm) {
-      // Labels stay quieter than the section title ("About").
-      Text(title)
-        .quotaSecondaryStyle()
-      Spacer(minLength: QuotaDesign.Spacing.sm)
+  private func settingsValueRow(title: String, systemImage: String, value: String) -> some View {
+    SettingsListRow(title: title, systemImage: systemImage) {
       Text(value)
         .quotaMonoMetaStyle()
         .textSelection(.enabled)
     }
-    .padding(.vertical, aboutRowVerticalPadding)
-    .frame(maxWidth: .infinity, alignment: .leading)
     .accessibilityElement(children: .combine)
     .accessibilityLabel("\(title) \(value)")
   }
 
-  private func aboutLinkRow(title: String, url: URL) -> some View {
+  private func settingsLinkRow(title: String, systemImage: String, url: URL) -> some View {
     Button {
       NSWorkspace.shared.open(url)
     } label: {
-      HStack(spacing: QuotaDesign.Spacing.sm) {
-        Text(title)
-          .quotaSecondaryStyle()
-        Spacer(minLength: QuotaDesign.Spacing.sm)
+      SettingsListRow(title: title, systemImage: systemImage) {
         Image(systemName: "arrow.up.right")
           .quotaAffordanceStyle()
       }
-      .padding(.vertical, aboutRowVerticalPadding)
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
     .accessibilityLabel(title)
     .accessibilityHint("Opens in browser")
   }
-
-  // ponytail: dense text row; keep hit target via contentShape, not minHeight 28
-  private var aboutRowVerticalPadding: CGFloat { 3 }
 }
 
-/// Settings Agents row model: visibility toggle is always interactive; non-success
-/// collection outcomes only add a short recovery/status detail.
+/// Status copy for Agents list detail lines and the provider-detail visibility toggle hint.
+/// Visibility is controlled only on the provider detail page.
 struct AgentStatusPresentation: Equatable {
   /// Optional secondary line. Nil for healthy signed-in agents.
   let detail: String?
+  /// Hint for the **Show in Overview** toggle on provider detail.
   let accessibilityHint: String
 
   static func resolve(result: QuotaCollectionResult?) -> AgentStatusPresentation {

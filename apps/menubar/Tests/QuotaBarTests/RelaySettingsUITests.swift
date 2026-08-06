@@ -9,6 +9,8 @@ struct RelaySettingsUITests {
   @Test
   func remoteDeviceRoutesHaveStableTitles() {
     #expect(MenuBarRoute.settings.title == "Settings")
+    #expect(MenuBarRoute.agents.title == "Agents")
+    #expect(MenuBarRoute.provider(.deepseek).title == "DeepSeek")
     #expect(MenuBarRoute.remoteDevices.title == "Remote Devices")
     #expect(MenuBarRoute.pairDevice.title == "Pair Device")
   }
@@ -21,6 +23,17 @@ struct RelaySettingsUITests {
     #expect(!navigation.canNavigateBack)
 
     navigation.open(.settings)
+    navigation.open(.agents)
+    navigation.open(.provider(.deepseek))
+    #expect(navigation.path == [.settings, .agents, .provider(.deepseek)])
+    #expect(navigation.title == "DeepSeek")
+    #expect(navigation.canNavigateBack)
+    #expect(!navigation.showsSettingsMenu)
+
+    navigation.navigateBack()
+    #expect(navigation.currentRoute == .agents)
+    navigation.navigateBack()
+
     navigation.open(.remoteDevices)
     navigation.open(.remoteDevices)
 

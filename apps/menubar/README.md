@@ -15,9 +15,9 @@ device revocation, and isolated multi-owner groups. Credential and transport req
 defined in [`docs/security.md`](../../docs/security.md) and
 [`docs/decisions/0005-url-only-relay-enrollment.md`](../../docs/decisions/0005-url-only-relay-enrollment.md).
 
-Settings exposes **General** (Launch at Login), **Agents** (visibility toggles for every catalog
-provider), **API-key** sections for configurable providers (currently OpenRouter: SecureField writing
-`~/.config/quotacli/providers.json`, shared with QuotaCLI), **Remote Devices**, and **Pair Device**.
+Settings is multi-level: **General** (Launch at Login); **Agents** (list → per-provider detail with
+Overview visibility and API keys when configurable); **Remote Devices** → **Pair Device**; **About**. API-key
+forms write `~/.config/quotacli/providers.json` (shared with QuotaCLI).
 Launch at Login mirrors macOS Login Items (`SMAppService.mainApp`): the toggle reflects system
 status, and a one-shot first-run seed registers default-on when still unregistered. Agent names,
 defaults, and login recovery commands come from generated catalog bindings
@@ -61,7 +61,8 @@ from the GitHub prerelease ZIP. The signed `.app` contains the standalone QuotaC
 bundle path and invokes that copy instead of a `quotacli` found on `PATH`. Users installing QuotaBar
 therefore do not install the npm CLI separately.
 
-Provider artwork uses monochrome template SVGs from Lobe Icons (OpenAI, Claude, Grok, OpenRouter).
+Provider artwork uses monochrome template SVGs from Lobe Icons (OpenAI, Claude, Grok, OpenRouter,
+DeepSeek).
 See [`THIRD_PARTY_NOTICES.md`](Sources/QuotaBar/Resources/THIRD_PARTY_NOTICES.md) for attribution.
 
 ## Visual QA
@@ -98,8 +99,8 @@ Fixtures are `loading`, `content`, `cached-refresh-error`, `empty`, and `unavail
 `dark`. Text sizes are `standard`, `extra-large`, and `accessibility`, selected with `--text-size`.
 
 The visual bundle also contains the same arm64 standalone QuotaCLI helper as the production app. An
-explicit live run invokes that bundled helper and may read local Codex, Claude Code, Grok, or
-OpenRouter provider sessions according to
+explicit live run invokes that bundled helper and may read local Codex, Claude Code, Grok,
+OpenRouter, or DeepSeek provider sessions according to
 [`docs/provider-collection.md`](../../docs/provider-collection.md):
 
 ```bash

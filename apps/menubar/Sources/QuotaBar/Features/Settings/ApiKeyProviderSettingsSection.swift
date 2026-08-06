@@ -1,22 +1,29 @@
 import SwiftUI
 
-/// Settings block for one API-key catalog provider (`ProviderID.configurableCases`).
-struct ApiKeyProviderSettingsSection: View {
+/// API-key form for one catalog-configurable provider (no outer section chrome).
+/// Used on the provider detail page under Settings → Agents.
+struct ApiKeyProviderSettingsForm: View {
   let provider: ProviderID
   @Binding var isVisible: Bool
 
   @State private var status: ProviderApiKeyStatus
   @State private var keyDraft = ""
+  @State private var baseURLDraft = ""
   @State private var message: String?
+
+  private let store = ProviderConfigStore()
 
   init(provider: ProviderID, isVisible: Binding<Bool>) {
     self.provider = provider
     self._isVisible = isVisible
-    _status = State(initialValue: ProviderConfigStore().status(for: provider))
+    let store = ProviderConfigStore()
+    _status = State(initialValue: store.status(for: provider))
+    // Seed base URL so Save does not wipe a previously stored proxy endpoint.
+    _baseURLDraft = State(initialValue: store.baseURL(for: provider) ?? "")
   }
 
   var body: some View {
-    SettingsSection(title: provider.displayName) {
+    VStack(alignment: .leading, spacing: QuotaDesign.Spacing.xs) {
       Text(statusLabel)
         .quotaMetaStyle()
         .fixedSize(horizontal: false, vertical: true)
@@ -26,6 +33,13 @@ struct ApiKeyProviderSettingsSection: View {
         .controlSize(.small)
         .font(.system(size: 11, design: .monospaced))
         .accessibilityLabel("\(provider.displayName) API key")
+
+      // LiteLLM and other proxies need a base URL; optional for the rest.
+      TextField("Base URL (optional)", text: $baseURLDraft)
+        .textFieldStyle(.roundedBorder)
+        .controlSize(.small)
+        .font(.system(size: 11, design: .monospaced))
+        .accessibilityLabel("\(provider.displayName) base URL")
 
       HStack(spacing: QuotaDesign.Spacing.inline) {
         Button("Save", action: save)
@@ -49,7 +63,7 @@ struct ApiKeyProviderSettingsSection: View {
       }
     }
     .onAppear {
-      status = ProviderConfigStore().status(for: provider)
+      reloadStatus()
     }
   }
 
@@ -64,11 +78,23 @@ struct ApiKeyProviderSettingsSection: View {
     }
   }
 
+  private func reloadStatus() {
+    status = store.status(for: provider)
+    if baseURLDraft.isEmpty, let saved = store.baseURL(for: provider) {
+      baseURLDraft = saved
+    }
+  }
+
   private func save() {
     do {
-      try ProviderConfigStore().setApiKey(provider, apiKey: keyDraft)
+      let base = baseURLDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+      try store.setApiKey(
+        provider,
+        apiKey: keyDraft,
+        baseURL: base.isEmpty ? nil : base
+      )
       keyDraft = ""
-      status = ProviderConfigStore().status(for: provider)
+      reloadStatus()
       message = "Saved. Refresh Overview to collect."
       isVisible = true
     } catch {
@@ -78,9 +104,10 @@ struct ApiKeyProviderSettingsSection: View {
 
   private func clear() {
     do {
-      try ProviderConfigStore().clear(provider)
+      try store.clear(provider)
       keyDraft = ""
-      status = ProviderConfigStore().status(for: provider)
+      baseURLDraft = ""
+      reloadStatus()
       message = "Cleared \(provider.displayName) key."
     } catch {
       message = "Could not clear the API key."

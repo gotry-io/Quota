@@ -23,6 +23,14 @@ enum QuotaDesign {
     static let backTitleOffset: CGFloat = 20
     static let headerControlWidth: CGFloat = minimumInteractiveDimension
     static let providerRowVerticalPadding: CGFloat = 10
+    /// Vertical padding inside multi-line settings forms (API key, sign-in copy).
+    static let settingsRowVerticalPadding: CGFloat = 8
+    /// Single-line Settings rows (home General / Sources / About).
+    static let settingsRowHeight: CGFloat = 36
+    /// Stacked list rows (Agents, Devices) — title-only still uses this height and centers.
+    static let settingsListRowHeight: CGFloat = 44
+    /// Leading mark column (SF Symbol or brand icon).
+    static let settingsIconColumnWidth: CGFloat = 16
     static let progressHeight: CGFloat = 8
     static let tagCornerRadius: CGFloat = 3
     static let controlMinHeight: CGFloat = 36
@@ -51,12 +59,14 @@ enum QuotaDesign {
   /// Semantic type roles. Prefer these over bare `.caption` / `.subheadline`.
   ///
   /// Hierarchy (strong → quiet):
-  /// panelTitle ≥ emptyTitle > rowTitle > sectionHeader > secondary > meta
+  /// panelTitle ≥ emptyTitle > rowTitle > settingsLabel ≥ sectionHeader > secondary > meta
   enum Typography {
     enum Role {
       case panelTitle
       case emptyTitle
       case rowTitle
+      /// Compact Settings body labels (menu-style, smaller than Overview row titles).
+      case settingsLabel
       case sectionHeader
       case secondary
       case meta
@@ -69,7 +79,7 @@ enum QuotaDesign {
       fileprivate var baseSize: CGFloat {
         switch self {
         case .panelTitle, .emptyTitle, .rowTitle, .remainingValue: 13
-        case .sectionHeader, .secondary, .mono, .quotaLabel: 11
+        case .settingsLabel, .sectionHeader, .secondary, .mono, .quotaLabel: 11
         case .meta, .metaMedium, .monoMeta: 10
         }
       }
@@ -77,7 +87,7 @@ enum QuotaDesign {
       fileprivate var weight: Font.Weight {
         switch self {
         case .panelTitle, .sectionHeader, .remainingValue: .semibold
-        case .emptyTitle, .rowTitle, .metaMedium, .quotaLabel: .medium
+        case .emptyTitle, .rowTitle, .settingsLabel, .metaMedium, .quotaLabel: .medium
         case .secondary, .meta, .mono, .monoMeta: .regular
         }
       }
@@ -114,6 +124,12 @@ extension View {
 
   func quotaRowTitleStyle() -> some View {
     quotaFont(.rowTitle)
+      .foregroundStyle(QuotaPalette.ink)
+  }
+
+  /// Settings body labels — 11pt medium, denser than Overview provider titles.
+  func quotaSettingsLabelStyle() -> some View {
+    quotaFont(.settingsLabel)
       .foregroundStyle(QuotaPalette.ink)
   }
 

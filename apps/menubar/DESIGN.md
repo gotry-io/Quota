@@ -44,7 +44,7 @@ Canonical implementation:
    accent/orange/red only. Auth/stale/errors still use text and icons, never provider brand colors.
 4. **One shell, one stack** — Overview is root. Settings, Remote Devices, and Pair Device push on one
    app-owned path with a leading back control. No second navigation bar.
-5. **Quiet provenance** — trailing mute icon for the selected source only; detail on hover.
+5. **Quiet provenance** — selected-source icon appears on hover with Observed (not on the title row).
 6. **Reduce Motion** — page transitions become opacity-only or instant when Reduce Motion is on.
 
 ## Layout tokens
@@ -116,8 +116,8 @@ Rules:
   `Refreshing…`). That time is **orchestration** (last local collect and/or Relay pull), not
   per-provider data age. Version lives in Settings → About.
 - Provider observation time (`observed_at`) is **not** shown after window Resets lines. On hover
-  over a provider block, show a single `Observed … ago` at the **bottom-right** of that provider
-  (shared across its windows). VoiceOver always exposes that value.
+  over a provider block, show a single meta row: **source icon leading** + `Observed … ago`
+  trailing (shared across its windows). VoiceOver always exposes source + observation age.
 
 ### Interaction and accessibility
 
@@ -125,8 +125,9 @@ Rules:
   an exceptional lower bound, not the normal design target.
 - Visual density never shrinks response geometry. Header icons use 28×44pt targets, text actions
   such as Refresh and Copy have at least 28pt height, and disclosure/link rows expose the whole row.
-- Agent visibility uses one native Toggle with at least a 28pt response region. Native Picker and
-  text-field behavior stays intact, including keyboard navigation and focus treatment.
+- Agent visibility uses one native Toggle on the **provider detail** page (not the Agents list).
+  Native Picker and text-field behavior stays intact, including keyboard navigation and focus
+  treatment.
 - Every icon-only action has an accessibility label and macOS hover help. Plain buttons use
   SwiftUI's native style for pressed, focused, and disabled states.
 - The eight pairing-code fields remain separate 28×28pt edit targets so pointer and VoiceOver users
@@ -134,13 +135,28 @@ Rules:
 
 ### Settings information architecture
 
-| Section | Content |
+Multi-level stack (same shell back control throughout):
+
+```text
+Settings
+├── General          [icon] Launch at Login          [toggle]
+├── Sources          [icon] Agents                   ›
+│                    [icon] Devices                  ›
+│                         └── Agents list → Provider detail
+│                         └── Devices list → Pair Device
+└── About            [icon] Version / Website / Feedback
+```
+
+All Settings home rows share **icon + title** (+ trailing control/value/chevron). Agents and Devices
+live in one **Sources** group.
+
+| Page | Content |
 | --- | --- |
-| **General** | Launch at Login toggle mirrors `SMAppService` system status (default on via one-shot first-run seed). Optional recovery detail when System Settings approval is required. |
-| **Agents** | Quiet helper under the section title (`Choose which agents appear in Overview.`), then one visibility toggle per catalog provider (`ProviderID.allCases`). Defaults from `defaultVisible` (OpenRouter off). |
-| **API key providers** | One Settings section per `ProviderID.configurableCases` (API-key catalog providers; currently OpenRouter): SecureField + Save/Clear writing `~/.config/quotacli/providers.json` (shared with QuotaCLI). Masked tip only. |
-| **Remote Devices** | Single destination; secondary value is a device count (`3 devices` / `No devices`). |
-| **About** | Version, website, feedback. |
+| **Settings** | Dense menu rows only; no inline API-key forms. |
+| **Agents** | Provider list → detail (visibility + API key when configurable). |
+| **Provider** | Visibility; ambient recovery **or** API-key form → `~/.config/quotacli/providers.json`. |
+| **Devices** | Device list; header `plus` pairs. |
+| **About** | Version, website, feedback (same icon+title row style). |
 
 ### Remote Devices
 
@@ -158,14 +174,25 @@ Rules:
 
 ### Settings density
 
+- Settings is **menu-dense**, not Overview-dense. Body labels use `settingsLabel` (11pt medium), not
+  Overview `rowTitle` (13pt). Secondary/meta stay 11/10pt.
+- **Grouping** uses a soft translucent fill (`QuotaPalette.settingsGroupFill`) on continuous rounded
+  rects — not stacks of hairline `Divider`s. Section title sits above the group; groups stack with
+  `Spacing.md`. In-group rows share one fill with no inter-row dividers. Group fill has horizontal
+  inset only.
 - Section title → body uses `Spacing.xs` (6).
-- Agents stack with **0** inter-row spacing; each row uses tight vertical padding. The toggle control
-  keeps a 28pt response size, but the row must not also force a second 28pt min height or three
-  healthy agents look padded.
-- About is a **dense key/value list**, not three control-sized rows. Version / Website / Feedback
-  share the same compact text-row padding (~3pt/side). Links stay full-row tappable via
-  `contentShape`, **without** `minHeight: minimumInteractiveDimension` on the row body — that token
-  is for discrete controls, and applying it per About row was the root cause of the sparse list.
+- **Shared row chrome** (`SettingsListRow`): leading mark (16pt) + title (+ optional one-line
+  subtitle) + trailing. Fixed heights — do not free-size rows per content:
+  - Home (General / Sources / About): `settingsRowHeight` **36**
+  - Agents / Devices / provider Overview: `settingsListRowHeight` **44**
+- Title-only stacked rows **vertically center** the title (no empty meta slot pushing it up). With a
+  subtitle, title + meta stack and stay centered in the same 44pt height.
+- Multi-line forms (API key, sign-in copy) keep `settingsRowVerticalPadding` (8). Toggles use
+  `.controlSize(.mini)` only — do not put minHeight on the switch itself.
+- Home rows are icon + title (+ trailing). Launch at Login has no recovery copy under the row.
+- About matches the same icon+title density. Links stay full-row tappable via `contentShape`.
+- Devices list uses the same grouped card + `SettingsListRow` language as Agents (no hairline
+  dividers).
 
 ### Pair Device
 
@@ -279,39 +306,44 @@ No website display scale (30–36px) inside the panel.
 ### Provider row
 
 ```text
-[brand] Codex  Pro Lite · eg***@example.com     Local
+[brand] Codex  Pro Lite                    eg***@example.com
 Weekly                           29% left
 ████████░░░░
 Resets Sat, 12:51 PM
+ This Mac                     Observed 2 minutes ago   ← hover only
 ```
 
 Rules:
 
-1. Provider icon + name leading; source label trailing (mute).
-2. **Single account:** plan + masked label sit on the **same row as the provider title**
-   (`Plan · maskedLabel`, mute, plain text — no plan chip). Plan slugs normalized for display only
-   (`prolite` → `Pro Lite`, `supergrok` → `SuperGrok`, OIDC Grok hint → SuperGrok).
+1. Provider icon + name leading; **single-account plan** sits immediately after the name (mute,
+   plain text — no plan chip). Plan slugs normalized for display only (`prolite` → `Pro Lite`,
+   `supergrok` → `SuperGrok`, OIDC Grok hint → SuperGrok). Masked account / key label is
+   **trailing** alone — not combined with plan.
+2. Status (if any) sits beside the provider name — not on the trailing identity edge.
 3. Each window: title left, **strong remaining %** right with the explicit word `left`, 8px meter,
    then a locale-appropriate weekday/time reset without routine seconds.
 4. Percentage text stays readable ink; the meter uses accent/orange/red by threshold. Filled
    proportion is always **remaining**.
-5. Window meta is reset timing only. Provider observation age is hover-only at the bottom-right of
-   the provider block (not after Resets).
-6. **Multi-account:** each account keeps its own identity row (plan/label + source + optional Stale).
+5. Window meta is reset timing only. On hover over the provider block: **source icon + device name
+   leading** + `Observed … ago` trailing (not after Resets). No separate source tooltip.
+6. **Multi-account:** each account keeps its own identity row (plan/label + optional Stale) and its
+   own source label. Provider hover meta still shows source + Observed for the newest snapshot.
 
-### Source badge
+### Source label
 
-- Trailing mute **icon only** for the **selected** observation source.
+- Mute **icon + device name** for the **selected** observation source of the newest account snapshot
+  shown on the hover meta row (with Observed). Not on the title row.
 - Must match `SubscriptionResolver`’s chosen snapshot — never a multi-source blend.
 - Icons: `laptopcomputer` (local) / `network` (remote).
-- Hover tooltip: `This Mac` or Relay device `displayName` (fallback `Relay Device`).
-- VoiceOver: `Source: {tooltip}`.
+- Name: `This Mac` or Relay device `displayName` (fallback `Relay Device`) — visible inline, no
+  `.help` tooltip.
+- VoiceOver: `Source: {name}` (combined into the provider row’s observation value).
 
 ### Provider status (failure / recovery)
 
 Collapse protocol outcomes into three quiet UI states:
 
-| UI | Protocol outcomes | Trailing | Detail |
+| UI | Protocol outcomes | Beside name | Detail |
 | --- | --- | --- | --- |
 | Needs Sign-In | `auth_required` | mute text | `Run \`… login\`` |
 | Unavailable | `unavailable`, `unsupported` | mute text | short reason if useful |
@@ -320,8 +352,10 @@ Collapse protocol outcomes into three quiet UI states:
 Rules:
 
 - No bordered chips/CTAs for auth or errors. Status is quiet text beside the provider name.
-- Trailing edge stays provenance-only (selected-source icon). Never replace it with status text.
-- Issue-only rows (no accounts) still show the local source icon when the failure came from local collection.
+- Title-row trailing edge is the masked account/key label for single-account success rows — not
+  provenance or plan.
+- Issue-only rows (no accounts) still expose the local source icon on the hover meta row when the
+  failure came from local collection.
 - When any presentable account exists for a provider (local or remote), suppress local
   Needs Sign-In / Unavailable / Can’t Refresh chrome for that provider. Do not blend local auth
   failure with successful remote quota.
@@ -344,17 +378,22 @@ Rules:
 
 ### Settings
 
-- Sections: General, Agents, zero or more API-key provider sections, Remote Devices, About.
-- General: native Launch at Login toggle. Same dense toggle row pattern as Agents (title + optional
-  meta detail + small Toggle, 28pt response). UI reads/writes `SMAppService.mainApp` only — not a
-  separate UserDefaults preference — so System Settings changes stay aligned on next Settings open.
-  First production launch seeds default-on once when still unregistered.
-- Agents: helper copy sits directly under the section title, then rows for every catalog provider
-  (brand icon, name, optional recovery detail, visibility toggle). Defaults from `defaultVisible`.
-  - Visibility toggle is always interactive (auth failures still appear in Overview when enabled).
-  - Signed-in / success: no status chrome — only the toggle.
+- Sections: General, Sources (Agents + Devices), About on home; Agents list → provider detail;
+  Remote Devices → Pair Device.
+- General: native Launch at Login toggle (title + mini Toggle, row min height 28). UI reads/writes
+  `SMAppService.mainApp` only — not a separate UserDefaults preference — so System Settings changes
+  stay aligned on next Settings open. First production launch seeds default-on once when still
+  unregistered.
+- Agents list: helper copy, then destination rows (brand icon, name, optional recovery/API-key
+  detail, chevron) via `SettingsListRow` at `settingsListRowHeight`. No visibility switch on the
+  list. Title-only rows center the name; subtitle rows stack within the same height.
+- Devices list: same grouped + list-row language; subtitle is health · short last-seen (· endpoint
+  when multi-Relay). Trailing **Remove** stays plain destructive text.
+- Provider detail: **Show in Overview** toggle (always interactive; auth failures still appear in
+  Overview when enabled) plus API key or sign-in copy. Defaults from `defaultVisible`.
+  - Signed-in / success: no status chrome under the name.
   - Not signed in / error / unavailable: short recovery detail (catalog `loginCommand`).
-- API-key sections: one per `configurableCases`; SecureField + Save/Clear; never show the full key.
+- API-key forms: SecureField + Save/Clear on configurable provider detail; never show the full key.
 - Overflow menu (ellipsis): Delete all QuotaBar data…, Quit QuotaBar.
 - About: Version, Website, Feedback rows (no product-name label, no copyright blurb). Rows share
   compact text height; do not force `minimumInteractiveDimension` as the About row body height.
@@ -385,7 +424,7 @@ Rules:
 - Keep the host `MenuBarExtra` background and system separators/tracks.
 - Keep Overview denser than Settings.
 - Keep provider marks monochrome; tone meters by remaining opacity tiers.
-- Put provenance on the trailing edge as quiet meta.
+- Put provenance on the hover meta row (source leading, Observed trailing).
 - Honor Reduce Motion and VoiceOver labels on combined provider rows.
 
 ### Don’t

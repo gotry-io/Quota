@@ -56,10 +56,6 @@ struct AccountQuotaPresentation: Equatable, Identifiable {
     selectedSource.isLocal ? "laptopcomputer" : "network"
   }
 
-  var sourceTooltip: String {
-    selectedSourceDisplayName
-  }
-
   var sourceAccessibilityLabel: String {
     "Source: \(selectedSourceDisplayName)"
   }

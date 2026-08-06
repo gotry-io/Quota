@@ -10,7 +10,7 @@ struct RemoteDevicesView: View {
 
   var body: some View {
     ScrollView {
-      VStack(alignment: .leading, spacing: QuotaDesign.Spacing.sectionBody) {
+      VStack(alignment: .leading, spacing: QuotaDesign.Spacing.md) {
         if isRefreshing && devices.isEmpty {
           HStack(spacing: QuotaDesign.Spacing.inline) {
             ProgressView().controlSize(.small)
@@ -21,11 +21,10 @@ struct RemoteDevicesView: View {
         } else if devices.isEmpty {
           emptyState
         } else {
-          VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(devices.enumerated()), id: \.element.id) { index, owned in
-              deviceRow(owned)
-              if index < devices.count - 1 {
-                Divider()
+          SettingsSection(title: "Devices") {
+            VStack(alignment: .leading, spacing: 0) {
+              ForEach(devices) { owned in
+                deviceRow(owned)
               }
             }
           }
@@ -33,7 +32,7 @@ struct RemoteDevicesView: View {
 
         if let errorMessage {
           Label(errorMessage, systemImage: "exclamationmark.circle")
-            .quotaSecondaryStyle()
+            .quotaMetaStyle()
             .fixedSize(horizontal: false, vertical: true)
         }
       }
@@ -87,59 +86,44 @@ struct RemoteDevicesView: View {
 
   private func deviceRow(_ owned: OwnedRemoteDevice) -> some View {
     let device = owned.device
-    return HStack(alignment: .center, spacing: QuotaDesign.Spacing.inline) {
-      VStack(alignment: .leading, spacing: QuotaDesign.Spacing.xxs) {
-        HStack(alignment: .firstTextBaseline, spacing: QuotaDesign.Spacing.iconLabel) {
-          Text(device.displayName)
-            .quotaRowTitleStyle()
-            .lineLimit(1)
-          Spacer(minLength: QuotaDesign.Spacing.sm)
-          healthLabel(for: device)
-        }
+    let subtitle = deviceSubtitle(owned)
 
-        Text(lastSeenLabel(device))
-          .quotaMetaStyle()
-          .lineLimit(1)
-
-        if model.showsEndpointLabelOnDevices {
-          Text(owned.endpointLabel)
-            .quotaMonoMetaStyle()
-            .lineLimit(1)
-        }
-      }
-
+    return SettingsListRow(
+      title: device.displayName,
+      subtitle: subtitle,
+      systemImage: "laptopcomputer",
+      height: QuotaDesign.Layout.settingsListRowHeight
+    ) {
       Button("Remove", role: .destructive) {
         pendingRemoval = owned
       }
       .buttonStyle(.plain)
-      .quotaSecondaryStyle()
-      .frame(
-        minWidth: QuotaDesign.Layout.minimumInteractiveDimension,
-        minHeight: QuotaDesign.Layout.minimumInteractiveDimension
-      )
+      .quotaMetaStyle()
+      .foregroundStyle(QuotaPalette.critical)
       .disabled(isRemoving)
       .accessibilityLabel("Remove \(device.displayName)")
     }
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .padding(.vertical, QuotaDesign.Spacing.sm)
     .accessibilityElement(children: .contain)
+    .accessibilityLabel(device.displayName)
+    .accessibilityValue(subtitle)
   }
 
-  private func healthLabel(for device: RelayDevice) -> some View {
-    if device.lastSeenAt == nil {
-      Label("Waiting", systemImage: "clock")
-        .quotaMetaStyle()
-    } else {
-      Label("Active", systemImage: "checkmark.circle")
-        .quotaMetaStyle()
+  private func deviceSubtitle(_ owned: OwnedRemoteDevice) -> String {
+    let device = owned.device
+    let health = device.lastSeenAt == nil ? "Waiting" : "Active"
+    let seen = lastSeenLabel(device)
+    // Keep one line; multi-Relay only appends endpoint (common case is shorter).
+    if model.showsEndpointLabelOnDevices {
+      return "\(health) · \(seen) · \(owned.endpointLabel)"
     }
+    return "\(health) · \(seen)"
   }
 
   private func lastSeenLabel(_ device: RelayDevice) -> String {
     guard let lastSeenAt = device.lastSeenAt else {
       return "Never reported"
     }
-    return "Last report \(lastSeenAt.formatted(date: .abbreviated, time: .shortened))"
+    return lastSeenAt.formatted(date: .abbreviated, time: .shortened)
   }
 
   private func removePendingDevice() {
