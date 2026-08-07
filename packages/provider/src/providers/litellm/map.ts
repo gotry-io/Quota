@@ -65,10 +65,7 @@ export function mapLiteLLMUserInfo(json: unknown): LiteLLMBudget | undefined {
   };
 }
 
-export function mapLiteLLMTeamInfo(
-  json: unknown,
-  teamId: string,
-): LiteLLMBudget | undefined {
+export function mapLiteLLMTeamInfo(json: unknown, teamId: string): LiteLLMBudget | undefined {
   const root = asRecord(json);
   const team =
     asRecord(root?.team_info) ??

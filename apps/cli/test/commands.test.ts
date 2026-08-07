@@ -21,7 +21,14 @@ const { collectQuotaReport, diagnoseProviderSessions } = vi.hoisted(() => ({
           };
         }
         const snapshot: QuotaSnapshot = {
-          provider: provider as "codex" | "claude" | "grok" | "openrouter" | "deepseek" | "kimi" | "litellm",
+          provider: provider as
+            | "codex"
+            | "claude"
+            | "grok"
+            | "openrouter"
+            | "deepseek"
+            | "kimi"
+            | "litellm",
           account: { fingerprint: `${provider}-fp`, fingerprint_scope: "source", plan: "plus" },
           windows: [
             {

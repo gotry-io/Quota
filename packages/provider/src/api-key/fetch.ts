@@ -1,9 +1,5 @@
 import { ProviderCollectionError } from "../contracts.ts";
-import {
-  HttpRequestError,
-  type HttpTransport,
-  readJsonObject,
-} from "../runtime/http.ts";
+import { HttpRequestError, type HttpTransport, readJsonObject } from "../runtime/http.ts";
 
 export interface FetchBearerJsonOptions {
   transport: HttpTransport;

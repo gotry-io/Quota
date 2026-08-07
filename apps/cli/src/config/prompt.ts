@@ -10,10 +10,7 @@ export type PromptOptions = {
  * Interactive line prompt. Secrets use raw mode so the key never echoes to the terminal.
  * Injectable for tests via module mock.
  */
-export async function promptLine(
-  message: string,
-  options: PromptOptions = {},
-): Promise<string> {
+export async function promptLine(message: string, options: PromptOptions = {}): Promise<string> {
   if (options.secret && stdin.isTTY && typeof stdin.setRawMode === "function") {
     return await promptSecret(message);
   }

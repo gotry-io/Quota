@@ -54,11 +54,7 @@ export async function resolveApiKeyCredentials(
     try {
       const stored = await store.get(config.provider);
       if (stored?.api_key) {
-        const baseUrl = resolveBaseUrl(
-          stored.base_url,
-          environment,
-          config,
-        );
+        const baseUrl = resolveBaseUrl(stored.base_url, environment, config);
         if (!baseUrl) {
           return undefined;
         }

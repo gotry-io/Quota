@@ -107,10 +107,7 @@ export class ClaudeCollector implements ProviderCollector {
 
     // context.now freezes tests; when omitted, map stamps observed_at after HTTP.
     const frozenNow = context.now;
-    const refreshAttempted = shouldRefreshClaudeCredentials(
-      credentials,
-      frozenNow ?? new Date(),
-    );
+    const refreshAttempted = shouldRefreshClaudeCredentials(credentials, frozenNow ?? new Date());
 
     if (refreshAttempted) {
       credentials = await this.refreshAndReload(credentials, context.signal);

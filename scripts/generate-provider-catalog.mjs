@@ -77,9 +77,7 @@ const cases = ids.join("\n  case ");
 const displayName = catalog
   .map((e) => `    case .${e.id}: "${escapeSwift(e.displayName)}"`)
   .join("\n");
-const defaultVisible = catalog
-  .map((e) => `    case .${e.id}: ${e.defaultVisible}`)
-  .join("\n");
+const defaultVisible = catalog.map((e) => `    case .${e.id}: ${e.defaultVisible}`).join("\n");
 const loginCommand = catalog
   .map((e) => `    case .${e.id}: "${escapeSwift(e.loginCommand)}"`)
   .join("\n");
@@ -145,10 +143,7 @@ ${order}
 }
 `;
 
-const swiftOut = join(
-  root,
-  "apps/menubar/Sources/QuotaBar/Core/Models/ProviderID.generated.swift",
-);
+const swiftOut = join(root, "apps/menubar/Sources/QuotaBar/Core/Models/ProviderID.generated.swift");
 mkdirSync(dirname(swiftOut), { recursive: true });
 writeFileSync(swiftOut, swift);
 console.log(`wrote ${swiftOut} (${catalog.length} providers)`);

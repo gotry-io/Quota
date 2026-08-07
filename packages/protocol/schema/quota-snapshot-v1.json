@@ -20,7 +20,9 @@
       "type": "object",
       "required": ["provider", "account", "windows", "source", "status", "observed_at"],
       "properties": {
-        "provider": { "enum": ["codex", "claude", "grok", "openrouter", "deepseek", "kimi", "litellm"] },
+        "provider": {
+          "enum": ["codex", "claude", "grok", "openrouter", "deepseek", "kimi", "litellm"]
+        },
         "account": {
           "type": "object",
           "required": ["fingerprint", "fingerprint_scope"],

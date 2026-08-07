@@ -6,6 +6,7 @@ import {
   PROVIDER_CATALOG,
   ProviderConfigStore,
   ProviderConfigStoreError,
+  type ProviderApiKeyConfigSpec,
 } from "@gotry-io/quota-provider";
 import type { CliOutput } from "../commands.ts";
 import { promptLine } from "./prompt.ts";
@@ -44,11 +45,12 @@ async function runConfigSet(args: readonly string[], output: CliOutput): Promise
   }
 
   const entry = PROVIDER_CATALOG[parsed.provider];
-  const spec = entry.config;
-  if (spec?.kind !== "api_key") {
+  if (entry.config?.kind !== "api_key") {
     output.stderr(`Config is not supported for provider: ${parsed.provider}`);
     return 2;
   }
+  // Catalog is `as const`; optional api_key flags need the shared interface for access.
+  const spec = entry.config as ProviderApiKeyConfigSpec;
 
   let apiKey: string;
   try {
@@ -122,10 +124,7 @@ async function runConfigSet(args: readonly string[], output: CliOutput): Promise
   return 0;
 }
 
-async function readApiKey(
-  mode: "prompt" | "stdin",
-  displayName: string,
-): Promise<string> {
+async function readApiKey(mode: "prompt" | "stdin", displayName: string): Promise<string> {
   if (mode === "stdin") {
     return await readStdinText();
   }

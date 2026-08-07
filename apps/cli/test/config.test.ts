@@ -118,10 +118,7 @@ describe("quotacli config", () => {
     const capture = captureOutput();
     expect(await runCli(["config", "set", "litellm"], capture.output)).toBe(0);
     expect(prompt).toHaveBeenNthCalledWith(1, "LiteLLM API key: ", { secret: true });
-    expect(prompt).toHaveBeenNthCalledWith(
-      2,
-      "LiteLLM base URL (required): ",
-    );
+    expect(prompt).toHaveBeenNthCalledWith(2, "LiteLLM base URL (required): ");
     const file = await readFile(join(root, "quotacli", "providers.json"), "utf8");
     expect(file).toContain(secret);
     expect(file).toContain("https://litellm.example.com");

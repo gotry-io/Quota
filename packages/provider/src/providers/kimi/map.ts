@@ -75,8 +75,10 @@ function parseUsageDetail(
   if (limit === undefined && used === undefined && remaining === undefined) {
     return undefined;
   }
-  const resolvedLimit = limit ?? (used !== undefined && remaining !== undefined ? used + remaining : 0);
-  const resolvedUsed = used ?? (resolvedLimit > 0 && remaining !== undefined ? resolvedLimit - remaining : 0);
+  const resolvedLimit =
+    limit ?? (used !== undefined && remaining !== undefined ? used + remaining : 0);
+  const resolvedUsed =
+    used ?? (resolvedLimit > 0 && remaining !== undefined ? resolvedLimit - remaining : 0);
   const resolvedRemaining =
     remaining ?? (resolvedLimit > 0 ? Math.max(0, resolvedLimit - resolvedUsed) : 0);
   const resetsAt = readString(record, "resetTime", "reset_time", "resets_at");
