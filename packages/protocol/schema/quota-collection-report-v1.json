@@ -5,11 +5,18 @@
   "type": "object",
   "required": ["schema_version", "captured_at", "results"],
   "properties": {
-    "schema_version": { "const": 1 },
-    "captured_at": { "type": "string", "format": "date-time" },
+    "schema_version": {
+      "const": 1
+    },
+    "captured_at": {
+      "type": "string",
+      "format": "date-time"
+    },
     "results": {
       "type": "array",
-      "items": { "$ref": "#/$defs/result" }
+      "items": {
+        "$ref": "#/$defs/result"
+      }
     }
   },
   "$defs": {
@@ -17,22 +24,36 @@
       "type": "object",
       "required": ["provider", "outcome", "snapshots"],
       "properties": {
-        "provider": { "enum": ["codex", "claude", "grok"] },
+        "provider": {
+          "enum": ["codex", "claude", "grok", "openrouter", "deepseek", "kimi", "litellm"]
+        },
         "outcome": {
           "enum": ["success", "auth_required", "unavailable", "unsupported", "error"]
         },
         "snapshots": {
           "type": "array",
-          "items": { "$ref": "quota-snapshot-v1.json#/$defs/snapshot" }
+          "items": {
+            "$ref": "quota-snapshot-v1.json#/$defs/snapshot"
+          }
         },
-        "source": { "type": "string", "minLength": 1 },
-        "message": { "type": "string", "minLength": 1 }
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        }
       },
       "oneOf": [
         {
           "properties": {
-            "outcome": { "const": "success" },
-            "snapshots": { "minItems": 1 }
+            "outcome": {
+              "const": "success"
+            },
+            "snapshots": {
+              "minItems": 1
+            }
           }
         },
         {
@@ -40,62 +61,8 @@
             "outcome": {
               "enum": ["auth_required", "unavailable", "unsupported", "error"]
             },
-            "snapshots": { "maxItems": 0 }
-          }
-        }
-      ],
-      "allOf": [
-        {
-          "if": {
-            "properties": { "provider": { "const": "codex" } },
-            "required": ["provider"]
-          },
-          "then": {
-            "properties": {
-              "snapshots": {
-                "items": {
-                  "allOf": [
-                    { "$ref": "quota-snapshot-v1.json#/$defs/snapshot" },
-                    { "properties": { "provider": { "const": "codex" } } }
-                  ]
-                }
-              }
-            }
-          }
-        },
-        {
-          "if": {
-            "properties": { "provider": { "const": "claude" } },
-            "required": ["provider"]
-          },
-          "then": {
-            "properties": {
-              "snapshots": {
-                "items": {
-                  "allOf": [
-                    { "$ref": "quota-snapshot-v1.json#/$defs/snapshot" },
-                    { "properties": { "provider": { "const": "claude" } } }
-                  ]
-                }
-              }
-            }
-          }
-        },
-        {
-          "if": {
-            "properties": { "provider": { "const": "grok" } },
-            "required": ["provider"]
-          },
-          "then": {
-            "properties": {
-              "snapshots": {
-                "items": {
-                  "allOf": [
-                    { "$ref": "quota-snapshot-v1.json#/$defs/snapshot" },
-                    { "properties": { "provider": { "const": "grok" } } }
-                  ]
-                }
-              }
+            "snapshots": {
+              "maxItems": 0
             }
           }
         }

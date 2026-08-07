@@ -553,7 +553,8 @@ tokens, copy, and behavior are canonical in [`apps/menubar/DESIGN.md`](../menuba
   sections, cards, and bottom action areas stay on that canvas and use spacing, strokes, or
   dividers for structure. Reserve local background fills for independent controls such as buttons,
   fields, tags, and meters — never nest system materials.
-- The footer shows a clickable last-refresh time on the right. Version lives only in Settings → About.
+- The footer shows a clickable last-checked time on the right (orchestration, not per-provider
+  data age). Version lives only in Settings → About.
 
 ### Settings Panel
 
@@ -836,7 +837,7 @@ a clear recovery action. Do not create alert banners for ordinary provider failu
 
 - `{colors.canvas}`, top `{colors.hairline}` border, height 36px,
   `{typography.caption-sm}` `{colors.body}`.
-- Shows last-refresh time on the right as the one refresh action (`Refreshing…` while collection
+- Shows last-checked time on the right as the one refresh action (`Refreshing…` while collection
   runs). Version lives only in Settings → About — not in the footer.
 - Quit and delete-all live in the Settings overflow menu, not the footer.
 

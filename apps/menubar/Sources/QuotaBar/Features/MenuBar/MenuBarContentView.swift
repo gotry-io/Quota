@@ -4,27 +4,32 @@ import SwiftUI
 struct MenuBarContentView: View {
   @Bindable var model: MenuBarViewModel
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  @AppStorage("provider.codex.visible") private var showsCodex = true
-  @AppStorage("provider.claude.visible") private var showsClaude = true
-  @AppStorage("provider.grok.visible") private var showsGrok = true
   @State private var navigation: MenuBarNavigationState
   @State private var navigationDirection: NavigationDirection = .forward
   @State private var showsDeleteAllConfirmation = false
   @State private var showsLocalDeleteConfirmation = false
   @State private var isDeletingAllData = false
   @State private var deleteAllErrorMessage: String?
+  /// Page-level issue shown in the shell title bar (API key failures, etc.).
+  @State private var pageIssue: String?
+  /// Bumped by header **Save** on configurable provider pages.
+  @State private var providerSaveRequest = 0
   private let performsInitialRefresh: Bool
   private let performsRelayRefreshes: Bool
+  /// Production only: one-shot default-on Login Item seed. Visual QA leaves system Login Items alone.
+  private let seedsLaunchAtLogin: Bool
 
   init(
     model: MenuBarViewModel,
     initialPath: [MenuBarRoute] = [],
     performsInitialRefresh: Bool = true,
-    performsRelayRefreshes: Bool = true
+    performsRelayRefreshes: Bool = true,
+    seedsLaunchAtLogin: Bool = true
   ) {
     self.model = model
     self.performsInitialRefresh = performsInitialRefresh
     self.performsRelayRefreshes = performsRelayRefreshes
+    self.seedsLaunchAtLogin = seedsLaunchAtLogin
     _navigation = State(initialValue: MenuBarNavigationState(path: initialPath))
   }
 
@@ -32,6 +37,7 @@ struct MenuBarContentView: View {
     MenuBarShell(
       model: model,
       title: navigation.title,
+      issue: pageIssue,
       canNavigateBack: navigation.canNavigateBack,
       onNavigateBack: navigateBack,
       showsLeadingIcon: navigation.currentRoute == nil,
@@ -76,6 +82,9 @@ struct MenuBarContentView: View {
       )
     }
     .task {
+      if seedsLaunchAtLogin {
+        LaunchAtLoginController.seedDefaultOnIfNeeded()
+      }
       guard performsInitialRefresh else { return }
       await model.refreshIfNeeded()
     }
@@ -112,6 +121,14 @@ struct MenuBarContentView: View {
     if navigation.showsPairDeviceAction {
       return .pairDevice { navigate(to: .pairDevice) }
     }
+    if navigation.showsProviderSaveAction {
+      return .textAction(
+        title: "Save",
+        accessibilityHint: "Save or clear the API key."
+      ) {
+        providerSaveRequest += 1
+      }
+    }
     if !navigation.canNavigateBack {
       return .openSettings(openSettings)
     }
@@ -130,11 +147,21 @@ struct MenuBarContentView: View {
     case .settings:
       SettingsHomeView(
         model: model,
-        showsCodex: $showsCodex,
-        showsClaude: $showsClaude,
-        showsGrok: $showsGrok,
+        onOpenAgents: { navigate(to: .agents) },
         onOpenRemoteDevices: { navigate(to: .remoteDevices) },
         deleteAllErrorMessage: deleteAllErrorMessage
+      )
+    case .agents:
+      AgentsSettingsView(
+        model: model,
+        onOpenProvider: { provider in navigate(to: .provider(provider)) }
+      )
+    case .provider(let provider):
+      ProviderSettingsView(
+        model: model,
+        provider: provider,
+        saveRequest: providerSaveRequest,
+        onIssue: { pageIssue = $0 }
       )
     case .remoteDevices:
       RemoteDevicesView(
@@ -147,11 +174,7 @@ struct MenuBarContentView: View {
   }
 
   private var enabledProviders: Set<ProviderID> {
-    var providers = Set<ProviderID>()
-    if showsCodex { providers.insert(.codex) }
-    if showsClaude { providers.insert(.claude) }
-    if showsGrok { providers.insert(.grok) }
-    return providers
+    ProviderVisibility.enabledSet()
   }
 
   private func openSettings() {
@@ -174,6 +197,8 @@ struct MenuBarContentView: View {
 
   private func applyNavigation(_ next: MenuBarNavigationState) {
     guard next != navigation else { return }
+    pageIssue = nil
+    providerSaveRequest = 0
     if let panelAnimation {
       withAnimation(panelAnimation) {
         navigation = next
@@ -223,12 +248,16 @@ private enum NavigationDirection {
 
 enum MenuBarRoute: Hashable {
   case settings
+  case agents
+  case provider(ProviderID)
   case remoteDevices
   case pairDevice
 
   var title: String {
     switch self {
     case .settings: "Settings"
+    case .agents: "Agents"
+    case .provider(let provider): provider.displayName
     case .remoteDevices: "Remote Devices"
     case .pairDevice: "Pair Device"
     }
@@ -243,6 +272,13 @@ struct MenuBarNavigationState: Equatable {
   var canNavigateBack: Bool { !path.isEmpty }
   var showsSettingsMenu: Bool { path == [.settings] }
   var showsPairDeviceAction: Bool { currentRoute == .remoteDevices }
+  /// Configurable provider detail: header trailing **Save** for the API-key form.
+  var showsProviderSaveAction: Bool {
+    if case .provider(let provider) = currentRoute {
+      return provider.isConfigurable
+    }
+    return false
+  }
 
   /// Stable identity for page transitions (depth + route).
   var pageIdentity: String {

@@ -3,10 +3,10 @@ import { basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
-  OwnerCreateResponseSchema,
-  OwnerSnapshotListResponseSchema,
   DeviceListResponseSchema,
   MAXIMUM_SNAPSHOTS_PER_ENVELOPE,
+  OwnerCreateResponseSchema,
+  OwnerSnapshotListResponseSchema,
   PairingApprovalRequestSchema,
   PairingCreateRequestSchema,
   PairingCreateResponseSchema,
@@ -401,7 +401,9 @@ describe("quota protocol", () => {
   });
 });
 
-function snapshot(provider: "codex" | "claude" | "grok") {
+function snapshot(
+  provider: "codex" | "claude" | "grok" | "openrouter" | "deepseek" | "kimi" | "litellm",
+) {
   return {
     provider,
     account: { fingerprint: `${provider}-fixture`, fingerprint_scope: "source" as const },

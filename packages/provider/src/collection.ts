@@ -1,23 +1,21 @@
 import {
-  ProviderCollectionError,
-  type CollectionContext,
-  type ProviderCollector,
-} from "./contracts.ts";
-import {
   PROTOCOL_VERSION,
-  QuotaCollectionReportSchema,
   type ProviderId,
   type QuotaCollectionReport,
+  QuotaCollectionReportSchema,
   type QuotaCollectionResult,
   type QuotaSnapshot,
 } from "@gotry-io/quota-protocol";
+import { authRequiredMessage } from "./catalog.ts";
+import type { CollectionContext, ProviderCollectionError, ProviderCollector } from "./contracts.ts";
+import {
+  type CollectorFactoryOptions,
+  createDefaultCollectors,
+  PROVIDER_ORDER,
+  resolveProviders,
+} from "./registry.ts";
 import { classifyProviderError, sanitizeMessage } from "./runtime/errors.ts";
 import { toIsoOffset } from "./runtime/time.ts";
-import {
-  createDefaultCollectors,
-  resolveProviders,
-  type CollectorFactoryOptions,
-} from "./registry.ts";
 
 export interface CollectQuotaOptions extends CollectorFactoryOptions {
   providers?: "all" | ProviderId | ProviderId[];
@@ -29,41 +27,42 @@ export interface CollectQuotaOptions extends CollectorFactoryOptions {
 export async function collectQuotaReport(
   options: CollectQuotaOptions = {},
 ): Promise<QuotaCollectionReport> {
-  const now = options.now ?? options.context?.now ?? new Date();
+  // Freeze only for tests/tooling. Production must not inject a shared now —
+  // each provider stamps observed_at near successful payload mapping.
+  const frozenNow = options.now ?? options.context?.now;
   const providerIds = resolveProviders(options.providers ?? "all");
-  const factoryOptions: CollectorFactoryOptions = {};
-  if (options.codex) {
-    factoryOptions.codex = options.codex;
-  }
-  if (options.claude) {
-    factoryOptions.claude = options.claude;
-  }
-  if (options.grok) {
-    factoryOptions.grok = options.grok;
-  }
-  if (options.clientVersion) {
-    factoryOptions.clientVersion = options.clientVersion;
-  }
-  const defaults = createDefaultCollectors(factoryOptions);
-  const collectors: Record<ProviderId, ProviderCollector> = {
-    codex: options.collectors?.codex ?? defaults.codex,
-    claude: options.collectors?.claude ?? defaults.claude,
-    grok: options.collectors?.grok ?? defaults.grok,
+  const factoryOptions: CollectorFactoryOptions = {
+    ...(options.clientVersion ? { clientVersion: options.clientVersion } : {}),
+    ...(options.codex ? { codex: options.codex } : {}),
+    ...(options.claude ? { claude: options.claude } : {}),
+    ...(options.grok ? { grok: options.grok } : {}),
+    ...(options.apiKey ? { apiKey: options.apiKey } : {}),
+    ...(options.apiKeyByProvider ? { apiKeyByProvider: options.apiKeyByProvider } : {}),
   };
+  const defaults = createDefaultCollectors(factoryOptions);
+  const collectors = {} as Record<ProviderId, ProviderCollector>;
+  for (const id of PROVIDER_ORDER) {
+    collectors[id] = options.collectors?.[id] ?? defaults[id];
+  }
 
   const results: QuotaCollectionResult[] = await Promise.all(
     providerIds.map(async (provider) => {
-      const context: CollectionContext = { now };
+      const context: CollectionContext = {};
       if (options.context?.signal) {
         context.signal = options.context.signal;
+      }
+      if (frozenNow) {
+        context.now = frozenNow;
       }
       return await collectOne(collectors[provider], context);
     }),
   );
 
+  // Batch assembly time (end of collection), not per-provider data age.
+  const capturedAt = frozenNow ?? new Date();
   const report = {
     schema_version: PROTOCOL_VERSION,
-    captured_at: toIsoOffset(now),
+    captured_at: toIsoOffset(capturedAt),
     results,
   };
   return QuotaCollectionReportSchema.parse(report);
@@ -130,17 +129,6 @@ async function collectOne(
       ...(classified.source ? { source: classified.source } : {}),
       message: sanitizeMessage(classified.message),
     };
-  }
-}
-
-function authRequiredMessage(provider: ProviderId): string {
-  switch (provider) {
-    case "codex":
-      return "Codex auth.json not found. Run `codex` to log in.";
-    case "claude":
-      return "Claude OAuth credentials are missing or unreadable. Run `claude auth login`.";
-    case "grok":
-      return "Grok auth.json not found. Run `grok login`.";
   }
 }
 

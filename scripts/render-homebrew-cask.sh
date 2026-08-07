@@ -16,9 +16,10 @@ if ! printf '%s' "$SHA256" | grep -Eq '^[0-9a-f]{64}$'; then
   echo "invalid SHA-256: $SHA256" >&2
   exit 1
 fi
-EXPECTED_URL="https://github.com/gotry-io/Quota/releases/download/v${VERSION}/QuotaBar-${VERSION}-macos-arm64.zip"
+EXPECTED_URL="https://github.com/gotry-io/Quota/releases/download/menubar-v${VERSION}/QuotaBar-${VERSION}-macos-arm64.zip"
 if [[ "$URL" != "$EXPECTED_URL" ]]; then
   echo "unexpected release URL: $URL" >&2
+  echo "expected: $EXPECTED_URL" >&2
   exit 1
 fi
 

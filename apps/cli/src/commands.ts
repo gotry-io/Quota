@@ -1,10 +1,12 @@
 import {
+  PROVIDER_IDS,
   type ProviderId,
   ProviderIdSchema,
   QuotaCollectionReportSchema,
 } from "@gotry-io/quota-protocol";
 import { collectionExitCode, collectQuotaReport } from "@gotry-io/quota-provider";
 import packageMetadata from "../package.json" with { type: "json" };
+import { configUsage, runConfigCommand } from "./config/commands.ts";
 import { runRelayCommand, runStatusCommand } from "./relay/commands.ts";
 import { renderJson, renderText } from "./render.ts";
 
@@ -59,6 +61,9 @@ export async function runCli(
 
     case "relay":
       return await runRelayCommand(args.slice(1), output);
+
+    case "config":
+      return await runConfigCommand(args.slice(1), output);
 
     case "help":
     case "--help":
@@ -181,12 +186,16 @@ function parseProviderOption(
     if (!parsed.success) {
       return {
         ok: false,
-        error: `Invalid --provider value: ${part}. Expected codex|claude|grok|all.`,
+        error: `Invalid --provider value: ${part}. Expected ${providerChoiceList()}.`,
       };
     }
     providers.push(parsed.data);
   }
   return { ok: true, providers };
+}
+
+function providerChoiceList(): string {
+  return `${PROVIDER_IDS.join("|")}|all`;
 }
 
 function usage(): string {
@@ -195,10 +204,15 @@ function usage(): string {
 Usage:
   quotacli version
   quotacli status
-  quotacli quota [--provider codex|claude|grok|all] [--format text|json] [--pretty]
+  quotacli quota [--provider ${providerChoiceList()}] [--format text|json] [--pretty]
   quotacli relay pair [--relay <url>]
   quotacli relay push
   quotacli relay unpair
+  quotacli config set <provider> [--base-url <url>]
+  quotacli config set <provider> --api-key-stdin [--base-url <url>]
+  quotacli config get <provider>
+  quotacli config unset <provider>
+  quotacli config list
   quotacli help
 
 Defaults:
@@ -209,9 +223,12 @@ relay pair stores a device credential, uploads one snapshot immediately, then en
 background push every 5 minutes.
 relay push collects local quota and uploads one snapshot to the paired Relay.
 status summarizes local provider readiness and Relay pairing/background state.
+config stores API-key providers (openrouter, deepseek, kimi, litellm) in ~/.config/quotacli/providers.json (owner-only).
 
 Exit codes for quota:
   0  every requested provider returned at least one fresh snapshot
   1  collection completed with one or more provider failures
-  2  invalid CLI arguments`;
+  2  invalid CLI arguments
+
+${configUsage()}`;
 }

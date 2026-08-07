@@ -17,6 +17,12 @@ struct ProviderQuotaPresentation: Equatable, Identifiable {
 
   var id: ProviderID { provider }
 
+  /// Newest selected-snapshot observation among presentable accounts for this provider.
+  /// All windows under one account share the same snapshot `observedAt`.
+  var latestObservedAt: Date? {
+    accounts.map(\.snapshot.observedAt).max()
+  }
+
   init(
     provider: ProviderID,
     accounts: [AccountQuotaPresentation],
@@ -50,10 +56,6 @@ struct AccountQuotaPresentation: Equatable, Identifiable {
     selectedSource.isLocal ? "laptopcomputer" : "network"
   }
 
-  var sourceTooltip: String {
-    selectedSourceDisplayName
-  }
-
   var sourceAccessibilityLabel: String {
     "Source: \(selectedSourceDisplayName)"
   }
@@ -70,15 +72,17 @@ final class MenuBarViewModel {
     localRefreshInProgress || relayStateModel.profileStates.values.contains { $0.isRefreshing }
   }
 
-  var refreshedAt: Date? {
-    ([localRefreshedAt] + relayStateModel.profileStates.values.map(\.lastSuccessfulRefreshAt))
+  /// When QuotaBar last finished a local collect and/or Relay pull (orchestration).
+  /// Not provider data age — use each snapshot's `observedAt` for that.
+  var lastCheckedAt: Date? {
+    ([localLastCheckedAt] + relayStateModel.profileStates.values.map(\.lastSuccessfulRefreshAt))
       .compactMap { $0 }
       .max()
   }
 
   private var localRefreshInProgress = false
 
-  private var localRefreshedAt: Date?
+  private var localLastCheckedAt: Date?
 
   @ObservationIgnored
   private let collector: (any LocalQuotaCollecting)?
@@ -98,7 +102,7 @@ final class MenuBarViewModel {
     self.reportCache = reportCache
     if let cached = reportCache?.load() {
       report = cached.report
-      localRefreshedAt = cached.refreshedAt
+      localLastCheckedAt = cached.refreshedAt
     }
 
     if let collector {
@@ -119,13 +123,13 @@ final class MenuBarViewModel {
     init(
       visualTestReport: QuotaCollectionReport?,
       errorMessage: String?,
-      refreshedAt: Date?,
+      lastCheckedAt: Date?,
       relayStateModel: RelayStateModel = RelayStateModel.live()
     ) {
       self.relayStateModel = relayStateModel
       report = visualTestReport
       self.errorMessage = errorMessage
-      localRefreshedAt = refreshedAt
+      localLastCheckedAt = lastCheckedAt
       collector = nil
       initializationError = nil
       reportCache = nil
@@ -136,7 +140,7 @@ final class MenuBarViewModel {
     let localIsFresh = if collector == nil {
       errorMessage != nil
     } else {
-      localRefreshedAt.map { now.timeIntervalSince($0) < 60 } == true
+      localLastCheckedAt.map { now.timeIntervalSince($0) < 60 } == true
     }
     let relayIsFresh = relayStateModel.profiles.allSatisfy { profile in
       guard let state = relayStateModel.state(for: profile.id), state.refreshIssue == nil else {
@@ -159,9 +163,9 @@ final class MenuBarViewModel {
     if let collector {
       do {
         report = try await collector.collect()
-        localRefreshedAt = Date()
-        if let report, let localRefreshedAt {
-          reportCache?.save(report: report, refreshedAt: localRefreshedAt)
+        localLastCheckedAt = Date()
+        if let report, let localLastCheckedAt {
+          reportCache?.save(report: report, refreshedAt: localLastCheckedAt)
         }
         errorMessage = nil
       } catch is CancellationError {
@@ -197,7 +201,8 @@ final class MenuBarViewModel {
   private func clearLocalState() {
     report = nil
     errorMessage = nil
-    localRefreshedAt = nil
+    localLastCheckedAt = nil
+    reportCache?.clear()
   }
 
   func displaySnapshots(

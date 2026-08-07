@@ -72,13 +72,12 @@ struct QuotaBarDefaultsResetter: QuotaBarDefaultsResetting {
     }
   }
 
-  private static let keys = [
-    RelayProfileStore.storageKey,
-    LocalQuotaReportCache.storageKey,
-    "provider.codex.visible",
-    "provider.claude.visible",
-    "provider.grok.visible",
-  ]
+  private static var keys: [String] {
+    [
+      RelayProfileStore.storageKey,
+      LocalQuotaReportCache.storageKey,
+    ] + ProviderID.allCases.map { ProviderVisibility.storageKey(for: $0) }
+  }
 }
 
 /// Official managed Relay endpoint. Used as the Pair Device default; never a user credential.

@@ -39,7 +39,8 @@ struct QuotaBarApp: App {
           model: model,
           initialPath: visualTestConfiguration.initialPath,
           performsInitialRefresh: visualTestConfiguration.performsInitialRefresh,
-          performsRelayRefreshes: visualTestConfiguration.performsRelayRefreshes
+          performsRelayRefreshes: visualTestConfiguration.performsRelayRefreshes,
+          seedsLaunchAtLogin: false
         )
         .preferredColorScheme(visualTestConfiguration.colorScheme)
         .dynamicTypeSize(visualTestConfiguration.dynamicTypeSize)

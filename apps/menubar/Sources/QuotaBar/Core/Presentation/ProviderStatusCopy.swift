@@ -67,7 +67,7 @@ struct ProviderStatusCopy: Equatable {
     if let command = extractLoginCommand(from: message) {
       return normalizeLoginCommand(command, provider: provider)
     }
-    return defaultLoginCommand(for: provider)
+    return provider.loginCommand
   }
 
   static func hint(for provider: ProviderID, message: String? = nil) -> String {
@@ -94,31 +94,12 @@ struct ProviderStatusCopy: Equatable {
     return String(trimmed.prefix(93)).trimmingCharacters(in: .whitespacesAndNewlines) + "…"
   }
 
-  private static func defaultLoginCommand(for provider: ProviderID) -> String {
-    switch provider {
-    case .codex:
-      return "codex login"
-    case .claude:
-      return "claude auth login"
-    case .grok:
-      return "grok login"
-    }
-  }
-
   private static func normalizeLoginCommand(_ command: String, provider: ProviderID) -> String {
-    switch command {
-    case "codex", "codex login":
-      return "codex login"
-    case "claude", "claude auth login", "claude login":
-      return "claude auth login"
-    case "grok", "grok login":
-      return "grok login"
-    default:
-      if command.split(whereSeparator: \.isWhitespace).count >= 2 {
-        return command
-      }
-      return defaultLoginCommand(for: provider)
+    // Multi-word snippets from error messages are usable as-is; bare tokens fall back to catalog.
+    if command.split(whereSeparator: \.isWhitespace).count >= 2 {
+      return command
     }
+    return provider.loginCommand
   }
 
   private static func extractLoginCommand(from message: String?) -> String? {

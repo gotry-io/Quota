@@ -1,12 +1,12 @@
 import { homedir } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
+import type { QuotaSnapshot } from "@gotry-io/quota-protocol";
 import {
-  ProviderCollectionError,
   type CollectionContext,
+  ProviderCollectionError,
   type ProviderCollector,
   type ProviderSession,
 } from "../../contracts.ts";
-import type { QuotaSnapshot } from "@gotry-io/quota-protocol";
 import { classifyProviderError } from "../../runtime/errors.ts";
 import {
   createFetchTransport,
@@ -14,14 +14,14 @@ import {
   type HttpTransport,
   readJsonObject,
 } from "../../runtime/http.ts";
+import { type ClaudeCliAuthRefreshOptions, refreshClaudeAuthWithCli } from "./auth-refresh.ts";
 import {
   CLAUDE_SOURCE_API,
+  type ClaudeCredentials,
   hasUserProfileScope,
   loadClaudeCredentials,
   shouldRefreshClaudeCredentials,
-  type ClaudeCredentials,
 } from "./credentials.ts";
-import { refreshClaudeAuthWithCli, type ClaudeCliAuthRefreshOptions } from "./auth-refresh.ts";
 import {
   buildClaudeSnapshot,
   claudePlanLabel,
@@ -105,21 +105,22 @@ export class ClaudeCollector implements ProviderCollector {
       );
     }
 
-    const now = context.now ?? new Date();
-    const refreshAttempted = shouldRefreshClaudeCredentials(credentials, now);
+    // context.now freezes tests; when omitted, map stamps observed_at after HTTP.
+    const frozenNow = context.now;
+    const refreshAttempted = shouldRefreshClaudeCredentials(credentials, frozenNow ?? new Date());
 
     if (refreshAttempted) {
       credentials = await this.refreshAndReload(credentials, context.signal);
     }
 
     try {
-      return await this.collectWithCredentials(credentials, now, context.signal);
+      return await this.collectWithCredentials(credentials, frozenNow, context.signal);
     } catch (error) {
       if (error instanceof ClaudeOAuthUnauthorizedError && !refreshAttempted) {
         const refreshed = await this.refreshAndReload(credentials, context.signal);
         if (credentialsChanged(credentials, refreshed)) {
           try {
-            return await this.collectWithCredentials(refreshed, now, context.signal);
+            return await this.collectWithCredentials(refreshed, frozenNow, context.signal);
           } catch (retryError) {
             error = retryError;
           }
@@ -136,7 +137,7 @@ export class ClaudeCollector implements ProviderCollector {
 
   private async collectWithCredentials(
     credentials: ClaudeCredentials,
-    now: Date,
+    frozenNow: Date | undefined,
     signal?: AbortSignal,
   ): Promise<QuotaSnapshot> {
     if (!hasUserProfileScope(credentials)) {
@@ -171,7 +172,7 @@ export class ClaudeCollector implements ProviderCollector {
     const plan = claudePlanLabel(credentials.subscriptionType, credentials.rateLimitTier);
     return buildClaudeSnapshot({
       windows: mapped.windows,
-      now,
+      ...(frozenNow ? { now: frozenNow } : {}),
       ...(plan ? { plan } : {}),
       ...(email ? { email } : {}),
       ...(organizationId ? { organizationId } : {}),

@@ -1,10 +1,10 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { constants } from "node:fs";
 import { access } from "node:fs/promises";
 import { delimiter, join } from "node:path";
 import { ProviderCollectionError } from "../contracts.ts";
-import { JSON_RPC_STDERR_LIMIT_BYTES, JSON_RPC_STDOUT_LINE_LIMIT_BYTES } from "./limits.ts";
 import { sanitizeMessage } from "./errors.ts";
+import { JSON_RPC_STDERR_LIMIT_BYTES, JSON_RPC_STDOUT_LINE_LIMIT_BYTES } from "./limits.ts";
 
 export async function resolveExecutable(
   name: string,

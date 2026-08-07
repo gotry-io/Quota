@@ -1,6 +1,6 @@
 import { ProviderCollectionError } from "../contracts.ts";
-import { HTTP_BODY_LIMIT_BYTES, HTTP_TIMEOUT_MS } from "./limits.ts";
 import { httpStatusCategory, sanitizeMessage } from "./errors.ts";
+import { HTTP_BODY_LIMIT_BYTES, HTTP_TIMEOUT_MS } from "./limits.ts";
 
 export interface HttpRequest {
   url: string;

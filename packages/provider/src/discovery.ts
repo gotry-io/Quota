@@ -1,8 +1,10 @@
 import { access } from "node:fs/promises";
 import { homedir } from "node:os";
+import { API_KEY_SPECS } from "./api-key/specs.ts";
+import { resolveApiKeyCredentials } from "./api-key/resolve.ts";
+import { PROVIDER_CATALOG } from "./catalog.ts";
 import type { ProviderDiagnostic } from "./contracts.ts";
-import { CLAUDE_KEYCHAIN_SERVICE } from "./providers/claude/credentials.ts";
-import { claudeCredentialPaths } from "./providers/claude/credentials.ts";
+import { CLAUDE_KEYCHAIN_SERVICE, claudeCredentialPaths } from "./providers/claude/credentials.ts";
 import { codexAuthPaths } from "./providers/codex/credentials.ts";
 import { grokAuthPaths } from "./providers/grok/credentials.ts";
 import { readGenericPassword } from "./runtime/keychain.ts";
@@ -58,6 +60,17 @@ export async function diagnoseProviderSessions(
       credential_source: path,
       detail: "Grok auth file",
       available: await canAccess(path),
+    });
+  }
+
+  for (const [id, spec] of Object.entries(API_KEY_SPECS)) {
+    const resolved = await resolveApiKeyCredentials(spec, { environment });
+    const envHint = spec.envKeys[0] ?? "API_KEY";
+    diagnostics.push({
+      provider: id as keyof typeof PROVIDER_CATALOG,
+      credential_source: resolved?.source ?? `config|env:${envHint}`,
+      detail: `${PROVIDER_CATALOG[id as keyof typeof PROVIDER_CATALOG].displayName} API key (config or env)`,
+      available: resolved !== undefined,
     });
   }
 

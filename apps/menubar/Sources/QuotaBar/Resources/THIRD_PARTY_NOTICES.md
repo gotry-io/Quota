@@ -2,9 +2,9 @@
 
 ## Lobe Icons
 
-The OpenAI, Claude, and Grok monochrome SVG assets are from
-`@lobehub/icons-static-svg` (https://lobehub.com/icons). Paths are used as template marks and tinted
-by QuotaBar.
+The OpenAI, Claude, Grok, and OpenRouter monochrome SVG assets are from
+`@lobehub/icons-static-svg` / [lobehub/lobe-icons](https://github.com/lobehub/lobe-icons)
+(https://lobehub.com/icons). Paths are used as template marks and tinted by QuotaBar.
 
 MIT License
 

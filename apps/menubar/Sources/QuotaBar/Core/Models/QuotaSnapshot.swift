@@ -1,20 +1,7 @@
 import Foundation
 
-enum ProviderID: String, Codable, CaseIterable, Identifiable, Sendable {
-  case codex
-  case claude
-  case grok
-
-  var id: String { rawValue }
-
-  var displayName: String {
-    switch self {
-    case .codex: "Codex"
-    case .claude: "Claude Code"
-    case .grok: "Grok"
-    }
-  }
-}
+// ProviderID lives in ProviderID.generated.swift (from packages/provider/src/catalog.ts via
+// `pnpm generate:provider-catalog`). Do not redefine provider cases here.
 
 enum QuotaStatus: String, Codable, Sendable {
   case available
@@ -49,12 +36,42 @@ struct QuotaAccount: Codable, Equatable, Sendable {
   }
 }
 
+enum QuotaValueUnit: String, Codable, Equatable, Sendable {
+  case usd
+  case credits
+  case count
+}
+
 struct QuotaWindow: Codable, Equatable, Identifiable, Sendable {
   let id: String
   let title: String
   let usedPercent: Double
   let resetsAt: Date?
   let durationSeconds: Int?
+  /// Absolute remaining when known (e.g. USD). Optional; meter still uses usedPercent.
+  let remainingValue: Double?
+  let limitValue: Double?
+  let valueUnit: QuotaValueUnit?
+
+  init(
+    id: String,
+    title: String,
+    usedPercent: Double,
+    resetsAt: Date? = nil,
+    durationSeconds: Int? = nil,
+    remainingValue: Double? = nil,
+    limitValue: Double? = nil,
+    valueUnit: QuotaValueUnit? = nil
+  ) {
+    self.id = id
+    self.title = title
+    self.usedPercent = usedPercent
+    self.resetsAt = resetsAt
+    self.durationSeconds = durationSeconds
+    self.remainingValue = remainingValue
+    self.limitValue = limitValue
+    self.valueUnit = valueUnit
+  }
 }
 
 struct QuotaSnapshot: Codable, Equatable, Sendable {

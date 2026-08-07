@@ -1,8 +1,8 @@
-import { ProviderCollectionError, type ProviderCollector } from "../src/contracts.ts";
 import type { QuotaSnapshot } from "@gotry-io/quota-protocol";
 import { QuotaCollectionReportSchema } from "@gotry-io/quota-protocol";
 import { describe, expect, it } from "vitest";
 import { collectionExitCode, collectQuotaReport } from "../src/collection.ts";
+import { ProviderCollectionError, type ProviderCollector } from "../src/contracts.ts";
 
 const NOW = new Date("2026-08-02T12:00:00.000Z");
 
@@ -14,14 +14,30 @@ describe("collection report", () => {
         codex: successCollector("codex", "chatgpt_usage_api"),
         claude: failingCollector("claude", "auth_required", "Sign in again"),
         grok: successCollector("grok", "grok_billing_api"),
+        openrouter: successCollector("openrouter", "openrouter_api"),
+        deepseek: successCollector("deepseek", "deepseek_balance_api"),
+        kimi: successCollector("kimi", "kimi_code_usages_api"),
+        litellm: successCollector("litellm", "litellm_budget_api"),
       },
     });
 
     const validated = QuotaCollectionReportSchema.parse(report);
-    expect(validated.results.map((result) => result.provider)).toEqual(["codex", "claude", "grok"]);
+    expect(validated.results.map((result) => result.provider)).toEqual([
+      "codex",
+      "claude",
+      "grok",
+      "openrouter",
+      "deepseek",
+      "kimi",
+      "litellm",
+    ]);
     expect(validated.results[0]?.outcome).toBe("success");
     expect(validated.results[1]?.outcome).toBe("auth_required");
     expect(validated.results[2]?.outcome).toBe("success");
+    expect(validated.results[3]?.outcome).toBe("success");
+    expect(validated.results[4]?.outcome).toBe("success");
+    expect(validated.results[5]?.outcome).toBe("success");
+    expect(validated.results[6]?.outcome).toBe("success");
     expect(collectionExitCode(validated)).toBe(1);
     expect(JSON.stringify(validated)).not.toMatch(/Bearer |eyJ|access_token|refresh_token/i);
   });
@@ -72,10 +88,34 @@ describe("collection report", () => {
     expect(report.results[0]?.message).not.toContain("super-secret-token");
     expect(report.results[1]?.outcome).toBe("success");
   });
+
+  it("freezes context.now and captured_at only when options.now is set", async () => {
+    const unfrozen: Array<Date | undefined> = [];
+    const unfrozenReport = await collectQuotaReport({
+      providers: ["codex", "claude"],
+      collectors: {
+        codex: contextProbeCollector("codex", "chatgpt_usage_api", unfrozen),
+        claude: contextProbeCollector("claude", "anthropic_oauth_usage_api", unfrozen),
+      },
+    });
+    expect(unfrozen).toEqual([undefined, undefined]);
+    expect(unfrozenReport.captured_at).not.toBe(NOW.toISOString().replace(/\.\d{3}Z$/, "Z"));
+
+    const frozen: Array<Date | undefined> = [];
+    const frozenReport = await collectQuotaReport({
+      providers: ["codex"],
+      now: NOW,
+      collectors: {
+        codex: contextProbeCollector("codex", "chatgpt_usage_api", frozen),
+      },
+    });
+    expect(frozen).toEqual([NOW]);
+    expect(frozenReport.captured_at).toBe(NOW.toISOString().replace(/\.\d{3}Z$/, "Z"));
+  });
 });
 
 function successCollector(
-  provider: "codex" | "claude" | "grok",
+  provider: "codex" | "claude" | "grok" | "openrouter" | "deepseek" | "kimi" | "litellm",
   source: string,
 ): ProviderCollector {
   const snapshot = snapshotFixture(provider, source);
@@ -93,7 +133,10 @@ function successCollector(
   };
 }
 
-function snapshotFixture(provider: "codex" | "claude" | "grok", source: string): QuotaSnapshot {
+function snapshotFixture(
+  provider: "codex" | "claude" | "grok" | "openrouter" | "deepseek" | "kimi" | "litellm",
+  source: string,
+): QuotaSnapshot {
   return {
     provider,
     account: { fingerprint: `${provider}-fp`, fingerprint_scope: "source" },
@@ -105,7 +148,7 @@ function snapshotFixture(provider: "codex" | "claude" | "grok", source: string):
 }
 
 function failingCollector(
-  provider: "codex" | "claude" | "grok",
+  provider: "codex" | "claude" | "grok" | "openrouter" | "deepseek" | "kimi" | "litellm",
   category: "auth_required" | "unavailable" | "unsupported" | "error",
   message: string,
 ): ProviderCollector {
@@ -121,6 +164,28 @@ function failingCollector(
     ],
     collect: async () => {
       throw new ProviderCollectionError(category, message);
+    },
+  };
+}
+
+function contextProbeCollector(
+  provider: "codex" | "claude" | "grok" | "openrouter" | "deepseek" | "kimi" | "litellm",
+  source: string,
+  sink: Array<Date | undefined>,
+): ProviderCollector {
+  return {
+    provider,
+    discover: async () => [
+      {
+        provider,
+        session_id: "ambient",
+        display_label: provider,
+        credential_source: "fixture",
+      },
+    ],
+    collect: async (_session, context = {}) => {
+      sink.push(context.now);
+      return snapshotFixture(provider, source);
     },
   };
 }

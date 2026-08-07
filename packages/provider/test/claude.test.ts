@@ -2,8 +2,8 @@ import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { ClaudeCollector } from "../src/providers/claude/collector.ts";
 import { refreshClaudeAuthWithCli } from "../src/providers/claude/auth-refresh.ts";
+import { ClaudeCollector } from "../src/providers/claude/collector.ts";
 import {
   CLAUDE_KEYCHAIN_SERVICE,
   hasUserProfileScope,

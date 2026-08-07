@@ -30,7 +30,7 @@
         MenuBarViewModel(
           visualTestReport: nil,
           errorMessage: nil,
-          refreshedAt: nil,
+          lastCheckedAt: nil,
           relayStateModel: relayStateModel
         )
       case .content, .cachedRefreshError:
@@ -39,7 +39,7 @@
           errorMessage: self == .cachedRefreshError
             ? "Refresh failed. Showing the last local report."
             : nil,
-          refreshedAt: referenceDate.addingTimeInterval(
+          lastCheckedAt: referenceDate.addingTimeInterval(
             self == .cachedRefreshError ? -180 : -30
           ),
           relayStateModel: relayStateModel
@@ -48,14 +48,14 @@
         MenuBarViewModel(
           visualTestReport: emptyReport(at: referenceDate),
           errorMessage: nil,
-          refreshedAt: referenceDate.addingTimeInterval(-30),
+          lastCheckedAt: referenceDate.addingTimeInterval(-30),
           relayStateModel: relayStateModel
         )
       case .unavailable:
         MenuBarViewModel(
           visualTestReport: nil,
           errorMessage: "The bundled QuotaCLI helper could not be started.",
-          refreshedAt: nil,
+          lastCheckedAt: nil,
           relayStateModel: relayStateModel
         )
       }
@@ -190,7 +190,7 @@
 
     func prepareEnvironment() {
       for provider in ProviderID.allCases {
-        UserDefaults.standard.set(true, forKey: "provider.\(provider.rawValue).visible")
+        ProviderVisibility.setVisible(provider, true)
       }
     }
 

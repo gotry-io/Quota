@@ -297,7 +297,7 @@ describe("status", () => {
 
     expect(await runStatusCommand(capture.output, dependencies)).toBe(0);
     expect(capture.stdout).toEqual([
-      `CLI version: 0.0.1`,
+      `CLI version: 0.0.3`,
       "Providers:",
       "  codex\tfound\t~/.codex/auth.json\tCodex auth file",
       "Relay:",

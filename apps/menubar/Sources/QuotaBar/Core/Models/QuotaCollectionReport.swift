@@ -48,4 +48,34 @@ extension QuotaWindow {
   var remainingPercent: Double {
     min(max(100 - usedPercent, 0), 100)
   }
+
+  /// Wallet-style window: absolute remaining only, no budget/limit ratio.
+  var isBalanceOnly: Bool {
+    remainingValue != nil && limitValue == nil
+  }
+
+  /// Rate-limit / budget meters need a percent bar. Balance-only wallets do not.
+  var showsPercentMeter: Bool {
+    !isBalanceOnly
+  }
+
+  /// e.g. "$4.61 left" when value_unit/remaining_value are present.
+  /// Balance-only rows without a unit (e.g. DeepSeek CNY) still show the absolute remaining.
+  var absoluteRemainingLabel: String? {
+    guard let remainingValue else { return nil }
+    if let valueUnit {
+      switch valueUnit {
+      case .usd:
+        return String(format: "$%.2f left", remainingValue)
+      case .credits:
+        return String(format: "%.2f credits left", remainingValue)
+      case .count:
+        return String(format: "%.0f left", remainingValue)
+      }
+    }
+    if isBalanceOnly {
+      return String(format: "%.2f left", remainingValue)
+    }
+    return nil
+  }
 }

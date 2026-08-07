@@ -3,8 +3,10 @@
 QuotaCLI is the local provider collector and remote Relay agent. One TypeScript entry point produces
 a Node ESM npm package and a standalone Bun executable.
 
-Provider credentials are read locally and never sent to QuotaRelay. Relay mode sends only validated,
-normalized quota snapshots from `@gotry-io/quota-protocol`.
+Provider credentials are read locally and never sent to QuotaRelay. Supported collectors: Codex,
+Claude Code, Grok (ambient sessions), and API-key collectors (OpenRouter, DeepSeek, Kimi Code,
+LiteLLM via `quotacli config` / env). Relay mode sends only validated, normalized quota snapshots
+from `@gotry-io/quota-protocol`.
 
 ```bash
 pnpm --filter @gotry-io/quotacli dev -- status
@@ -18,11 +20,16 @@ pnpm --filter @gotry-io/quotacli build
 ```text
 quotacli version
 quotacli status
-quotacli quota [--provider codex|claude|grok|all] [--format text|json] [--pretty]
+quotacli quota [--provider <id>|all] [--format text|json] [--pretty]
 quotacli relay pair [--relay <url>]
 quotacli relay push
 quotacli relay unpair
 quotacli relay --help
+quotacli config set <provider> [--base-url <url>]
+quotacli config set <provider> --api-key-stdin [--base-url <url>]
+quotacli config get <provider>
+quotacli config unset <provider>
+quotacli config list
 quotacli help
 ```
 
@@ -53,10 +60,50 @@ bodies.
 `build:npm` creates the Node-based `dist/npm/quotacli.js` intended for publication as
 `@gotry-io/quotacli`. `build:standalone` creates `dist/standalone/quotacli` for the QuotaBar app
 bundle and direct release downloads. The npm package installs the same `quotacli` command and does
-not require Bun at runtime. A `v*` Git tag publishes the package from `release-cli.yml` through npm
-Trusted Publishing; the release workflow stores no long-lived npm credential. Stable tags publish
-to the `latest` dist-tag; prerelease tags such as `v0.0.2-beta.1` publish to `beta`
-(`npm install -g @gotry-io/quotacli@beta`).
+not require Bun at runtime. A `cli-v*` Git tag publishes the package from `release-cli.yml` through
+npm Trusted Publishing; the release workflow stores no long-lived npm credential. Stable tags
+publish to the `latest` dist-tag and update the Homebrew Formula `gotry-io/tap/quotacli` (installs
+the npm tarball via Node). Prerelease tags such as `cli-v0.0.2-beta.1` publish to `beta` only
+(`npm install -g @gotry-io/quotacli@beta`); they do not update Homebrew. QuotaBar uses separate
+`menubar-v*` tags and is not published by this workflow.
+
+Local version bump (commits `apps/cli/package.json` by default):
+
+```bash
+pnpm version:bump:cli patch    # also: minor | major | 0.1.0
+git tag -a "cli-v$(node -p "require('./apps/cli/package.json').version")" -m "QuotaCLI release"
+git push origin "cli-v$(node -p "require('./apps/cli/package.json').version")"
+```
+
+### Install
+
+```bash
+# Homebrew (stable; requires Node via brew)
+brew install gotry-io/tap/quotacli
+
+# npm (stable)
+npm install -g @gotry-io/quotacli
+
+# npm (beta)
+npm install -g @gotry-io/quotacli@beta
+```
+
+### Provider config (API keys)
+
+API-key providers (catalog `config.kind: "api_key"`) use a shared owner-only
+file (`$XDG_CONFIG_HOME/quotacli/providers.json` or `~/.config/quotacli/providers.json`). Collection
+prefers that file over environment variables. Do not pass secrets on argv.
+
+```bash
+quotacli config set deepseek
+printf '%s' "$OPENROUTER_API_KEY" | quotacli config set openrouter --api-key-stdin
+quotacli config get openrouter    # masked tip only
+quotacli config list
+quotacli config unset openrouter
+quotacli quota --provider openrouter
+```
+
+QuotaBar Settings sections for the same providers write the same file.
 
 ## Relay pairing
 

@@ -91,24 +91,6 @@ struct RelayPairCommandPresentation: Equatable {
   }
 }
 
-/// Compact single-line field with a small corner radius.
-struct RelayRoundedTextFieldStyle: TextFieldStyle {
-  private let cornerRadius: CGFloat = 6
-
-  func _body(configuration: TextField<Self._Label>) -> some View {
-    configuration
-      .textFieldStyle(.plain)
-      .padding(.horizontal, 10)
-      .frame(minHeight: 30)
-      .background(QuotaPalette.soft)
-      .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-      .overlay {
-        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-          .stroke(QuotaPalette.hairlineBorder, lineWidth: 1)
-      }
-  }
-}
-
 /// Eight fixed cells for Relay user codes (`ABCD-EFGH`).
 struct PairingCodeEntryView: View {
   @Binding var code: String
@@ -174,24 +156,20 @@ struct PairingCodeEntryView: View {
   }
 
   private func codeBox(_ index: Int) -> some View {
-    TextField("", text: binding(for: index))
+    let focused = focusedIndex == index
+    let fill =
+      showsError
+      ? QuotaPalette.critical.opacity(0.12)
+      : (focused ? QuotaPalette.fieldFillFocused : QuotaPalette.fieldFill)
+    return TextField("", text: binding(for: index))
       .textFieldStyle(.plain)
       .multilineTextAlignment(.center)
       .font(QuotaDesign.Typography.pairingCode)
       .frame(width: boxSize, height: boxSize)
-      .background(QuotaPalette.soft)
-      .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-      .overlay {
-        RoundedRectangle(cornerRadius: 8, style: .continuous)
-          .stroke(
-            showsError
-              ? QuotaPalette.critical.opacity(0.85)
-              : (focusedIndex == index
-                ? QuotaPalette.accent.opacity(0.75)
-                : QuotaPalette.hairlineBorder),
-            lineWidth: focusedIndex == index || showsError ? 1.5 : 1
-          )
-      }
+      .background(fill)
+      .clipShape(
+        RoundedRectangle(cornerRadius: QuotaDesign.Layout.groupCornerRadius, style: .continuous)
+      )
       .focused($focusedIndex, equals: index)
       .disabled(isDisabled)
       .accessibilityLabel("Pairing code character \(index + 1) of 8")

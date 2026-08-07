@@ -101,12 +101,4 @@ enum ProviderBrandAssets {
   }
 }
 
-extension ProviderID {
-  fileprivate var brandIconAssetName: String {
-    switch self {
-    case .codex: "openai"
-    case .claude: "claude"
-    case .grok: "grok"
-    }
-  }
-}
+
