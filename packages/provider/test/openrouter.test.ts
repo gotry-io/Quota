@@ -57,6 +57,19 @@ describe("openrouter mapping", () => {
     expect(windows[0]?.id).toBe("credits");
     expect(windows[0]?.used_percent).toBe(20);
   });
+
+  it("keeps key-limit when prepaid credits are zero", () => {
+    const credits = mapOpenRouterCreditsResponse({
+      data: { total_credits: 0, total_usage: 0 },
+    });
+    const key = mapOpenRouterKeyResponse({
+      data: { limit: 25, limit_remaining: 10, usage: 15, limit_reset: "daily" },
+    });
+    const windows = mapOpenRouterWindows(credits, key);
+    expect(windows).toHaveLength(1);
+    expect(windows[0]?.id).toBe("key_daily");
+    expect(windows[0]?.remaining_value).toBe(10);
+  });
 });
 
 describe("openrouter collector", () => {
@@ -116,6 +129,64 @@ describe("openrouter collector", () => {
     });
     expect(snapshot.windows).toHaveLength(1);
     expect(snapshot.windows[0]?.id).toBe("credits");
+  });
+
+  it("succeeds with key-limit alone when credits are zero", async () => {
+    const transport = async (request: HttpRequest): Promise<HttpResponse> => {
+      if (request.url.endsWith("/credits")) {
+        return jsonResponse(200, { data: { total_credits: 0, total_usage: 0 } });
+      }
+      if (request.url.endsWith("/key")) {
+        return jsonResponse(200, {
+          data: { limit: 20, limit_remaining: 12, usage: 8, limit_reset: "monthly" },
+        });
+      }
+      return jsonResponse(404, {});
+    };
+    const collector = new ApiKeyHttpCollector(openrouterSpec, {
+      environment: { OPENROUTER_API_KEY: "sk-or-v1-fixture" },
+      configPath: "/tmp/quota-openrouter-missing-config.json",
+      transport,
+    });
+    const snapshot = await collector.collect({
+      provider: "openrouter",
+      session_id: "ambient",
+      display_label: "OpenRouter",
+      credential_source: "env:OPENROUTER_API_KEY",
+    });
+    expect(snapshot.windows).toHaveLength(1);
+    expect(snapshot.windows[0]).toMatchObject({
+      id: "key_monthly",
+      remaining_value: 12,
+      limit_value: 20,
+    });
+  });
+
+  it("succeeds with key-limit when credits endpoint is unavailable", async () => {
+    const transport = async (request: HttpRequest): Promise<HttpResponse> => {
+      if (request.url.endsWith("/credits")) {
+        return jsonResponse(503, { error: "credits down" });
+      }
+      if (request.url.endsWith("/key")) {
+        return jsonResponse(200, {
+          data: { limit: 10, limit_remaining: 4, usage: 6, limit_reset: "daily" },
+        });
+      }
+      return jsonResponse(404, {});
+    };
+    const collector = new ApiKeyHttpCollector(openrouterSpec, {
+      environment: { OPENROUTER_API_KEY: "sk-or-v1-fixture" },
+      configPath: "/tmp/quota-openrouter-missing-config.json",
+      transport,
+    });
+    const snapshot = await collector.collect({
+      provider: "openrouter",
+      session_id: "ambient",
+      display_label: "OpenRouter",
+      credential_source: "env:OPENROUTER_API_KEY",
+    });
+    expect(snapshot.windows).toHaveLength(1);
+    expect(snapshot.windows[0]?.id).toBe("key_daily");
   });
 
   it("reports auth_required for 401 without echoing the key", async () => {

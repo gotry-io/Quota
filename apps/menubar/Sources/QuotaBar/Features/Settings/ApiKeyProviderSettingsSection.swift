@@ -87,11 +87,12 @@ struct ApiKeyProviderSettingsForm: View {
       do {
         try store.setApiKey(provider, apiKey: key, baseURL: base.isEmpty ? nil : base)
         keyDraft = ""
+        baseURLDraft = store.baseURL(for: provider) ?? ""
         reloadStatus()
         onIssue(nil)
         isVisible = true
       } catch {
-        onIssue("Could not save the API key.")
+        onIssue(saveErrorMessage(error, fallback: "Could not save the API key."))
       }
       return
     }
@@ -108,10 +109,11 @@ struct ApiKeyProviderSettingsForm: View {
         // Empty key field is normal when configured — only base changed.
         do {
           try store.updateBaseURL(provider, baseURL: base.isEmpty ? nil : base)
+          baseURLDraft = store.baseURL(for: provider) ?? ""
           reloadStatus()
           onIssue(nil)
         } catch {
-          onIssue("Could not save the base URL.")
+          onIssue(saveErrorMessage(error, fallback: "Could not save the base URL."))
         }
       } else {
         // Empty key + unchanged base → remove stored credential.
@@ -125,6 +127,19 @@ struct ApiKeyProviderSettingsForm: View {
           onIssue("Could not clear the API key.")
         }
       }
+    }
+  }
+
+  private func saveErrorMessage(_ error: Error, fallback: String) -> String {
+    switch error as? ProviderConfigStoreError {
+    case .invalidBaseURL:
+      return provider.allowsPrivateHttpBaseURL
+        ? "Invalid base URL. Use HTTPS, or HTTP for local/private hosts."
+        : "Invalid base URL. Use an HTTPS origin."
+    case .missingBaseURL:
+      return "\(provider.displayName) requires a base URL."
+    default:
+      return fallback
     }
   }
 }

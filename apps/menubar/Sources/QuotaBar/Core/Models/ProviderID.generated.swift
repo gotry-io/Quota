@@ -84,4 +84,30 @@ enum ProviderID: String, Codable, CaseIterable, Identifiable, Sendable {
   var isConfigurable: Bool {
     Self.configurableCases.contains(self)
   }
+
+  /// Catalog `requireBaseUrl` — base URL required when saving API-key config.
+  var requiresBaseURL: Bool {
+    switch self {
+    case .codex: false
+    case .claude: false
+    case .grok: false
+    case .openrouter: false
+    case .deepseek: false
+    case .kimi: false
+    case .litellm: true
+    }
+  }
+
+  /// Catalog `allowPrivateHttp` — http:// only for loopback/private/.local.
+  var allowsPrivateHttpBaseURL: Bool {
+    switch self {
+    case .codex: false
+    case .claude: false
+    case .grok: false
+    case .openrouter: false
+    case .deepseek: false
+    case .kimi: false
+    case .litellm: true
+    }
+  }
 }

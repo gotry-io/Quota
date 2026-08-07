@@ -37,6 +37,36 @@ struct ProviderConfigStoreTests {
   }
 
   @Test
+  func normalizesAndRejectsInvalidBaseURLsLikeCLI() throws {
+    #expect(
+      ProviderConfigStore.normalizeBaseURL("https://openrouter.ai/api/v1/", allowPrivateHttp: false)
+        == "https://openrouter.ai/api/v1"
+    )
+    #expect(
+      ProviderConfigStore.normalizeBaseURL("http://evil.example", allowPrivateHttp: false) == nil
+    )
+    #expect(
+      ProviderConfigStore.normalizeBaseURL("http://127.0.0.1:4000", allowPrivateHttp: true)
+        == "http://127.0.0.1:4000"
+    )
+    #expect(
+      ProviderConfigStore.normalizeBaseURL("http://127.0.0.1:4000", allowPrivateHttp: false) == nil
+    )
+
+    let directory = try ownerOnlyTempDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let store = ProviderConfigStore(fileURL: directory.appendingPathComponent("providers.json"))
+    #expect(throws: ProviderConfigStoreError.invalidBaseURL) {
+      try store.setApiKey(.openrouter, apiKey: "sk-or-v1-x", baseURL: "http://evil.example")
+    }
+    #expect(throws: ProviderConfigStoreError.missingBaseURL) {
+      try store.setApiKey(.litellm, apiKey: "sk-litellm-x", baseURL: nil)
+    }
+    try store.setApiKey(.litellm, apiKey: "sk-litellm-x", baseURL: "http://192.168.1.10:4000/v1")
+    #expect(store.baseURL(for: .litellm) == "http://192.168.1.10:4000/v1")
+  }
+
+  @Test
   func updatesBaseURLWithoutReenteringApiKey() throws {
     let directory = try ownerOnlyTempDirectory()
     defer { try? FileManager.default.removeItem(at: directory) }

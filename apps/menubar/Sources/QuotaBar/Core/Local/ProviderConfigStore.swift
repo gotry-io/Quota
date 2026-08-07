@@ -71,16 +71,10 @@ struct ProviderConfigStore {
     guard !trimmed.isEmpty else {
       throw ProviderConfigStoreError.emptyKey
     }
+    let normalizedBase = try Self.validatedBaseURL(baseURL, for: provider)
     // Missing file → empty. Corrupt / insecure file → throw (never wipe secrets).
     var file = try load()
-    var entry = ProviderSecretEntry(apiKey: trimmed, baseURL: nil)
-    if let baseURL {
-      let base = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
-      if !base.isEmpty {
-        entry.baseURL = base
-      }
-    }
-    file.providers[provider.rawValue] = entry
+    file.providers[provider.rawValue] = ProviderSecretEntry(apiKey: trimmed, baseURL: normalizedBase)
     try save(file)
   }
 
@@ -106,10 +100,89 @@ struct ProviderConfigStore {
     guard var entry = file.providers[provider.rawValue], !entry.apiKey.isEmpty else {
       throw ProviderConfigStoreError.missingKey
     }
-    let trimmed = baseURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-    entry.baseURL = trimmed.isEmpty ? nil : trimmed
+    entry.baseURL = try Self.validatedBaseURL(baseURL, for: provider)
     file.providers[provider.rawValue] = entry
     try save(file)
+  }
+
+  /// Aligns with CLI `normalizeBaseUrl` (HTTPS origin; optional private HTTP).
+  static func normalizeBaseURL(
+    _ value: String?,
+    allowPrivateHttp: Bool
+  ) -> String? {
+    guard var trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty
+    else {
+      return nil
+    }
+    while trimmed.hasSuffix("/") {
+      trimmed.removeLast()
+    }
+    guard !trimmed.isEmpty else { return nil }
+
+    let candidate = trimmed.contains("://") ? trimmed : "https://\(trimmed)"
+    guard let url = URL(string: candidate),
+      let scheme = url.scheme?.lowercased(),
+      let host = url.host,
+      !host.isEmpty
+    else {
+      return nil
+    }
+    if url.user != nil || url.password != nil {
+      return nil
+    }
+
+    let path = url.path.hasSuffix("/") ? String(url.path.dropLast()) : url.path
+    switch scheme {
+    case "https":
+      let origin = "https://\(host)\(url.port.map { ":\($0)" } ?? "")"
+      return path.isEmpty ? origin : "\(origin)\(path)"
+    case "http" where allowPrivateHttp && isPrivateOrLocalHost(host):
+      let origin = "http://\(host)\(url.port.map { ":\($0)" } ?? "")"
+      return path.isEmpty ? origin : "\(origin)\(path)"
+    default:
+      return nil
+    }
+  }
+
+  private static func validatedBaseURL(_ value: String?, for provider: ProviderID) throws -> String? {
+    let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    if trimmed.isEmpty {
+      if provider.requiresBaseURL {
+        throw ProviderConfigStoreError.missingBaseURL
+      }
+      return nil
+    }
+    guard
+      let normalized = normalizeBaseURL(
+        trimmed,
+        allowPrivateHttp: provider.allowsPrivateHttpBaseURL
+      )
+    else {
+      throw ProviderConfigStoreError.invalidBaseURL
+    }
+    return normalized
+  }
+
+  private static func isPrivateOrLocalHost(_ hostname: String) -> Bool {
+    let host = hostname.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+    if host == "localhost" || host == "127.0.0.1" || host == "::1" {
+      return true
+    }
+    if host.hasSuffix(".local") {
+      return true
+    }
+    let parts = host.split(separator: ".").compactMap { Int($0) }
+    if parts.count == 4 {
+      if parts[0] == 10 { return true }
+      if parts[0] == 192, parts[1] == 168 { return true }
+      if parts[0] == 172, (16...31).contains(parts[1]) { return true }
+      if parts[0] == 169, parts[1] == 254 { return true }
+    }
+    // Unique-local IPv6 fc00::/7
+    if host.hasPrefix("fc") || host.hasPrefix("fd") {
+      return true
+    }
+    return false
   }
 
   private func load() throws -> ProviderConfigFile {
@@ -215,6 +288,8 @@ enum ProviderApiKeyStatus: Equatable {
 enum ProviderConfigStoreError: Error, Equatable {
   case emptyKey
   case missingKey
+  case missingBaseURL
+  case invalidBaseURL
   case notConfigurable
   case unreadable
   case invalid

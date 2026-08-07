@@ -27,23 +27,28 @@ export const openrouterSpec: ApiKeyHttpCollectorSpec = {
 
 async function collectOpenRouter(ctx: ApiKeyCollectContext) {
   const { credentials, transport, clientVersion, signal, now } = ctx;
-  const creditsJson = await fetchBearerJson({
-    transport,
-    url: `${credentials.baseUrl}/credits`,
-    apiKey: credentials.apiKey,
-    source: OPENROUTER_SOURCE_API,
-    providerLabel: "OpenRouter",
-    clientVersion,
-    ...(signal ? { signal } : {}),
-    extraHeaders: { "X-Title": clientVersion },
-  });
-  const credits = mapOpenRouterCreditsResponse(creditsJson);
-  if (!credits) {
-    throw new ProviderCollectionError(
-      "error",
-      "OpenRouter credits response was malformed.",
-      OPENROUTER_SOURCE_API,
-    );
+
+  // Credits and /key are independent meters. Auth failures still surface; soft failures
+  // leave that meter undefined so key-limit-only accounts can succeed.
+  let credits = undefined as ReturnType<typeof mapOpenRouterCreditsResponse>;
+  try {
+    const creditsJson = await fetchBearerJson({
+      transport,
+      url: `${credentials.baseUrl}/credits`,
+      apiKey: credentials.apiKey,
+      source: OPENROUTER_SOURCE_API,
+      providerLabel: "OpenRouter",
+      clientVersion,
+      required: false,
+      ...(signal ? { signal } : {}),
+      extraHeaders: { "X-Title": clientVersion },
+    });
+    credits = creditsJson !== undefined ? mapOpenRouterCreditsResponse(creditsJson) : undefined;
+  } catch (error) {
+    if (error instanceof ProviderCollectionError && error.category === "auth_required") {
+      throw error;
+    }
+    credits = undefined;
   }
 
   let keyData: OpenRouterKeyData | undefined;
@@ -60,7 +65,10 @@ async function collectOpenRouter(ctx: ApiKeyCollectContext) {
       extraHeaders: { "X-Title": clientVersion },
     });
     keyData = keyJson !== undefined ? mapOpenRouterKeyResponse(keyJson) : undefined;
-  } catch {
+  } catch (error) {
+    if (error instanceof ProviderCollectionError && error.category === "auth_required") {
+      throw error;
+    }
     keyData = undefined;
   }
 

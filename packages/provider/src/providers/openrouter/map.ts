@@ -74,7 +74,7 @@ export function mapOpenRouterKeyResponse(json: unknown): OpenRouterKeyData | und
 
 /** CodexBar-aligned: key-limit window first when configured, then credits balance. */
 export function mapOpenRouterWindows(
-  credits: OpenRouterCreditsData,
+  credits: OpenRouterCreditsData | undefined,
   key: OpenRouterKeyData | undefined,
 ): QuotaWindow[] {
   const windows: QuotaWindow[] = [];
@@ -84,7 +84,8 @@ export function mapOpenRouterWindows(
     windows.push(keyWindow);
   }
 
-  if (credits.totalCredits > 0) {
+  // totalCredits === 0 is a valid empty prepaid balance; only emit a credits meter when > 0.
+  if (credits && credits.totalCredits > 0) {
     windows.push({
       id: "credits",
       title: "Credits",
