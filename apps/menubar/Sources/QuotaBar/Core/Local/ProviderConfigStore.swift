@@ -97,6 +97,21 @@ struct ProviderConfigStore {
     try save(file)
   }
 
+  /// Update proxy base URL without re-entering the API key (provider must already be configured).
+  func updateBaseURL(_ provider: ProviderID, baseURL: String?) throws {
+    guard provider.isConfigurable else {
+      throw ProviderConfigStoreError.notConfigurable
+    }
+    var file = try load()
+    guard var entry = file.providers[provider.rawValue], !entry.apiKey.isEmpty else {
+      throw ProviderConfigStoreError.missingKey
+    }
+    let trimmed = baseURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    entry.baseURL = trimmed.isEmpty ? nil : trimmed
+    file.providers[provider.rawValue] = entry
+    try save(file)
+  }
+
   private func load() throws -> ProviderConfigFile {
     let fileManager = FileManager.default
     let path = fileURL.path
@@ -199,6 +214,7 @@ enum ProviderApiKeyStatus: Equatable {
 
 enum ProviderConfigStoreError: Error, Equatable {
   case emptyKey
+  case missingKey
   case notConfigurable
   case unreadable
   case invalid

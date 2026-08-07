@@ -18,6 +18,10 @@ enum QuotaPalette {
   static let soft = Color(nsColor: .quaternaryLabelColor).opacity(0.35)
   /// Settings grouped list fill — light translucent wash on material chrome.
   static let settingsGroupFill = Color.primary.opacity(0.055)
+  /// Text fields: borderless recessed fill (just deeper than group chrome).
+  static let fieldFill = Color.primary.opacity(0.06)
+  /// Text fields when focused — a step deeper, still quiet on material.
+  static let fieldFillFocused = Color.primary.opacity(0.09)
   static let progressTrack = Color.primary.opacity(0.08)
 
   // MARK: Semantic (accent / warning / critical)
@@ -26,6 +30,10 @@ enum QuotaPalette {
   static let accent = Color(nsColor: adaptiveAccent)
   /// Black or white, selected from the resolved accent to retain at least AA text contrast.
   static let onAccent = Color(nsColor: adaptiveOnAccent)
+  /// Toggle ON track — accent wash (readable on material; not solid primary fill).
+  static let toggleOnTrack = Color(nsColor: adaptiveAccent).opacity(0.55)
+  /// Toggle thumb — always light; on/off is carried by the track wash.
+  static let toggleThumb = Color(nsColor: .controlBackgroundColor)
   static let warning = Color(nsColor: .systemOrange)
   static let critical = Color(nsColor: .systemRed)
 

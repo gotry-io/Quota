@@ -37,6 +37,31 @@ struct ProviderConfigStoreTests {
   }
 
   @Test
+  func updatesBaseURLWithoutReenteringApiKey() throws {
+    let directory = try ownerOnlyTempDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let fileURL = directory.appendingPathComponent("providers.json")
+    let store = ProviderConfigStore(fileURL: fileURL)
+    let secret = "sk-or-v1-menubar-base-url-fixture"
+    try store.setApiKey(.openrouter, apiKey: secret, baseURL: "https://proxy.example")
+    #expect(store.baseURL(for: .openrouter) == "https://proxy.example")
+
+    try store.updateBaseURL(.openrouter, baseURL: "https://proxy.example/v1")
+    #expect(store.baseURL(for: .openrouter) == "https://proxy.example/v1")
+    guard case .configured = store.status(for: .openrouter) else {
+      Issue.record("key must remain configured after base URL update")
+      return
+    }
+
+    try store.updateBaseURL(.openrouter, baseURL: nil)
+    #expect(store.baseURL(for: .openrouter) == nil)
+    #expect(throws: ProviderConfigStoreError.missingKey) {
+      try store.updateBaseURL(.deepseek, baseURL: "https://example")
+    }
+  }
+
+  @Test
   func refusesToOverwriteCorruptConfig() throws {
     let directory = try ownerOnlyTempDirectory()
     defer { try? FileManager.default.removeItem(at: directory) }

@@ -33,7 +33,18 @@ enum QuotaDesign {
     static let settingsIconColumnWidth: CGFloat = 16
     static let progressHeight: CGFloat = 8
     static let tagCornerRadius: CGFloat = 3
+    /// Primary filled pill (empty-state Retry, etc.).
     static let controlMinHeight: CGFloat = 36
+    /// Compact single-line fields.
+    static let fieldMinHeight: CGFloat = 30
+    /// Fields nest slightly inside group chrome.
+    static let fieldCornerRadius: CGFloat = 6
+    /// Settings groups, command chips, pairing cells.
+    static let groupCornerRadius: CGFloat = 8
+    /// Product toggle track (visual); hit target remains ≥ minimumInteractiveDimension.
+    static let toggleTrackWidth: CGFloat = 26
+    static let toggleTrackHeight: CGFloat = 15
+    static let toggleThumbSize: CGFloat = 13
 
     static let headerIconPointSize: CGFloat = 14
     static let emptyIconPointSize: CGFloat = 28

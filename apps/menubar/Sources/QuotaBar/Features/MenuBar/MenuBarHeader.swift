@@ -12,10 +12,14 @@ struct MenuBarHeader: View {
     case none
     case openSettings(() -> Void)
     case pairDevice(() -> Void)
+    /// Quiet text action in the header ops area (e.g. provider API key **Save**).
+    case textAction(title: String, accessibilityHint: String, action: () -> Void)
     case overflowMenu(deleteEnabled: Bool, onDeleteAll: () -> Void)
   }
 
   let title: String
+  /// Page-level failure copy (e.g. API key save). Replaces the title while set.
+  var issue: String? = nil
   let canNavigateBack: Bool
   let onNavigateBack: () -> Void
   /// Overview root only: app mark before the title.
@@ -42,11 +46,22 @@ struct MenuBarHeader: View {
         Color.clear.frame(width: QuotaDesign.Spacing.xs, height: 1)
       }
 
-      Text(title)
-        .quotaFont(.panelTitle)
-        .foregroundStyle(QuotaPalette.ink)
-        .lineLimit(1)
-        .accessibilityAddTraits(.isHeader)
+      if let issue, !issue.isEmpty {
+        Text(issue)
+          .quotaFont(.secondary)
+          .foregroundStyle(QuotaPalette.critical)
+          .lineLimit(1)
+          .minimumScaleFactor(0.85)
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .accessibilityLabel("\(title). \(issue)")
+          .accessibilityAddTraits(.isHeader)
+      } else {
+        Text(title)
+          .quotaFont(.panelTitle)
+          .foregroundStyle(QuotaPalette.ink)
+          .lineLimit(1)
+          .accessibilityAddTraits(.isHeader)
+      }
 
       Spacer(minLength: QuotaDesign.Spacing.inline)
 
@@ -94,6 +109,23 @@ struct MenuBarHeader: View {
         alignment: .trailing,
         action: action
       )
+
+    case .textAction(let title, let accessibilityHint, let action):
+      Button(action: action) {
+        Text(title)
+          .quotaFont(.settingsLabel)
+          .foregroundStyle(QuotaPalette.accent)
+          .frame(
+            minWidth: QuotaDesign.Layout.minimumInteractiveDimension,
+            minHeight: QuotaDesign.Layout.headerHeight,
+            alignment: .trailing
+          )
+          .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .accessibilityLabel(title)
+      .accessibilityHint(accessibilityHint)
+      .help(title)
 
     case .overflowMenu(let deleteEnabled, let onDeleteAll):
       HeaderOverflowPlainButton(

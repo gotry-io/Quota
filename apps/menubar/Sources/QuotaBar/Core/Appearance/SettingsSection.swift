@@ -5,8 +5,6 @@ struct SettingsSection<Content: View>: View {
   let title: String
   @ViewBuilder var content: () -> Content
 
-  private let groupCornerRadius: CGFloat = 8
-
   var body: some View {
     VStack(alignment: .leading, spacing: QuotaDesign.Spacing.xs) {
       Text(title)
@@ -19,8 +17,11 @@ struct SettingsSection<Content: View>: View {
         // multi-row groups share the same per-row height.
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-          RoundedRectangle(cornerRadius: groupCornerRadius, style: .continuous)
-            .fill(QuotaPalette.settingsGroupFill)
+          RoundedRectangle(
+            cornerRadius: QuotaDesign.Layout.groupCornerRadius,
+            style: .continuous
+          )
+          .fill(QuotaPalette.settingsGroupFill)
         )
     }
   }

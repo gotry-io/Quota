@@ -28,6 +28,7 @@ Canonical implementation:
 
 - `Sources/QuotaBar/Core/Appearance/QuotaPalette.swift`
 - `Sources/QuotaBar/Core/Appearance/QuotaDesign.swift`
+- `Sources/QuotaBar/Core/Appearance/QuotaControls.swift`
 - `Sources/QuotaBar/Core/Appearance/ProviderBrandIcon.swift`
 - `Sources/QuotaBar/Features/MenuBar/*`
 - `Sources/QuotaBar/Features/Settings/*`
@@ -67,6 +68,12 @@ Mapped from `QuotaDesign.Layout`:
 | `providerRowVerticalPadding` | 10 | Provider block / dense list row vertical padding |
 | `progressHeight` | 8 | Remaining meter thickness |
 | `controlMinHeight` | 36 | Primary button min height |
+| `fieldMinHeight` | 30 | Single-line text field / menu-field chrome |
+| `fieldCornerRadius` | 6 | Fields (nested in groups) |
+| `groupCornerRadius` | 8 | Settings groups, command chips, pairing cells |
+| `toggleTrackWidth` | 26 | Product toggle track width |
+| `toggleTrackHeight` | 15 | Product toggle track height |
+| `toggleThumbSize` | 13 | Product toggle thumb diameter |
 | `tagCornerRadius` | 3 | Status tag corner |
 
 ### Spacing scale (`QuotaDesign.Spacing`)
@@ -108,6 +115,8 @@ Rules:
 - **Overview trailing:** gear → opens Settings.
 - **Settings trailing:** `ellipsis` overflow menu (Delete all data…, Quit).
 - **Remote Devices trailing:** `plus` with accessibility label **Pair Device**.
+- **Configurable provider detail trailing:** quiet accent text **Save** (API key form commit /
+  empty-key delete). Non-configurable providers keep no trailing action.
 - **Pair Device:** no trailing action; 8-cell code entry auto-submits when complete.
 - **Other pages:** no trailing control; back returns through the stack. Back uses a compact 20pt
   visual slot so the title stays attached to the chevron, while its response region remains
@@ -125,11 +134,11 @@ Rules:
   an exceptional lower bound, not the normal design target.
 - Visual density never shrinks response geometry. Header icons use 28×44pt targets, text actions
   such as Refresh and Copy have at least 28pt height, and disclosure/link rows expose the whole row.
-- Agent visibility uses one native Toggle on the **provider detail** page (not the Agents list).
-  Native Picker and text-field behavior stays intact, including keyboard navigation and focus
-  treatment.
-- Every icon-only action has an accessibility label and macOS hover help. Plain buttons use
-  SwiftUI's native style for pressed, focused, and disabled states.
+- Agent visibility uses one product Toggle (`QuotaToggleStyle`) on the **provider detail** page
+  (not the Agents list). Text fields use `.quotaTextFieldStyle()`; focus is a deeper fill (no stroke
+  ring). Keyboard navigation stays intact.
+- Every icon-only action has an accessibility label and macOS hover help. Product button styles
+  own pressed/disabled treatment; quiet plain actions keep SwiftUI plain style.
 - The eight pairing-code fields remain separate 28×28pt edit targets so pointer and VoiceOver users
   can address an individual character without breaking the fixed 288pt content width.
 
@@ -188,7 +197,8 @@ live in one **Sources** group.
 - Title-only stacked rows **vertically center** the title (no empty meta slot pushing it up). With a
   subtitle, title + meta stack and stay centered in the same 44pt height.
 - Multi-line forms (API key, sign-in copy) keep `settingsRowVerticalPadding` (8). Toggles use
-  `.controlSize(.mini)` only — do not put minHeight on the switch itself.
+  `QuotaToggleStyle` (track geometry from Layout tokens; 28×28 hit target). Do not reintroduce
+  system mini Toggle chrome in Settings rows.
 - Home rows are icon + title (+ trailing). Launch at Login has no recovery copy under the row.
 - About matches the same icon+title density. Links stay full-row tappable via `contentShape`.
 - Devices list uses the same grouped card + `SettingsListRow` language as Agents (no hairline
@@ -196,6 +206,7 @@ live in one **Sources** group.
 
 ### Pair Device
 
+- No page intro / pairing-code how-to prose — section headers + controls only.
 - Default endpoint: official Quota Relay. Known endpoints and **Other Relay…** (reveals Relay URL).
 - Task order is endpoint → visible `quotacli relay pair` command → pairing code. Installation help is
   secondary disclosure, not a prerequisite form.
@@ -368,32 +379,95 @@ Rules:
 - Small outlined tag with clock symbol + `Stale` (still the one exception that keeps light chrome).
 - Appears near the account/provider header when data is stale.
 
-### Primary button
+### Form controls
 
-- Accent-filled pill with a black-or-white label selected from the resolved accent for AA contrast;
-  min height 36, horizontal padding 18.
-- Press feedback uses a slight scale change, not translucent accent fill, so label contrast remains
-  stable on both light and dark material.
-- At most one high-emphasis pill visible in a compact region (empty-state Retry, etc.).
+Product form chrome lives in `QuotaControls.swift` (styles) and `QuotaDesign.Layout` (geometry).
+Do not use AppKit `.roundedBorder`, `.borderedProminent`, or system mini Toggle inside the panel.
+
+#### Text field (`.quotaTextFieldStyle()`)
+
+```text
+┌───────────────────────────────────┬────┐
+│  mono 11 content                  │  × │  borderless fill · r=6 · minH 30
+└───────────────────────────────────┴────┘
+```
+
+| State | Fill |
+| --- | --- |
+| Rest | `fieldFill` (primary @ 6%) |
+| Focus | `fieldFillFocused` (primary @ 9%) |
+| Disabled | same chrome at ~55% opacity |
+
+- **No field stroke** — depth vs group chrome is fill only (deeper than `settingsGroupFill`).
+- Optional trailing **×** (`xmark.circle.fill`, mute) clears draft text only; hit target 28×28.
+- Secrets use `SecureField`; non-secrets (base URL, Relay URL) use plain `TextField`.
+- Pass `isFocused` from the field's `@FocusState`.
+- Pairing cells keep independent 28×28 geometry; same borderless fill language (`groupCornerRadius` 8).
+
+#### Form commit (API key)
+
+- **Explicit Save in the shell header trailing ops area only** (quiet accent text `Save`) — never a
+  body button, never auto-save on blur, Return, or leave.
+- **Non-empty key + Save** → write key (+ optional base URL).
+- **Empty key + Save** when already configured:
+  - base URL draft **differs** from disk → update base URL only (key field is empty by design when
+    a key is stored);
+  - base URL **unchanged** → delete the stored credential.
+- In-field × only clears draft text, never the store.
+- Failures go to the **shell title bar** (`pageIssue`). No instructional body copy above fields.
+- Body is fields only; commit is header-owned. Configured mask lives on the Agents list subtitle.
+
+#### Buttons
+
+| Level | Style | Visual | Use |
+| --- | --- | --- | --- |
+| Primary | `QuotaPrimaryButtonStyle` | Accent capsule, `onAccent` label, minH 36, pad 18 | Empty-state Retry; at most one high-emphasis pill in a compact region |
+| Header text | trailing `textAction` | Quiet accent `settingsLabel`, no chrome | Provider **Save** |
+| Quiet | `.buttonStyle(.plain)` | No chrome; `body` / `mute` text | Copy, header icons, disclosures, field × |
+| Destructive quiet | plain + role/critical | No chrome; destructive label | Remove Device |
+
+Primary press feedback is a slight scale change (not translucent accent) so label contrast stays
+stable on light and dark material. Do not put form Save as a filled body control next to fields.
+
+#### Toggle (`QuotaToggleStyle`)
+
+```text
+OFF  track = progressTrack · stroke hairline · thumb light
+ON   track = accent @ 55% · stroke accent @ 35% · thumb light
+Hit  28×28; visual track 26×15
+```
+
+- ON uses a medium accent wash (not solid primary fill; not a pale 30% tint).
+- Thumb stays light in both states; on/off is carried by the track, not a dark thumb.
+- Snappy thumb animation; Reduce Motion → instant toggle.
+- Used for Launch at Login and Show in Overview. Never system green switch chrome in Settings.
+
+#### Menu field (Picker chrome)
+
+Relay endpoint menu Picker uses the same borderless `fieldFill` + r=6 chrome as text fields
+(full width, minH 30). Keep native menu behavior; do not invent a second radio list unless
+endpoint count requires it.
 
 ### Settings
 
 - Sections: General, Sources (Agents + Devices), About on home; Agents list → provider detail;
   Remote Devices → Pair Device.
-- General: native Launch at Login toggle (title + mini Toggle, row min height 28). UI reads/writes
-  `SMAppService.mainApp` only — not a separate UserDefaults preference — so System Settings changes
-  stay aligned on next Settings open. First production launch seeds default-on once when still
-  unregistered.
-- Agents list: helper copy, then destination rows (brand icon, name, optional recovery/API-key
-  detail, chevron) via `SettingsListRow` at `settingsListRowHeight`. No visibility switch on the
-  list. Title-only rows center the name; subtitle rows stack within the same height.
+- General: Launch at Login (title + `QuotaToggleStyle`). UI reads/writes `SMAppService.mainApp`
+  only — not a separate UserDefaults preference — so System Settings changes stay aligned on next
+  Settings open. First production launch seeds default-on once when still unregistered.
+- Agents list: destination rows only (no page helper prose). Brand icon, name, optional subtitle,
+  chevron via `SettingsListRow` at `settingsListRowHeight`. No visibility switch on the list. For
+  API-key providers, a **configured** mask from `providers.json` is the subtitle even when
+  collection still shows recovery copy. Missing key falls back to recovery detail or `API key`.
 - Devices list: same grouped + list-row language; subtitle is health · short last-seen (· endpoint
   when multi-Relay). Trailing **Remove** stays plain destructive text.
-- Provider detail: **Show in Overview** toggle (always interactive; auth failures still appear in
-  Overview when enabled) plus API key or sign-in copy. Defaults from `defaultVisible`.
+- Provider detail: **Show in Overview** product toggle (always interactive; auth failures still
+  appear in Overview when enabled) plus API key or sign-in copy. Defaults from `defaultVisible`.
   - Signed-in / success: no status chrome under the name.
   - Not signed in / error / unavailable: short recovery detail (catalog `loginCommand`).
-- API-key forms: SecureField + Save/Clear on configurable provider detail; never show the full key.
+- API-key forms: fields only (no status blurb); SecureField + optional base URL, in-field ×; header
+  **Save** (empty key deletes); failures in the title bar; never show the full key.
+- Non-configurable Sign-in: login command only (mono), no surrounding explanation.
 - Overflow menu (ellipsis): Delete all QuotaBar data…, Quit QuotaBar.
 - About: Version, Website, Feedback rows (no product-name label, no copyright blurb). Rows share
   compact text height; do not force `minimumInteractiveDimension` as the About row body height.
@@ -426,6 +500,8 @@ Rules:
 - Keep provider marks monochrome; tone meters by remaining opacity tiers.
 - Put provenance on the hover meta row (source leading, Observed trailing).
 - Honor Reduce Motion and VoiceOver labels on combined provider rows.
+- Use product form styles (`.quotaTextFieldStyle()`, in-field ×, `QuotaToggleStyle`) for
+  Settings/Pair Device inputs so soft material chrome stays consistent.
 
 ### Don’t
 
@@ -434,6 +510,8 @@ Rules:
 - Show Local/Remote as heavy filled badges.
 - Put version in the footer or Quit as an always-visible Settings row.
 - Drive QuotaBar visuals from `apps/web/DESIGN.md`.
+- Mix AppKit field/button chrome (`.roundedBorder`, `.borderedProminent`, system mini Toggle)
+  back into form surfaces.
 
 ## Reference
 

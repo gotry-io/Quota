@@ -23,6 +23,7 @@ struct PairDeviceView: View {
   @State private var retryToken = 0
   @State private var installCopied = false
   @State private var pairCopied = false
+  @FocusState private var isCustomOriginFocused: Bool
 
   private var officialURL: URL {
     model.officialRelayBaseURL ?? OfficialRelayEndpoint.production.baseURL
@@ -57,29 +58,25 @@ struct PairDeviceView: View {
   var body: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: QuotaDesign.Spacing.section) {
-        Text("Choose a Relay, then run the pairing command on the device you want to connect.")
-          .quotaSecondaryStyle()
-          .fixedSize(horizontal: false, vertical: true)
-
         endpointPicker
 
         if endpointChoice == .other {
-          VStack(alignment: .leading, spacing: QuotaDesign.Spacing.meta) {
-            TextField("https://relay.example", text: $customOrigin)
-              .textFieldStyle(RelayRoundedTextFieldStyle())
-              .quotaMonoStyle()
-              .disabled(isSubmitting)
-              .accessibilityLabel("Relay URL")
-              .onChange(of: customOrigin) { _, _ in
+          TextField("https://relay.example", text: $customOrigin)
+            .focused($isCustomOriginFocused)
+            .quotaTextFieldStyle(
+              isFocused: isCustomOriginFocused,
+              showsClear: !customOrigin.isEmpty,
+              onClear: {
+                customOrigin = ""
                 pairCopied = false
               }
-
-            if selectedURL == nil {
-              Text("Enter a valid Relay URL to update the command and enable code entry.")
-                .quotaMetaStyle()
-                .fixedSize(horizontal: false, vertical: true)
+            )
+            .quotaMonoStyle()
+            .disabled(isSubmitting)
+            .accessibilityLabel("Relay URL")
+            .onChange(of: customOrigin) { _, _ in
+              pairCopied = false
             }
-          }
         }
 
         VStack(alignment: .leading, spacing: QuotaDesign.Spacing.sm) {
@@ -109,10 +106,6 @@ struct PairDeviceView: View {
         VStack(alignment: .leading, spacing: QuotaDesign.Spacing.sectionRows) {
           Text("Pairing Code")
             .quotaSectionHeaderStyle()
-
-          Text("Enter the 8-character code shown by QuotaCLI. Pairing starts automatically.")
-            .quotaSecondaryStyle()
-            .fixedSize(horizontal: false, vertical: true)
 
           PairingCodeEntryView(
             code: $pairingCode,
@@ -169,7 +162,12 @@ struct PairDeviceView: View {
       .labelsHidden()
       .pickerStyle(.menu)
       .controlSize(.regular)
-      .frame(minHeight: QuotaDesign.Layout.minimumInteractiveDimension)
+      .padding(.horizontal, 10)
+      .frame(maxWidth: .infinity, minHeight: QuotaDesign.Layout.fieldMinHeight, alignment: .leading)
+      .background(QuotaPalette.fieldFill)
+      .clipShape(
+        RoundedRectangle(cornerRadius: QuotaDesign.Layout.fieldCornerRadius, style: .continuous)
+      )
       .disabled(isSubmitting)
       .accessibilityLabel("Relay endpoint")
       .onChange(of: endpointChoice) { _, _ in
@@ -251,12 +249,10 @@ struct PairDeviceView: View {
       }
       .padding(.horizontal, 10)
       .padding(.vertical, QuotaDesign.Spacing.sm)
-      .background(QuotaPalette.soft)
-      .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-      .overlay {
-        RoundedRectangle(cornerRadius: 8, style: .continuous)
-          .stroke(QuotaPalette.hairlineBorder, lineWidth: 1)
-      }
+      .background(QuotaPalette.fieldFill)
+      .clipShape(
+        RoundedRectangle(cornerRadius: QuotaDesign.Layout.groupCornerRadius, style: .continuous)
+      )
     }
   }
 

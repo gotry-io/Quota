@@ -4,12 +4,21 @@ import SwiftUI
 struct ProviderSettingsView: View {
   let model: MenuBarViewModel
   let provider: ProviderID
+  var saveRequest: Int = 0
+  var onIssue: (String?) -> Void = { _ in }
 
   @State private var isVisible: Bool
 
-  init(model: MenuBarViewModel, provider: ProviderID) {
+  init(
+    model: MenuBarViewModel,
+    provider: ProviderID,
+    saveRequest: Int = 0,
+    onIssue: @escaping (String?) -> Void = { _ in }
+  ) {
     self.model = model
     self.provider = provider
+    self.saveRequest = saveRequest
+    self.onIssue = onIssue
     _isVisible = State(initialValue: ProviderVisibility.isVisible(provider))
   }
 
@@ -27,7 +36,7 @@ struct ProviderSettingsView: View {
               trailing: {
                 Toggle("Show in Overview", isOn: visibilityBinding)
                   .labelsHidden()
-                  .controlSize(.mini)
+                  .toggleStyle(QuotaToggleStyle())
                   .accessibilityLabel("Show \(provider.displayName) in Overview")
                   .accessibilityHint(agentStatus.accessibilityHint)
               }
@@ -45,13 +54,19 @@ struct ProviderSettingsView: View {
 
         if provider.isConfigurable {
           SettingsSection(title: "API key") {
-            ApiKeyProviderSettingsForm(provider: provider, isVisible: visibilityBinding)
-              .padding(.vertical, QuotaDesign.Layout.settingsRowVerticalPadding)
+            ApiKeyProviderSettingsForm(
+              provider: provider,
+              isVisible: visibilityBinding,
+              saveRequest: saveRequest,
+              onIssue: onIssue
+            )
+            .padding(.vertical, QuotaDesign.Layout.settingsRowVerticalPadding)
           }
         } else {
           SettingsSection(title: "Sign-in") {
-            Text("Uses local \(provider.displayName) session credentials. Recovery: \(provider.loginCommand)")
-              .quotaMetaStyle()
+            Text(provider.loginCommand)
+              .quotaMonoStyle()
+              .textSelection(.enabled)
               .fixedSize(horizontal: false, vertical: true)
               .padding(.vertical, QuotaDesign.Layout.settingsRowVerticalPadding)
           }

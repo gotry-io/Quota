@@ -106,7 +106,7 @@ struct SettingsHomeView: View {
     SettingsListRow(title: title, systemImage: systemImage) {
       Toggle(accessibilityLabel, isOn: isOn)
         .labelsHidden()
-        .controlSize(.mini)
+        .toggleStyle(QuotaToggleStyle())
     }
     .accessibilityElement(children: .combine)
     .accessibilityLabel(accessibilityLabel)

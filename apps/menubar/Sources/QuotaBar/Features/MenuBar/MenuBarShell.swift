@@ -3,6 +3,7 @@ import SwiftUI
 struct MenuBarShell<Content: View>: View {
   let model: MenuBarViewModel
   let title: String
+  var issue: String? = nil
   let canNavigateBack: Bool
   let onNavigateBack: () -> Void
   let showsLeadingIcon: Bool
@@ -12,6 +13,7 @@ struct MenuBarShell<Content: View>: View {
   init(
     model: MenuBarViewModel,
     title: String,
+    issue: String? = nil,
     canNavigateBack: Bool,
     onNavigateBack: @escaping () -> Void,
     showsLeadingIcon: Bool = false,
@@ -20,6 +22,7 @@ struct MenuBarShell<Content: View>: View {
   ) {
     self.model = model
     self.title = title
+    self.issue = issue
     self.canNavigateBack = canNavigateBack
     self.onNavigateBack = onNavigateBack
     self.showsLeadingIcon = showsLeadingIcon
@@ -31,6 +34,7 @@ struct MenuBarShell<Content: View>: View {
     VStack(spacing: 0) {
       MenuBarHeader(
         title: title,
+        issue: issue,
         canNavigateBack: canNavigateBack,
         onNavigateBack: onNavigateBack,
         showsLeadingIcon: showsLeadingIcon,

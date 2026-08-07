@@ -16,6 +16,21 @@ struct RelaySettingsUITests {
   }
 
   @Test
+  func configurableProviderDetailShowsHeaderSaveAction() {
+    var navigation = MenuBarNavigationState()
+    navigation.open(.settings)
+    navigation.open(.agents)
+    navigation.open(.provider(.openrouter))
+    #expect(navigation.showsProviderSaveAction)
+    #expect(ProviderID.openrouter.isConfigurable)
+
+    navigation.navigateBack()
+    navigation.open(.provider(.codex))
+    #expect(!navigation.showsProviderSaveAction)
+    #expect(!ProviderID.codex.isConfigurable)
+  }
+
+  @Test
   func customPageStackPushesAndPops() {
     var navigation = MenuBarNavigationState()
     #expect(navigation.currentRoute == nil)
@@ -130,6 +145,7 @@ struct RelaySettingsUITests {
       }
     }
   }
+
 }
 
 private struct LeakyError: LocalizedError {

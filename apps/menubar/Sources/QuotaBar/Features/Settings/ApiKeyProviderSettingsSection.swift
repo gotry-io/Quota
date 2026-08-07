@@ -1,116 +1,130 @@
 import SwiftUI
 
-/// API-key form for one catalog-configurable provider (no outer section chrome).
-/// Used on the provider detail page under Settings → Agents.
+/// Header **Save** bumps `saveRequest`.
+/// Non-empty key writes; empty key + base change updates base only; empty + no base change deletes.
 struct ApiKeyProviderSettingsForm: View {
   let provider: ProviderID
   @Binding var isVisible: Bool
+  var saveRequest: Int = 0
+  var onIssue: (String?) -> Void = { _ in }
 
   @State private var status: ProviderApiKeyStatus
   @State private var keyDraft = ""
   @State private var baseURLDraft = ""
-  @State private var message: String?
+  @FocusState private var focusedField: Field?
 
-  private let store = ProviderConfigStore()
+  private enum Field: Hashable {
+    case apiKey
+    case baseURL
+  }
 
-  init(provider: ProviderID, isVisible: Binding<Bool>) {
+  init(
+    provider: ProviderID,
+    isVisible: Binding<Bool>,
+    saveRequest: Int = 0,
+    onIssue: @escaping (String?) -> Void = { _ in }
+  ) {
     self.provider = provider
     self._isVisible = isVisible
+    self.saveRequest = saveRequest
+    self.onIssue = onIssue
     let store = ProviderConfigStore()
     _status = State(initialValue: store.status(for: provider))
-    // Seed base URL so Save does not wipe a previously stored proxy endpoint.
     _baseURLDraft = State(initialValue: store.baseURL(for: provider) ?? "")
   }
 
   var body: some View {
     VStack(alignment: .leading, spacing: QuotaDesign.Spacing.xs) {
-      Text(statusLabel)
-        .quotaMetaStyle()
-        .fixedSize(horizontal: false, vertical: true)
-
       SecureField("API key", text: $keyDraft)
-        .textFieldStyle(.roundedBorder)
-        .controlSize(.small)
-        .font(.system(size: 11, design: .monospaced))
+        .focused($focusedField, equals: .apiKey)
+        .quotaTextFieldStyle(
+          isFocused: focusedField == .apiKey,
+          showsClear: !keyDraft.isEmpty,
+          onClear: { keyDraft = "" }
+        )
+        .quotaMonoStyle()
+        .textContentType(.password)
         .accessibilityLabel("\(provider.displayName) API key")
 
-      // LiteLLM and other proxies need a base URL; optional for the rest.
       TextField("Base URL (optional)", text: $baseURLDraft)
-        .textFieldStyle(.roundedBorder)
-        .controlSize(.small)
-        .font(.system(size: 11, design: .monospaced))
+        .focused($focusedField, equals: .baseURL)
+        .quotaTextFieldStyle(
+          isFocused: focusedField == .baseURL,
+          showsClear: !baseURLDraft.isEmpty,
+          onClear: { baseURLDraft = "" }
+        )
+        .quotaMonoStyle()
+        .textContentType(.URL)
+        .autocorrectionDisabled()
         .accessibilityLabel("\(provider.displayName) base URL")
-
-      HStack(spacing: QuotaDesign.Spacing.inline) {
-        Button("Save", action: save)
-          .buttonStyle(.borderedProminent)
-          .controlSize(.small)
-          .disabled(keyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-
-        Button("Clear", action: clear)
-          .buttonStyle(.bordered)
-          .controlSize(.small)
-          .disabled({
-            if case .configured = status { return false }
-            return true
-          }())
-      }
-
-      if let message {
-        Text(message)
-          .quotaMetaStyle()
-          .fixedSize(horizontal: false, vertical: true)
-      }
     }
     .onAppear {
       reloadStatus()
+      if case .unreadable = status {
+        onIssue("Could not read providers.json.")
+      }
     }
-  }
-
-  private var statusLabel: String {
-    switch status {
-    case .missing:
-      return "No key saved. Paste a key and Save, or run \(provider.loginCommand)."
-    case .unreadable:
-      return "Could not read ~/.config/quotacli/providers.json."
-    case .configured(let mask):
-      return "Saved: \(mask). Shared with QuotaCLI."
+    .onDisappear { onIssue(nil) }
+    .onChange(of: saveRequest) { _, newValue in
+      if newValue > 0 { save() }
     }
   }
 
   private func reloadStatus() {
+    let store = ProviderConfigStore()
     status = store.status(for: provider)
-    if baseURLDraft.isEmpty, let saved = store.baseURL(for: provider) {
-      baseURLDraft = saved
+    if baseURLDraft.isEmpty {
+      baseURLDraft = store.baseURL(for: provider) ?? ""
     }
   }
 
   private func save() {
-    do {
-      let base = baseURLDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-      try store.setApiKey(
-        provider,
-        apiKey: keyDraft,
-        baseURL: base.isEmpty ? nil : base
-      )
-      keyDraft = ""
-      reloadStatus()
-      message = "Saved. Refresh Overview to collect."
-      isVisible = true
-    } catch {
-      message = "Could not save the API key."
-    }
-  }
+    let key = keyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+    let base = baseURLDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+    let store = ProviderConfigStore()
 
-  private func clear() {
-    do {
-      try store.clear(provider)
+    if !key.isEmpty {
+      do {
+        try store.setApiKey(provider, apiKey: key, baseURL: base.isEmpty ? nil : base)
+        keyDraft = ""
+        reloadStatus()
+        onIssue(nil)
+        isVisible = true
+      } catch {
+        onIssue("Could not save the API key.")
+      }
+      return
+    }
+
+    switch status {
+    case .missing:
       keyDraft = ""
-      baseURLDraft = ""
-      reloadStatus()
-      message = "Cleared \(provider.displayName) key."
-    } catch {
-      message = "Could not clear the API key."
+      onIssue(nil)
+    case .unreadable:
+      onIssue("Could not clear the API key.")
+    case .configured:
+      let savedBase = store.baseURL(for: provider) ?? ""
+      if base != savedBase {
+        // Empty key field is normal when configured — only base changed.
+        do {
+          try store.updateBaseURL(provider, baseURL: base.isEmpty ? nil : base)
+          reloadStatus()
+          onIssue(nil)
+        } catch {
+          onIssue("Could not save the base URL.")
+        }
+      } else {
+        // Empty key + unchanged base → remove stored credential.
+        do {
+          try store.clear(provider)
+          keyDraft = ""
+          baseURLDraft = ""
+          reloadStatus()
+          onIssue(nil)
+        } catch {
+          onIssue("Could not clear the API key.")
+        }
+      }
     }
   }
 }

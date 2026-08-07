@@ -11,10 +11,6 @@ struct AgentsSettingsView: View {
 
     return ScrollView {
       VStack(alignment: .leading, spacing: QuotaDesign.Spacing.md) {
-        Text("Open a provider to show or hide it in Overview and manage API keys.")
-          .quotaMetaStyle()
-          .fixedSize(horizontal: false, vertical: true)
-
         SettingsSection(title: "Agents") {
           VStack(alignment: .leading, spacing: 0) {
             ForEach(ProviderID.allCases) { provider in
@@ -63,17 +59,22 @@ struct AgentsSettingsView: View {
     status: AgentStatusPresentation,
     apiKeyStatus: ProviderApiKeyStatus?
   ) -> String {
+    if provider.isConfigurable {
+      switch apiKeyStatus ?? .missing {
+      case .configured(let mask):
+        return mask
+      case .unreadable:
+        return "Config unreadable"
+      case .missing:
+        break
+      }
+    }
     if let detail = status.detail {
       return detail
     }
-    guard provider.isConfigurable else { return "" }
-    switch apiKeyStatus ?? .missing {
-    case .configured(let mask):
-      return mask
-    case .missing:
+    if provider.isConfigurable {
       return "API key"
-    case .unreadable:
-      return "Config unreadable"
     }
+    return ""
   }
 }
