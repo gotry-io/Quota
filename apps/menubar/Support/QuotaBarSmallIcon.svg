@@ -1,7 +1,14 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
   <title>QuotaBar compact</title>
-  <!-- Same inset plate as the large master; single-ring optical mark for 16–64px. -->
-  <rect x="100" y="100" width="824" height="824" rx="185" ry="185" fill="#f2f8f5"/>
+  <defs>
+    <linearGradient id="brand-surface" gradientUnits="userSpaceOnUse" x1="256" y1="164" x2="768" y2="860">
+      <stop offset="0" stop-color="#fbfdfc"/>
+      <stop offset="0.48" stop-color="#f2f8f5"/>
+      <stop offset="1" stop-color="#dfebe5"/>
+    </linearGradient>
+  </defs>
+  <!-- Same graded inset plate as the large master; the 16–64px glyph stays flat and crisp. -->
+  <rect x="100" y="100" width="824" height="824" rx="185" ry="185" fill="url(#brand-surface)"/>
   <g transform="translate(179.2 179.2) scale(10.4)">
     <path
       d="M37.37 50.75A19.5 19.5 0 1 1 50.75 37.37"

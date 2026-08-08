@@ -356,6 +356,12 @@ Compact Mint `#39c991` is an asset-only optical color for the diagonal tail in 1
 and the favicon. It is intentionally more saturated than Soft Mint so the short stroke survives at
 small sizes; it is never a UI accent, semantic state, or full-mark color.
 
+The macOS app-icon masters alone may model restrained material depth: one upper-left light source,
+a low-contrast Brand Surface gradient, tonal Emerald/Mint mark gradients, and a low-opacity contact
+shadow under the large mark. This exception does not permit gradients, highlights, or persistent
+shadows in the menu panel or website product mark. The compact 16–64px glyph remains flat so its
+silhouette and color separation survive rasterization.
+
 | Token | Value | Use |
 | --- | --- | --- |
 | provider marks | `ink` | All providers share ink template tint |
@@ -419,14 +425,16 @@ full mark or add the full mark's circular node to compact assets.
 
 ### Product-mark masters
 
-- **Large app-icon master:** 1024×1024 transparent canvas with a Brand Surface plate at
+- **Large app-icon master:** 1024×1024 transparent canvas with a gently graded Brand Surface plate at
   `(100, 100)`, size `824×824`, corner radius `185`. The full mark is centered at `(512, 512)` and
   occupies about 78% of the plate: Soft Mint outer capacity track (`r=288`, `64px` stroke), Emerald
   inner quota arc (`r=172`, `88px` stroke), and an Emerald node centered at `(715.6, 715.6)` with
   radius `40`. A Brand Surface knockout of radius `68` replaces the outer-track segment behind the
   node, creating even negative space; the node must touch neither ring. The outer track is a circle,
-  not an arc with ordinary rounded endpoints.
-- **Compact app-icon master:** the same transparent canvas and inset plate, but one Emerald open arc
+  not an arc with ordinary rounded endpoints. The surface and mark use one restrained upper-left
+  light source, and one low-opacity underlay separates the mark from the plate without gloss,
+  texture, extrusion, or a second hard shadow.
+- **Compact app-icon master:** the same transparent canvas and graded inset plate, but one Emerald open arc
   plus a Compact Mint (`#39c991`) short diagonal tail. It intentionally preserves the earlier
   Q-gauge silhouette because
   the two rings and circular knockout lose separation at 16–64px. The tail uses the arc's line weight

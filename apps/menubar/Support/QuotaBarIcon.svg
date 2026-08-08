@@ -1,24 +1,62 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
   <title>QuotaBar</title>
+  <defs>
+    <!-- One restrained upper-left light source gives the pale plate and flat mark native depth. -->
+    <linearGradient id="brand-surface" gradientUnits="userSpaceOnUse" x1="256" y1="164" x2="768" y2="860">
+      <stop offset="0" stop-color="#fbfdfc"/>
+      <stop offset="0.48" stop-color="#f2f8f5"/>
+      <stop offset="1" stop-color="#dfebe5"/>
+    </linearGradient>
+    <linearGradient id="brand-mint" gradientUnits="userSpaceOnUse" x1="288" y1="240" x2="748" y2="792">
+      <stop offset="0" stop-color="#9be8c9"/>
+      <stop offset="0.5" stop-color="#82ddb8"/>
+      <stop offset="1" stop-color="#62c79f"/>
+    </linearGradient>
+    <linearGradient id="brand-emerald" gradientUnits="userSpaceOnUse" x1="336" y1="304" x2="712" y2="736">
+      <stop offset="0" stop-color="#0d8362"/>
+      <stop offset="0.52" stop-color="#087456"/>
+      <stop offset="1" stop-color="#055b45"/>
+    </linearGradient>
+  </defs>
   <!--
     macOS app icon layout (1024 master):
     - Transparent canvas
     - Centered rounded plate with ~100px margin/side (plate ≈ 824×824)
     - Continuous-looking corner radius ≈ 185 on the plate (~22.4%)
     - Glyph occupies ~78% of the plate while retaining a clear internal margin
+    - Restrained material gradients and contact shadow share one upper-left light source
     System may still apply effects; silhouette and optical size come from this inset plate.
   -->
-  <rect x="100" y="100" width="824" height="824" rx="185" ry="185" fill="#f2f8f5"/>
+  <rect x="100" y="100" width="824" height="824" rx="185" ry="185" fill="url(#brand-surface)"/>
+  <!-- Two faint underlays soften contact depth without filters or glossy bevels. -->
+  <g fill="none" stroke="#183f34" stroke-opacity="0.035" transform="translate(3 10)">
+    <circle cx="512" cy="512" r="288" stroke-width="84"/>
+    <path
+      d="M570.8 673.6A172 172 0 1 1 673.6 570.8"
+      stroke-width="108"
+      stroke-linecap="round"
+    />
+  </g>
+  <g fill="none" stroke="#183f34" stroke-opacity="0.06" transform="translate(2 6)">
+    <circle cx="512" cy="512" r="288" stroke-width="70"/>
+    <path
+      d="M570.8 673.6A172 172 0 1 1 673.6 570.8"
+      stroke-width="96"
+      stroke-linecap="round"
+    />
+  </g>
   <!-- Full orbital-node mark: mint capacity track, emerald quota ring, emerald outer node. -->
-  <circle cx="512" cy="512" r="288" fill="none" stroke="#82ddb8" stroke-width="64"/>
+  <circle cx="512" cy="512" r="288" fill="none" stroke="url(#brand-mint)" stroke-width="64"/>
   <path
     d="M570.8 673.6A172 172 0 1 1 673.6 570.8"
     fill="none"
-    stroke="#087456"
+    stroke="url(#brand-emerald)"
     stroke-width="88"
     stroke-linecap="round"
   />
   <!-- The surface knockout makes the node part of the outer track without touching either ring. -->
-  <circle cx="715.6" cy="715.6" r="68" fill="#f2f8f5"/>
-  <circle cx="715.6" cy="715.6" r="40" fill="#087456"/>
+  <circle cx="715.6" cy="715.6" r="68" fill="url(#brand-surface)"/>
+  <circle cx="718.6" cy="725.6" r="52" fill="#183f34" fill-opacity="0.035"/>
+  <circle cx="717.6" cy="721.6" r="45" fill="#183f34" fill-opacity="0.06"/>
+  <circle cx="715.6" cy="715.6" r="40" fill="url(#brand-emerald)"/>
 </svg>
