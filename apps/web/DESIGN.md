@@ -3,9 +3,10 @@ version: alpha
 name: Quota-web-design
 description: |
   Design system for the Quota public website (quota.gotry.io) and related marketing/static surfaces.
-  Paper canvas, pure black CTAs, no gradients or custom shadows — aligned to the Ollama design
-  grammar. SF Pro Rounded for display, system sans for UI, ui-monospace for commands. This file is
-  not the QuotaBar menu-panel system; native menubar UI is specified in apps/menubar/DESIGN.md.
+  Paper canvas, pure black CTAs, a Soft Mint and Emerald product mark, and no gradients or custom
+  shadows. SF Pro Rounded is used for display, system sans for UI, and ui-monospace for commands.
+  This file is not the QuotaBar menu-panel system; native menubar UI is specified in
+  apps/menubar/DESIGN.md.
 
 colors:
   primary: "#000000"
@@ -15,6 +16,10 @@ colors:
   charcoal: "#525252"
   body: "#737373"
   mute: "#a3a3a3"
+  brand-emerald: "#087456"
+  brand-mint: "#82ddb8"
+  brand-compact-mint: "#39c991"
+  brand-surface: "#f2f8f5"
   canvas: "#ffffff"
   surface-soft: "#fafafa"
   surface-card: "#ffffff"
@@ -23,7 +28,7 @@ colors:
   on-dark: "#ffffff"
   on-dark-mute: "rgba(255,255,255,0.7)"
   surface-dark: "#171717"
-  focus-ring: "rgba(59,130,246,0.5)"
+  focus-ring: "rgba(8,116,86,0.45)"
   link: "#000000"
   link-mute: "#737373"
   terminal-red: "#ff5f56"
@@ -33,7 +38,7 @@ colors:
   brand-claude: "#d97757"
   brand-grok: "#26262a"
   brand-grok-dark: "#e4e4e7"
-  usage-healthy: "#16a34a"
+  usage-healthy: "#087456"
   usage-warning: "#d97706"
   usage-critical: "#dc2626"
 
@@ -365,9 +370,12 @@ may appear, but interactive marketing chrome stays minimal.
 
 The visual system is inspired by Ollama's documentation-first minimalism. Light mode is paper-white
 canvas and pure black ink; dark mode is an inverted adaptation of the same fixed tokens. Page
-chrome, actions, tags, and empty states stay monochrome. Provider identity may use light brand
-tints on monochrome SVG marks in marketing illustrations. There are no gradients or custom shadows.
-Depth is hairline borders and at most one inverted dark surface per viewport.
+chrome, actions, tags, and empty states stay monochrome. The Quota product mark is the intentional
+brand-color exception: Soft Mint defines the outer quota track; Emerald defines the inner quota arc
+and the node embedded in the outer track. Provider identity may use light brand tints on monochrome
+SVG marks in marketing illustrations.
+There are no gradients or custom shadows. Depth is hairline borders and at most one inverted dark
+surface per viewport.
 
 All website surfaces share one geometry. Interactive controls use `{rounded.full}`; cards use
 `{rounded.lg}` (12px); structural rows and dividers use `{rounded.none}`.
@@ -383,7 +391,7 @@ Typography pairs SF Pro Rounded for display roles with the system sans for ordin
 - Flat 12px cards for feature and install blocks.
 - One reading column; marketing pages are not a stack of dashboard widgets.
 - Monospaced commands and device identifiers are treated as primary content.
-- The double-ring Q gauge product mark is the only custom illustration.
+- The double-ring orbital-node product mark is the only custom illustration.
 
 ## Colors
 
@@ -392,8 +400,16 @@ Typography pairs SF Pro Rounded for display roles with the system sans for ordin
 
 ### Brand & Accent
 
-- **Pure Black** (`{colors.primary}` — `#000000`): the product brand, primary action, and strongest
-  text. Panel chrome stays neutral.
+- **Quota Emerald** (`{colors.brand-emerald}` — `#087456`): the full mark's inner quota arc and outer
+  node, healthy quota fill, and brand-aligned focus treatment.
+- **Soft Mint** (`{colors.brand-mint}` — `#82ddb8`): the full mark's outer capacity track.
+- **Compact Mint** (`{colors.brand-compact-mint}` — `#39c991`): the short diagonal tail in the
+  favicon and 16–64px app-icon master only. Its extra saturation preserves the stroke at small sizes;
+  it is not a website accent or semantic state.
+- **Brand Surface** (`{colors.brand-surface}` — `#f2f8f5`): favicon and app-icon plate only; it does
+  not replace the website canvas.
+- **Pure Black** (`{colors.primary}` — `#000000`): primary action and strongest text. Panel chrome
+  stays neutral.
 - **Ink Deep** (`{colors.ink-deep}` — `#090909`): pressed primary-button surface.
 - **Provider brand tints**: Codex `{colors.brand-codex}` (Lobe `codex-color` blue `#7a9dff`), Claude
   `{colors.brand-claude}`, Grok `{colors.brand-grok}` / `{colors.brand-grok-dark}` — used only to
@@ -448,8 +464,8 @@ They must not be reused for quota state.
 
 ### Focus
 
-- **Focus Ring** (`{colors.focus-ring}` — `rgba(59,130,246,0.5)`): the sole blue token, reserved for
-  keyboard focus and native accessibility indication.
+- **Focus Ring** (`{colors.focus-ring}` — `rgba(8,116,86,0.45)`): Emerald at translucent strength,
+  reserved for keyboard focus and native accessibility indication.
 
 ### System Appearance
 
@@ -597,7 +613,7 @@ the overview's visual inventory during repeated refreshes.
 ### Onboarding & Pairing
 
 - Center a single reading column no wider than 560px.
-- Use the double-ring Q gauge product mark at 80–120px once, above the headline.
+- Use the full orbital-node product mark at 80–120px once, above the headline.
 - Present one task per step: discover local providers, choose Relay, pair device, confirm.
 - Pairing commands use `{components.command-pill}` when short and `{components.terminal-card}` when
   output or multiple lines are required.
@@ -623,12 +639,14 @@ stack custom shadows on top of platform elevation.
 
 ### Decorative Depth
 
-The only custom illustration is the double-ring Q gauge product mark. Its primary inner quota arc
-and diagonal tail use `{colors.ink}`; its quieter outer quota-window arc uses `{colors.mute}`. Both
-arcs open on the same lower-right axis, and the tail stays inside the outer circular silhouette. A
-small line icon may identify providers, devices, Relay, authentication, refresh, settings, and
-freshness. Utility icons stay monochrome; provider marks use brand-tinted monochrome SVGs. There is
-no photography, texture, glow, glass effect, or background artwork.
+The only custom illustration is the double-ring orbital-node product mark. Its smaller inner quota
+arc and the node on the outer trajectory use `{colors.brand-emerald}`; the outer capacity track uses
+`{colors.brand-mint}`. A circular knockout separates the node from the outer track, while the radial
+gap keeps it clear of the inner arc at the 24px header size. `public/logo.svg` is this full-color
+mark, while `public/logo-monochrome.svg` preserves the same geometry in one ink. A small line icon
+may identify providers, devices, Relay, authentication, refresh, settings, and freshness. Utility
+icons stay monochrome; provider marks use brand-tinted monochrome SVGs. There is no photography,
+texture, glow, glass effect, or background artwork.
 
 ## Shapes
 
@@ -648,14 +666,24 @@ new default shapes.
 
 ### Icon Geometry
 
-- Product mark: two concentric open quota arcs plus one lower-right diagonal tail. The inner arc and
-  tail are black; the thinner outer arc uses `{colors.mute}`. Their openings share a 4:30 axis, and
-  the tail begins inside the inner circle without extending beyond the outer arc.
-- Website assets: `public/logo.svg` is the standard double-ring header mark; `public/favicon.svg` is
-  the single-ring 16–32px optical version with a wider opening, heavier stroke, and white backing
-  circle.
-- Menu-bar icon: custom 18×18pt single-ring template mark, solid monochrome with no percentage text
-  inside the glyph. Its native specification lives in `apps/menubar/DESIGN.md`.
+- **Full mark:** a Soft Mint circular capacity track, a concentric Emerald inner quota arc, and a
+  lower-right Emerald node whose center sits on the outer track. The node does not extend from the
+  inner arc. A circular transparent knockout replaces the outer-track segment behind the node and
+  gives it even clearance; the node must also stay clear of the inner arc. The outer track remains
+  thinner than the inner arc. Do not convert the knockout into an ordinary open arc or reconnect the
+  node with a line.
+- **Compact mark:** one Emerald open arc with a Compact Mint short diagonal tail on Brand Surface.
+  This is a separate optical master for 16–32px favicon use, not a reduced full mark. Do not add the
+  full mark's second ring or circular node at this size.
+- **Website assets:** `public/logo.svg` is the full-color orbital-node mark and remains the 24px
+  header asset; `public/logo-monochrome.svg` preserves the full geometry and transparent knockout in
+  one ink. `public/favicon.svg` is the compact optical mark with a Brand Surface backing circle.
+  Selection is surface-specific: the vector header keeps the full mark beside the QuotaBar wordmark,
+  while isolated browser chrome uses the compact favicon even though both may render near 24px.
+- **Semantic invariant:** the lower-right node is fixed brand punctuation, not a data point. Never
+  rotate or animate it, map its size or position to remaining quota, or recolor it by quota state.
+- Menu-bar icon: custom 18×18pt single-ring-and-tail template mark, solid monochrome with no
+  percentage text inside the glyph. Its native specification lives in `apps/menubar/DESIGN.md`.
 - Provider icons: use the Codex, Claude Code, and Grok monochrome SVG assets from Lobe Icons as
   template images tinted with `{colors.brand-*}` tokens; do not substitute SF Symbols or multicolor
   artwork.
@@ -815,7 +843,8 @@ owner capability, mode, or administration cards.
 **`empty-state`**
 
 - Flat `{colors.canvas}` surface, `{colors.body}` text, `{typography.body-md}`, padding `32px 24px`.
-- May include the double-ring Q gauge or one SF Symbol, a short heading, one sentence, and one action.
+- May include the full orbital-node mark or one SF Symbol, a short heading, one sentence, and one
+  action.
 - Examples: no provider session, no paired remote device, or no quota endpoint support.
 
 Error states reuse the same component. They replace the illustration with a functional icon and add
@@ -837,8 +866,8 @@ a clear recovery action. Do not create alert banners for ordinary provider failu
 
 - `{colors.canvas}`, top `{colors.hairline}` border, height 36px,
   `{typography.caption-sm}` `{colors.body}`.
-- Shows last-checked time on the right as the one refresh action (`Refreshing…` while collection
-  runs). Version lives only in Settings → About — not in the footer.
+- Shows last-checked time on the right as the one refresh action. Background refresh never replaces
+  it with progress copy. Version lives only in Settings → About — not in the footer.
 - Quit and delete-all live in the Settings overflow menu, not the footer.
 
 **`link-inline`** and **`link-mute`**
@@ -853,8 +882,9 @@ a clear recovery action. Do not create alert banners for ordinary provider failu
 
 - Treat the menu panel as a short operational document with one reading column on solid canvas.
 - Prefer fixed product tokens over system label/separator/material colors inside the panel.
-- Keep structural chrome grayscale; use labels plus icons for semantic state; brand tints only on
-  provider marks; usage tones only on meters/percents.
+- Keep structural chrome grayscale; reserve Quota greens for the product mark, focus treatment, and
+  healthy quota; use provider brand tints only on provider marks and other usage tones only on
+  meters/percents.
 - Use `{rounded.full}` for interactive controls and `{rounded.lg}` for the panel shell and cards.
 - Use `{components.provider-row}` as the default quota presentation.
 - Keep every percentage definition consistent: the primary number and meter show remaining quota.

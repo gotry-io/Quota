@@ -1,4 +1,3 @@
-import AppKit
 import SwiftUI
 
 struct PairDeviceView: View {
@@ -21,8 +20,6 @@ struct PairDeviceView: View {
   @State private var isSubmitting = false
   @State private var lastAttemptedCode: String?
   @State private var retryToken = 0
-  @State private var installCopied = false
-  @State private var pairCopied = false
   @FocusState private var isCustomOriginFocused: Bool
 
   private var officialURL: URL {
@@ -59,6 +56,7 @@ struct PairDeviceView: View {
     ScrollView {
       VStack(alignment: .leading, spacing: QuotaDesign.Spacing.section) {
         endpointPicker
+          .zIndex(1)
 
         if endpointChoice == .other {
           TextField("https://relay.example", text: $customOrigin)
@@ -68,39 +66,11 @@ struct PairDeviceView: View {
               showsClear: !customOrigin.isEmpty,
               onClear: {
                 customOrigin = ""
-                pairCopied = false
               }
             )
             .quotaMonoStyle()
             .disabled(isSubmitting)
             .accessibilityLabel("Relay URL")
-            .onChange(of: customOrigin) { _, _ in
-              pairCopied = false
-            }
-        }
-
-        VStack(alignment: .leading, spacing: QuotaDesign.Spacing.sm) {
-          Text("On the Device")
-            .quotaSectionHeaderStyle()
-
-          commandRow(
-            title: "Pair",
-            command: pairCommand.command,
-            copied: pairCopied,
-            copyLabel: "Copy pair command",
-            isCopyEnabled: pairCommand.canCopy,
-            action: copyPairCommand
-          )
-
-          collapsibleSection(title: "Need QuotaCLI?", isExpanded: $showsInstallHelp) {
-            commandRow(
-              title: "Install",
-              command: installCommand,
-              copied: installCopied,
-              copyLabel: "Copy install command",
-              action: copyInstallCommand
-            )
-          }
         }
 
         VStack(alignment: .leading, spacing: QuotaDesign.Spacing.sectionRows) {
@@ -139,6 +109,26 @@ struct PairDeviceView: View {
               .accessibilityLabel("Pairing failed. \(errorMessage)")
           }
         }
+
+        VStack(alignment: .leading, spacing: QuotaDesign.Spacing.sm) {
+          Text("On the device")
+            .quotaSectionHeaderStyle()
+
+          QuotaCommandRow(
+            command: pairCommand.command,
+            copyLabel: "Copy pair command",
+            isCopyEnabled: pairCommand.canCopy,
+          )
+          .quotaGroupSurface()
+
+          collapsibleSection(title: "Need QuotaCLI?", isExpanded: $showsInstallHelp) {
+            QuotaCommandRow(
+              command: installCommand,
+              copyLabel: "Copy install command"
+            )
+            .quotaGroupSurface()
+          }
+        }
       }
       .frame(maxWidth: .infinity, alignment: .topLeading)
       .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
@@ -152,28 +142,21 @@ struct PairDeviceView: View {
       Text("Relay")
         .quotaSectionHeaderStyle()
 
-      Picker("Relay", selection: $endpointChoice) {
-        Text("Quota Relay").tag(EndpointChoice.official)
-        ForEach(knownEndpoints, id: \.absoluteString) { url in
-          Text(url.absoluteString).tag(EndpointChoice.known(url))
-        }
-        Text("Other Relay…").tag(EndpointChoice.other)
-      }
-      .labelsHidden()
-      .pickerStyle(.menu)
-      .controlSize(.regular)
-      .padding(.horizontal, 10)
-      .frame(maxWidth: .infinity, minHeight: QuotaDesign.Layout.fieldMinHeight, alignment: .leading)
-      .background(QuotaPalette.fieldFill)
-      .clipShape(
-        RoundedRectangle(cornerRadius: QuotaDesign.Layout.fieldCornerRadius, style: .continuous)
+      QuotaPopUpField(
+        selection: $endpointChoice,
+        options: endpointOptions,
+        accessibilityLabel: "Relay endpoint"
       )
       .disabled(isSubmitting)
-      .accessibilityLabel("Relay endpoint")
-      .onChange(of: endpointChoice) { _, _ in
-        pairCopied = false
-      }
     }
+  }
+
+  private var endpointOptions: [QuotaPopUpOption<EndpointChoice>] {
+    [QuotaPopUpOption(value: .official, title: "Quota Relay")]
+      + knownEndpoints.map {
+        QuotaPopUpOption(value: .known($0), title: $0.absoluteString)
+      }
+      + [QuotaPopUpOption(value: .other, title: "Other Relay…")]
   }
 
   private func collapsibleSection<Content: View>(
@@ -199,81 +182,21 @@ struct PairDeviceView: View {
             .quotaSectionHeaderStyle()
           Spacer(minLength: 0)
         }
+        .padding(.horizontal, QuotaDesign.Layout.groupContentInset)
         .contentShape(Rectangle())
         .frame(
           maxWidth: .infinity,
-          minHeight: QuotaDesign.Layout.minimumInteractiveDimension,
+          minHeight: QuotaDesign.Layout.settingsRowHeight,
           alignment: .leading
         )
       }
-      .buttonStyle(.plain)
+      .buttonStyle(QuotaListRowButtonStyle())
       .accessibilityLabel(title)
       .accessibilityHint(isExpanded.wrappedValue ? "Collapse" : "Expand")
 
       if isExpanded.wrappedValue {
         content()
       }
-    }
-  }
-
-  private func commandRow(
-    title: String,
-    command: String,
-    copied: Bool,
-    copyLabel: String,
-    isCopyEnabled: Bool = true,
-    action: @escaping () -> Void
-  ) -> some View {
-    VStack(alignment: .leading, spacing: QuotaDesign.Spacing.meta) {
-      Text(title)
-        .quotaMetaStyle()
-
-      HStack(spacing: QuotaDesign.Spacing.inline) {
-        Text(command)
-          .quotaMonoStyle()
-          .lineLimit(2)
-          .frame(maxWidth: .infinity, alignment: .leading)
-
-        Button(action: action) {
-          Text(copied && isCopyEnabled ? "Copied" : "Copy")
-            .quotaSecondaryStyle()
-            .frame(
-              minWidth: QuotaDesign.Layout.minimumInteractiveDimension,
-              minHeight: QuotaDesign.Layout.minimumInteractiveDimension
-            )
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .disabled(!isCopyEnabled)
-        .accessibilityLabel(copyLabel)
-      }
-      .padding(.horizontal, 10)
-      .padding(.vertical, QuotaDesign.Spacing.sm)
-      .background(QuotaPalette.fieldFill)
-      .clipShape(
-        RoundedRectangle(cornerRadius: QuotaDesign.Layout.groupCornerRadius, style: .continuous)
-      )
-    }
-  }
-
-  private func copyInstallCommand() {
-    NSPasteboard.general.clearContents()
-    NSPasteboard.general.setString(installCommand, forType: .string)
-    installCopied = true
-    Task {
-      try? await Task.sleep(for: .seconds(1.5))
-      installCopied = false
-    }
-  }
-
-  private func copyPairCommand() {
-    guard pairCommand.canCopy else { return }
-    NSPasteboard.general.clearContents()
-    NSPasteboard.general.setString(pairCommand.command, forType: .string)
-    pairCopied = true
-    Task {
-      try? await Task.sleep(for: .seconds(1.5))
-      pairCopied = false
     }
   }
 

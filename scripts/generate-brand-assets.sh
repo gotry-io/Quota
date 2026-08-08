@@ -12,7 +12,7 @@ SHADOW_SWIFT="${BRAND_TMP_DIR}/bake-icon-shadow.swift"
 
 trap 'rm -rf "$BRAND_TMP_DIR"' EXIT
 
-# Masters are transparent 1024 canvases with an inset rounded white plate + glyph.
+# Masters are transparent 1024 canvases with an inset rounded brand-surface plate + optical glyph.
 # Bake a macOS-style soft drop shadow (as in News/Photos icns) after rasterization,
 # because sips does not reliably render SVG filters.
 mkdir -p "$ICONSET_DIR"

@@ -231,7 +231,7 @@ struct MenuBarViewModelRelayTests {
 
     await model.refresh()
     guard case .content(let providers, _) = model.overviewState(
-      enabledProviders: Set(ProviderID.allCases)
+      enabledProviders: ProviderID.allCases
     ) else {
       Issue.record("Expected remote provider content.")
       return
@@ -423,7 +423,7 @@ struct MenuBarViewModelRelayTests {
     await model.refresh()
 
     #expect(
-      model.overviewState(enabledProviders: Set(ProviderID.allCases))
+      model.overviewState(enabledProviders: ProviderID.allCases)
         == .empty(
           refreshWarning:
             "Primary Relay: The Relay is unavailable. Backup Relay: The Relay is unavailable."

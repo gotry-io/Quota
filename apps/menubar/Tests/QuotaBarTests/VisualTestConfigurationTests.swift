@@ -67,8 +67,11 @@
   }
 
   @Test
-  func remoteDeviceVisualRoutesParseIntoOneTypedStackWithMatchingTitles() throws {
+  func detailVisualRoutesParseIntoOneTypedStackWithMatchingTitles() throws {
     let routeExpectations: [(rawValue: String, title: String, depth: Int)] = [
+      ("agents", "Agents", 2),
+      ("provider-codex", "Codex", 3),
+      ("provider-openrouter", "OpenRouter", 3),
       ("remote-devices", "Remote Devices", 2),
       ("pair-device", "Pair Device", 3),
     ]
@@ -106,7 +109,7 @@
 
     guard
       case .content(let providers, let warning) = configuration.makeModel().overviewState(
-        enabledProviders: Set(ProviderID.allCases),
+        enabledProviders: ProviderID.allCases,
         now: referenceDate
       )
     else {
@@ -124,7 +127,7 @@
 
     #expect(
       try configuration(fixture: .loading, referenceDate: referenceDate).makeModel()
-        .overviewState(enabledProviders: Set(ProviderID.allCases), now: referenceDate) == .loading
+        .overviewState(enabledProviders: ProviderID.allCases, now: referenceDate) == .loading
     )
 
     guard
@@ -132,7 +135,7 @@
         fixture: .cachedRefreshError,
         referenceDate: referenceDate
       ).makeModel().overviewState(
-        enabledProviders: Set(ProviderID.allCases),
+        enabledProviders: ProviderID.allCases,
         now: referenceDate
       )
     else {
@@ -146,7 +149,7 @@
         fixture: .empty,
         referenceDate: referenceDate
       ).makeModel().overviewState(
-        enabledProviders: Set(ProviderID.allCases),
+        enabledProviders: ProviderID.allCases,
         now: referenceDate
       )
     else {
@@ -166,7 +169,7 @@
 
     #expect(
       try configuration(fixture: .unavailable, referenceDate: referenceDate).makeModel()
-        .overviewState(enabledProviders: Set(ProviderID.allCases), now: referenceDate)
+        .overviewState(enabledProviders: ProviderID.allCases, now: referenceDate)
         == .unavailable(message: "The bundled QuotaCLI helper could not be started.")
     )
   }
@@ -186,7 +189,7 @@
     let profile = try #require(relayModel.profiles.first)
     let state = try #require(relayModel.state(for: profile.id))
     let accounts = menuModel.overviewState(
-      enabledProviders: Set(ProviderID.allCases),
+      enabledProviders: ProviderID.allCases,
       now: referenceDate
     )
     let encodedProfiles = try QuotaWireCodec.makeEncoder().encode(relayModel.profiles)

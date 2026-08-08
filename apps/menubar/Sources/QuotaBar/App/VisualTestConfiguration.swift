@@ -65,6 +65,9 @@
   enum VisualTestRoute: String {
     case overview
     case settings
+    case agents
+    case providerCodex = "provider-codex"
+    case providerOpenRouter = "provider-openrouter"
     case remoteDevices = "remote-devices"
     case pairDevice = "pair-device"
 
@@ -72,6 +75,9 @@
       switch self {
       case .overview: []
       case .settings: [.settings]
+      case .agents: [.settings, .agents]
+      case .providerCodex: [.settings, .agents, .provider(.codex)]
+      case .providerOpenRouter: [.settings, .agents, .provider(.openrouter)]
       case .remoteDevices: [.settings, .remoteDevices]
       case .pairDevice: [.settings, .remoteDevices, .pairDevice]
       }
@@ -189,8 +195,9 @@
     }
 
     func prepareEnvironment() {
+      ProviderDisplayOrder.reset()
       for provider in ProviderID.allCases {
-        ProviderVisibility.setVisible(provider, true)
+        ProviderVisibility.setVisible(provider, provider.defaultVisible)
       }
     }
 

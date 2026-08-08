@@ -18,35 +18,51 @@ enum QuotaDesign {
     static let footerHeight: CGFloat = 36
     /// Apple HIG's recommended minimum pointer target on macOS.
     static let minimumInteractiveDimension: CGFloat = 28
-    /// Visual footprint between the back glyph's content edge and the title.
-    /// The button itself remains `headerControlWidth` wide and overlaps this slot inward.
-    static let backTitleOffset: CGFloat = 20
     static let headerControlWidth: CGFloat = minimumInteractiveDimension
+    /// Compact visible hover/pressed surface inside the unchanged header target.
+    static let headerControlSurfaceSize: CGFloat = 24
+    /// Settings overflow list, trailing-aligned to the panel content guide.
+    static let headerMenuWidth: CGFloat = 220
+    /// Nominal optical box for header action symbols.
+    static let headerGlyphWidth: CGFloat = 16
+    /// Root brand mark aligns directly with the shell's leading content edge.
+    static let headerBrandSize: CGFloat = 18
+    /// Navigation/action slot. Grouped content uses its own inset grid.
+    static let headerAccessoryWidth: CGFloat = headerControlWidth
     static let providerRowVerticalPadding: CGFloat = 10
     /// Vertical padding inside multi-line settings forms (API key, sign-in copy).
     static let settingsRowVerticalPadding: CGFloat = 8
     /// Single-line Settings rows (home General / Sources / About).
-    static let settingsRowHeight: CGFloat = 36
+    static let settingsRowHeight: CGFloat = 38
     /// Stacked list rows (Agents, Devices) — title-only still uses this height and centers.
-    static let settingsListRowHeight: CGFloat = 44
+    static let settingsListRowHeight: CGFloat = 46
     /// Leading mark column (SF Symbol or brand icon).
     static let settingsIconColumnWidth: CGFloat = 16
     static let progressHeight: CGFloat = 8
-    static let tagCornerRadius: CGFloat = 3
     /// Primary filled pill (empty-state Retry, etc.).
     static let controlMinHeight: CGFloat = 36
     /// Compact single-line fields.
-    static let fieldMinHeight: CGFloat = 30
+    static let fieldMinHeight: CGFloat = 32
     /// Fields nest slightly inside group chrome.
-    static let fieldCornerRadius: CGFloat = 6
-    /// Settings groups, command chips, pairing cells.
-    static let groupCornerRadius: CGFloat = 8
-    /// Product toggle track (visual); hit target remains ≥ minimumInteractiveDimension.
-    static let toggleTrackWidth: CGFloat = 26
-    static let toggleTrackHeight: CGFloat = 15
-    static let toggleThumbSize: CGFloat = 13
+    static let fieldCornerRadius: CGFloat = 7
+    /// Settings groups and read-only modules.
+    static let groupCornerRadius: CGFloat = 10
+    /// Content inset inside a Settings group.
+    static let groupContentInset: CGFloat = 8
+    /// Equal inset between a group and its row interaction surface.
+    static let groupSurfaceInset: CGFloat = 4
+    /// Hover/pressed surface nested inside a settings group.
+    static let rowCornerRadius: CGFloat = 6
+    /// Transient menus sit above the panel and use a slightly fuller silhouette than groups.
+    static let floatingMenuCornerRadius: CGFloat = 12
+    /// Keeps menu-row hover geometry concentric with the 4pt surface inset.
+    static let floatingMenuRowCornerRadius: CGFloat =
+      floatingMenuCornerRadius - groupSurfaceInset
+    static let floatingMenuShadowRadius: CGFloat = 12
+    static let floatingMenuShadowY: CGFloat = 5
 
-    static let headerIconPointSize: CGFloat = 14
+    static let headerBackIconPointSize: CGFloat = 11
+    static let headerActionIconPointSize: CGFloat = 13
     static let emptyIconPointSize: CGFloat = 28
   }
 
@@ -70,7 +86,7 @@ enum QuotaDesign {
   /// Semantic type roles. Prefer these over bare `.caption` / `.subheadline`.
   ///
   /// Hierarchy (strong → quiet):
-  /// panelTitle ≥ emptyTitle > rowTitle > settingsLabel ≥ sectionHeader > secondary > meta
+  /// panelTitle ≥ emptyTitle > rowTitle > settingsLabel > sectionHeader > listSecondary > meta
   enum Typography {
     enum Role {
       case panelTitle
@@ -79,9 +95,10 @@ enum QuotaDesign {
       /// Compact Settings body labels (menu-style, smaller than Overview row titles).
       case settingsLabel
       case sectionHeader
+      /// Supporting copy inside list rows; more readable than tertiary metadata.
+      case listSecondary
       case secondary
       case meta
-      case metaMedium
       case mono
       case monoMeta
       case quotaLabel
@@ -90,22 +107,24 @@ enum QuotaDesign {
       fileprivate var baseSize: CGFloat {
         switch self {
         case .panelTitle, .emptyTitle, .rowTitle, .remainingValue: 13
-        case .settingsLabel, .sectionHeader, .secondary, .mono, .quotaLabel: 11
-        case .meta, .metaMedium, .monoMeta: 10
+        case .settingsLabel: 12
+        case .sectionHeader, .secondary, .mono, .quotaLabel: 11
+        case .listSecondary: 10.5
+        case .meta, .monoMeta: 10
         }
       }
 
       fileprivate var weight: Font.Weight {
         switch self {
         case .panelTitle, .sectionHeader, .remainingValue: .semibold
-        case .emptyTitle, .rowTitle, .settingsLabel, .metaMedium, .quotaLabel: .medium
-        case .secondary, .meta, .mono, .monoMeta: .regular
+        case .emptyTitle, .rowTitle, .settingsLabel, .quotaLabel: .medium
+        case .listSecondary, .secondary, .meta, .mono, .monoMeta: .regular
         }
       }
 
       fileprivate var design: Font.Design {
         switch self {
-        case .panelTitle, .emptyTitle: .rounded
+        case .emptyTitle: .rounded
         case .mono, .monoMeta: .monospaced
         default: .default
         }
@@ -114,7 +133,14 @@ enum QuotaDesign {
 
     static let chevron = Font.system(size: 11, weight: .semibold)
     static let affordance = Font.system(size: 10, weight: .medium)
-    static let headerIcon = Font.system(size: Layout.headerIconPointSize, weight: .semibold)
+    static let headerBackIcon = Font.system(
+      size: Layout.headerBackIconPointSize,
+      weight: .semibold
+    )
+    static let headerActionIcon = Font.system(
+      size: Layout.headerActionIconPointSize,
+      weight: .medium
+    )
     static let emptyIcon = Font.system(size: Layout.emptyIconPointSize, weight: .regular)
     static let pairingCode = Font.system(.title3, design: .monospaced, weight: .semibold)
     static let pairingSeparator = Font.system(.body, weight: .medium)
@@ -130,7 +156,7 @@ extension View {
 
   func quotaSectionHeaderStyle() -> some View {
     quotaFont(.sectionHeader)
-      .foregroundStyle(QuotaPalette.mute)
+      .foregroundStyle(QuotaPalette.body)
   }
 
   func quotaRowTitleStyle() -> some View {
@@ -138,7 +164,7 @@ extension View {
       .foregroundStyle(QuotaPalette.ink)
   }
 
-  /// Settings body labels — 11pt medium, denser than Overview provider titles.
+  /// Settings body labels — 12pt medium, denser than Overview provider titles.
   func quotaSettingsLabelStyle() -> some View {
     quotaFont(.settingsLabel)
       .foregroundStyle(QuotaPalette.ink)
@@ -146,6 +172,12 @@ extension View {
 
   func quotaSecondaryStyle() -> some View {
     quotaFont(.secondary)
+      .foregroundStyle(QuotaPalette.body)
+  }
+
+  /// One-line supporting copy inside a list row; quieter than its title but not tertiary metadata.
+  func quotaListSecondaryStyle() -> some View {
+    quotaFont(.listSecondary)
       .foregroundStyle(QuotaPalette.body)
   }
 
@@ -163,6 +195,12 @@ extension View {
   func quotaMonoMetaStyle() -> some View {
     quotaFont(.monoMeta)
       .foregroundStyle(QuotaPalette.mute)
+  }
+
+  /// Compact technical value inside a Settings row (for example the app version).
+  func quotaMonoListValueStyle() -> some View {
+    quotaFont(.monoMeta)
+      .foregroundStyle(QuotaPalette.body)
   }
 
   func quotaEmptyTitleStyle() -> some View {
@@ -219,29 +257,6 @@ private extension DynamicTypeSize {
 }
 
 // MARK: - Shared chrome
-
-/// Compact mute status chip reserved for stale quota data.
-struct QuotaStatusTag: View {
-  let text: String
-  var systemImage: String?
-
-  var body: some View {
-    HStack(spacing: 3) {
-      if let systemImage {
-        Image(systemName: systemImage)
-      }
-      Text(text)
-    }
-    .quotaFont(.meta)
-    .foregroundStyle(QuotaPalette.mute)
-    .padding(.horizontal, 5)
-    .padding(.vertical, 2)
-    .overlay {
-      RoundedRectangle(cornerRadius: QuotaDesign.Layout.tagCornerRadius)
-        .stroke(QuotaPalette.hairlineBorder, lineWidth: 1)
-    }
-  }
-}
 
 struct QuotaPrimaryButtonStyle: ButtonStyle {
   @Environment(\.isEnabled) private var isEnabled

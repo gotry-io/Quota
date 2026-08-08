@@ -76,6 +76,7 @@ struct QuotaBarDefaultsResetter: QuotaBarDefaultsResetting {
     [
       RelayProfileStore.storageKey,
       LocalQuotaReportCache.storageKey,
+      ProviderDisplayOrder.storageKey,
     ] + ProviderID.allCases.map { ProviderVisibility.storageKey(for: $0) }
   }
 }

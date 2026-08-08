@@ -157,19 +157,42 @@ struct PairingCodeEntryView: View {
 
   private func codeBox(_ index: Int) -> some View {
     let focused = focusedIndex == index
-    let fill =
-      showsError
-      ? QuotaPalette.critical.opacity(0.12)
-      : (focused ? QuotaPalette.fieldFillFocused : QuotaPalette.fieldFill)
     return TextField("", text: binding(for: index))
       .textFieldStyle(.plain)
       .multilineTextAlignment(.center)
       .font(QuotaDesign.Typography.pairingCode)
       .frame(width: boxSize, height: boxSize)
-      .background(fill)
+      .background {
+        RoundedRectangle(cornerRadius: QuotaDesign.Layout.fieldCornerRadius, style: .continuous)
+          .fill(QuotaPalette.fieldFill)
+          .overlay {
+            if showsError {
+              RoundedRectangle(
+                cornerRadius: QuotaDesign.Layout.fieldCornerRadius,
+                style: .continuous
+              )
+              .fill(QuotaPalette.critical.opacity(0.12))
+            } else if focused {
+              RoundedRectangle(
+                cornerRadius: QuotaDesign.Layout.fieldCornerRadius,
+                style: .continuous
+              )
+              .fill(QuotaPalette.fieldFillFocused)
+            }
+          }
+      }
       .clipShape(
-        RoundedRectangle(cornerRadius: QuotaDesign.Layout.groupCornerRadius, style: .continuous)
+        RoundedRectangle(cornerRadius: QuotaDesign.Layout.fieldCornerRadius, style: .continuous)
       )
+      .overlay {
+        RoundedRectangle(cornerRadius: QuotaDesign.Layout.fieldCornerRadius, style: .continuous)
+          .strokeBorder(
+            showsError
+              ? QuotaPalette.critical.opacity(0.72)
+              : (focused ? QuotaPalette.accent.opacity(0.72) : .clear),
+            lineWidth: 1.5
+          )
+      }
       .focused($focusedIndex, equals: index)
       .disabled(isDisabled)
       .accessibilityLabel("Pairing code character \(index + 1) of 8")

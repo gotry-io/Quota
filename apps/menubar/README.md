@@ -45,7 +45,7 @@ unavailable, and error states. The panel is a window-style `MenuBarExtra` with a
 strongly typed page stack rendered inside one shared shell. Settings, Remote Devices, and Pair
 Device use the shell's single custom back control rather than a system navigation bar. The panel
 keeps flat provider rows, system-material chrome, monochrome provider marks, and restrained
-semantic usage meters described in [`DESIGN.md`](./DESIGN.md). Appearance inherits the current macOS color scheme
+brand-accented semantic usage meters described in [`DESIGN.md`](./DESIGN.md). Appearance inherits the current macOS color scheme
 through SwiftUI and has no app-level appearance override. Do not apply `apps/web/DESIGN.md` tokens
 to the menu panel.
 Agents without an authenticated session are omitted from the overview. A provider row requires a
