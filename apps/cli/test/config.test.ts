@@ -4,7 +4,6 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runCli } from "../src/commands.ts";
 import * as promptModule from "../src/config/prompt.ts";
-import * as stdinModule from "../src/config/stdin.ts";
 
 function captureOutput() {
   const stdout: string[] = [];
@@ -71,13 +70,11 @@ describe("quotacli config", () => {
     process.env.XDG_CONFIG_HOME = root;
 
     const secret = "sk-or-v1-super-secret-fixture-key";
-    vi.spyOn(stdinModule, "readStdinText").mockResolvedValue(secret);
+    Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
+    vi.spyOn(promptModule, "promptLine").mockResolvedValue(secret);
 
     const setCapture = captureOutput();
-    const setCode = await runCli(
-      ["config", "set", "openrouter", "--api-key-stdin"],
-      setCapture.output,
-    );
+    const setCode = await runCli(["config", "set", "openrouter"], setCapture.output);
     expect(setCode).toBe(0);
     expect(setCapture.stdout.join("\n")).toContain("Configured openrouter");
     expect(setCapture.stdout.join("\n")).toContain("···");
@@ -105,6 +102,13 @@ describe("quotacli config", () => {
     expect(getAfter.stdout.join("\n")).toContain("not configured");
   });
 
+  it("rejects the removed stdin option", async () => {
+    const capture = captureOutput();
+    const code = await runCli(["config", "set", "openrouter", "--api-key-stdin"], capture.output);
+    expect(code).toBe(2);
+    expect(capture.stderr.join("\n")).toContain("Unknown option: --api-key-stdin");
+  });
+
   it("prompts for required base URL for litellm", async () => {
     const root = await mkdtemp(join(tmpdir(), "quota-cli-config-"));
     process.env.XDG_CONFIG_HOME = root;
@@ -122,5 +126,20 @@ describe("quotacli config", () => {
     const file = await readFile(join(root, "quotacli", "providers.json"), "utf8");
     expect(file).toContain(secret);
     expect(file).toContain("https://litellm.example.com");
+  });
+
+  it("rejects a fixed-provider base URL before reading the API key", async () => {
+    Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
+    const prompt = vi.spyOn(promptModule, "promptLine");
+    const capture = captureOutput();
+
+    expect(
+      await runCli(
+        ["config", "set", "openrouter", "--base-url", "https://proxy.example"],
+        capture.output,
+      ),
+    ).toBe(2);
+    expect(prompt).not.toHaveBeenCalled();
+    expect(capture.stderr.join("\n")).toContain("OpenRouter does not support --base-url");
   });
 });

@@ -111,7 +111,7 @@ function parseRateLimit(
         timeUnit === "minute" ||
         timeUnit === "MINUTE" ||
         timeUnit === undefined);
-    if (!isFiveHour && limits.length > 1) {
+    if (!isFiveHour) {
       continue;
     }
     const detail = parseUsageDetail(asRecord(record.detail) ?? record);

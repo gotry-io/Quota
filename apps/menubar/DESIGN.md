@@ -520,8 +520,10 @@ Rules:
    omit the redundant Needs Sign-In title and show `Account setup required.` below the name. Account
    `Stale` belongs with its
    observation time in the account footer because it describes data freshness, not the plan.
-4. Each window: title left, **strong remaining %** right with the explicit word `left`, 8px meter,
-   then a locale-appropriate weekday/time reset without routine seconds.
+4. Quota/budget windows show title left, **strong remaining %** right with the explicit word `left`,
+   an 8px meter, then a locale-appropriate weekday/time reset without routine seconds. Balance-only
+   windows show the remaining amount without a meter. Spend without a hard limit is not a quota
+   window and never synthesizes a remaining amount, percent, or budget.
 5. Percentage text stays readable ink; the meter uses accent/orange/red by threshold. Filled
    proportion is always **remaining**.
 6. Window meta is reset timing only. A fixed footer after all windows shows selected source leading
@@ -607,10 +609,10 @@ system control bezel with a second custom field background.
 
 - **Explicit Save in the shell header trailing ops area only** (quiet accent text `Save`) — never a
   body button, never auto-save on blur, Return, or leave.
-- **Non-empty key + Save** → write key (+ optional base URL).
+- **Non-empty key + Save** → write key (+ LiteLLM base URL when applicable).
 - **Empty key + Save** when already configured:
-  - base URL draft **differs** from disk → update base URL only (key field is empty by design when
-    a key is stored);
+  - LiteLLM base URL draft **differs** from disk → update base URL only (key field is empty by
+    design when a key is stored);
   - base URL **unchanged** → delete the stored credential.
 - In-field × only clears draft text, never the store.
 - Failures go to the **shell title bar** (`pageIssue`). No instructional body copy above fields.
@@ -675,8 +677,9 @@ Settings actions are skipped.
 - Provider detail: Overview contains only the **Show in Overview** product toggle. The second group
   is either the API-key form or a copyable CLI sign-in command; no scan/recovery status is repeated
   on this page. Visibility defaults from `defaultVisible`.
-- API-key forms: fields only (no status blurb); SecureField + optional base URL, in-field ×; header
-  **Save** (empty key deletes); failures in the title bar; never show the full key.
+- API-key forms: fields only (no status blurb); SecureField plus a LiteLLM base URL field when
+  applicable, in-field ×; header **Save** (empty key deletes); failures in the title bar; never show
+  the full key.
 - Non-configurable Sign-in: login command (mono) + quiet **Copy**, no surrounding explanation.
 - Overflow menu (ellipsis): app-owned transient list with Delete all QuotaBar data… (critical) and
   Quit QuotaBar. It uses r12 outer / 4pt inset / r8 hover geometry.

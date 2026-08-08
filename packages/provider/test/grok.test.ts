@@ -193,6 +193,41 @@ printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":{"authMethods":[{"id":"grok.com
       );
     },
   );
+
+  it.skipIf(process.platform === "win32")(
+    "does not overwrite a malformed auth.json recreated during refresh",
+    async () => {
+      await withTemporaryExecutable(
+        `#!/bin/sh
+rm -f "$GROK_HOME/auth.json"
+printf '%s\\n' '{"rotated":true}' > "$GROK_HOME/auth.json"
+printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":{"authMethods":[{"id":"grok.com"}]}}'
+`,
+        async (executable, directory) => {
+          const grokHome = join(directory, ".grok");
+          const authPath = join(grokHome, "auth.json");
+          await mkdir(grokHome, { recursive: true });
+          await writeFile(
+            authPath,
+            `${JSON.stringify(syntheticAuthPayload("keep-me-token", "2026-08-01T00:00:00Z"))}\n`,
+          );
+
+          await expect(
+            refreshGrokAuthWithCli({
+              homeDirectory: directory,
+              environment: {
+                GROK_CLI_PATH: executable,
+                GROK_HOME: grokHome,
+                PATH: "/usr/bin:/bin",
+              },
+            }),
+          ).resolves.toBe(false);
+
+          await expect(readFile(authPath, "utf8")).resolves.toBe('{"rotated":true}\n');
+        },
+      );
+    },
+  );
 });
 
 describe("grok billing mapping", () => {

@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 /// Owner-only API-key secrets shared with QuotaCLI (`~/.config/quotacli/providers.json`).
@@ -50,7 +51,7 @@ struct ProviderConfigStore {
 
   /// Saved base URL for form draft (never the API key).
   func baseURL(for provider: ProviderID) -> String? {
-    guard provider.isConfigurable else { return nil }
+    guard provider.isConfigurable, provider.supportsBaseURL else { return nil }
     guard let entry = try? load().providers[provider.rawValue] else { return nil }
     return entry.baseURL
   }
@@ -71,24 +72,38 @@ struct ProviderConfigStore {
     guard !trimmed.isEmpty else {
       throw ProviderConfigStoreError.emptyKey
     }
-    let normalizedBase = try Self.validatedBaseURL(baseURL, for: provider)
+    let suppliedBase = baseURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    if !provider.supportsBaseURL && !suppliedBase.isEmpty {
+      throw ProviderConfigStoreError.invalidBaseURL
+    }
+    let normalizedBase = try Self.validatedBaseURL(
+      provider.supportsBaseURL ? baseURL : nil,
+      for: provider
+    )
     // Missing file → empty. Corrupt / insecure file → throw (never wipe secrets).
-    var file = try load()
-    file.providers[provider.rawValue] = ProviderSecretEntry(apiKey: trimmed, baseURL: normalizedBase)
-    try save(file)
+    try withWriteLock {
+      var file = try load()
+      file.providers[provider.rawValue] = ProviderSecretEntry(
+        apiKey: trimmed,
+        baseURL: normalizedBase
+      )
+      try save(file)
+    }
   }
 
   func clear(_ provider: ProviderID) throws {
     guard provider.isConfigurable else {
       throw ProviderConfigStoreError.notConfigurable
     }
-    var file = try load()
-    file.providers[provider.rawValue] = nil
-    if file.providers.isEmpty {
-      try removeFileIfPresent()
-      return
+    try withWriteLock {
+      var file = try load()
+      file.providers[provider.rawValue] = nil
+      if file.providers.isEmpty {
+        try removeFileIfPresent()
+        return
+      }
+      try save(file)
     }
-    try save(file)
   }
 
   /// Update proxy base URL without re-entering the API key (provider must already be configured).
@@ -96,13 +111,18 @@ struct ProviderConfigStore {
     guard provider.isConfigurable else {
       throw ProviderConfigStoreError.notConfigurable
     }
-    var file = try load()
-    guard var entry = file.providers[provider.rawValue], !entry.apiKey.isEmpty else {
-      throw ProviderConfigStoreError.missingKey
+    try withWriteLock {
+      var file = try load()
+      guard var entry = file.providers[provider.rawValue], !entry.apiKey.isEmpty else {
+        throw ProviderConfigStoreError.missingKey
+      }
+      guard provider.supportsBaseURL else {
+        throw ProviderConfigStoreError.invalidBaseURL
+      }
+      entry.baseURL = try Self.validatedBaseURL(baseURL, for: provider)
+      file.providers[provider.rawValue] = entry
+      try save(file)
     }
-    entry.baseURL = try Self.validatedBaseURL(baseURL, for: provider)
-    file.providers[provider.rawValue] = entry
-    try save(file)
   }
 
   /// Aligns with CLI `normalizeBaseUrl` (HTTPS origin; optional private HTTP).
@@ -245,6 +265,87 @@ struct ProviderConfigStore {
     try FileManager.default.removeItem(at: fileURL)
   }
 
+  /// Cross-process mutex shared with QuotaCLI's TypeScript ProviderConfigStore.
+  private func withWriteLock<T>(_ action: () throws -> T) throws -> T {
+    let lockURL = URL(fileURLWithPath: "\(fileURL.path).lock", isDirectory: true)
+    let ownerURL = lockURL.appendingPathComponent("owner", isDirectory: false)
+    let directory = fileURL.deletingLastPathComponent()
+    let fileManager = FileManager.default
+    try fileManager.createDirectory(
+      at: directory,
+      withIntermediateDirectories: true,
+      attributes: [.posixPermissions: 0o700]
+    )
+    try fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+
+    let deadline = Date().addingTimeInterval(10)
+    while true {
+      do {
+        try fileManager.createDirectory(
+          at: lockURL,
+          withIntermediateDirectories: false,
+          attributes: [.posixPermissions: 0o700]
+        )
+        do {
+          try Data("\(ProcessInfo.processInfo.processIdentifier)\n".utf8).write(
+            to: ownerURL,
+            options: .withoutOverwriting
+          )
+        } catch {
+          try? fileManager.removeItem(at: lockURL)
+          throw ProviderConfigStoreError.locked
+        }
+        break
+      } catch {
+        if error as? ProviderConfigStoreError == .locked {
+          throw error
+        }
+        guard (error as? CocoaError)?.code == .fileWriteFileExists else {
+          throw ProviderConfigStoreError.locked
+        }
+        if Self.removeStaleWriteLock(lockURL: lockURL, ownerURL: ownerURL) {
+          continue
+        }
+        guard Date() < deadline else { throw ProviderConfigStoreError.locked }
+        Thread.sleep(forTimeInterval: 0.01)
+      }
+    }
+    defer { try? fileManager.removeItem(at: lockURL) }
+    return try action()
+  }
+
+  private static func removeStaleWriteLock(lockURL: URL, ownerURL: URL) -> Bool {
+    let fileManager = FileManager.default
+    let stale: Bool
+    if let data = try? Data(contentsOf: ownerURL),
+      let text = String(data: data, encoding: .utf8)?.trimmingCharacters(
+        in: .whitespacesAndNewlines
+      ),
+      let ownerPID = Int32(text), ownerPID > 0
+    {
+      errno = 0
+      if kill(ownerPID, 0) == 0 || errno == EPERM {
+        return false
+      }
+      stale = errno == ESRCH
+    } else {
+      guard
+        let attributes = try? fileManager.attributesOfItem(atPath: lockURL.path),
+        let modifiedAt = attributes[.modificationDate] as? Date
+      else {
+        return false
+      }
+      stale = Date().timeIntervalSince(modifiedAt) >= 1
+    }
+    guard stale else { return false }
+    do {
+      try fileManager.removeItem(at: lockURL)
+      return true
+    } catch {
+      return false
+    }
+  }
+
   /// Refuse group/other access, matching QuotaCLI `ProviderConfigStore`.
   private static func requireOwnerOnly(path: String, isDirectory: Bool) throws {
     let attributes: [FileAttributeKey: Any]
@@ -294,6 +395,7 @@ enum ProviderConfigStoreError: Error, Equatable {
   case unreadable
   case invalid
   case insecurePermissions
+  case locked
 }
 
 private struct ProviderConfigFile: Codable, Equatable {

@@ -51,27 +51,23 @@ async function collectLiteLLM(ctx: ApiKeyCollectContext) {
     );
   }
 
-  let personal = undefined;
-  let team = undefined;
-
-  if (keyInfo.userId) {
-    const userJson = await fetchBearerJson({
-      ...common,
-      url: `${root}/user/info?user_id=${encodeURIComponent(keyInfo.userId)}`,
-    });
-    personal = mapLiteLLMUserInfo(userJson);
-  }
-
-  if (keyInfo.teamId) {
-    const teamJson = await fetchBearerJson({
-      ...common,
-      url: `${root}/team/info?team_id=${encodeURIComponent(keyInfo.teamId)}`,
-      required: !keyInfo.userId,
-    });
-    if (teamJson !== undefined) {
-      team = mapLiteLLMTeamInfo(teamJson, keyInfo.teamId);
-    }
-  }
+  const userId = keyInfo.userId;
+  const teamId = keyInfo.teamId;
+  const [personal, team] = await Promise.all([
+    userId
+      ? fetchBearerJson({
+          ...common,
+          url: `${root}/user/info?user_id=${encodeURIComponent(userId)}`,
+        }).then(mapLiteLLMUserInfo)
+      : undefined,
+    teamId
+      ? fetchBearerJson({
+          ...common,
+          url: `${root}/team/info?team_id=${encodeURIComponent(teamId)}`,
+          required: !userId,
+        }).then((json) => (json === undefined ? undefined : mapLiteLLMTeamInfo(json, teamId)))
+      : undefined,
+  ]);
 
   const windows = mapLiteLLMWindows({
     ...(personal ? { personal } : {}),
@@ -80,7 +76,7 @@ async function collectLiteLLM(ctx: ApiKeyCollectContext) {
   if (windows.length === 0) {
     throw new ProviderCollectionError(
       "error",
-      "LiteLLM returned no usable budget or spend windows.",
+      "LiteLLM returned no usable budget windows.",
       LITELLM_SOURCE_API,
     );
   }

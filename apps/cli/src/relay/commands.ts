@@ -46,12 +46,7 @@ export interface RelayCredentialStoreContract {
   delete(): Promise<void>;
 }
 
-export interface StatusProviderDiagnostic {
-  provider: string;
-  available: boolean;
-  credential_source: string;
-  detail: string;
-}
+export type DoctorProviderDiagnostic = Awaited<ReturnType<typeof diagnoseProviderSessions>>[number];
 
 export interface RelayCommandDependencies {
   createClient(relayUrl: string): RelayCommandClient;
@@ -61,7 +56,7 @@ export interface RelayCommandDependencies {
   now(): Date;
   deviceName(): string;
   collect(options: { providers: "all"; clientVersion: string }): Promise<unknown>;
-  diagnoseProviders(): Promise<StatusProviderDiagnostic[]>;
+  diagnoseProviders(): Promise<DoctorProviderDiagnostic[]>;
 }
 
 export async function runRelayCommand(
@@ -129,7 +124,7 @@ enables macOS background push every 5 minutes. push performs one collection and 
 stops background push, revokes the remote device, and removes the local credential.`;
 }
 
-export async function runStatusCommand(
+export async function runDoctorCommand(
   output: RelayCommandOutput,
   dependencies?: RelayCommandDependencies,
 ): Promise<number> {
@@ -157,8 +152,12 @@ export async function runStatusCommand(
     } else {
       for (const diagnostic of diagnostics) {
         const marker = diagnostic.available ? "found" : "missing";
+        const foregroundOnly =
+          diagnostic.available && diagnostic.credential_source.startsWith("env:")
+            ? " (foreground only; LaunchAgent does not inherit environment secrets)"
+            : "";
         output.stdout(
-          `  ${diagnostic.provider}\t${marker}\t${diagnostic.credential_source}\t${diagnostic.detail}`,
+          `  ${diagnostic.provider}\t${marker}\t${diagnostic.credential_source}${foregroundOnly}`,
         );
       }
     }
@@ -173,15 +172,21 @@ export async function runStatusCommand(
     output.stdout(`  Background: ${backgroundLabel(background)}`);
 
     const providerReady = diagnostics.some((diagnostic) => diagnostic.available);
-    // Healthy means: at least one local provider credential, no launchd probe error,
-    // and background state matches pairing (loaded iff paired on macOS).
+    // Healthy means: at least one persistent local provider credential, no launchd probe error,
+    // and background state matches pairing (loaded iff paired on macOS). Environment-only API
+    // keys are intentionally foreground-only because LaunchAgent does not inherit secrets.
+    const hasPersistentProvider = diagnostics.some(
+      (diagnostic) => diagnostic.available && !diagnostic.credential_source.startsWith("env:"),
+    );
     const backgroundHealthy =
       background !== "error" &&
       (resolved.platform !== "darwin" ||
         (credential ? background === "loaded" : background === "stopped"));
-    return providerReady && backgroundHealthy ? 0 : 1;
+    const providerHealthy =
+      resolved.platform === "darwin" && credential ? hasPersistentProvider : providerReady;
+    return providerHealthy && backgroundHealthy ? 0 : 1;
   } catch {
-    output.stderr("QuotaCLI could not inspect local status.");
+    output.stderr("QuotaCLI could not complete local diagnostics.");
     return 1;
   }
 }
@@ -243,9 +248,22 @@ async function runPair(
   const initialPush = await pushOnce(dependencies);
   if (initialPush.kind !== "uploaded") {
     writePushFailure(output, initialPush);
-    output.stderr(
-      "Pairing was saved, but the initial relay push failed. Run `quotacli relay push` before retrying background setup.",
-    );
+    if (dependencies.platform === "darwin") {
+      try {
+        await dependencies.service.start();
+        output.stdout(
+          "Pairing was saved. Background relay push is loaded and will retry every 5 minutes.",
+        );
+      } catch {
+        output.stderr(
+          "Pairing was saved, but the initial upload and background setup failed. Run `quotacli relay push` to retry now; run `quotacli relay unpair` before pairing again.",
+        );
+      }
+    } else {
+      output.stderr(
+        "Pairing was saved, but the initial relay push failed. Run `quotacli relay push` to retry the upload.",
+      );
+    }
     return 1;
   }
   writePushSuccess(output, initialPush);

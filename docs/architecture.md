@@ -111,7 +111,9 @@ storage requirements are defined only in [`security.md`](security.md).
 - `quotacli config` stores API-key provider secrets in owner-only
   `$XDG_CONFIG_HOME/quotacli/providers.json` or `~/.config/quotacli/providers.json` (directory
   `0700`, file `0600`). Collection prefers that file over env fallbacks. Keys are accepted only via
-  stdin (`--api-key-stdin`); get/list never print full secrets.
+  the interactive hidden prompt; get/list never print full secrets. QuotaCLI and QuotaBar take the
+  same owner-only lock directory while read-modify-writing this shared file, then replace it
+  atomically.
 - Owns Relay discovery, Device Code pairing, and the single Relay-bound local device credential.
   Successful pairing enables recurring push on macOS.
 - Provides an explicit one-shot `relay push` path that validates the bound Relay instance, collects
@@ -122,8 +124,10 @@ storage requirements are defined only in [`security.md`](security.md).
   runtime is provided on other platforms.
 - Unpairing stops that service, uses the device capability to revoke the remote device, and removes
   the local credential only after the Relay reaches a terminal revoked state.
-- Exposes `status` as a read-only summary of local provider readiness and Relay pairing/background
-  state without performing collection or upload.
+- Exposes `doctor` as a read-only summary of local provider readiness and Relay pairing/background
+  state without performing collection or upload. `status` defaults to locally discovered providers,
+  supports explicit provider/all selection, and keeps terminal progress on stderr so stdout remains
+  machine-readable.
 - Avoids native Node addons so standalone cross-platform builds remain possible.
 
 ### QuotaRelay

@@ -43,6 +43,18 @@ describe("kimi mapping", () => {
       value_unit: "count",
     });
   });
+
+  it("does not treat a non-300-minute single limit as a 5-hour window", () => {
+    const data = mapKimiUsagesResponse({
+      limits: [
+        {
+          window: { duration: 60, timeUnit: "TIME_UNIT_MINUTE" },
+          detail: { limit: "50", used: "10", remaining: "40" },
+        },
+      ],
+    });
+    expect(data).toBeUndefined();
+  });
 });
 
 describe("kimi collector", () => {

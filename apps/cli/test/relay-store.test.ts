@@ -67,6 +67,17 @@ describe("RelayCredentialStore", () => {
     expect(await readdir(temporaryDirectory)).toEqual(["device.json"]);
   });
 
+  it("allows only one concurrent initial save", async () => {
+    const path = join(temporaryDirectory, "device.json");
+    const stores = [new RelayCredentialStore({ path }), new RelayCredentialStore({ path })];
+    const results = await Promise.allSettled(
+      stores.map((store, index) => store.save({ ...credential, last_sequence: index })),
+    );
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+    expect(await stores[0]?.load()).toMatchObject({ device_token: credential.device_token });
+  });
+
   it("fails closed for group- or other-readable credentials on POSIX", async () => {
     if (process.platform === "win32") {
       return;

@@ -19,7 +19,6 @@ export const openrouterSpec: ApiKeyHttpCollectorSpec = {
   provider: "openrouter",
   source: OPENROUTER_SOURCE_API,
   envKeys: ["OPENROUTER_API_KEY"],
-  urlEnvKey: "OPENROUTER_API_URL",
   defaultBaseUrl: "https://openrouter.ai/api/v1",
   maskLabel: "OpenRouter",
   collect: collectOpenRouter,
@@ -27,56 +26,39 @@ export const openrouterSpec: ApiKeyHttpCollectorSpec = {
 
 async function collectOpenRouter(ctx: ApiKeyCollectContext) {
   const { credentials, transport, clientVersion, signal, now } = ctx;
+  const request = (path: string) =>
+    fetchBearerJson({
+      transport,
+      url: `${credentials.baseUrl}/${path}`,
+      apiKey: credentials.apiKey,
+      source: OPENROUTER_SOURCE_API,
+      providerLabel: "OpenRouter",
+      clientVersion,
+      ...(signal ? { signal } : {}),
+      extraHeaders: { "X-Title": clientVersion },
+    });
 
   // Credits and /key are independent meters. Auth failures still surface; soft failures
   // leave that meter undefined so key-limit-only accounts can succeed.
-  let credits = undefined as ReturnType<typeof mapOpenRouterCreditsResponse>;
-  try {
-    const creditsJson = await fetchBearerJson({
-      transport,
-      url: `${credentials.baseUrl}/credits`,
-      apiKey: credentials.apiKey,
-      source: OPENROUTER_SOURCE_API,
-      providerLabel: "OpenRouter",
-      clientVersion,
-      required: false,
-      ...(signal ? { signal } : {}),
-      extraHeaders: { "X-Title": clientVersion },
-    });
-    credits = creditsJson !== undefined ? mapOpenRouterCreditsResponse(creditsJson) : undefined;
-  } catch (error) {
-    if (error instanceof ProviderCollectionError && error.category === "auth_required") {
-      throw error;
-    }
-    credits = undefined;
-  }
-
-  let keyData: OpenRouterKeyData | undefined;
-  try {
-    const keyJson = await fetchBearerJson({
-      transport,
-      url: `${credentials.baseUrl}/key`,
-      apiKey: credentials.apiKey,
-      source: OPENROUTER_SOURCE_API,
-      providerLabel: "OpenRouter",
-      clientVersion,
-      required: false,
-      ...(signal ? { signal } : {}),
-      extraHeaders: { "X-Title": clientVersion },
-    });
-    keyData = keyJson !== undefined ? mapOpenRouterKeyResponse(keyJson) : undefined;
-  } catch (error) {
-    if (error instanceof ProviderCollectionError && error.category === "auth_required") {
-      throw error;
-    }
-    keyData = undefined;
-  }
+  const [creditsResult, keyResult] = await Promise.all([
+    collectMeter(() => request("credits"), mapOpenRouterCreditsResponse),
+    collectMeter(() => request("key"), mapOpenRouterKeyResponse),
+  ]);
+  const credits = creditsResult.value;
+  const keyData: OpenRouterKeyData | undefined = keyResult.value;
 
   const windows = mapOpenRouterWindows(credits, keyData);
   if (windows.length === 0) {
+    const unavailable =
+      creditsResult.unavailable &&
+      keyResult.unavailable &&
+      !creditsResult.malformed &&
+      !keyResult.malformed;
     throw new ProviderCollectionError(
-      "error",
-      "OpenRouter returned no usable credit or key-limit quota.",
+      unavailable ? "unavailable" : "error",
+      unavailable
+        ? "OpenRouter quota endpoints are temporarily unavailable."
+        : "OpenRouter returned no usable credit or key-limit quota.",
       OPENROUTER_SOURCE_API,
     );
   }
@@ -86,4 +68,27 @@ async function collectOpenRouter(ctx: ApiKeyCollectContext) {
     credentials,
     ...(now ? { now } : {}),
   });
+}
+
+async function collectMeter<T>(
+  request: () => Promise<unknown>,
+  map: (json: unknown) => T | undefined,
+): Promise<{ value?: T; unavailable: boolean; malformed: boolean }> {
+  try {
+    const json = await request();
+    const value = json === undefined ? undefined : map(json);
+    return {
+      ...(value === undefined ? {} : { value }),
+      unavailable: false,
+      malformed: json !== undefined && value === undefined,
+    };
+  } catch (error) {
+    if (error instanceof ProviderCollectionError && error.category === "auth_required") {
+      throw error;
+    }
+    return {
+      unavailable: error instanceof ProviderCollectionError && error.category === "unavailable",
+      malformed: false,
+    };
+  }
 }

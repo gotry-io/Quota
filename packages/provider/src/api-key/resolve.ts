@@ -14,7 +14,7 @@ export interface ApiKeyResolveConfig {
   provider: ProviderId;
   /** Env vars checked in order after config file. */
   envKeys: readonly string[];
-  /** Optional base URL env (e.g. OPENROUTER_API_URL). */
+  /** Optional base URL env (LiteLLM self-hosted proxy only). */
   urlEnvKey?: string;
   /** When set, used if config/env do not supply a base URL. */
   defaultBaseUrl?: string;
@@ -141,9 +141,13 @@ function resolveBaseUrl(
   config: ApiKeyResolveConfig,
 ): string | undefined {
   const allowPrivateHttp = config.allowPrivateHttp === true;
-  const fromStored = normalizeBaseUrl(storedBaseUrl, { allowPrivateHttp });
-  if (fromStored) {
-    return fromStored;
+  if (storedBaseUrl !== undefined) {
+    // A configured URL is an explicit routing choice. Invalid values, and values
+    // on fixed-endpoint providers, fail closed instead of falling through to env.
+    if (!config.urlEnvKey) {
+      return undefined;
+    }
+    return normalizeBaseUrl(storedBaseUrl, { allowPrivateHttp });
   }
   if (config.urlEnvKey) {
     const fromEnv = normalizeBaseUrl(environment[config.urlEnvKey], { allowPrivateHttp });

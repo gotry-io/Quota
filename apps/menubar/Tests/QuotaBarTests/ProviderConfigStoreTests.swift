@@ -73,19 +73,19 @@ struct ProviderConfigStoreTests {
 
     let fileURL = directory.appendingPathComponent("providers.json")
     let store = ProviderConfigStore(fileURL: fileURL)
-    let secret = "sk-or-v1-menubar-base-url-fixture"
-    try store.setApiKey(.openrouter, apiKey: secret, baseURL: "https://proxy.example")
-    #expect(store.baseURL(for: .openrouter) == "https://proxy.example")
+    let secret = "sk-litellm-menubar-base-url-fixture"
+    try store.setApiKey(.litellm, apiKey: secret, baseURL: "https://proxy.example")
+    #expect(store.baseURL(for: .litellm) == "https://proxy.example")
 
-    try store.updateBaseURL(.openrouter, baseURL: "https://proxy.example/v1")
-    #expect(store.baseURL(for: .openrouter) == "https://proxy.example/v1")
-    guard case .configured = store.status(for: .openrouter) else {
+    try store.updateBaseURL(.litellm, baseURL: "https://proxy.example/v1")
+    #expect(store.baseURL(for: .litellm) == "https://proxy.example/v1")
+    guard case .configured = store.status(for: .litellm) else {
       Issue.record("key must remain configured after base URL update")
       return
     }
 
-    try store.updateBaseURL(.openrouter, baseURL: nil)
-    #expect(store.baseURL(for: .openrouter) == nil)
+    try store.updateBaseURL(.litellm, baseURL: "https://proxy.example/next")
+    #expect(store.baseURL(for: .litellm) == "https://proxy.example/next")
     #expect(throws: ProviderConfigStoreError.missingKey) {
       try store.updateBaseURL(.deepseek, baseURL: "https://example")
     }
@@ -127,6 +127,29 @@ struct ProviderConfigStoreTests {
     #expect(throws: ProviderConfigStoreError.insecurePermissions) {
       try store.setApiKey(.openrouter, apiKey: "sk-or-v1-new")
     }
+  }
+
+  @Test
+  func recoversWriteLockWhoseOwnerProcessNoLongerExists() throws {
+    let directory = try ownerOnlyTempDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let fileURL = directory.appendingPathComponent("providers.json")
+    let lockURL = URL(fileURLWithPath: "\(fileURL.path).lock", isDirectory: true)
+    try FileManager.default.createDirectory(
+      at: lockURL,
+      withIntermediateDirectories: false,
+      attributes: [.posixPermissions: 0o700]
+    )
+    try "2147483647\n".write(
+      to: lockURL.appendingPathComponent("owner"),
+      atomically: false,
+      encoding: .utf8
+    )
+
+    let store = ProviderConfigStore(fileURL: fileURL)
+    try store.setApiKey(.openrouter, apiKey: "sk-or-v1-after-stale-lock")
+    #expect(store.status(for: .openrouter) != .missing)
   }
 
   private func ownerOnlyTempDirectory() throws -> URL {

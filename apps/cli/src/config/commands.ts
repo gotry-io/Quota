@@ -10,7 +10,6 @@ import {
 } from "@gotry-io/quota-provider";
 import type { CliOutput } from "../commands.ts";
 import { promptLine } from "./prompt.ts";
-import { readStdinText } from "./stdin.ts";
 
 export async function runConfigCommand(
   args: readonly string[],
@@ -51,10 +50,17 @@ async function runConfigSet(args: readonly string[], output: CliOutput): Promise
   }
   // Catalog is `as const`; optional api_key flags need the shared interface for access.
   const spec = entry.config as ProviderApiKeyConfigSpec;
+  if (parsed.baseUrl !== undefined) {
+    const error = baseUrlError(parsed.baseUrl, spec, entry.displayName);
+    if (error) {
+      output.stderr(error);
+      return 2;
+    }
+  }
 
   let apiKey: string;
   try {
-    apiKey = (await readApiKey(parsed.mode, entry.displayName)).trim();
+    apiKey = (await promptLine(`${entry.displayName} API key: `, { secret: true })).trim();
   } catch {
     output.stderr("Could not read the API key.");
     return 1;
@@ -65,7 +71,7 @@ async function runConfigSet(args: readonly string[], output: CliOutput): Promise
   }
 
   let baseUrl = parsed.baseUrl;
-  if (baseUrl === undefined && spec.supportsBaseUrl && parsed.mode === "prompt") {
+  if (baseUrl === undefined && spec.supportsBaseUrl) {
     try {
       const answer = (
         await promptLine(
@@ -87,20 +93,9 @@ async function runConfigSet(args: readonly string[], output: CliOutput): Promise
   }
 
   if (baseUrl !== undefined) {
-    if (!spec.supportsBaseUrl) {
-      output.stderr(`${entry.displayName} does not support --base-url.`);
-      return 2;
-    }
-    if (
-      !normalizeBaseUrl(baseUrl, {
-        allowPrivateHttp: spec.allowPrivateHttp === true,
-      })
-    ) {
-      output.stderr(
-        spec.allowPrivateHttp
-          ? "Invalid base URL. Use HTTPS, or HTTP only for loopback/private/.local hosts."
-          : "Invalid base URL. Use an HTTPS origin such as https://openrouter.ai/api/v1.",
-      );
+    const error = baseUrlError(baseUrl, spec, entry.displayName);
+    if (error) {
+      output.stderr(error);
       return 2;
     }
   } else if (spec.requireBaseUrl) {
@@ -124,11 +119,20 @@ async function runConfigSet(args: readonly string[], output: CliOutput): Promise
   return 0;
 }
 
-async function readApiKey(mode: "prompt" | "stdin", displayName: string): Promise<string> {
-  if (mode === "stdin") {
-    return await readStdinText();
+function baseUrlError(
+  baseUrl: string,
+  spec: ProviderApiKeyConfigSpec,
+  displayName: string,
+): string | undefined {
+  if (!spec.supportsBaseUrl) {
+    return `${displayName} does not support --base-url.`;
   }
-  return await promptLine(`${displayName} API key: `, { secret: true });
+  if (normalizeBaseUrl(baseUrl, { allowPrivateHttp: spec.allowPrivateHttp === true })) {
+    return undefined;
+  }
+  return spec.allowPrivateHttp
+    ? "Invalid base URL. Use HTTPS, or HTTP only for loopback/private/.local hosts."
+    : "Invalid base URL. Use an HTTPS origin such as https://litellm.example.com.";
 }
 
 async function runConfigGet(args: readonly string[], output: CliOutput): Promise<number> {
@@ -144,7 +148,7 @@ async function runConfigGet(args: readonly string[], output: CliOutput): Promise
       return 0;
     }
     output.stdout(`${provider}: ${maskApiKey(secret.api_key, maskLabel(provider))}`);
-    if (secret.base_url) {
+    if (secret.base_url && PROVIDER_CATALOG[provider].config?.supportsBaseUrl === true) {
       output.stdout(`  base_url: ${secret.base_url}`);
     }
     return 0;
@@ -216,7 +220,7 @@ function maskLabel(provider: ProviderId): string {
 }
 
 type ConfigSetParse =
-  | { ok: true; provider: ProviderId; mode: "prompt" | "stdin"; baseUrl?: string }
+  | { ok: true; provider: ProviderId; baseUrl?: string }
   | { ok: false; error: string };
 
 function parseConfigSetArgs(args: readonly string[]): ConfigSetParse {
@@ -240,14 +244,9 @@ function parseConfigSetArgs(args: readonly string[]): ConfigSetParse {
   }
   const provider = providerRaw;
 
-  let useStdin = false;
   let baseUrl: string | undefined;
   for (let index = 1; index < args.length; index += 1) {
     const arg = args[index]!;
-    if (arg === "--api-key-stdin") {
-      useStdin = true;
-      continue;
-    }
     if (arg === "--base-url" || arg.startsWith("--base-url=")) {
       const value = arg === "--base-url" ? args[++index] : arg.slice("--base-url=".length);
       if (!value) {
@@ -260,24 +259,22 @@ function parseConfigSetArgs(args: readonly string[]): ConfigSetParse {
       return {
         ok: false,
         error:
-          "Do not pass API keys on the command line. Run `quotacli config set <provider>` and enter the key when prompted, or pipe with --api-key-stdin.",
+          "Do not pass API keys on the command line. Run `quotacli config set <provider>` and enter the key when prompted.",
       };
     }
     return { ok: false, error: `Unknown option: ${arg}` };
   }
 
-  if (!useStdin && !process.stdin.isTTY) {
+  if (!process.stdin.isTTY) {
     return {
       ok: false,
-      error:
-        "No interactive terminal. Run in a TTY to be prompted, or pipe the key with --api-key-stdin.",
+      error: "No interactive terminal. Run in a TTY to enter the key when prompted.",
     };
   }
 
   return {
     ok: true,
     provider,
-    mode: useStdin ? "stdin" : "prompt",
     ...(baseUrl !== undefined ? { baseUrl } : {}),
   };
 }
@@ -296,7 +293,6 @@ export function configUsage(): string {
 
 Usage:
   quotacli config set <provider> [--base-url <url>]
-  quotacli config set <provider> --api-key-stdin [--base-url <url>]
   quotacli config get <provider>
   quotacli config unset <provider>
   quotacli config list
@@ -307,12 +303,11 @@ ${providers || "  (none)"}
 Examples:
   quotacli config set deepseek
   quotacli config set litellm --base-url https://litellm.example.com
-  printf '%s' "$OPENROUTER_API_KEY" | quotacli config set openrouter --api-key-stdin
   quotacli config get openrouter
   quotacli config unset openrouter
 
 Interactive set prompts for the API key (input is hidden). Providers that need a base URL
-prompt for it unless --base-url is passed. --api-key-stdin is for scripts/pipes only.
+prompt for it unless --base-url is passed.
 Secrets are stored owner-only at ~/.config/quotacli/providers.json (or $XDG_CONFIG_HOME/quotacli/).
 get/list never print the full key. Collection prefers config over env fallbacks.`;
 }

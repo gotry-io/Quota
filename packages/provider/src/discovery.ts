@@ -2,7 +2,6 @@ import { access } from "node:fs/promises";
 import { homedir } from "node:os";
 import { API_KEY_SPECS } from "./api-key/specs.ts";
 import { resolveApiKeyCredentials } from "./api-key/resolve.ts";
-import { PROVIDER_CATALOG } from "./catalog.ts";
 import type { ProviderDiagnostic } from "./contracts.ts";
 import { CLAUDE_KEYCHAIN_SERVICE, claudeCredentialPaths } from "./providers/claude/credentials.ts";
 import { codexAuthPaths } from "./providers/codex/credentials.ts";
@@ -40,7 +39,6 @@ export async function diagnoseProviderSessions(
     diagnostics.push({
       provider: "codex",
       credential_source: path,
-      detail: "Codex auth file",
       available: await canAccess(path),
     });
   }
@@ -49,7 +47,6 @@ export async function diagnoseProviderSessions(
     diagnostics.push({
       provider: "claude",
       credential_source: path,
-      detail: "Claude Code credential file",
       available: await canAccess(path),
     });
   }
@@ -58,7 +55,6 @@ export async function diagnoseProviderSessions(
     diagnostics.push({
       provider: "grok",
       credential_source: path,
-      detail: "Grok auth file",
       available: await canAccess(path),
     });
   }
@@ -67,9 +63,8 @@ export async function diagnoseProviderSessions(
     const resolved = await resolveApiKeyCredentials(spec, { environment });
     const envHint = spec.envKeys[0] ?? "API_KEY";
     diagnostics.push({
-      provider: id as keyof typeof PROVIDER_CATALOG,
+      provider: id as keyof typeof API_KEY_SPECS,
       credential_source: resolved?.source ?? `config|env:${envHint}`,
-      detail: `${PROVIDER_CATALOG[id as keyof typeof PROVIDER_CATALOG].displayName} API key (config or env)`,
       available: resolved !== undefined,
     });
   }
@@ -87,11 +82,6 @@ export async function diagnoseProviderSessions(
       provider: "claude",
       available,
       credential_source: `macOS Keychain: ${CLAUDE_KEYCHAIN_SERVICE}`,
-      detail: options.probeKeychain
-        ? available
-          ? "Keychain item present"
-          : "Keychain item missing or unreadable"
-        : "Keychain discovery is performed during quota collection",
     });
   }
 

@@ -63,9 +63,9 @@ pnpm dev:relay:self-hosted
 Run the CLI:
 
 ```bash
-pnpm dev:cli -- providers
 pnpm dev:cli -- doctor
-pnpm dev:cli -- quota --format json --pretty
+pnpm dev:cli -- status --format json --pretty
+pnpm dev:cli -- relay push
 ```
 
 Run the public website:
@@ -74,9 +74,10 @@ Run the public website:
 pnpm dev:web
 ```
 
-`quotacli quota` collects read-only ambient Codex, Claude Code, and Grok sessions plus API-key
-providers (OpenRouter, DeepSeek, Kimi Code, LiteLLM) into a versioned collection report. Credentials
-never leave the local machine and are never printed.
+`quotacli status` discovers locally configured providers, collects them concurrently, and writes a
+versioned collection report in stable catalog order. Use `--provider all` to include missing
+providers as explicit authentication failures. Credentials never leave the local machine and are
+never printed.
 
 ## Distribution targets
 
@@ -133,8 +134,8 @@ without user accounts or a bootstrap token. Owners can revoke their own devices 
 group; devices can revoke themselves; devices and owner groups inactive for 30 days are reclaimed by
 scheduled maintenance. QuotaCLI implements Relay pairing with one foreground upload after join,
 one-shot `relay push`, remote unpairing, and a macOS LaunchAgent that continues push every five
-minutes after pairing. Top-level `status` summarizes local provider readiness and Relay background
-state.
+minutes after pairing. Top-level `doctor` summarizes local provider readiness and Relay background
+state without collecting quota.
 
 The first public releases used bare `v*` tags that shipped CLI and QuotaBar together. **Current**
 releases use product-prefixed tags so either product can ship alone (for example a CLI-only bugfix).

@@ -42,6 +42,41 @@ describe("collection report", () => {
     expect(JSON.stringify(validated)).not.toMatch(/Bearer |eyJ|access_token|refresh_token/i);
   });
 
+  it("collects providers concurrently while preserving report order", async () => {
+    let active = 0;
+    let maximumActive = 0;
+    const events: string[] = [];
+    const concurrentCollector = (
+      provider: "codex" | "claude",
+      source: string,
+    ): ProviderCollector => ({
+      ...successCollector(provider, source),
+      collect: async () => {
+        active += 1;
+        maximumActive = Math.max(maximumActive, active);
+        await Promise.resolve();
+        active -= 1;
+        return snapshotFixture(provider, source);
+      },
+    });
+
+    const report = await collectQuotaReport({
+      providers: ["codex", "claude"],
+      now: NOW,
+      collectors: {
+        codex: concurrentCollector("codex", "chatgpt_usage_api"),
+        claude: concurrentCollector("claude", "anthropic_oauth_usage_api"),
+      },
+      onProviderProgress: (provider, state) => events.push(`${provider}:${state}`),
+    });
+
+    expect(maximumActive).toBe(2);
+    expect(report.results.map((result) => result.provider)).toEqual(["codex", "claude"]);
+    expect(events.slice(0, 2)).toEqual(["codex:collecting", "claude:collecting"]);
+    expect(events).toContain("codex:done");
+    expect(events).toContain("claude:done");
+  });
+
   it("returns exit code 0 when every requested provider succeeds", async () => {
     const report = await collectQuotaReport({
       providers: ["codex"],
@@ -64,6 +99,53 @@ describe("collection report", () => {
       results: [{ provider: "codex", outcome: "success", snapshots: [staleSnapshot] }],
     });
 
+    expect(collectionExitCode(report)).toBe(1);
+  });
+
+  it("keeps successful sessions but marks a provider result partial", async () => {
+    const snapshot = snapshotFixture("codex", "chatgpt_usage_api");
+    const report = await collectQuotaReport({
+      providers: ["codex"],
+      now: NOW,
+      collectors: {
+        codex: {
+          provider: "codex",
+          discover: async () => [
+            {
+              provider: "codex",
+              session_id: "working",
+              display_label: "working",
+              credential_source: "fixture",
+            },
+            {
+              provider: "codex",
+              session_id: "broken",
+              display_label: "broken",
+              credential_source: "fixture",
+            },
+          ],
+          collect: async (session) => {
+            if (session.session_id === "broken") {
+              throw new ProviderCollectionError("unavailable", "provider-owned raw detail");
+            }
+            return snapshot;
+          },
+        },
+      },
+    });
+
+    expect(report.results[0]).toMatchObject({
+      outcome: "success",
+      snapshots: [snapshot],
+      message: "Some provider sessions could not be collected.",
+    });
+    expect(collectionExitCode(report)).toBe(1);
+    expect(report.results[0]?.message).not.toContain("provider-owned raw detail");
+  });
+
+  it("returns exit code 1 when no providers are selected", async () => {
+    const report = await collectQuotaReport({ providers: [], now: NOW });
+    expect(report.results).toEqual([]);
     expect(collectionExitCode(report)).toBe(1);
   });
 

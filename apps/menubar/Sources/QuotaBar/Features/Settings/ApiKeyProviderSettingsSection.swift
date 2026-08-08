@@ -46,17 +46,19 @@ struct ApiKeyProviderSettingsForm: View {
         .textContentType(.password)
         .accessibilityLabel("\(provider.displayName) API key")
 
-      TextField("Base URL (optional)", text: $baseURLDraft)
-        .focused($focusedField, equals: .baseURL)
-        .quotaTextFieldStyle(
-          isFocused: focusedField == .baseURL,
-          showsClear: !baseURLDraft.isEmpty,
-          onClear: { baseURLDraft = "" }
-        )
-        .quotaMonoStyle()
-        .textContentType(.URL)
-        .autocorrectionDisabled()
-        .accessibilityLabel("\(provider.displayName) base URL")
+      if provider.supportsBaseURL {
+        TextField("Base URL", text: $baseURLDraft)
+          .focused($focusedField, equals: .baseURL)
+          .quotaTextFieldStyle(
+            isFocused: focusedField == .baseURL,
+            showsClear: !baseURLDraft.isEmpty,
+            onClear: { baseURLDraft = "" }
+          )
+          .quotaMonoStyle()
+          .textContentType(.URL)
+          .autocorrectionDisabled()
+          .accessibilityLabel("\(provider.displayName) base URL")
+      }
     }
     .onAppear {
       reloadStatus()

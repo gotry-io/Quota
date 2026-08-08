@@ -20,21 +20,25 @@ export function classifyProviderError(
   fallback: ProviderErrorCategory = "error",
 ): ProviderCollectionError {
   if (error instanceof ProviderCollectionError) {
-    return error;
+    return new ProviderCollectionError(
+      error.category,
+      fixedProviderMessage(error.category),
+      error.source,
+    );
   }
 
   if (error instanceof Error && error.name === "AbortError") {
-    return new ProviderCollectionError("unavailable", "Collection was cancelled.");
+    return new ProviderCollectionError("unavailable", fixedProviderMessage("unavailable"));
   }
 
   const message = error instanceof Error ? error.message : String(error ?? "unknown error");
   const lower = message.toLowerCase();
 
   if (AUTH_HINTS.some((hint) => lower.includes(hint))) {
-    return new ProviderCollectionError("auth_required", sanitizeMessage(message));
+    return new ProviderCollectionError("auth_required", fixedProviderMessage("auth_required"));
   }
   if (UNSUPPORTED_HINTS.some((hint) => lower.includes(hint))) {
-    return new ProviderCollectionError("unsupported", sanitizeMessage(message));
+    return new ProviderCollectionError("unsupported", fixedProviderMessage("unsupported"));
   }
   if (
     lower.includes("timed out") ||
@@ -44,10 +48,24 @@ export function classifyProviderError(
     lower.includes("econn") ||
     lower.includes("network")
   ) {
-    return new ProviderCollectionError("unavailable", sanitizeMessage(message));
+    return new ProviderCollectionError("unavailable", fixedProviderMessage("unavailable"));
   }
 
-  return new ProviderCollectionError(fallback, sanitizeMessage(message));
+  return new ProviderCollectionError(fallback, fixedProviderMessage(fallback));
+}
+
+/** Provider-owned diagnostics are classified, never copied into reports or UI. */
+export function fixedProviderMessage(category: ProviderErrorCategory): string {
+  switch (category) {
+    case "auth_required":
+      return "Provider authentication is required.";
+    case "unavailable":
+      return "Provider is temporarily unavailable.";
+    case "unsupported":
+      return "Provider operation is not supported.";
+    case "error":
+      return "Provider returned invalid quota data.";
+  }
 }
 
 export function sanitizeMessage(message: string): string {

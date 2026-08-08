@@ -98,6 +98,19 @@ enum ProviderID: String, Codable, CaseIterable, Identifiable, Sendable {
     }
   }
 
+  /// Catalog `supportsBaseUrl` — whether users may configure a custom endpoint.
+  var supportsBaseURL: Bool {
+    switch self {
+    case .codex: false
+    case .claude: false
+    case .grok: false
+    case .openrouter: false
+    case .deepseek: false
+    case .kimi: false
+    case .litellm: true
+    }
+  }
+
   /// Catalog `allowPrivateHttp` — http:// only for loopback/private/.local.
   var allowsPrivateHttpBaseURL: Bool {
     switch self {

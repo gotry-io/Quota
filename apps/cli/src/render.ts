@@ -1,3 +1,4 @@
+import { stripVTControlCharacters } from "node:util";
 import { remainingPercent } from "@gotry-io/quota-model";
 import type {
   ProviderId,
@@ -11,127 +12,193 @@ export function renderJson(report: QuotaCollectionReport, pretty: boolean): stri
   return `${JSON.stringify(report, null, pretty ? 2 : undefined)}\n`;
 }
 
-export function renderText(report: QuotaCollectionReport): string {
+export function renderText(
+  report: QuotaCollectionReport,
+  options: { color?: boolean } = {},
+): string {
+  const style = textStyle(options.color === true);
   const lines: string[] = [];
   for (const result of report.results) {
-    lines.push(...renderResultText(result));
+    if (lines.length > 0) {
+      lines.push("");
+    }
+    lines.push(...renderResultText(result, style));
   }
   if (lines.length === 0) {
-    lines.push("No providers requested.");
+    lines.push(style.warning("No configured providers found."));
+    lines.push("Run `quotacli doctor` for setup details or use `--provider all`.");
   }
   return `${lines.join("\n")}\n`;
 }
 
-function renderResultText(result: QuotaCollectionResult): string[] {
-  const title = providerTitle(result.provider);
+type TextStyle = ReturnType<typeof textStyle>;
+
+function renderResultText(result: QuotaCollectionResult, style: TextStyle): string[] {
+  const title = PROVIDER_CATALOG[result.provider].displayName;
   if (result.outcome !== "success") {
-    return [renderFailureLine(title, result)];
+    return renderFailureLines(title, result, style);
   }
 
-  const lines: string[] = [];
-  for (const snapshot of result.snapshots) {
-    const plan = snapshot.account.plan ? ` (${snapshot.account.plan})` : "";
-    const label = snapshot.account.label ? ` ${snapshot.account.label}` : "";
-    lines.push(`${title}${plan}${label}`);
+  const lines = [cardHeader(title, style)];
+  for (const [index, snapshot] of result.snapshots.entries()) {
+    if (index > 0) {
+      lines.push(style.rule(`├${"┄".repeat(52)}`));
+    }
+    const identity = [snapshot.account.label, snapshot.account.plan]
+      .filter((value): value is string => value !== undefined)
+      .map(safeText)
+      .filter(Boolean)
+      .join(" · ");
+    if (identity) {
+      lines.push(cardLine(style.strong(identity), style));
+    }
     if (snapshot.windows.length === 0) {
-      lines.push("  no windows");
-      continue;
+      lines.push(cardLine(style.dim("No quota limits reported."), style));
+    } else {
+      for (const window of snapshot.windows) {
+        lines.push(...formatWindowLines(window, style).map((line) => cardLine(line, style)));
+      }
     }
-    for (const window of snapshot.windows) {
-      lines.push(`  ${window.title}: ${formatWindowLine(window)}`);
-    }
-    lines.push(`  source: ${snapshot.source}`);
+    lines.push(cardLine(style.dim(`Source · ${safeText(snapshot.source)}`), style));
   }
+  if (result.message !== undefined) {
+    lines.push(cardLine(style.warning("▲ Partial result · one or more sessions failed"), style));
+  }
+  lines.push(cardFooter(style));
   return lines;
 }
 
-function formatWindowLine(window: QuotaWindow): string {
+function formatWindowLines(window: QuotaWindow, style: TextStyle): string[] {
   const absolute = formatAbsolute(window);
-  const reset = window.resets_at ? ` resets ${window.resets_at}` : "";
-  // Balance-only: remaining $ without a budget limit — do not invent 0%/100% usage.
-  const balanceOnly =
-    window.remaining_value !== undefined && window.limit_value === undefined && window.value_unit;
+  const reset = window.resets_at ? `Resets ${window.resets_at}` : undefined;
+  // Balance-only: an absolute remainder without a budget limit — do not invent a percent.
+  const balanceOnly = window.remaining_value !== undefined && window.limit_value === undefined;
   if (balanceOnly && absolute) {
-    return `${absolute} remaining${reset}`;
+    return [
+      style.strong(safeText(window.title)),
+      `  ${absolute} remaining`,
+      ...(reset ? [`  ${style.dim(reset)}`] : []),
+    ];
   }
   const remaining = remainingPercent(window.used_percent);
-  const percentPart = `${formatPercent(remaining)}% remaining (${formatPercent(window.used_percent)}% used)`;
-  return absolute ? `${percentPart}; ${absolute}${reset}` : `${percentPart}${reset}`;
+  const summary = [
+    `${formatPercent(remaining)}% left`,
+    absolute,
+    `${formatPercent(window.used_percent)}% used`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  return [
+    style.strong(safeText(window.title)),
+    `  ${style.meter(quotaMeter(remaining), remaining)}  ${summary}`,
+    ...(reset ? [`  ${style.dim(reset)}`] : []),
+  ];
 }
 
 function formatAbsolute(window: QuotaWindow): string | undefined {
-  if (window.remaining_value === undefined || !window.value_unit) {
+  if (window.remaining_value === undefined) {
     return undefined;
   }
-  const unit = window.value_unit === "usd" ? "$" : "";
-  const suffix = window.value_unit === "usd" ? "" : ` ${window.value_unit}`;
-  const remaining = `${unit}${formatQuantity(window.remaining_value)}${suffix}`;
+  const remaining = window.value_unit
+    ? formatValue(window.remaining_value, window.value_unit)
+    : formatQuantity(window.remaining_value);
   if (window.limit_value !== undefined) {
-    const limit = `${unit}${formatQuantity(window.limit_value)}${suffix}`;
+    const limit = window.value_unit
+      ? formatValue(window.limit_value, window.value_unit)
+      : formatQuantity(window.limit_value);
     return `${remaining} / ${limit}`;
   }
   return remaining;
 }
 
-function renderFailureLine(title: string, result: QuotaCollectionResult): string {
-  if (result.outcome === "auth_required") {
-    return `${title}: sign-in required — run \`${loginCommand(result.provider, result.message)}\``;
+function formatValue(value: number, unit: NonNullable<QuotaWindow["value_unit"]>): string {
+  return unit === "usd" ? `$${formatQuantity(value)}` : `${formatQuantity(value)} ${unit}`;
+}
+
+function renderFailureLines(
+  title: string,
+  result: QuotaCollectionResult,
+  style: TextStyle,
+): string[] {
+  const outcome = result.outcome;
+  if (outcome === "auth_required") {
+    return [
+      cardHeader(title, style),
+      cardLine(style.warning("● Sign-in required"), style),
+      cardLine(`Run \`${loginCommand(result.provider)}\``, style),
+      cardFooter(style),
+    ];
   }
   const label =
-    result.outcome === "unavailable"
-      ? "unavailable"
-      : result.outcome === "unsupported"
-        ? "unsupported"
-        : "error";
-  return `${title}: ${label} — ${conciseFailureDetail(result.message) ?? label}`;
+    outcome === "unavailable" ? "unavailable" : outcome === "unsupported" ? "unsupported" : "error";
+  const failure =
+    outcome === "unavailable" || outcome === "unsupported" || outcome === "error"
+      ? outcome
+      : "error";
+  return [
+    cardHeader(title, style),
+    cardLine(`${style.error(`● ${label}`)} · ${fixedFailureDetail(failure)}`, style),
+    cardFooter(style),
+  ];
 }
 
-function loginCommand(provider: ProviderId, message: string | undefined): string {
-  const catalog = PROVIDER_CATALOG[provider].loginCommand;
-  const fromMessage = message?.match(/`([^`]+)`/)?.[1]?.trim();
-  if (!fromMessage) {
-    return catalog;
-  }
-  // Prefer the backticked command when it looks like a real shell command.
-  if (fromMessage.includes(" ") || fromMessage === catalog) {
-    return fromMessage;
-  }
-  return catalog;
+function cardHeader(title: string, style: TextStyle): string {
+  const tail = "─".repeat(Math.max(2, 49 - title.length));
+  return `${style.rule("┌─")} ${style.heading(title)} ${style.rule(tail)}`;
 }
 
-function conciseFailureDetail(message: string | undefined): string | undefined {
-  const trimmed = message?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  if (trimmed.includes("`")) {
-    const withoutCommand = trimmed
-      .replace(/`[^`]+`/g, "")
-      .replace(/\s+/g, " ")
-      .trim();
-    if (
-      !withoutCommand ||
-      withoutCommand === "." ||
-      withoutCommand.toLowerCase().startsWith("run")
-    ) {
-      return undefined;
-    }
-  }
-  if (trimmed.length <= 96) {
-    return trimmed;
-  }
-  const period = trimmed.indexOf(".");
-  if (period >= 11 && period <= 95) {
-    return trimmed.slice(0, period + 1);
-  }
-  return `${trimmed.slice(0, 93).trimEnd()}…`;
+function cardLine(value: string, style: TextStyle): string {
+  return `${style.rule("│")}  ${value}`;
 }
 
-function providerTitle(provider: string): string {
-  if (provider in PROVIDER_CATALOG) {
-    return PROVIDER_CATALOG[provider as ProviderId].displayName;
+function cardFooter(style: TextStyle): string {
+  return style.rule(`└${"─".repeat(52)}`);
+}
+
+const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001F\u007F-\u009F]/g;
+
+function safeText(value: string): string {
+  return stripVTControlCharacters(value)
+    .replace(CONTROL_CHARACTER_PATTERN, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function quotaMeter(remaining: number, width = 18): string {
+  const filled = Math.round((Math.min(Math.max(remaining, 0), 100) / 100) * width);
+  return `${"█".repeat(filled)}${"░".repeat(width - filled)}`;
+}
+
+function textStyle(color: boolean) {
+  const wrap = (code: number, value: string) =>
+    color ? `\u001B[${code}m${value}\u001B[0m` : value;
+  return {
+    heading: (value: string) => wrap(1, value),
+    strong: (value: string) => wrap(1, value),
+    dim: (value: string) => wrap(2, value),
+    rule: (value: string) => wrap(2, value),
+    warning: (value: string) => wrap(33, value),
+    error: (value: string) => wrap(31, value),
+    meter: (value: string, remaining: number) =>
+      wrap(remaining >= 50 ? 32 : remaining >= 20 ? 33 : 31, value),
+  };
+}
+
+function loginCommand(provider: ProviderId): string {
+  return PROVIDER_CATALOG[provider].loginCommand;
+}
+
+function fixedFailureDetail(outcome: Exclude<QuotaCollectionResult["outcome"], "success">): string {
+  switch (outcome) {
+    case "unavailable":
+      return "provider temporarily unavailable";
+    case "unsupported":
+      return "operation not supported";
+    case "error":
+      return "invalid quota data";
+    case "auth_required":
+      return "authentication required";
   }
-  return provider;
 }
 
 function formatPercent(value: number): string {

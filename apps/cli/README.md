@@ -9,8 +9,8 @@ LiteLLM via `quotacli config` / env). Relay mode sends only validated, normalize
 from `@gotry-io/quota-protocol`.
 
 ```bash
-pnpm --filter @gotry-io/quotacli dev -- status
-pnpm --filter @gotry-io/quotacli dev -- quota --format json --pretty
+pnpm --filter @gotry-io/quotacli dev -- doctor
+pnpm --filter @gotry-io/quotacli dev -- status --format json --pretty
 pnpm --filter @gotry-io/quotacli dev -- relay --help
 pnpm --filter @gotry-io/quotacli build
 ```
@@ -19,37 +19,43 @@ pnpm --filter @gotry-io/quotacli build
 
 ```text
 quotacli version
-quotacli status
-quotacli quota [--provider <id>|all] [--format text|json] [--pretty]
+quotacli status [--provider <id>|all] [--format text|json] [--pretty]
+quotacli doctor
 quotacli relay pair [--relay <url>]
 quotacli relay push
 quotacli relay unpair
 quotacli relay --help
 quotacli config set <provider> [--base-url <url>]
-quotacli config set <provider> --api-key-stdin [--base-url <url>]
 quotacli config get <provider>
 quotacli config unset <provider>
 quotacli config list
 quotacli help
 ```
 
-`quota` defaults:
+`status` defaults:
 
-- `--provider all`
+- collect providers whose local credential source is present; use `--provider all` to include every
+  catalog provider
 - `--format text` when attached to a terminal
 - `--format json` otherwise
 
-Exit codes for `quota`:
+Interactive text mode shows discovery and collection progress on stderr, then renders each provider
+as a clearly separated card with remaining-quota meters. JSON and redirected output contain no
+progress control sequences; `NO_COLOR` disables ANSI color.
+
+Exit codes for `status`:
 
 - `0`: every requested provider returned at least one fresh snapshot
-- `1`: collection completed with one or more provider failures
+- `1`: no configured provider, or collection completed with a provider/session failure
 - `2`: invalid CLI arguments
 
 Relay commands return `0` on complete success, `1` for pairing, push, credential-store, or partial
-provider-collection outcomes, and `2` for invalid commands or arguments. `status` returns `0` only
+provider-collection outcomes, and `2` for invalid commands or arguments. `doctor` returns `0` only
 when at least one local provider credential source is available, launchd inspection succeeds, and
 macOS background state matches pairing (`loaded` when paired, `stopped` when unpaired). Otherwise
-it returns `1`. Missing providers do not fail `status` by themselves if another provider is present.
+it returns `1`. Missing providers do not fail `doctor` by themselves if another provider is present.
+On macOS, a paired Relay also requires a persistent provider credential; environment-only API keys
+are marked foreground-only because LaunchAgent does not inherit provider secrets.
 
 JSON output is one versioned `QuotaCollectionReport`. Provider failures stay inside the report.
 QuotaCLI never prints credentials, authorization headers, cookies, raw JWTs, or unredacted response
@@ -96,11 +102,10 @@ prefers that file over environment variables. Do not pass secrets on argv.
 
 ```bash
 quotacli config set deepseek
-printf '%s' "$OPENROUTER_API_KEY" | quotacli config set openrouter --api-key-stdin
 quotacli config get openrouter    # masked tip only
 quotacli config list
 quotacli config unset openrouter
-quotacli quota --provider openrouter
+quotacli status --provider openrouter
 ```
 
 QuotaBar Settings sections for the same providers write the same file.
@@ -114,7 +119,7 @@ quotacli relay pair                         # defaults to https://quota.gotry.io
 quotacli relay pair --relay https://relay.example.com
 quotacli relay push
 quotacli relay unpair
-quotacli status
+quotacli doctor
 ```
 
 `pair` discovers and validates Relay capabilities, displays a Relay-generated user code for
@@ -124,6 +129,10 @@ and upload so the owner can see the device leave Waiting promptly. On macOS it t
 background LaunchAgent, which continues `relay push` every five minutes. QuotaBar registers an
 isolated anonymous owner capability for the selected Relay URL (managed or self-hosted) without a
 user account or bootstrap token, then approves the displayed pairing code.
+
+If that first upload fails on macOS, the issued pairing is retained and the LaunchAgent is still
+loaded so it can retry every five minutes. Outside macOS, the pairing is retained and the operator
+retries explicitly with `quotacli relay push`.
 
 `unpair` stops and removes the macOS background service, verifies the saved Relay instance, revokes
 the current device with its device credential, and then deletes the local credential. If discovery
@@ -146,7 +155,7 @@ On macOS, after the foreground first upload, `pair` installs and loads the user 
 `io.gotry.quotacli.relay`. The agent runs the same executable's `relay push` command at load
 (login/reboot) and every five minutes. The local device credential is stored at
 `$XDG_CONFIG_HOME/quotacli/device.json` or `~/.config/quotacli/device.json`.
-`status` reports provider readiness, pairing, Relay, device, sequence, and loaded/stopped background
+`doctor` reports provider readiness, pairing, Relay, device, sequence, and loaded/stopped background
 state without displaying the device token. `unpair` removes the LaunchAgent together with the remote
 device and local credential.
 

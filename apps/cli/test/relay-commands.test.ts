@@ -10,8 +10,9 @@ import {
   type RelayCommandDependencies,
   type RelayCommandOutput,
   type RelayCredentialStoreContract,
+  type DoctorProviderDiagnostic,
   runRelayCommand,
-  runStatusCommand,
+  runDoctorCommand,
 } from "../src/relay/commands.ts";
 import type { RelayPushService } from "../src/relay/launch-agent.ts";
 import type { RelayCredential } from "../src/relay/store.ts";
@@ -212,9 +213,21 @@ describe("relay pair", () => {
     expect(await runRelayCommand(["pair"], capture.output, dependencies)).toBe(1);
     expect(dependencies.store.save).toHaveBeenCalledOnce();
     expect(dependencies.collect).toHaveBeenCalledOnce();
-    expect(dependencies.service.start).not.toHaveBeenCalled();
-    expect(capture.stderr.join("\n")).toContain("initial relay push failed");
-    expect(capture.stderr.join("\n")).toContain("quotacli relay push");
+    expect(dependencies.service.start).toHaveBeenCalledOnce();
+    expect(capture.stdout.join("\n")).toContain("will retry every 5 minutes");
+    expect(capture.stderr.join("\n")).toContain("QuotaCLI could not complete the relay push");
+  });
+
+  it("gives a real recovery path when initial upload and background setup both fail", async () => {
+    const capture = captureOutput();
+    const dependencies = fakeDependencies({
+      collectError: new Error("provider blew up"),
+      startError: new Error("launchctl failed"),
+    });
+
+    expect(await runRelayCommand(["pair"], capture.output, dependencies)).toBe(1);
+    expect(dependencies.service.start).toHaveBeenCalledOnce();
+    expect(capture.stderr.join("\n")).toContain("quotacli relay unpair");
   });
 
   it("keeps the credential when background start fails after the initial upload", async () => {
@@ -290,16 +303,16 @@ describe("relay unpair", () => {
   });
 });
 
-describe("status", () => {
+describe("doctor", () => {
   it("summarizes providers and unpaired relay state", async () => {
     const capture = captureOutput();
     const dependencies = fakeDependencies({ existing: null, status: "stopped" });
 
-    expect(await runStatusCommand(capture.output, dependencies)).toBe(0);
+    expect(await runDoctorCommand(capture.output, dependencies)).toBe(0);
     expect(capture.stdout).toEqual([
       `CLI version: 0.0.3`,
       "Providers:",
-      "  codex\tfound\t~/.codex/auth.json\tCodex auth file",
+      "  codex\tfound\t~/.codex/auth.json",
       "Relay:",
       "  Pairing: unpaired",
       "  Background: stopped",
@@ -311,7 +324,7 @@ describe("status", () => {
     const capture = captureOutput();
     const dependencies = fakeDependencies({ existing: credential(), status: "stopped" });
 
-    expect(await runStatusCommand(capture.output, dependencies)).toBe(1);
+    expect(await runDoctorCommand(capture.output, dependencies)).toBe(1);
     expect(capture.stdout.join("\n")).toContain("Pairing: paired");
     expect(capture.stdout.join("\n")).toContain("Background: stopped");
     expect(capture.stdout.join("\n")).not.toContain(credential().device_token);
@@ -321,7 +334,7 @@ describe("status", () => {
     const capture = captureOutput();
     const dependencies = fakeDependencies({ existing: null, status: "loaded" });
 
-    expect(await runStatusCommand(capture.output, dependencies)).toBe(1);
+    expect(await runDoctorCommand(capture.output, dependencies)).toBe(1);
     expect(capture.stdout.join("\n")).toContain("Pairing: unpaired");
     expect(capture.stdout.join("\n")).toContain("Background: loaded (every 5 minutes)");
   });
@@ -333,9 +346,29 @@ describe("status", () => {
       platform: "linux",
     });
 
-    expect(await runStatusCommand(capture.output, dependencies)).toBe(0);
+    expect(await runDoctorCommand(capture.output, dependencies)).toBe(0);
     expect(capture.stdout.join("\n")).toContain("Background: unsupported on this platform");
     expect(dependencies.service.status).not.toHaveBeenCalled();
+  });
+
+  it("warns that environment-only API keys are foreground-only", async () => {
+    const capture = captureOutput();
+    const dependencies = fakeDependencies({
+      existing: credential(),
+      status: "loaded",
+      diagnostics: [
+        {
+          provider: "openrouter",
+          available: true,
+          credential_source: "env:OPENROUTER_API_KEY",
+        },
+      ],
+    });
+
+    expect(await runDoctorCommand(capture.output, dependencies)).toBe(1);
+    expect(capture.stdout.join("\n")).toContain(
+      "foreground only; LaunchAgent does not inherit environment secrets",
+    );
   });
 });
 
@@ -347,6 +380,7 @@ function fakeDependencies(
     collectError?: Error;
     platform?: NodeJS.Platform;
     status?: "loaded" | "stopped";
+    diagnostics?: DoctorProviderDiagnostic[];
   } = {},
 ): RelayCommandDependencies & {
   createClient: ReturnType<typeof vi.fn<(relayUrl: string) => RelayCommandClient>>;
@@ -406,14 +440,16 @@ function fakeDependencies(
       }
       return syntheticReport();
     }),
-    diagnoseProviders: vi.fn(async () => [
-      {
-        provider: "codex",
-        available: true,
-        credential_source: "~/.codex/auth.json",
-        detail: "Codex auth file",
-      },
-    ]),
+    diagnoseProviders: vi.fn(
+      async () =>
+        options.diagnostics ?? [
+          {
+            provider: "codex",
+            available: true,
+            credential_source: "~/.codex/auth.json",
+          },
+        ],
+    ),
   };
 }
 

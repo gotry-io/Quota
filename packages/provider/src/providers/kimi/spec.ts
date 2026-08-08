@@ -13,7 +13,6 @@ export const kimiSpec: ApiKeyHttpCollectorSpec = {
   provider: "kimi",
   source: KIMI_SOURCE_API,
   envKeys: ["KIMI_CODE_API_KEY", "KIMI_API_KEY"],
-  urlEnvKey: "KIMI_CODE_BASE_URL",
   defaultBaseUrl: "https://api.kimi.com",
   maskLabel: "Kimi",
   collect: collectKimi,

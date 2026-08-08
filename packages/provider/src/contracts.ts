@@ -11,7 +11,6 @@ export interface ProviderDiagnostic {
   provider: ProviderId;
   available: boolean;
   credential_source: string;
-  detail: string;
 }
 
 export interface CollectionContext {

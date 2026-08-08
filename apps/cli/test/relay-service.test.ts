@@ -3,7 +3,7 @@ import {
   type RelayCommandDependencies,
   type RelayCommandOutput,
   runRelayCommand,
-  runStatusCommand,
+  runDoctorCommand,
 } from "../src/relay/commands.ts";
 import type { RelayPushService } from "../src/relay/launch-agent.ts";
 import type { RelayCredential } from "../src/relay/store.ts";
@@ -40,15 +40,15 @@ describe("relay background lifecycle", () => {
     expect(capture.stderr.join("\n")).toContain("Unknown relay command: stop");
   });
 
-  it("shows paired identity through top-level status and hides the device token", async () => {
+  it("shows paired identity through doctor and hides the device token", async () => {
     const dependencies = serviceDependencies({ status: "loaded" });
     const capture = captureOutput();
 
-    expect(await runStatusCommand(capture.output, dependencies)).toBe(0);
+    expect(await runDoctorCommand(capture.output, dependencies)).toBe(0);
     expect(capture.stdout).toEqual([
       "CLI version: 0.0.3",
       "Providers:",
-      "  codex\tfound\t~/.codex/auth.json\tCodex auth file",
+      "  codex\tfound\t~/.codex/auth.json",
       "Relay:",
       "  Pairing: paired",
       `  Relay URL: ${pairedCredential.relay_url}`,
@@ -72,19 +72,19 @@ describe("relay background lifecycle", () => {
       const dependencies = serviceDependencies({ credential, status });
       const capture = captureOutput();
 
-      expect(await runStatusCommand(capture.output, dependencies)).toBe(code);
+      expect(await runDoctorCommand(capture.output, dependencies)).toBe(code);
       expect(capture.stdout).toContain(`  Pairing: ${pairing}`);
       expect(capture.stdout.join("\n")).toContain(`Background: ${status}`);
     },
   );
 
-  it("hides unexpected status errors", async () => {
+  it("hides unexpected doctor errors", async () => {
     const dependencies = serviceDependencies({
       statusError: new Error(`raw print output ${pairedCredential.device_token}`),
     });
     const capture = captureOutput();
 
-    expect(await runStatusCommand(capture.output, dependencies)).toBe(1);
+    expect(await runDoctorCommand(capture.output, dependencies)).toBe(1);
     expect(capture.stdout.join("\n")).toContain("Background: unavailable");
     expect(capture.stderr.join("\n")).not.toContain(pairedCredential.device_token);
   });
@@ -318,7 +318,6 @@ function serviceDependencies(options: ServiceDependencyOptions = {}): RelayComma
         provider: "codex" as const,
         available: true,
         credential_source: "~/.codex/auth.json",
-        detail: "Codex auth file",
       },
     ]),
   };
