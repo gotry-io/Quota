@@ -146,10 +146,10 @@ inputs run `deploy-cloudflare.yml`.
 
 | Tag example | Product | Channel | Artifacts |
 | --- | --- | --- | --- |
-| `cli-v0.0.4` | QuotaCLI | stable | npm `@latest`, Homebrew Formula `quotacli` |
-| `cli-v0.0.4-beta.1` | QuotaCLI | beta | npm `@beta` only |
-| `menubar-v0.0.3` | QuotaBar | stable | GitHub Release ZIP, Homebrew Cask `quotabar` |
-| `menubar-v0.0.3-beta.1` | QuotaBar | beta | GitHub prerelease ZIP only |
+| `cli-vX.Y.Z` | QuotaCLI | stable | npm `@latest`, Homebrew Formula `quotacli` |
+| `cli-vX.Y.Z-beta.N` | QuotaCLI | beta | npm `@beta` only |
+| `menubar-vX.Y.Z` | QuotaBar | stable | GitHub Release ZIP, Homebrew Cask `quotabar` |
+| `menubar-vX.Y.Z-beta.N` | QuotaBar | beta | GitHub prerelease ZIP only |
 
 Rules:
 
@@ -157,7 +157,8 @@ Rules:
   `0.0.4beta1`). Prefer `beta.N` for public validation builds.
 - CLI version lives in `apps/cli/package.json`. QuotaBar marketing version lives in
   `apps/menubar/Support/Info.plist` (`CFBundleShortVersionString`). Internal packages and managed
-  Relay/web do **not** drive client tags.
+  Relay/web do **not** drive client tags. Release workflows reject tags that do not exactly match
+  the corresponding source version.
 - Bump (same idea as `npm version`):
 
   ```bash
@@ -169,8 +170,12 @@ Rules:
   Default commits only the touched product file. Then publish:
 
   ```bash
-  git tag -a cli-v0.0.4 -m "QuotaCLI 0.0.4" && git push origin cli-v0.0.4
-  git tag -a menubar-v0.0.3 -m "QuotaBar 0.0.3" && git push origin menubar-v0.0.3
+  CLI_VERSION="$(node -p "require('./apps/cli/package.json').version")"
+  git tag -a "cli-v$CLI_VERSION" -m "QuotaCLI $CLI_VERSION" && git push origin "cli-v$CLI_VERSION"
+
+  MENUBAR_VERSION="$(plutil -extract CFBundleShortVersionString raw apps/menubar/Support/Info.plist)"
+  git tag -a "menubar-v$MENUBAR_VERSION" -m "QuotaBar $MENUBAR_VERSION" && \
+    git push origin "menubar-v$MENUBAR_VERSION"
   ```
 
 - A CLI-only tag does **not** update QuotaBar's bundled helper. Ship a `menubar-v*` release when
@@ -178,7 +183,7 @@ Rules:
 - Install stable CLI with Homebrew (`brew install gotry-io/tap/quotacli`) or
   `npm install -g @gotry-io/quotacli`.
 - Install beta CLI with `npm install -g @gotry-io/quotacli@beta` or pin
-  `@gotry-io/quotacli@0.0.4-beta.1` (no Homebrew Formula for beta).
+  `@gotry-io/quotacli@X.Y.Z-beta.N` (no Homebrew Formula for beta).
 - Install stable QuotaBar with Homebrew Cask or the latest stable GitHub Release for `menubar-v*`.
 - Install beta QuotaBar from the GitHub prerelease ZIP only; do not `brew upgrade` for beta.
 
