@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import packageMetadata from "../package.json" with { type: "json" };
 import {
   type RelayCommandDependencies,
   type RelayCommandOutput,
@@ -46,7 +47,7 @@ describe("relay background lifecycle", () => {
 
     expect(await runDoctorCommand(capture.output, dependencies)).toBe(0);
     expect(capture.stdout).toEqual([
-      "CLI version: 0.0.3",
+      `CLI version: ${packageMetadata.version}`,
       "Providers:",
       "  codex\tfound\t~/.codex/auth.json",
       "Relay:",

@@ -4,6 +4,7 @@ import type {
   RelayInfo,
 } from "@gotry-io/quota-protocol";
 import { describe, expect, it, vi } from "vitest";
+import packageMetadata from "../package.json" with { type: "json" };
 import { RelayClient, RelayClientError, type RelayFetch } from "../src/relay/client.ts";
 import {
   type RelayCommandClient,
@@ -310,7 +311,7 @@ describe("doctor", () => {
 
     expect(await runDoctorCommand(capture.output, dependencies)).toBe(0);
     expect(capture.stdout).toEqual([
-      `CLI version: 0.0.3`,
+      `CLI version: ${packageMetadata.version}`,
       "Providers:",
       "  codex\tfound\t~/.codex/auth.json",
       "Relay:",
