@@ -6,6 +6,22 @@ import Testing
 
 @Suite(.serialized)
 struct LocalQuotaClientTests {
+  @Test
+  func relayPairingStateFollowsCredentialFilePresence() throws {
+    let helper = try TemporaryHelper(body: "exit 0")
+    defer { helper.remove() }
+    let credentialURL = helper.directoryURL.appending(path: "device.json")
+    let client = try LocalQuotaClient(
+      executableURL: helper.url,
+      relayCredentialURL: credentialURL,
+      timeout: .seconds(2)
+    )
+
+    #expect(!client.hasRelayCredential)
+    try Data().write(to: credentialURL)
+    #expect(client.hasRelayCredential)
+  }
+
   @Test(arguments: [Int32(0), Int32(1)])
   func relayPushAcceptsDocumentedExitCodes(exitCode: Int32) async throws {
     let helper = try TemporaryHelper(

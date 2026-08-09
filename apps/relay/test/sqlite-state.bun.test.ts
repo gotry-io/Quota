@@ -6,6 +6,28 @@ import { join } from "node:path";
 import { SQLiteRelayState } from "../src/state/sqlite-state.ts";
 
 describe("SQLiteRelayState", () => {
+  it("stamps fresh databases at the current schema version", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "quota-relay-schema-test-"));
+    const path = join(directory, "relay.db");
+    const state = new SQLiteRelayState(path);
+
+    await state.initialize();
+    await state.initialize();
+
+    const database = new Database(path, { readonly: true, strict: true });
+    expect(
+      database.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version,
+    ).toBe(2);
+    expect(
+      database
+        .query<{ sql: string }, []>(
+          "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'quota_snapshots'",
+        )
+        .get()?.sql,
+    ).not.toContain("provider IN");
+    database.close();
+  });
+
   it("migrates the released provider whitelist without losing snapshots", async () => {
     const directory = mkdtempSync(join(tmpdir(), "quota-relay-migration-test-"));
     const path = join(directory, "relay.db");

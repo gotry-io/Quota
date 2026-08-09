@@ -276,7 +276,7 @@ final class MenuBarViewModel {
   }
 
   private func pushRelaySnapshot() async {
-    guard let relayPusher else { return }
+    guard let relayPusher, relayPusher.hasRelayCredential else { return }
     do {
       try await relayPusher.push()
     } catch is CancellationError {

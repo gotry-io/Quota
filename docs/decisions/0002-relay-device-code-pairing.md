@@ -30,8 +30,9 @@ The flow is:
 7. QuotaCLI stores the credential in the platform credential store or a user-only file.
 8. QuotaCLI performs one foreground collection and upload before treating pair as complete, so the
    owner can observe the device as reporting as soon as join succeeds.
-9. On macOS, the running QuotaBar app invokes its bundled helper every five minutes. Other
-   platforms require an operator-owned external scheduler for recurring uploads.
+9. On macOS, the running QuotaBar app checks for the local device credential every five minutes and
+   invokes its bundled helper only while paired. Other platforms require an operator-owned external
+   scheduler for recurring uploads.
 
 Pairing therefore authorizes the device and publishes an initial snapshot. Recurring scheduling is
 owned by the host: QuotaBar's app lifecycle on macOS and an external scheduler elsewhere. Quitting
@@ -72,5 +73,5 @@ push.
   states.
 - macOS has no QuotaCLI LaunchAgent. QuotaBar's signed Login Item is the only automatic-start path,
   and recurring uploads stop when QuotaBar exits.
-- Earlier releases installed `io.gotry.quotacli.relay`; a macOS push or unpair removes that fixed
-  legacy service before continuing so the old and new schedulers cannot race.
+- Earlier releases installed `io.gotry.quotacli.relay`; a macOS pair, push, or unpair removes that
+  fixed legacy service before continuing so the old and new schedulers cannot race.

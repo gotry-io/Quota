@@ -12,7 +12,7 @@ struct RelayPushLoopTests {
     let sleeper = RelayPushSleepSequence()
     let model = MenuBarViewModel(
       collector: EmptyLocalCollector(),
-      relayPusher: RecordingRelayPusher(recorder: recorder),
+      relayPusher: RecordingRelayPusher(recorder: recorder, hasRelayCredential: true),
       reportCache: nil,
       relayPushInterval: .seconds(300),
       relayPushSleep: { duration in
@@ -26,6 +26,26 @@ struct RelayPushLoopTests {
 
     #expect(await recorder.count == 2)
     #expect(await sleeper.intervals == [.seconds(300), .seconds(300)])
+  }
+
+  @Test
+  func skipsHelperWhileUnpaired() async throws {
+    let recorder = RelayPushRecorder(failsFirstPush: false)
+    let sleeper = RelayPushSleepSequence()
+    let model = MenuBarViewModel(
+      collector: EmptyLocalCollector(),
+      relayPusher: RecordingRelayPusher(recorder: recorder, hasRelayCredential: false),
+      reportCache: nil,
+      relayPushInterval: .seconds(300),
+      relayPushSleep: { duration in
+        try await sleeper.sleep(duration)
+      }
+    )
+
+    model.startRelayPushLoop()
+    try await waitUntil { await sleeper.intervals.count >= 2 }
+
+    #expect(await recorder.count == 0)
   }
 
   private func waitUntil(
@@ -55,6 +75,7 @@ private struct EmptyLocalCollector: LocalQuotaCollecting {
 
 private struct RecordingRelayPusher: RelaySnapshotPushing {
   let recorder: RelayPushRecorder
+  let hasRelayCredential: Bool
 
   func push() async throws {
     try await recorder.push()

@@ -29,6 +29,7 @@ protocol LocalQuotaCollecting: Sendable {
 }
 
 protocol RelaySnapshotPushing: Sendable {
+  var hasRelayCredential: Bool { get }
   func push() async throws
 }
 
@@ -38,12 +39,14 @@ struct LocalQuotaClient: LocalQuotaCollecting, RelaySnapshotPushing {
   private static let defaultTerminationGracePeriod: Duration = .milliseconds(250)
 
   private let executableURL: URL
+  private let relayCredentialURL: URL
   private let timeout: Duration
   private let maximumOutputBytes: Int
   private let terminationGracePeriod: Duration
 
   init(
     executableURL: URL? = nil,
+    relayCredentialURL: URL? = nil,
     bundle: Bundle = .main,
     timeout: Duration = LocalQuotaClient.defaultTimeout,
     maximumOutputBytes: Int = LocalQuotaClient.defaultMaximumOutputBytes,
@@ -56,6 +59,7 @@ struct LocalQuotaClient: LocalQuotaCollecting, RelaySnapshotPushing {
     self.timeout = timeout
     self.maximumOutputBytes = maximumOutputBytes
     self.terminationGracePeriod = terminationGracePeriod
+    self.relayCredentialURL = relayCredentialURL ?? Self.defaultRelayCredentialURL()
 
     if let executableURL {
       self.executableURL = executableURL
@@ -70,6 +74,10 @@ struct LocalQuotaClient: LocalQuotaCollecting, RelaySnapshotPushing {
       throw LocalQuotaClientError.helperMissing
     }
     self.executableURL = helperURL
+  }
+
+  var hasRelayCredential: Bool {
+    FileManager.default.fileExists(atPath: relayCredentialURL.path)
   }
 
   func collect() async throws -> QuotaCollectionReport {
@@ -103,6 +111,18 @@ struct LocalQuotaClient: LocalQuotaCollecting, RelaySnapshotPushing {
     guard result.exitedNormally, result.status == 0 || result.status == 1 else {
       throw LocalQuotaClientError.launchFailed
     }
+  }
+
+  private static func defaultRelayCredentialURL() -> URL {
+    if let xdg = ProcessInfo.processInfo.environment["XDG_CONFIG_HOME"], !xdg.isEmpty {
+      return URL(fileURLWithPath: xdg, isDirectory: true)
+        .appendingPathComponent("quotacli", isDirectory: true)
+        .appendingPathComponent("device.json", isDirectory: false)
+    }
+    return FileManager.default.homeDirectoryForCurrentUser
+      .appendingPathComponent(".config", isDirectory: true)
+      .appendingPathComponent("quotacli", isDirectory: true)
+      .appendingPathComponent("device.json", isDirectory: false)
   }
 
   private func run(arguments: [String]) async throws -> BoundedProcessResult {

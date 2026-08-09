@@ -217,16 +217,19 @@ describe("relay pair", () => {
     expect(capture.stderr.join("\n")).toContain("QuotaCLI could not complete the relay push");
   });
 
-  it("retains the credential when legacy background cleanup fails", async () => {
+  it("does not start pairing when legacy background cleanup fails", async () => {
     const capture = captureOutput();
     const dependencies = fakeDependencies({
       cleanupError: new Error("launchctl failed"),
     });
 
     expect(await runRelayCommand(["pair"], capture.output, dependencies)).toBe(1);
-    expect(dependencies.store.save).toHaveBeenCalledOnce();
+    expect(dependencies.store.save).not.toHaveBeenCalled();
+    expect(dependencies.createClient).not.toHaveBeenCalled();
     expect(dependencies.collect).not.toHaveBeenCalled();
-    expect(capture.stderr.join("\n")).toContain("QuotaCLI could not complete the relay push");
+    expect(capture.stderr).toEqual([
+      "QuotaCLI could not remove the legacy background task. Pairing was not started.",
+    ]);
   });
 
   it("pairs outside macOS with a foreground upload and external scheduling", async () => {

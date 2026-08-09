@@ -106,12 +106,14 @@ data requirements.
   file and atomic rename, and POSIX reads reject group/other-accessible directories or files.
 - QuotaBar invokes only its signed bundled helper with the fixed `relay push` argument array; it
   never uses a shell or resolves a helper from `PATH`. Each push is bounded to 60 seconds and 1 MiB
-  of stdout and discards stderr. Recurring scheduling exists only while the QuotaBar process runs;
-  no separate macOS background task contains or inherits credentials.
+  of stdout and discards stderr. It checks only for the local device credential before invocation,
+  so unpaired lifecycle ticks start no process. Recurring scheduling exists only while the QuotaBar
+  process runs; no separate macOS background task contains or inherits credentials.
 - Earlier production releases installed `~/Library/LaunchAgents/io.gotry.quotacli.relay.plist`.
-  Before a macOS push or unpair, the helper accepts only that fixed regular-file path, boots out only
-  that fixed service label, and then deletes the plist. It rejects symlink paths and retains the
-  device credential when cleanup fails so two schedulers cannot race snapshot sequences.
+  Before a macOS pair, push, or unpair, the helper accepts only that fixed regular-file path, boots
+  out only that fixed service label, and then deletes the plist. It rejects symlink paths; pairing
+  does not start when cleanup fails, and an existing device credential is retained on push or unpair
+  failure so two schedulers cannot race snapshot sequences.
 - QuotaCLI persists the next device snapshot sequence only after Relay acceptance. Retrying after a
   local persistence failure reuses the prior sequence and relies on Relay's idempotent `204`
   response for that device sequence.

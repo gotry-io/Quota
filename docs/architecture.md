@@ -34,9 +34,9 @@ macOS QuotaBar ── bundled QuotaCLI ─── outbound HTTPS ─────�
 
 QuotaCLI explicitly pairs with a selected Relay, receives a Relay-bound device credential, and on
 `relay pair` uploads one normalized snapshot immediately after the device credential is saved. On
-macOS, the signed QuotaBar login item invokes its bundled helper at app launch and every five
-minutes while QuotaBar is running. Other platforms use an operator-owned external scheduler for
-recurring `relay push` calls.
+macOS, the signed QuotaBar login item checks for that credential at app launch and every five
+minutes while QuotaBar is running, and invokes its bundled helper only while paired. Other platforms
+use an operator-owned external scheduler for recurring `relay push` calls.
 Relay persists accepted snapshots and serves QuotaBar instances authenticated by anonymous owner
 capabilities. It never receives provider credentials or runs provider collectors. Pairing and token
 generation are defined in
@@ -84,9 +84,10 @@ storage requirements are defined only in [`security.md`](security.md).
 - Ships its exact compatible QuotaCLI helper inside the signed app bundle and never resolves it from
   the user's `PATH`; the Homebrew Cask exposes this same signed helper as `quotacli` for pairing and
   one-shot commands.
-- Owns the macOS recurring upload lifecycle: it invokes `relay push` immediately after app launch
-  and every 300 seconds while running. Quitting QuotaBar stops recurring uploads, and Launch at Login
-  is the only automatic-start mechanism.
+- Owns the macOS recurring upload lifecycle: it checks for the local device credential immediately
+  after app launch and every 300 seconds while running, invoking `relay push` only while paired.
+  Quitting QuotaBar stops recurring uploads, and Launch at Login is the only automatic-start
+  mechanism.
 - Stores hidden owner capabilities in a user-only Application Support file and keeps endpoint
   records as internal state only.
   Pairing through any Relay URL automatically registers an isolated anonymous owner capability;
@@ -127,9 +128,9 @@ storage requirements are defined only in [`security.md`](security.md).
 - Owns Relay discovery, Device Code pairing, and the single Relay-bound local device credential.
 - Provides an explicit one-shot `relay push` path that validates the bound Relay instance, collects
   all providers, uploads one normalized envelope, and commits its local sequence after acceptance.
-- Does not own a background-service runtime. Before a macOS push or unpair, it removes the legacy
-  `io.gotry.quotacli.relay` LaunchAgent shipped by earlier releases; this compatibility cleanup is
-  retained only for that released artifact.
+- Does not own a background-service runtime. Before a macOS pair, push, or unpair, it removes the
+  legacy `io.gotry.quotacli.relay` LaunchAgent shipped by earlier releases; this compatibility
+  cleanup is retained only for that released artifact.
 - Unpairing uses the device capability to revoke the remote device and removes the local credential
   only after the Relay reaches a terminal revoked state.
 - Exposes `doctor` as a read-only summary of local provider readiness and Relay pairing state

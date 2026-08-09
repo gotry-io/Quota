@@ -57,6 +57,21 @@ describe("relay push", () => {
     ]);
   });
 
+  it("does no paired work when legacy background cleanup fails", async () => {
+    const capture = captureOutput();
+    const dependencies = reportDependencies({
+      cleanupError: new Error("launchctl failed"),
+    });
+
+    expect(await runRelayCommand(["push"], capture.output, dependencies)).toBe(1);
+    expect(dependencies.store.load).not.toHaveBeenCalled();
+    expect(dependencies.createClient).not.toHaveBeenCalled();
+    expect(dependencies.collect).not.toHaveBeenCalled();
+    expect(capture.stderr).toEqual([
+      "QuotaCLI could not remove the legacy background task. Push was not started.",
+    ]);
+  });
+
   it("discovers without Authorization and stops before collection on instance mismatch", async () => {
     const fetchMock = vi.fn<RelayFetch>(async (_input, init) => {
       expect(new Headers(init?.headers).has("Authorization")).toBe(false);
@@ -260,6 +275,7 @@ interface ReportDependencyOptions {
   credential?: RelayCredential | null;
   report?: unknown;
   collectError?: Error;
+  cleanupError?: Error;
   createClient?: (relayUrl: string) => RelayCommandClient;
   upload?: (token: string, envelope: QuotaSnapshotEnvelope) => Promise<void>;
   save?: RelayCredentialStoreContract["save"];
@@ -295,7 +311,11 @@ function reportDependencies(options: ReportDependencyOptions = {}): RelayCommand
       delete: vi.fn(async () => undefined),
     },
     platform: "darwin",
-    cleanupLegacyService: vi.fn(async () => undefined),
+    cleanupLegacyService: vi.fn(async () => {
+      if (options.cleanupError) {
+        throw options.cleanupError;
+      }
+    }),
     now: () => new Date("2026-08-03T10:00:00Z"),
     deviceName: () => "synthetic-relay",
     collect,

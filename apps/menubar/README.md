@@ -23,9 +23,10 @@ last reported, not remote credential configuration. API-key forms write
 `~/.config/quotacli/providers.json` (shared with QuotaCLI).
 Launch at Login mirrors macOS Login Items (`SMAppService.mainApp`): the toggle reflects system
 status, and a one-shot first-run seed registers default-on when still unregistered. QuotaBar invokes
-its bundled helper immediately after app launch and every five minutes while running; quitting the
-menu-bar app stops recurring uploads. Agent names, defaults, and login recovery commands come from
-generated catalog bindings
+its bundled helper immediately after app launch and every five minutes while running only when the
+local Relay device credential exists; unpaired checks do not start the helper. Quitting the menu-bar
+app stops recurring uploads. Agent names, defaults, and login recovery commands come from generated
+catalog bindings
 (`ProviderID.generated.swift`); do not hand-edit that file—run `pnpm generate:provider-catalog`.
 **Delete all QuotaBar data** deletes each reachable owner group before clearing the local owners
 file, endpoint records, cached quota, and preferences (including agent visibility); it does not

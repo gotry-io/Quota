@@ -147,9 +147,10 @@ is uploaded but returns exit code `1` with an explicit notice.
 ## Recurring relay push
 
 On macOS, QuotaBar owns recurring reporting. Its signed Login Item starts the menu-bar app, which
-runs the bundled helper once at app launch and every five minutes while the app remains running.
-Quitting QuotaBar pauses uploads; there is no separate QuotaCLI LaunchAgent. The helper removes the
-fixed `io.gotry.quotacli.relay` service left by earlier releases before a push or unpair.
+checks for the local Relay device credential once at app launch and every five minutes while the app
+remains running, and invokes the bundled helper only while paired. Quitting QuotaBar pauses uploads;
+there is no separate QuotaCLI LaunchAgent. Before a macOS pair, push, or unpair, the helper removes
+the fixed `io.gotry.quotacli.relay` service left by earlier releases.
 
 The local device credential is stored at `$XDG_CONFIG_HOME/quotacli/device.json` or
 `~/.config/quotacli/device.json`. `doctor` reports provider readiness, pairing, Relay, device,

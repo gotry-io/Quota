@@ -46,7 +46,7 @@ export class SQLiteRelayState implements RelayState {
   }
 
   async initialize(): Promise<void> {
-    this.database.exec(SQLITE_SCHEMA);
+    this.database.exec("PRAGMA foreign_keys = ON");
     const schemaVersion = this.database
       .query<{ user_version: number }, []>("PRAGMA user_version")
       .get();
@@ -56,8 +56,13 @@ export class SQLiteRelayState implements RelayState {
     if (schemaVersion.user_version >= SQLITE_SCHEMA_VERSION) {
       return;
     }
+    const existingTable = this.database
+      .query<{ name: string }, []>(
+        "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%' LIMIT 1",
+      )
+      .get();
     this.database.transaction(() => {
-      this.database.exec(SQLITE_MIGRATION_0002);
+      this.database.exec(existingTable ? SQLITE_MIGRATION_0002 : SQLITE_SCHEMA);
       this.database.exec(`PRAGMA user_version = ${SQLITE_SCHEMA_VERSION}`);
     })();
   }

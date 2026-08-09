@@ -181,6 +181,15 @@ async function runPair(
       );
       return 1;
     }
+    if (dependencies.platform === "darwin") {
+      try {
+        await dependencies.cleanupLegacyService();
+      } catch {
+        throw new RelayCommandError(
+          "QuotaCLI could not remove the legacy background task. Pairing was not started.",
+        );
+      }
+    }
 
     const displayName = dependencies.deviceName().trim().slice(0, 128);
     if (displayName.length === 0) {
@@ -292,6 +301,14 @@ async function runPush(
   output: RelayCommandOutput,
   dependencies: RelayCommandDependencies,
 ): Promise<number> {
+  if (dependencies.platform === "darwin") {
+    try {
+      await dependencies.cleanupLegacyService();
+    } catch {
+      output.stderr("QuotaCLI could not remove the legacy background task. Push was not started.");
+      return 1;
+    }
+  }
   const result = await pushOnce(dependencies);
   if (result.kind !== "uploaded") {
     writePushFailure(output, result);
@@ -344,9 +361,6 @@ function writePushFailure(
 
 async function pushOnce(dependencies: RelayCommandDependencies): Promise<PushOnceResult> {
   try {
-    if (dependencies.platform === "darwin") {
-      await dependencies.cleanupLegacyService();
-    }
     const credential = await dependencies.store.load();
     if (!credential) {
       return { kind: "not_paired" };
