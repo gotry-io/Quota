@@ -45,7 +45,7 @@ CREATE INDEX IF NOT EXISTS devices_activity_idx ON devices(revoked_at, last_seen
 
 CREATE TABLE IF NOT EXISTS quota_snapshots (
   device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
-  provider TEXT NOT NULL CHECK (provider IN ('codex', 'claude', 'grok')),
+  provider TEXT NOT NULL,
   account_fingerprint TEXT NOT NULL,
   sequence INTEGER NOT NULL CHECK (sequence >= 0),
   captured_at TEXT NOT NULL,
@@ -79,4 +79,47 @@ CREATE TABLE IF NOT EXISTS rate_limit_counters (
 
 CREATE INDEX IF NOT EXISTS rate_limit_counters_expires_at_idx
 ON rate_limit_counters(window_expires_at);
+`;
+
+export const SQLITE_SCHEMA_VERSION = 2;
+
+export const SQLITE_MIGRATION_0002 = `
+ALTER TABLE quota_snapshots RENAME TO quota_snapshots_v1;
+
+CREATE TABLE quota_snapshots (
+  device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,
+  account_fingerprint TEXT NOT NULL,
+  sequence INTEGER NOT NULL CHECK (sequence >= 0),
+  captured_at TEXT NOT NULL,
+  observed_at TEXT NOT NULL,
+  snapshot_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (device_id, provider, account_fingerprint)
+);
+
+INSERT INTO quota_snapshots (
+  device_id,
+  provider,
+  account_fingerprint,
+  sequence,
+  captured_at,
+  observed_at,
+  snapshot_json,
+  updated_at
+)
+SELECT
+  device_id,
+  provider,
+  account_fingerprint,
+  sequence,
+  captured_at,
+  observed_at,
+  snapshot_json,
+  updated_at
+FROM quota_snapshots_v1;
+
+DROP TABLE quota_snapshots_v1;
+
+CREATE INDEX quota_snapshots_observed_at_idx ON quota_snapshots(observed_at);
 `;

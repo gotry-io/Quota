@@ -16,7 +16,6 @@ import {
   type RelayCredentialStoreContract,
   runRelayCommand,
 } from "../src/relay/commands.ts";
-import type { RelayPushService } from "../src/relay/launch-agent.ts";
 import type { RelayCredential } from "../src/relay/store.ts";
 
 const boundCredential: RelayCredential = {
@@ -52,8 +51,24 @@ describe("relay push", () => {
     expect(dependencies.createClient).not.toHaveBeenCalled();
     expect(dependencies.collect).not.toHaveBeenCalled();
     expect(dependencies.store.save).not.toHaveBeenCalled();
+    expect(dependencies.cleanupLegacyService).toHaveBeenCalledOnce();
     expect(capture.stderr).toEqual([
       "This machine is not paired. Run `quotacli relay pair` first.",
+    ]);
+  });
+
+  it("does no paired work when legacy background cleanup fails", async () => {
+    const capture = captureOutput();
+    const dependencies = reportDependencies({
+      cleanupError: new Error("launchctl failed"),
+    });
+
+    expect(await runRelayCommand(["push"], capture.output, dependencies)).toBe(1);
+    expect(dependencies.store.load).not.toHaveBeenCalled();
+    expect(dependencies.createClient).not.toHaveBeenCalled();
+    expect(dependencies.collect).not.toHaveBeenCalled();
+    expect(capture.stderr).toEqual([
+      "QuotaCLI could not remove the legacy background task. Push was not started. Unload io.gotry.quotacli.relay and remove ~/Library/LaunchAgents/io.gotry.quotacli.relay.plist, then retry.",
     ]);
   });
 
@@ -115,9 +130,7 @@ describe("relay push", () => {
     );
     expect(capture.stdout).toEqual(["Uploaded 3 snapshots with sequence 5."]);
     expect(capture.stderr).toEqual([]);
-    expect(dependencies.service.start).not.toHaveBeenCalled();
-    expect(dependencies.service.status).not.toHaveBeenCalled();
-    expect(dependencies.service.stop).not.toHaveBeenCalled();
+    expect(dependencies.cleanupLegacyService).toHaveBeenCalledOnce();
   });
 
   it("uploads an empty heartbeat and reports incomplete collection", async () => {
@@ -262,6 +275,7 @@ interface ReportDependencyOptions {
   credential?: RelayCredential | null;
   report?: unknown;
   collectError?: Error;
+  cleanupError?: Error;
   createClient?: (relayUrl: string) => RelayCommandClient;
   upload?: (token: string, envelope: QuotaSnapshotEnvelope) => Promise<void>;
   save?: RelayCredentialStoreContract["save"];
@@ -275,7 +289,7 @@ function reportDependencies(options: ReportDependencyOptions = {}): RelayCommand
     save: ReturnType<typeof vi.fn<RelayCredentialStoreContract["save"]>>;
     delete: ReturnType<typeof vi.fn<RelayCredentialStoreContract["delete"]>>;
   };
-  service: ReturnType<typeof fakeService>;
+  cleanupLegacyService: ReturnType<typeof vi.fn<RelayCommandDependencies["cleanupLegacyService"]>>;
 } {
   const client = relayClient(options.upload);
   const createClient = vi.fn<(relayUrl: string) => RelayCommandClient>(
@@ -297,23 +311,15 @@ function reportDependencies(options: ReportDependencyOptions = {}): RelayCommand
       delete: vi.fn(async () => undefined),
     },
     platform: "darwin",
-    service: fakeService(),
+    cleanupLegacyService: vi.fn(async () => {
+      if (options.cleanupError) {
+        throw options.cleanupError;
+      }
+    }),
     now: () => new Date("2026-08-03T10:00:00Z"),
     deviceName: () => "synthetic-relay",
     collect,
     diagnoseProviders: vi.fn(async () => []),
-  };
-}
-
-function fakeService(): RelayPushService & {
-  start: ReturnType<typeof vi.fn<RelayPushService["start"]>>;
-  status: ReturnType<typeof vi.fn<RelayPushService["status"]>>;
-  stop: ReturnType<typeof vi.fn<RelayPushService["stop"]>>;
-} {
-  return {
-    start: vi.fn(async () => undefined),
-    status: vi.fn(async () => "stopped"),
-    stop: vi.fn(async () => undefined),
   };
 }
 

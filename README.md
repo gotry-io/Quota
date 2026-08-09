@@ -4,7 +4,8 @@ Quota is the monorepo behind [quota.gotry.io](https://quota.gotry.io), monitorin
 subscription quotas.
 
 - **QuotaBar** — native macOS menu bar app for local and remote quotas.
-- **QuotaCLI** — standalone local collector and installable Relay agent.
+- **QuotaCLI** — headless local collector and Relay agent for non-macOS machines; QuotaBar embeds it
+  on macOS.
 - **QuotaRelay** — persistent device registry and normalized snapshot relay.
 
 The initial providers are Codex, Claude Code, Grok, OpenRouter, DeepSeek, Kimi Code, and LiteLLM.
@@ -82,17 +83,15 @@ never printed.
 ## Distribution targets
 
 - QuotaBar is intended for distribution as a Homebrew Cask from `gotry-io/homebrew-tap`. Its signed
-  app bundle
-  includes a private QuotaCLI helper, so desktop users do not install the CLI separately.
-- QuotaCLI is published as `@gotry-io/quotacli` on npm and as a Homebrew Formula
-  (`gotry-io/tap/quotacli`) that installs that npm package. Developers and Relay machines can use
-  either channel for the `quotacli` command.
-- The same CLI source also produces a Bun standalone executable for the QuotaBar helper and release
-  artifacts.
+  app bundle includes the compatible QuotaCLI helper and its Cask exposes that helper as the
+  `quotacli` command. macOS users install QuotaBar rather than a separate CLI package.
+- QuotaCLI is published as `@gotry-io/quotacli` on npm for headless non-macOS Relay machines. There
+  is no standalone macOS CLI artifact or Homebrew Formula.
+- The same CLI source produces the private Bun executable only while packaging QuotaBar.
 
 QuotaCLI and QuotaBar use **independent semver and release tags**. A `cli-v*` tag runs only
-`release-cli.yml` (npm Trusted Publishing; stable also updates Homebrew Formula
-`gotry-io/tap/quotacli`). A `menubar-v*` tag runs only `release-menubar.yml` (sign, notarize, GitHub
+`release-cli.yml` (npm Trusted Publishing). A `menubar-v*` tag runs only
+`release-menubar.yml` (sign, notarize, GitHub
 Release ZIP; stable also updates the Cask). QuotaBar still ships a **bundled** QuotaCLI helper built
 from the same commit's `apps/cli` sources; the helper reports the CLI package version, which may
 differ from the App marketing version. **Prerelease** tags use a hyphen suffix (for example
@@ -119,13 +118,15 @@ normalized protocol validation, persistent D1/SQLite Relay storage, Relay discov
 public website. QuotaBar ships its bundled helper and resolves local and remote observations into one
 stable Overview without accumulating conflicting quota values. One Relay state model is shared by
 five-minute app-lifecycle polling and the typed Settings stack for **Remote Devices** and **Pair
-Device**. A Relay is only an endpoint URL; each QuotaBar holds a hidden owner capability in Keychain
-and sees only the devices it paired.
+Device**. A Relay is only an endpoint URL; each QuotaBar holds a hidden owner capability in its
+user-only Application Support file and sees only the devices it paired.
 
-The macOS Relay acceptance test exercises a real LaunchServices-started QuotaBar and QuotaCLI
+The macOS Relay acceptance test exercises a real LaunchServices-started QuotaBar and its bundled
+QuotaCLI helper
 against isolated managed and self-hosted Relay runtimes. It covers anonymous owner enrollment on both
-runtimes, Keychain persistence, device pairing, a non-empty report, Remote Overview rendering, device
-revocation and rejection, remote self-unpairing, restart restoration, and credential cleanup.
+runtimes, owner credential persistence, device pairing, a non-empty report, Remote Overview
+rendering, device revocation and rejection, remote self-unpairing, restart restoration, and
+credential cleanup.
 
 QuotaRelay implements its protocol-validated `/api/v1` server core for device-code pairing, scoped
 Bearer authentication, snapshot upload and reads, device management, and persistent rate limiting.
@@ -133,9 +134,11 @@ Both managed and self-hosted runtimes issue the same anonymous, isolated, expiri
 without user accounts or a bootstrap token. Owners can revoke their own devices or delete their
 group; devices can revoke themselves; devices and owner groups inactive for 30 days are reclaimed by
 scheduled maintenance. QuotaCLI implements Relay pairing with one foreground upload after join,
-one-shot `relay push`, remote unpairing, and a macOS LaunchAgent that continues push every five
-minutes after pairing. Top-level `doctor` summarizes local provider readiness and Relay background
-state without collecting quota.
+one-shot `relay push`, and remote unpairing. On macOS, the signed QuotaBar login item invokes its
+bundled helper at app launch and every five minutes while the menu-bar app is running and a device
+credential exists; unpaired checks do not start the helper. Before pairing or uploading, QuotaCLI
+removes the LaunchAgent left by older CLI releases. Top-level `doctor` summarizes local provider
+readiness and Relay pairing state without collecting quota.
 
 The first public releases used bare `v*` tags that shipped CLI and QuotaBar together. **Current**
 releases use product-prefixed tags so either product can ship alone (for example a CLI-only bugfix).
@@ -146,7 +149,7 @@ inputs run `deploy-cloudflare.yml`.
 
 | Tag example | Product | Channel | Artifacts |
 | --- | --- | --- | --- |
-| `cli-vX.Y.Z` | QuotaCLI | stable | npm `@latest`, Homebrew Formula `quotacli` |
+| `cli-vX.Y.Z` | QuotaCLI | stable | npm `@latest` |
 | `cli-vX.Y.Z-beta.N` | QuotaCLI | beta | npm `@beta` only |
 | `menubar-vX.Y.Z` | QuotaBar | stable | GitHub Release ZIP, Homebrew Cask `quotabar` |
 | `menubar-vX.Y.Z-beta.N` | QuotaBar | beta | GitHub prerelease ZIP only |
@@ -180,16 +183,17 @@ Rules:
 
 - A CLI-only tag does **not** update QuotaBar's bundled helper. Ship a `menubar-v*` release when
   menu-bar local collection must pick up the fix (Release notes should mention the helper version).
-- Install stable CLI with Homebrew (`brew install gotry-io/tap/quotacli`) or
-  `npm install -g @gotry-io/quotacli`.
+- Install QuotaBar and its bundled `quotacli` command on macOS with
+  `brew install --cask gotry-io/tap/quotabar`.
+- Install stable CLI on non-macOS machines with `npm install -g @gotry-io/quotacli`.
 - Install beta CLI with `npm install -g @gotry-io/quotacli@beta` or pin
-  `@gotry-io/quotacli@X.Y.Z-beta.N` (no Homebrew Formula for beta).
+  `@gotry-io/quotacli@X.Y.Z-beta.N`.
 - Install stable QuotaBar with Homebrew Cask or the latest stable GitHub Release for `menubar-v*`.
 - Install beta QuotaBar from the GitHub prerelease ZIP only; do not `brew upgrade` for beta.
 
 The deterministic Visual App captures its own window without Screen Recording permission, and its
 automated acceptance harness validates Overview and Settings scenes across appearance and text-size
-variants. Background-service support outside macOS remains incomplete. Realtime delivery is optional
+variants. Non-macOS recurring uploads require an external scheduler. Realtime delivery is optional
 and not part of v1.
 
 ## License

@@ -15,7 +15,6 @@ import {
   runRelayCommand,
   runDoctorCommand,
 } from "../src/relay/commands.ts";
-import type { RelayPushService } from "../src/relay/launch-agent.ts";
 import type { RelayCredential } from "../src/relay/store.ts";
 
 const relayInfo: RelayInfo = {
@@ -103,17 +102,17 @@ describe("relay command arguments", () => {
 });
 
 describe("relay pair", () => {
-  it("uses the default Relay URL, uploads once in-process, then starts background push", async () => {
+  it("uses the default Relay URL and uploads once in-process", async () => {
     const capture = captureOutput();
     const dependencies = fakeDependencies();
 
     expect(await runRelayCommand(["pair"], capture.output, dependencies)).toBe(0);
     expect(dependencies.createClient).toHaveBeenCalledWith("https://quota.gotry.io");
     expect(dependencies.collect).toHaveBeenCalledOnce();
-    expect(dependencies.service.start).toHaveBeenCalledOnce();
+    expect(dependencies.cleanupLegacyService).toHaveBeenCalledOnce();
     expect(capture.stdout.join("\n")).toContain("Uploaded 1 snapshot with sequence 0.");
     expect(capture.stdout.join("\n")).toContain(
-      "Background relay push is loaded and runs every 5 minutes.",
+      "QuotaBar uploads every 5 minutes while it is running.",
     );
   });
 
@@ -124,7 +123,7 @@ describe("relay pair", () => {
     expect(await runRelayCommand(["pair"], capture.output, dependencies)).toBe(1);
     expect(dependencies.createClient).not.toHaveBeenCalled();
     expect(dependencies.store.save).not.toHaveBeenCalled();
-    expect(dependencies.service.start).not.toHaveBeenCalled();
+    expect(dependencies.cleanupLegacyService).not.toHaveBeenCalled();
     expect(capture.stderr.join("\n")).toContain("quotacli relay unpair");
   });
 
@@ -161,7 +160,7 @@ describe("relay pair", () => {
       createClient,
       store,
       platform: "darwin",
-      service: fakeService(),
+      cleanupLegacyService: vi.fn(async () => undefined),
       now: () => new Date(now),
       deviceName: () => longHostname,
       collect: vi.fn(async () => syntheticReport()),
@@ -200,9 +199,8 @@ describe("relay pair", () => {
     expect(rendered).not.toContain(pairing.device_code);
     expect(rendered).not.toContain(issued.device_token);
     expect(rendered).not.toContain("Authorization");
-    expect(dependencies.service.start).toHaveBeenCalledOnce();
+    expect(dependencies.cleanupLegacyService).toHaveBeenCalledOnce();
     expect(dependencies.collect).toHaveBeenCalledOnce();
-    expect(dependencies.service.stop).not.toHaveBeenCalled();
   });
 
   it("keeps the credential when the initial push fails after pairing", async () => {
@@ -214,45 +212,35 @@ describe("relay pair", () => {
     expect(await runRelayCommand(["pair"], capture.output, dependencies)).toBe(1);
     expect(dependencies.store.save).toHaveBeenCalledOnce();
     expect(dependencies.collect).toHaveBeenCalledOnce();
-    expect(dependencies.service.start).toHaveBeenCalledOnce();
-    expect(capture.stdout.join("\n")).toContain("will retry every 5 minutes");
+    expect(dependencies.cleanupLegacyService).toHaveBeenCalledOnce();
+    expect(capture.stderr.join("\n")).toContain("QuotaBar will retry while it is running");
     expect(capture.stderr.join("\n")).toContain("QuotaCLI could not complete the relay push");
   });
 
-  it("gives a real recovery path when initial upload and background setup both fail", async () => {
+  it("does not start pairing when legacy background cleanup fails", async () => {
     const capture = captureOutput();
     const dependencies = fakeDependencies({
-      collectError: new Error("provider blew up"),
-      startError: new Error("launchctl failed"),
+      cleanupError: new Error("launchctl failed"),
     });
 
     expect(await runRelayCommand(["pair"], capture.output, dependencies)).toBe(1);
-    expect(dependencies.service.start).toHaveBeenCalledOnce();
-    expect(capture.stderr.join("\n")).toContain("quotacli relay unpair");
+    expect(dependencies.store.save).not.toHaveBeenCalled();
+    expect(dependencies.createClient).not.toHaveBeenCalled();
+    expect(dependencies.collect).not.toHaveBeenCalled();
+    expect(capture.stderr).toEqual([
+      "QuotaCLI could not remove the legacy background task. Pairing was not started. Unload io.gotry.quotacli.relay and remove ~/Library/LaunchAgents/io.gotry.quotacli.relay.plist, then retry.",
+    ]);
   });
 
-  it("keeps the credential when background start fails after the initial upload", async () => {
-    const capture = captureOutput();
-    const dependencies = fakeDependencies({
-      startError: new Error("launchctl failed"),
-    });
-
-    expect(await runRelayCommand(["pair"], capture.output, dependencies)).toBe(1);
-    expect(dependencies.store.save).toHaveBeenCalledTimes(2);
-    expect(dependencies.collect).toHaveBeenCalledOnce();
-    expect(capture.stderr.join("\n")).toContain("could not start background relay push");
-    expect(capture.stderr.join("\n")).toContain("quotacli relay unpair");
-  });
-
-  it("pairs outside macOS with a foreground upload and without background support", async () => {
+  it("pairs outside macOS with a foreground upload and external scheduling", async () => {
     const capture = captureOutput();
     const dependencies = fakeDependencies({ platform: "linux" });
 
     expect(await runRelayCommand(["pair"], capture.output, dependencies)).toBe(0);
-    expect(dependencies.service.start).not.toHaveBeenCalled();
+    expect(dependencies.cleanupLegacyService).not.toHaveBeenCalled();
     expect(dependencies.collect).toHaveBeenCalledOnce();
     expect(capture.stdout.join("\n")).toContain("Uploaded 1 snapshot with sequence 0.");
-    expect(capture.stdout.join("\n")).toContain("Background relay push is supported only on macOS");
+    expect(capture.stdout.join("\n")).toContain("external scheduler");
   });
 
   it("prints only a fixed RelayClientError message", async () => {
@@ -284,6 +272,7 @@ describe("relay unpair", () => {
     const dependencies = fakeDependencies({ existing });
 
     expect(await runRelayCommand(["unpair"], capture.output, dependencies)).toBe(0);
+    expect(dependencies.cleanupLegacyService).toHaveBeenCalledOnce();
     expect(dependencies.store.load).toHaveBeenCalledOnce();
     expect(dependencies.createClient).toHaveBeenCalledWith(existing.relay_url);
     expect(dependencies.store.delete).toHaveBeenCalledOnce();
@@ -307,7 +296,7 @@ describe("relay unpair", () => {
 describe("doctor", () => {
   it("summarizes providers and unpaired relay state", async () => {
     const capture = captureOutput();
-    const dependencies = fakeDependencies({ existing: null, status: "stopped" });
+    const dependencies = fakeDependencies({ existing: null });
 
     expect(await runDoctorCommand(capture.output, dependencies)).toBe(0);
     expect(capture.stdout).toEqual([
@@ -316,31 +305,23 @@ describe("doctor", () => {
       "  codex\tfound\t~/.codex/auth.json",
       "Relay:",
       "  Pairing: unpaired",
-      "  Background: stopped",
+      "  Recurring uploads: QuotaBar while running",
     ]);
     expect(dependencies.diagnoseProviders).toHaveBeenCalledOnce();
+    expect(dependencies.cleanupLegacyService).not.toHaveBeenCalled();
   });
 
-  it("returns non-zero when paired but background reporting is stopped", async () => {
+  it("reports paired identity without exposing the credential", async () => {
     const capture = captureOutput();
-    const dependencies = fakeDependencies({ existing: credential(), status: "stopped" });
+    const dependencies = fakeDependencies({ existing: credential() });
 
-    expect(await runDoctorCommand(capture.output, dependencies)).toBe(1);
+    expect(await runDoctorCommand(capture.output, dependencies)).toBe(0);
     expect(capture.stdout.join("\n")).toContain("Pairing: paired");
-    expect(capture.stdout.join("\n")).toContain("Background: stopped");
+    expect(capture.stdout.join("\n")).toContain("Recurring uploads: QuotaBar while running");
     expect(capture.stdout.join("\n")).not.toContain(credential().device_token);
   });
 
-  it("returns non-zero when unpaired but a background agent is still loaded", async () => {
-    const capture = captureOutput();
-    const dependencies = fakeDependencies({ existing: null, status: "loaded" });
-
-    expect(await runDoctorCommand(capture.output, dependencies)).toBe(1);
-    expect(capture.stdout.join("\n")).toContain("Pairing: unpaired");
-    expect(capture.stdout.join("\n")).toContain("Background: loaded (every 5 minutes)");
-  });
-
-  it("marks background support as unsupported outside macOS", async () => {
+  it("marks recurring uploads as externally scheduled outside macOS", async () => {
     const capture = captureOutput();
     const dependencies = fakeDependencies({
       existing: credential(),
@@ -348,15 +329,13 @@ describe("doctor", () => {
     });
 
     expect(await runDoctorCommand(capture.output, dependencies)).toBe(0);
-    expect(capture.stdout.join("\n")).toContain("Background: unsupported on this platform");
-    expect(dependencies.service.status).not.toHaveBeenCalled();
+    expect(capture.stdout.join("\n")).toContain("Recurring uploads: external scheduler required");
   });
 
-  it("warns that environment-only API keys are foreground-only", async () => {
+  it("accepts environment-only API keys without launchd restrictions", async () => {
     const capture = captureOutput();
     const dependencies = fakeDependencies({
       existing: credential(),
-      status: "loaded",
       diagnostics: [
         {
           provider: "openrouter",
@@ -366,10 +345,9 @@ describe("doctor", () => {
       ],
     });
 
-    expect(await runDoctorCommand(capture.output, dependencies)).toBe(1);
-    expect(capture.stdout.join("\n")).toContain(
-      "foreground only; LaunchAgent does not inherit environment secrets",
-    );
+    expect(await runDoctorCommand(capture.output, dependencies)).toBe(0);
+    expect(capture.stdout.join("\n")).toContain("env:OPENROUTER_API_KEY");
+    expect(capture.stdout.join("\n")).not.toContain("LaunchAgent");
   });
 });
 
@@ -377,10 +355,9 @@ function fakeDependencies(
   options: {
     existing?: RelayCredential | null;
     discoverError?: Error;
-    startError?: Error;
+    cleanupError?: Error;
     collectError?: Error;
     platform?: NodeJS.Platform;
-    status?: "loaded" | "stopped";
     diagnostics?: DoctorProviderDiagnostic[];
   } = {},
 ): RelayCommandDependencies & {
@@ -390,7 +367,7 @@ function fakeDependencies(
     save: ReturnType<typeof vi.fn<RelayCredentialStoreContract["save"]>>;
     delete: ReturnType<typeof vi.fn<RelayCredentialStoreContract["delete"]>>;
   };
-  service: ReturnType<typeof fakeService>;
+  cleanupLegacyService: ReturnType<typeof vi.fn<RelayCommandDependencies["cleanupLegacyService"]>>;
   collect: ReturnType<typeof vi.fn<RelayCommandDependencies["collect"]>>;
   diagnoseProviders: ReturnType<typeof vi.fn<RelayCommandDependencies["diagnoseProviders"]>>;
 } {
@@ -424,15 +401,11 @@ function fakeDependencies(
       }),
     },
     platform: options.platform ?? "darwin",
-    service: fakeService(
-      options.startError === undefined
-        ? options.status === undefined
-          ? {}
-          : { status: options.status }
-        : options.status === undefined
-          ? { startError: options.startError }
-          : { startError: options.startError, status: options.status },
-    ),
+    cleanupLegacyService: vi.fn(async () => {
+      if (options.cleanupError) {
+        throw options.cleanupError;
+      }
+    }),
     now: () => new Date("2026-08-03T10:00:00Z"),
     deviceName: () => "synthetic-relay",
     collect: vi.fn(async () => {
@@ -451,24 +424,6 @@ function fakeDependencies(
           },
         ],
     ),
-  };
-}
-
-function fakeService(
-  options: { startError?: Error; status?: "loaded" | "stopped" } = {},
-): RelayPushService & {
-  start: ReturnType<typeof vi.fn<RelayPushService["start"]>>;
-  status: ReturnType<typeof vi.fn<RelayPushService["status"]>>;
-  stop: ReturnType<typeof vi.fn<RelayPushService["stop"]>>;
-} {
-  return {
-    start: vi.fn(async () => {
-      if (options.startError) {
-        throw options.startError;
-      }
-    }),
-    status: vi.fn(async () => options.status ?? "stopped"),
-    stop: vi.fn(async () => undefined),
   };
 }
 

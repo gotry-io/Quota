@@ -285,11 +285,10 @@ Defaults:
   --provider configured providers discovered from local credentials
   --format text when attached to a terminal, otherwise json
 
-relay pair stores a device credential, uploads one snapshot immediately, then enables macOS
-background push every 5 minutes.
+relay pair stores a device credential and uploads one snapshot immediately.
 relay push collects local quota and uploads one snapshot to the paired Relay.
 status collects and renders local provider quota.
-doctor summarizes local provider readiness and Relay pairing/background state without collection.
+doctor summarizes local provider readiness and Relay pairing state without collection.
 config stores API-key providers (openrouter, deepseek, kimi, litellm) in ~/.config/quotacli/providers.json (owner-only).
 
 Exit codes for status:

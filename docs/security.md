@@ -58,8 +58,9 @@ data requirements.
   QuotaCLI and QuotaBar coordinate updates with an owner-only lock directory, atomically isolate
   released or stale locks before deletion, and use atomic file replacement, so concurrent writers
   cannot lose another provider's update.
-  API keys available only from process environment are foreground-only: the macOS LaunchAgent
-  intentionally does not inherit provider secret variables and therefore cannot collect them.
+  API keys available only from process environment depend on the process that launched QuotaCLI or
+  QuotaBar. Login Items do not provide an interactive shell environment, so persistent recurring
+  collection must use the owner-only provider config file.
 - Plans, OAuth scopes, tokens, email addresses, and anonymous fallback values must not produce a
   globally scoped fingerprint. When the quota owner is unavailable, emit a source-scoped
   fingerprint. Every normalized account must declare its fingerprint scope.
@@ -103,19 +104,26 @@ data requirements.
   `$XDG_CONFIG_HOME/quotacli/device.json` or `~/.config/quotacli/device.json`. Its containing
   QuotaCLI directory is `0700`, its credential file is `0600`, writes use a same-directory temporary
   file and atomic rename, and POSIX reads reject group/other-accessible directories or files.
-- QuotaCLI's macOS Relay LaunchAgent plist is written atomically as `0600`, contains no Relay or
-  provider credential, and invokes a resolved executable with a fixed `relay push` argument array
-  rather than a shell command. It inherits only `PATH`, `XDG_CONFIG_HOME`, `CODEX_HOME`,
-  `CLAUDE_CONFIG_DIR`, `GROK_HOME`, and the three provider CLI path overrides; launchctl output is
-  bounded and never rendered to users. Pairing installs the agent; unpairing removes it.
+- QuotaBar invokes only its signed bundled helper with the fixed `relay push` argument array; it
+  never uses a shell or resolves a helper from `PATH`. Each push is bounded to 60 seconds and 1 MiB
+  of stdout and discards stderr. It checks only for the local device credential before invocation,
+  so unpaired lifecycle ticks start no process. Recurring scheduling exists only while the QuotaBar
+  process runs; no separate macOS background task contains or inherits credentials.
+- Earlier production releases installed `~/Library/LaunchAgents/io.gotry.quotacli.relay.plist`.
+  Before a macOS pair, push, or unpair, the helper accepts only that fixed regular-file path, boots
+  out only that fixed service label, and then deletes the plist. It rejects symlink paths; pairing
+  does not start when cleanup fails, and an existing device credential is retained on push or unpair
+  failure so two schedulers cannot race snapshot sequences. Failure output contains only the fixed
+  service label and plist path needed for manual recovery, never launchctl output or credentials.
 - QuotaCLI persists the next device snapshot sequence only after Relay acceptance. Retrying after a
   local persistence failure reuses the prior sequence and relies on Relay's idempotent `204`
   response for that device sequence.
-- Unpairing first stops the macOS reporting service when present, verifies the bound Relay instance,
-  and uses the device bearer to revoke that device remotely. It deletes the local credential only
-  after the Relay returns the idempotent successful self-revocation response. A token hash belonging
-  to that already-revoked device receives the same success; an unknown or rejected credential does
-  not prove deletion and remains local for retry or explicit local-only cleanup.
+- Unpairing first removes the legacy macOS reporting service when present, verifies the bound Relay
+  instance, and uses the device bearer to revoke that device remotely. It deletes the local
+  credential only after the Relay returns the idempotent successful self-revocation response. A
+  token hash belonging to that already-revoked device receives the same success; an unknown or
+  rejected credential does not prove deletion and remains local for retry or explicit local-only
+  cleanup.
 - Persist only hashes of device and owner bearer tokens and pairing device/user codes, never their
   plaintext values. Return a generated owner bearer only once at anonymous registration and a
   generated device bearer only once when pairing is consumed.

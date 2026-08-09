@@ -11,9 +11,15 @@ cask "quotabar" do
   depends_on macos: :sonoma
 
   app "QuotaBar.app"
+  binary "#{appdir}/QuotaBar.app/Contents/Helpers/quotacli"
 
   zap trash: [
     "~/Library/Preferences/io.gotry.quotabar.plist",
     "~/Library/Saved Application State/io.gotry.quotabar.savedState",
   ]
+
+  caveats <<~EOS
+    QuotaBar now provides the macOS quotacli command. If the retired Formula is still installed,
+    remove it with `brew uninstall quotacli` before installing this Cask.
+  EOS
 end

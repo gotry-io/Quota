@@ -38,10 +38,9 @@
     "registry": "https://registry.npmjs.org/"
   },
   "scripts": {
-    "build": "pnpm run build:npm && pnpm run build:standalone",
+    "build": "pnpm run build:npm",
     "build:npm": "bun run scripts/build-npm.ts",
-    "build:standalone": "pnpm run build:standalone:macos-arm64",
-    "build:standalone:macos-arm64": "bun build --compile --minify --target=bun-darwin-arm64 --outfile dist/standalone/quotacli src/main.ts",
+    "build:menubar-helper": "bun build --compile --minify --target=bun-darwin-arm64 --outfile dist/menubar-helper/quotacli src/main.ts",
     "check": "tsc -p tsconfig.json",
     "dev": "bun run src/main.ts",
     "prepack": "pnpm run build:npm",

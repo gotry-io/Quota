@@ -22,8 +22,11 @@ presentable local snapshots and observations from currently owned Relay devices;
 last reported, not remote credential configuration. API-key forms write
 `~/.config/quotacli/providers.json` (shared with QuotaCLI).
 Launch at Login mirrors macOS Login Items (`SMAppService.mainApp`): the toggle reflects system
-status, and a one-shot first-run seed registers default-on when still unregistered. Agent names,
-defaults, and login recovery commands come from generated catalog bindings
+status, and a one-shot first-run seed registers default-on when still unregistered. QuotaBar invokes
+its bundled helper immediately after app launch and every five minutes while running only when the
+local Relay device credential exists; unpaired checks do not start the helper. Quitting the menu-bar
+app stops recurring uploads. Agent names, defaults, and login recovery commands come from generated
+catalog bindings
 (`ProviderID.generated.swift`); do not hand-edit that file—run `pnpm generate:provider-catalog`.
 **Delete all QuotaBar data** deletes each reachable owner group before clearing the local owners
 file, endpoint records, cached quota, and preferences (including agent visibility); it does not
@@ -34,8 +37,9 @@ replaces that unusable local record with a newly isolated owner; background poll
 its own.
 
 The Relay state model coordinates endpoint enrollment, pairing, last-known-good snapshot and device
-state, explicit refresh, and a cancellable five-minute polling loop. The production app creates one
-shared model for its lifecycle, Overview, and Settings stack and starts polling when the app starts.
+state, explicit refresh, and a cancellable five-minute read loop. The production app creates one
+shared model for its lifecycle, Overview, and Settings stack and starts Relay reads plus the bundled
+helper's five-minute upload loop when the app starts.
 
 The observation-preserving subscription resolver groups only globally scoped provider identities
 across local and remote sources, keeps source-scoped observations separate, selects one preferred
@@ -60,9 +64,10 @@ notarizes and staples the bundle, and publishes a GitHub Release. **Stable** tag
 Homebrew Cask; **prerelease** tags publish a GitHub prerelease ZIP only and skip Homebrew.
 
 The stable release target is a Homebrew Cask from `gotry-io/homebrew-tap`. Beta builds are installed
-from the GitHub prerelease ZIP. The signed `.app` contains the standalone QuotaCLI helper at a fixed
-bundle path and invokes that copy instead of a `quotacli` found on `PATH`. Users installing QuotaBar
-therefore do not install the npm CLI separately.
+from the GitHub prerelease ZIP. The signed `.app` contains the bundled QuotaCLI helper at a fixed
+bundle path and invokes that copy instead of a `quotacli` found on `PATH`. The Cask also links that
+same signed helper as the terminal's `quotacli` command for pairing and one-shot operations. macOS
+users do not install an npm CLI or a separate Homebrew Formula.
 
 Provider artwork uses the bundled monochrome template SVGs for every catalog provider.
 See [`THIRD_PARTY_NOTICES.md`](Sources/QuotaBar/Resources/THIRD_PARTY_NOTICES.md) for attribution.
@@ -100,7 +105,7 @@ Fixtures are `loading`, `content`, `cached-refresh-error`, `empty`, and `unavail
 `overview`, `settings`, `remote-devices`, and `pair-device`; appearances are `system`, `light`, and
 `dark`. Text sizes are `standard`, `extra-large`, and `accessibility`, selected with `--text-size`.
 
-The visual bundle also contains the same arm64 standalone QuotaCLI helper as the production app. An
+The visual bundle also contains the same arm64 bundled QuotaCLI helper as the production app. An
 explicit live run invokes that bundled helper and may read local provider sessions according to
 [`docs/provider-collection.md`](../../docs/provider-collection.md):
 
