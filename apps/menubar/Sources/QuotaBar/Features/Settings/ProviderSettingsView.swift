@@ -68,7 +68,6 @@ struct ProviderSettingsView: View {
                   Text(source.detailLabel(now: now))
                     .quotaListSecondaryStyle()
                     .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
                 }
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(source.displayName)
