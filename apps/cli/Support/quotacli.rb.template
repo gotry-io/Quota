@@ -1,5 +1,5 @@
 class Quotacli < Formula
-  desc "Inspect Codex, Claude Code, Grok, and OpenRouter quota from one CLI"
+  desc "Collect local provider quota and diagnose Relay readiness from one CLI"
   homepage "https://quota.gotry.io"
   url "https://registry.npmjs.org/@gotry-io/quotacli/-/quotacli-@VERSION@.tgz"
   sha256 "@SHA256@"

@@ -1,3 +1,6 @@
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { ApiKeyHttpCollector } from "../src/api-key/collector.ts";
 import {
@@ -29,6 +32,13 @@ describe("litellm mapping", () => {
       userId: "u1",
       teamId: "t1",
     });
+  });
+
+  it("does not turn spend without a budget into fabricated quota", () => {
+    const windows = mapLiteLLMWindows({
+      personal: { spendUsd: 12.5, label: "Personal" },
+    });
+    expect(windows).toEqual([]);
   });
 });
 
@@ -75,6 +85,58 @@ describe("litellm collector", () => {
       configPath: "/tmp/quota-litellm-missing-config.json",
     });
     expect(await collector.discover()).toEqual([]);
+  });
+
+  it("treats an invalid stored base URL as unavailable", async () => {
+    const root = await mkdtemp(join(tmpdir(), "quota-litellm-invalid-url-"));
+    const configPath = join(root, "providers.json");
+    await writeFile(
+      configPath,
+      `${JSON.stringify({
+        schema_version: 1,
+        providers: {
+          litellm: { api_key: "sk-litellm-invalid-url", base_url: "ftp://invalid.example" },
+        },
+      })}\n`,
+      { mode: 0o600 },
+    );
+    const collector = new ApiKeyHttpCollector(litellmSpec, { configPath, environment: {} });
+    await expect(collector.discover()).resolves.toEqual([]);
+  });
+
+  it("fetches independent user and team budgets concurrently after key discovery", async () => {
+    let active = 0;
+    let maximumActive = 0;
+    const transport = async (request: HttpRequest): Promise<HttpResponse> => {
+      if (request.url.endsWith("/key/info")) {
+        return jsonResponse(200, { info: { user_id: "user-1", team_id: "team-1" } });
+      }
+      active += 1;
+      maximumActive = Math.max(maximumActive, active);
+      await Promise.resolve();
+      active -= 1;
+      return request.url.includes("/user/info")
+        ? jsonResponse(200, { user_info: { spend: 10, max_budget: 50 } })
+        : jsonResponse(200, {
+            team_info: { team_id: "team-1", spend: 5, max_budget: 200 },
+          });
+    };
+    const collector = new ApiKeyHttpCollector(litellmSpec, {
+      environment: {
+        LITELLM_API_KEY: "sk-litellm-fixture",
+        LITELLM_BASE_URL: "https://litellm.example.com",
+      },
+      configPath: "/tmp/quota-litellm-missing-config.json",
+      transport,
+    });
+
+    await collector.collect({
+      provider: "litellm",
+      session_id: "ambient",
+      display_label: "LiteLLM",
+      credential_source: "env:LITELLM_API_KEY",
+    });
+    expect(maximumActive).toBe(2);
   });
 });
 

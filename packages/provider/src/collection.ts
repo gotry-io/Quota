@@ -22,6 +22,7 @@ export interface CollectQuotaOptions extends CollectorFactoryOptions {
   collectors?: Partial<Record<ProviderId, ProviderCollector>>;
   context?: CollectionContext;
   now?: Date;
+  onProviderProgress?: (provider: ProviderId, state: "collecting" | "done") => void;
 }
 
 export async function collectQuotaReport(
@@ -47,6 +48,7 @@ export async function collectQuotaReport(
 
   const results: QuotaCollectionResult[] = await Promise.all(
     providerIds.map(async (provider) => {
+      options.onProviderProgress?.(provider, "collecting");
       const context: CollectionContext = {};
       if (options.context?.signal) {
         context.signal = options.context.signal;
@@ -54,7 +56,11 @@ export async function collectQuotaReport(
       if (frozenNow) {
         context.now = frozenNow;
       }
-      return await collectOne(collectors[provider], context);
+      try {
+        return await collectOne(collectors[provider], context);
+      } finally {
+        options.onProviderProgress?.(provider, "done");
+      }
     }),
   );
 
@@ -101,6 +107,7 @@ async function collectOne(
         outcome: "success",
         snapshots,
         ...(source ? { source } : {}),
+        ...(lastError ? { message: "Some provider sessions could not be collected." } : {}),
       };
     }
 
@@ -136,7 +143,8 @@ export function collectionExitCode(report: QuotaCollectionReport): number {
   const allFresh = report.results.every(
     (result) =>
       result.outcome === "success" &&
+      result.message === undefined &&
       result.snapshots.some((snapshot) => snapshot.status === "available"),
   );
-  return allFresh ? 0 : 1;
+  return report.results.length > 0 && allFresh ? 0 : 1;
 }

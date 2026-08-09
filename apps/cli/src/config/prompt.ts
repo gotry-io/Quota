@@ -1,8 +1,8 @@
-import { createInterface } from "node:readline";
 import { stdin, stdout } from "node:process";
+import { createInterface } from "node:readline/promises";
 
 export type PromptOptions = {
-  /** Hide typed characters (API keys). Falls back to visible input when not a TTY. */
+  /** Hide typed characters (API keys); secret prompts require a TTY with raw-mode support. */
   secret?: boolean;
 };
 
@@ -11,7 +11,10 @@ export type PromptOptions = {
  * Injectable for tests via module mock.
  */
 export async function promptLine(message: string, options: PromptOptions = {}): Promise<string> {
-  if (options.secret && stdin.isTTY && typeof stdin.setRawMode === "function") {
+  if (options.secret) {
+    if (!stdin.isTTY || typeof stdin.setRawMode !== "function") {
+      throw new Error("Secret prompt requires an interactive terminal.");
+    }
     return await promptSecret(message);
   }
   return await promptVisible(message);
@@ -20,15 +23,7 @@ export async function promptLine(message: string, options: PromptOptions = {}): 
 async function promptVisible(message: string): Promise<string> {
   const rl = createInterface({ input: stdin, output: stdout });
   try {
-    return await new Promise<string>((resolve, reject) => {
-      rl.question(message, (answer) => {
-        resolve(answer);
-      });
-      rl.once("close", () => {
-        // no-op: question resolves first
-      });
-      rl.once("error", reject);
-    });
+    return await rl.question(message);
   } finally {
     rl.close();
   }

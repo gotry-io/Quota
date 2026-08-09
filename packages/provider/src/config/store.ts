@@ -1,7 +1,17 @@
 import { randomUUID } from "node:crypto";
 import type { Stats } from "node:fs";
 import { constants } from "node:fs";
-import { chmod, lstat, mkdir, open, rename, unlink } from "node:fs/promises";
+import {
+  chmod,
+  lstat,
+  mkdir,
+  open,
+  readFile,
+  rename,
+  rmdir,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import type { ProviderId } from "@gotry-io/quota-protocol";
@@ -127,17 +137,6 @@ export class ProviderConfigStore {
     }
   }
 
-  async save(config: ProviderConfigFile): Promise<void> {
-    try {
-      await this.#save(decodeProviderConfig(config));
-    } catch (error) {
-      if (error instanceof ProviderConfigStoreError) {
-        throw error;
-      }
-      throw new ProviderConfigStoreError("Could not save the provider config file.");
-    }
-  }
-
   async #save(config: ProviderConfigFile): Promise<void> {
     const directory = dirname(this.path);
     await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -201,28 +200,37 @@ export class ProviderConfigStore {
         `${PROVIDER_CATALOG[provider].displayName} API key must not be empty.`,
       );
     }
-    const config = await this.load();
-    const next: ProviderSecretEntry = { api_key: apiKey };
-    if (entry.base_url?.trim()) {
-      next.base_url = entry.base_url.trim();
+    if (entry.base_url?.trim() && PROVIDER_CATALOG[provider].config?.supportsBaseUrl !== true) {
+      throw new ProviderConfigStoreError(
+        `${PROVIDER_CATALOG[provider].displayName} does not support custom base URLs.`,
+      );
     }
-    config.providers[provider] = next;
-    await this.save(config);
+    await this.#withWriteLock(async () => {
+      const config = await this.load();
+      const next: ProviderSecretEntry = { api_key: apiKey };
+      if (entry.base_url?.trim()) {
+        next.base_url = entry.base_url.trim();
+      }
+      config.providers[provider] = next;
+      await this.#save(config);
+    });
   }
 
   async unset(provider: ProviderId): Promise<boolean> {
     assertConfigurable(provider);
-    const config = await this.load();
-    if (!config.providers[provider]) {
-      return false;
-    }
-    delete config.providers[provider];
-    if (Object.keys(config.providers).length === 0) {
-      await this.deleteFile();
+    return await this.#withWriteLock(async () => {
+      const config = await this.load();
+      if (!config.providers[provider]) {
+        return false;
+      }
+      delete config.providers[provider];
+      if (Object.keys(config.providers).length === 0) {
+        await this.deleteFile();
+        return true;
+      }
+      await this.#save(config);
       return true;
-    }
-    await this.save(config);
-    return true;
+    });
   }
 
   async listConfigured(): Promise<ProviderId[]> {
@@ -239,6 +247,105 @@ export class ProviderConfigStore {
       }
     }
   }
+
+  /** Cross-process mutex shared with QuotaBar's Swift ProviderConfigStore. */
+  async #withWriteLock<T>(action: () => Promise<T>): Promise<T> {
+    const lockPath = `${this.path}.lock`;
+    const ownerPath = join(lockPath, "owner");
+    const directory = dirname(this.path);
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    const deadline = Date.now() + 10_000;
+    while (true) {
+      try {
+        await mkdir(lockPath, { mode: 0o700 });
+        try {
+          await writeFile(ownerPath, `${process.pid}\n`, {
+            encoding: "utf8",
+            flag: "wx",
+            mode: 0o600,
+          });
+        } catch {
+          await discardWriteLock(lockPath, "failed");
+          throw new ProviderConfigStoreError("Could not initialize the provider config lock.");
+        }
+        break;
+      } catch (error) {
+        if (!isFileSystemError(error, "EEXIST")) {
+          throw new ProviderConfigStoreError("Could not acquire the provider config lock.");
+        }
+        if (await removeStaleWriteLock(lockPath, ownerPath)) {
+          continue;
+        }
+        if (Date.now() >= deadline) {
+          throw new ProviderConfigStoreError("Could not acquire the provider config lock.");
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+    }
+    try {
+      return await action();
+    } finally {
+      await discardWriteLock(lockPath, "released");
+    }
+  }
+}
+
+async function removeStaleWriteLock(lockPath: string, ownerPath: string): Promise<boolean> {
+  const reclaimPath = `${lockPath}.reclaim`;
+  try {
+    await mkdir(reclaimPath, { mode: 0o700 });
+  } catch {
+    return false;
+  }
+  try {
+    if (!(await isWriteLockStale(lockPath, ownerPath))) {
+      return false;
+    }
+    return await discardWriteLock(lockPath, "stale");
+  } finally {
+    await rmdir(reclaimPath).catch(() => undefined);
+  }
+}
+
+async function discardWriteLock(lockPath: string, state: string): Promise<boolean> {
+  const discardedPath = `${lockPath}.${state}-${process.pid}-${randomUUID()}`;
+  try {
+    await rename(lockPath, discardedPath);
+  } catch (error) {
+    return isFileSystemError(error, "ENOENT");
+  }
+  await unlink(join(discardedPath, "owner")).catch(() => undefined);
+  await rmdir(discardedPath).catch(() => undefined);
+  return true;
+}
+
+async function isWriteLockStale(lockPath: string, ownerPath: string): Promise<boolean> {
+  let stale = false;
+  try {
+    const owner = (await readFile(ownerPath, "utf8")).trim();
+    const ownerPid = Number(owner);
+    if (!Number.isSafeInteger(ownerPid) || ownerPid <= 0) {
+      const metadata = await lstat(lockPath);
+      stale = Date.now() - metadata.mtimeMs >= 1_000;
+    } else {
+      try {
+        process.kill(ownerPid, 0);
+      } catch (error) {
+        stale = isFileSystemError(error, "ESRCH");
+      }
+    }
+  } catch (error) {
+    if (!isFileSystemError(error, "ENOENT")) {
+      return false;
+    }
+    try {
+      const metadata = await lstat(lockPath);
+      stale = Date.now() - metadata.mtimeMs >= 1_000;
+    } catch (metadataError) {
+      return isFileSystemError(metadataError, "ENOENT");
+    }
+  }
+  return stale;
 }
 
 function assertConfigurable(provider: ProviderId): void {

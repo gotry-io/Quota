@@ -71,6 +71,8 @@ struct SettingsHomeView: View {
               .quotaMetaStyle()
               .fixedSize(horizontal: false, vertical: true)
               .padding(.top, QuotaDesign.Spacing.xs)
+              .padding(.horizontal, QuotaDesign.Layout.groupContentInset)
+              .padding(.bottom, QuotaDesign.Layout.groupContentInset)
           }
         }
       }
@@ -106,7 +108,9 @@ struct SettingsHomeView: View {
     SettingsListRow(title: title, systemImage: systemImage) {
       Toggle(accessibilityLabel, isOn: isOn)
         .labelsHidden()
-        .toggleStyle(QuotaToggleStyle())
+        .toggleStyle(.switch)
+        .controlSize(.mini)
+        .tint(QuotaPalette.accent)
     }
     .accessibilityElement(children: .combine)
     .accessibilityLabel(accessibilityLabel)
@@ -124,14 +128,14 @@ struct SettingsHomeView: View {
       SettingsListRow(title: title, systemImage: systemImage) {
         HStack(spacing: QuotaDesign.Spacing.xxs) {
           Text(trailing)
-            .quotaMetaStyle()
+            .quotaListSecondaryStyle()
             .lineLimit(1)
           Image(systemName: "chevron.right")
             .quotaChevronStyle()
         }
       }
     }
-    .buttonStyle(.plain)
+    .buttonStyle(QuotaListRowButtonStyle())
     .accessibilityLabel(accessibilityLabel)
     .accessibilityHint(trailing)
   }
@@ -139,7 +143,7 @@ struct SettingsHomeView: View {
   private func settingsValueRow(title: String, systemImage: String, value: String) -> some View {
     SettingsListRow(title: title, systemImage: systemImage) {
       Text(value)
-        .quotaMonoMetaStyle()
+        .quotaMonoListValueStyle()
         .textSelection(.enabled)
     }
     .accessibilityElement(children: .combine)
@@ -155,45 +159,8 @@ struct SettingsHomeView: View {
           .quotaAffordanceStyle()
       }
     }
-    .buttonStyle(.plain)
+    .buttonStyle(QuotaListRowButtonStyle())
     .accessibilityLabel(title)
     .accessibilityHint("Opens in browser")
-  }
-}
-
-/// Status copy for Agents list detail lines and the provider-detail visibility toggle hint.
-/// Visibility is controlled only on the provider detail page.
-struct AgentStatusPresentation: Equatable {
-  /// Optional secondary line. Nil for healthy signed-in agents.
-  let detail: String?
-  /// Hint for the **Show in Overview** toggle on provider detail.
-  let accessibilityHint: String
-
-  static func resolve(result: QuotaCollectionResult?) -> AgentStatusPresentation {
-    guard let result else {
-      return AgentStatusPresentation(
-        detail: "Refresh to check access.",
-        accessibilityHint: "Not checked yet. Toggle visibility anytime; refresh to update status."
-      )
-    }
-
-    switch result.outcome {
-    case .success:
-      return AgentStatusPresentation(
-        detail: nil,
-        accessibilityHint: "Toggle to show or hide in Overview."
-      )
-    case .authRequired, .unavailable, .unsupported, .error:
-      guard let status = ProviderStatusCopy.from(result: result) else {
-        return AgentStatusPresentation(
-          detail: "Unavailable",
-          accessibilityHint: "Provider unavailable. Toggle to show or hide in Overview."
-        )
-      }
-      return AgentStatusPresentation(
-        detail: status.detail ?? status.title,
-        accessibilityHint: "\(status.accessibilityLabel) Toggle to show or hide in Overview."
-      )
-    }
   }
 }

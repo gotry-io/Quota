@@ -71,7 +71,7 @@ struct LocalQuotaClient: LocalQuotaCollecting {
   func collect() async throws -> QuotaCollectionReport {
     let execution = BoundedProcessExecution(
       executableURL: executableURL,
-      arguments: ["quota", "--provider", "all", "--format", "json"],
+      arguments: ["status", "--provider", "all", "--format", "json"],
       timeout: timeout,
       maximumOutputBytes: maximumOutputBytes,
       terminationGracePeriod: terminationGracePeriod

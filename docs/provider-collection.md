@@ -109,14 +109,16 @@ Aligned with CodexBar's OpenRouter provider (credits + API-key limit meters).
 1. Resolve the API key in order:
    1. Owner-only config at `$XDG_CONFIG_HOME/quotacli/providers.json` or
       `~/.config/quotacli/providers.json` (`schema_version: 1`, `providers.openrouter.api_key`),
-      written by `quotacli config set openrouter --api-key-stdin` or QuotaBar Settings.
+      written by the hidden prompt in `quotacli config set openrouter` or QuotaBar Settings.
    2. Else `OPENROUTER_API_KEY` from the process environment.
-   Optional base URL: config `base_url`, else `OPENROUTER_API_URL` (HTTPS only; default
-   `https://openrouter.ai/api/v1`).
-2. Call `GET {base}/credits` with `Authorization: Bearer <key>` and a product `X-Title` header.
-3. Best-effort call `GET {base}/key` for per-key limit, remaining, reset window, and spend fields.
-   Key failure must not discard a usable credits result.
-4. Map windows (remaining is always `100 - used_percent` in consumers). Absolute USD fields are
+   Use the fixed `https://openrouter.ai/api/v1` endpoint. Custom base URLs and URL environment
+   overrides are not supported.
+2. Concurrently call `GET {base}/credits` and best-effort `GET {base}/key`; both use
+   `Authorization: Bearer <key>` and a product `X-Title` header. The latter supplies per-key limit,
+   remaining, reset window, and spend fields. Key failure must not discard a usable credits result.
+   If both independent endpoints are unavailable or rate-limited, preserve `unavailable`; do not
+   convert that state to malformed-data `error`.
+3. Map windows (remaining is always `100 - used_percent` in consumers). Absolute USD fields are
    optional protocol extensions for credits-class UIs:
    - **API key budget** (primary when present): when `limit > 0`, used amount prefers
      `limit - clamp(limit_remaining)`, else the spend field matching `limit_reset`
@@ -125,8 +127,8 @@ Aligned with CodexBar's OpenRouter provider (credits + API-key limit meters).
    - **Credits**: when `total_credits > 0`, used percent is `total_usage / total_credits * 100`
      (balance = `total_credits - total_usage` on OpenRouter's side; values may be up to ~60s stale).
      Emit the same absolute USD fields for the credits window.
-5. Absent key → `auth_required` with guidance to run
-   `quotacli config set openrouter --api-key-stdin` (or set `OPENROUTER_API_KEY`). HTTP 401/403 →
+4. Absent key → `auth_required` with guidance to run
+   `quotacli config set openrouter` (or set `OPENROUTER_API_KEY`). HTTP 401/403 →
    `auth_required`. Never print the API key, Authorization header, or response bodies.
    `config get` / `list` and menubar UI only show a masked tip (`OpenRouter ···abcd`).
 
@@ -141,10 +143,10 @@ scope).
 1. Resolve the API key in order:
    1. Owner-only config at `$XDG_CONFIG_HOME/quotacli/providers.json` or
       `~/.config/quotacli/providers.json` (`providers.deepseek.api_key`), written by
-      `quotacli config set deepseek --api-key-stdin` or QuotaBar Settings.
+      the hidden prompt in `quotacli config set deepseek` or QuotaBar Settings.
    2. Else `DEEPSEEK_API_KEY`, then `DEEPSEEK_KEY`, from the process environment.
-   Optional base URL: config `base_url`, else `DEEPSEEK_API_URL` (HTTPS only; default
-   `https://api.deepseek.com`).
+   Use the fixed `https://api.deepseek.com` endpoint. Custom base URLs and URL environment
+   overrides are not supported.
 2. Call `GET {base}/user/balance` with `Authorization: Bearer <key>`.
 3. Parse every `balance_infos` row. Map each currency with `total_balance > 0` as its own
    balance-only window (`remaining_value`; USD also sets `value_unit: "usd"`). Do **not** prefer a
@@ -162,11 +164,13 @@ scope). Distinct from Moonshot Open Platform balance.
 1. Resolve the API key in order:
    1. Owner-only config `providers.kimi.api_key`.
    2. Else `KIMI_CODE_API_KEY`, then `KIMI_API_KEY`.
-   Optional base URL: config / `KIMI_CODE_BASE_URL` (default `https://api.kimi.com`).
+   Use the fixed `https://api.kimi.com` endpoint. Custom base URLs and URL environment overrides
+   are not supported.
 2. Call `GET {base}/coding/v1/usages` with `Authorization: Bearer <key>`.
 3. Map windows:
    - **Weekly** from top-level `usage` (request counts; `value_unit: "count"`).
-   - **5 hour** from `limits[]` where window duration is 300 minutes.
+   - **5 hour** only from `limits[]` where window duration is exactly 300 minutes (also when it is
+     the only entry).
 4. Absent key → `auth_required`. HTTP 401/403 → `auth_required`.
 
 ## LiteLLM
@@ -178,10 +182,18 @@ Aligned with CodexBar's LiteLLM virtual-key budget path.
    HTTPS is required except loopback / RFC1918 / `.local` HTTP for self-hosted proxies. A trailing
    `/v1` is stripped before management endpoints.
 2. `GET {root}/key/info` → `user_id` / `team_id`.
-3. When `user_id` present: `GET {root}/user/info?user_id=…` → personal spend / max_budget.
-4. When `team_id` present: `GET {root}/team/info?team_id=…` → team spend / max_budget.
-5. Map budget windows with `value_unit: "usd"` when `max_budget > 0`; otherwise surface spend-only.
-6. Missing key or base URL → `auth_required` (discovery unavailable). HTTP 401/403 → `auth_required`.
+3. After key discovery, request the present user and team resources concurrently:
+   - `GET {root}/user/info?user_id=…` → personal spend / max_budget.
+   - `GET {root}/team/info?team_id=…` → team spend / max_budget.
+4. Map budget windows with `remaining_value`, `limit_value`, and `value_unit: "usd"` when
+   `max_budget > 0`. Spend without a hard budget is not emitted as a v1 quota window; never treat
+   spend as a budget or fabricate remaining quota.
+5. Missing key or base URL → `auth_required` (discovery unavailable). HTTP 401/403 → `auth_required`.
+
+QuotaCLI 0.0.2 allowed custom base URLs for OpenRouter, DeepSeek, and Kimi. Current releases ignore
+those already-persisted `base_url` fields and use each provider's official endpoint; saving the
+provider again removes the stale field. New custom URLs remain rejected for these fixed-endpoint
+providers.
 
 ## Identity and normalization
 
@@ -196,5 +208,8 @@ Aligned with CodexBar's LiteLLM virtual-key budget path.
 - Account labels use a masked email or a non-sensitive display name.
 - A collection attempt records its stable source identifier and an explicit outcome.
 - One provider failure does not discard successful results from other requested providers.
-- The CLI preserves provider order from the catalog (`PROVIDER_ORDER`): Codex, Claude Code, Grok,
-  then OpenRouter.
+- Requested providers collect concurrently while the report preserves catalog order
+  (`PROVIDER_ORDER`): Codex, Claude Code, Grok, OpenRouter, DeepSeek, Kimi Code, then LiteLLM.
+  Multiple sessions within one provider remain sequential so provider-owned credential refreshes do
+  not race. A provider result with both successful and failed sessions is partial and makes
+  `quotacli status` exit `1`.

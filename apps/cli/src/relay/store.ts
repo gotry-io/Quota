@@ -1,6 +1,6 @@
 import type { Stats } from "node:fs";
 import { constants } from "node:fs";
-import { chmod, lstat, mkdir, open, rename, unlink } from "node:fs/promises";
+import { chmod, link, lstat, mkdir, open, rename, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { canonicalRelayUrl } from "./url.ts";
@@ -125,7 +125,7 @@ export class RelayCredentialStore {
 
     const existing = await existingTarget(this.path);
     if (existing && !options.overwrite) {
-      throw new RelayCredentialStoreError("An relay credential already exists.");
+      throw new RelayCredentialStoreError("A relay credential already exists.");
     }
     if (existing && !existing.isFile()) {
       throw new RelayCredentialStoreError("The relay credential path is not a regular file.");
@@ -153,9 +153,27 @@ export class RelayCredentialStore {
       if (process.platform !== "win32") {
         await chmod(temporaryPath, 0o600);
       }
-      await rename(temporaryPath, this.path);
+      if (options.overwrite) {
+        await rename(temporaryPath, this.path);
+      } else {
+        // A hard-link creates the destination atomically without replacing a file (or symlink).
+        // `rename` cannot provide that guarantee on POSIX and allowed two concurrent first saves
+        // to both report success.
+        try {
+          await link(temporaryPath, this.path);
+        } catch (error) {
+          if (isFileSystemError(error, "EEXIST")) {
+            throw new RelayCredentialStoreError("A relay credential already exists.");
+          }
+          throw error;
+        }
+        await unlink(temporaryPath);
+      }
       temporaryExists = false;
-    } catch {
+    } catch (error) {
+      if (error instanceof RelayCredentialStoreError) {
+        throw error;
+      }
       throw new RelayCredentialStoreError("Could not save the relay credential file.");
     } finally {
       if (temporaryExists) {

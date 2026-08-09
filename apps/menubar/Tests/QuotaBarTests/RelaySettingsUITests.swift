@@ -16,6 +16,15 @@ struct RelaySettingsUITests {
   }
 
   @Test
+  func interactiveControlMetricsMeetMinimumTarget() {
+    let layout = QuotaDesign.Layout.self
+
+    #expect(layout.headerControlWidth >= layout.minimumInteractiveDimension)
+    #expect(layout.settingsRowHeight >= layout.minimumInteractiveDimension)
+    #expect(layout.fieldMinHeight >= layout.minimumInteractiveDimension)
+  }
+
+  @Test
   func configurableProviderDetailShowsHeaderSaveAction() {
     var navigation = MenuBarNavigationState()
     navigation.open(.settings)
@@ -133,16 +142,14 @@ struct RelaySettingsUITests {
   }
 
   @Test
-  func primaryButtonTextMeetsAAContrastAcrossSystemAccentsAndAppearances() throws {
+  func primaryButtonTextMeetsAAContrastAcrossBrandAccentsAndAppearances() throws {
     for appearanceName in [NSAppearance.Name.aqua, .darkAqua] {
       let appearance = try #require(NSAppearance(named: appearanceName))
-      for color in [NSColor.systemYellow, .systemOrange, .systemIndigo, .systemBlue] {
-        let background = QuotaPalette.resolvedColor(color, for: appearance)
-        let foreground = QuotaPalette.accessibleTextColor(for: background)
-        #expect(
-          QuotaPalette.contrastRatio(foreground: foreground, background: background) >= 4.5
-        )
-      }
+      let background = QuotaPalette.resolvedAccent(for: appearance)
+      let foreground = QuotaPalette.accessibleTextColor(for: background)
+      #expect(
+        QuotaPalette.contrastRatio(foreground: foreground, background: background) >= 4.5
+      )
     }
   }
 

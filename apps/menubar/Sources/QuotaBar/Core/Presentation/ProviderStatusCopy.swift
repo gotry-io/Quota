@@ -12,8 +12,8 @@ enum ProviderStatusKind: Equatable {
 
 struct ProviderStatusCopy: Equatable {
   let kind: ProviderStatusKind
-  /// Quiet trailing label, e.g. `Needs Sign-In`.
-  let title: String
+  /// Quiet trailing label. Authentication recovery uses detail only.
+  let title: String?
   /// Optional recovery/detail line under the provider header.
   let detail: String?
   let accessibilityLabel: String
@@ -23,12 +23,11 @@ struct ProviderStatusCopy: Equatable {
     case .success:
       return nil
     case .authRequired:
-      let command = loginCommand(for: result.provider, message: result.message)
       return ProviderStatusCopy(
         kind: .needsSignIn,
-        title: "Needs Sign-In",
-        detail: "Run `\(command)`",
-        accessibilityLabel: "Needs Sign-In. Run \(command)."
+        title: nil,
+        detail: "Account setup required.",
+        accessibilityLabel: "Account setup required."
       )
     case .unavailable:
       return ProviderStatusCopy(
@@ -63,17 +62,6 @@ struct ProviderStatusCopy: Equatable {
     }
   }
 
-  static func loginCommand(for provider: ProviderID, message: String? = nil) -> String {
-    if let command = extractLoginCommand(from: message) {
-      return normalizeLoginCommand(command, provider: provider)
-    }
-    return provider.loginCommand
-  }
-
-  static func hint(for provider: ProviderID, message: String? = nil) -> String {
-    "Run `\(loginCommand(for: provider, message: message))`"
-  }
-
   static func conciseMessage(_ message: String?) -> String? {
     guard let trimmed = message?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty
     else {
@@ -92,14 +80,6 @@ struct ProviderStatusCopy: Equatable {
       }
     }
     return String(trimmed.prefix(93)).trimmingCharacters(in: .whitespacesAndNewlines) + "…"
-  }
-
-  private static func normalizeLoginCommand(_ command: String, provider: ProviderID) -> String {
-    // Multi-word snippets from error messages are usable as-is; bare tokens fall back to catalog.
-    if command.split(whereSeparator: \.isWhitespace).count >= 2 {
-      return command
-    }
-    return provider.loginCommand
   }
 
   private static func extractLoginCommand(from message: String?) -> String? {

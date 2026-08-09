@@ -13,27 +13,40 @@ enum QuotaPalette {
   // MARK: Structural chrome
 
   static let hairline = Color(nsColor: .separatorColor)
-  /// Shared card/tag/field border — one opacity, no per-call drift.
+  /// Shared control/surface border — one opacity, no per-call drift.
   static let hairlineBorder = Color(nsColor: .separatorColor).opacity(0.8)
   static let soft = Color(nsColor: .quaternaryLabelColor).opacity(0.35)
-  /// Settings grouped list fill — light translucent wash on material chrome.
-  static let settingsGroupFill = Color.primary.opacity(0.055)
-  /// Text fields: borderless recessed fill (just deeper than group chrome).
-  static let fieldFill = Color.primary.opacity(0.06)
-  /// Text fields when focused — a step deeper, still quiet on material.
-  static let fieldFillFocused = Color.primary.opacity(0.09)
-  static let progressTrack = Color.primary.opacity(0.08)
+  /// A quiet neutral wash over the native panel material limits vivid wallpaper bleed-through.
+  static let panelWash = Color(nsColor: adaptivePanelWash)
+  /// Group surface: related rows and read-only modules.
+  static let settingsGroupFill = Color(nsColor: adaptiveSettingsGroupFill)
+  /// Light material wash for transient menus; z-order, not opacity, covers page content.
+  static let floatingMenuFill = Color(nsColor: adaptiveFloatingMenuFill)
+  /// Adaptive ambient shadow used only by transient menus.
+  static let floatingMenuShadow = Color(nsColor: adaptiveFloatingMenuShadow)
+  /// Neutral interaction feedback for destination rows and header controls.
+  static let rowHoverFill = Color(nsColor: adaptiveRowHoverFill)
+  /// Accent is reserved for the active/pressed interaction state.
+  static let rowPressedFill = Color(nsColor: adaptiveRowPressedFill)
+  /// Editable/selectable control surface, one level above groups.
+  static let fieldFill = Color(nsColor: adaptiveFieldFill)
+  /// Focus is an accent tint layered over `fieldFill`, never a hard outline.
+  static let fieldFillFocused = Color(nsColor: adaptiveFieldFocusTint)
+  static let progressTrack = Color(nsColor: adaptiveProgressTrack)
+
+  // MARK: Brand
+
+  /// Primary Quota green used on light surfaces and in the full-color mark.
+  static let brandEmerald = Color(nsColor: brandEmeraldNSColor)
+  /// Lighter capacity-boundary green used on dark surfaces and in the full-color mark.
+  static let brandMint = Color(nsColor: brandMintNSColor)
 
   // MARK: Semantic (accent / warning / critical)
 
-  /// Product accent with indigo fallback when the control accent is not usable.
+  /// Adaptive product accent: Emerald in light appearance, Soft Mint in dark appearance.
   static let accent = Color(nsColor: adaptiveAccent)
   /// Black or white, selected from the resolved accent to retain at least AA text contrast.
   static let onAccent = Color(nsColor: adaptiveOnAccent)
-  /// Toggle ON track — accent wash (readable on material; not solid primary fill).
-  static let toggleOnTrack = Color(nsColor: adaptiveAccent).opacity(0.55)
-  /// Toggle thumb — always light; on/off is carried by the track wash.
-  static let toggleThumb = Color(nsColor: .controlBackgroundColor)
   static let warning = Color(nsColor: .systemOrange)
   static let critical = Color(nsColor: .systemRed)
 
@@ -68,7 +81,9 @@ enum QuotaPalette {
 
   private static let adaptiveAccent = NSColor(
     name: nil,
-    dynamicProvider: { appearance in resolvedAccent(for: appearance) }
+    dynamicProvider: { appearance in
+      resolvedAccent(for: appearance)
+    }
   )
 
   private static let adaptiveOnAccent = NSColor(
@@ -78,13 +93,88 @@ enum QuotaPalette {
     }
   )
 
-  private static func resolvedAccent(for appearance: NSAppearance) -> NSColor {
-    let controlAccent = resolvedColor(.controlAccentColor, for: appearance)
-    guard controlAccent.usingColorSpace(NSColorSpace.sRGB) != nil else {
-      return resolvedColor(.systemIndigo, for: appearance)
+  private static let adaptiveSettingsGroupFill = adaptiveColor(
+    light: NSColor.white.withAlphaComponent(0.16),
+    dark: NSColor.white.withAlphaComponent(0.045)
+  )
+
+  private static let adaptiveFloatingMenuFill = adaptiveColor(
+    light: NSColor.white.withAlphaComponent(0.32),
+    dark: NSColor.white.withAlphaComponent(0.09)
+  )
+
+  private static let adaptiveFloatingMenuShadow = adaptiveColor(
+    light: NSColor.black.withAlphaComponent(0.13),
+    dark: NSColor.black.withAlphaComponent(0.30)
+  )
+
+  private static let adaptiveRowHoverFill = adaptiveColor(
+    light: NSColor.black.withAlphaComponent(0.03),
+    dark: NSColor.white.withAlphaComponent(0.06)
+  )
+
+  private static let adaptivePanelWash = NSColor(
+    name: nil,
+    dynamicProvider: { appearance in
+      resolvedColor(.windowBackgroundColor, for: appearance)
+        .withAlphaComponent(isDark(appearance) ? 0.14 : 0.20)
     }
-    return controlAccent
+  )
+
+  private static let adaptiveRowPressedFill = NSColor(
+    name: nil,
+    dynamicProvider: { appearance in
+      resolvedAccent(for: appearance).withAlphaComponent(isDark(appearance) ? 0.16 : 0.11)
+    }
+  )
+
+  private static let adaptiveFieldFill = adaptiveColor(
+    light: NSColor.white.withAlphaComponent(0.44),
+    dark: NSColor.white.withAlphaComponent(0.12)
+  )
+
+  private static let adaptiveFieldFocusTint = NSColor(
+    name: nil,
+    dynamicProvider: { appearance in
+      resolvedAccent(for: appearance).withAlphaComponent(isDark(appearance) ? 0.16 : 0.11)
+    }
+  )
+
+  private static let adaptiveProgressTrack = adaptiveColor(
+    light: NSColor.black.withAlphaComponent(0.10),
+    dark: NSColor.white.withAlphaComponent(0.12)
+  )
+
+  static func resolvedAccent(for appearance: NSAppearance) -> NSColor {
+    isDark(appearance) ? brandMintNSColor : brandEmeraldNSColor
   }
+
+  private static func adaptiveColor(light: NSColor, dark: NSColor) -> NSColor {
+    NSColor(
+      name: nil,
+      dynamicProvider: { appearance in
+        isDark(appearance) ? dark : light
+      }
+    )
+  }
+
+  private static func isDark(_ appearance: NSAppearance) -> Bool {
+    appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+  }
+
+  private static let brandEmeraldNSColor = NSColor(
+    srgbRed: 0.031_372_549,
+    green: 0.454_901_961,
+    blue: 0.337_254_902,
+    alpha: 1
+  )
+
+  private static let brandMintNSColor = NSColor(
+    srgbRed: 0.509_803_922,
+    green: 0.866_666_667,
+    blue: 0.721_568_627,
+    alpha: 1
+  )
 
   private static func relativeLuminance(_ color: NSColor) -> Double {
     guard let rgb = color.usingColorSpace(NSColorSpace.sRGB) else { return 0 }

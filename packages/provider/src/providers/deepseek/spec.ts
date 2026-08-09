@@ -17,7 +17,6 @@ export const deepseekSpec: ApiKeyHttpCollectorSpec = {
   provider: "deepseek",
   source: DEEPSEEK_SOURCE_API,
   envKeys: ["DEEPSEEK_API_KEY", "DEEPSEEK_KEY"],
-  urlEnvKey: "DEEPSEEK_API_URL",
   defaultBaseUrl: "https://api.deepseek.com",
   maskLabel: "DeepSeek",
   collect: collectDeepSeek,

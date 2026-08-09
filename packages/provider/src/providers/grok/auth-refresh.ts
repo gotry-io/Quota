@@ -1,4 +1,4 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { open, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { asRecord, readString } from "../../runtime/files.ts";
 import {
@@ -127,11 +127,16 @@ async function snapshotAuthFile(
 }
 
 async function restoreAuthFileIfMissing(backup: { path: string; bytes: Buffer }): Promise<void> {
-  if (await readAuthBytes(backup.path)) {
-    return;
-  }
   try {
-    await writeFile(backup.path, backup.bytes, { mode: 0o600 });
+    // Exclusive creation is the final authority: malformed, rotated, or concurrently
+    // recreated auth files are never overwritten during recovery.
+    const handle = await open(backup.path, "wx", 0o600);
+    try {
+      await handle.writeFile(backup.bytes);
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
   } catch {
     // best-effort; caller treats missing auth as refresh failure
   }

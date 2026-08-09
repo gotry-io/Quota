@@ -195,15 +195,15 @@ func refreshesMenuBarModelFromLocalCollector() async throws {
   #expect(model.result(for: .grok)?.outcome == .success)
   guard
     case .content(let providers, _) = model.overviewState(
-      enabledProviders: Set(ProviderID.allCases)
+      enabledProviders: [.grok, .codex, .claude]
     )
   else {
     Issue.record("Expected Grok quota content")
     return
   }
-  #expect(providers.map(\.provider) == [.codex, .claude, .grok])
+  #expect(providers.map(\.provider) == [.grok, .codex, .claude])
   #expect(providers.first { $0.provider == .codex }?.status?.kind == .needsSignIn)
-  #expect(providers.first { $0.provider == .codex }?.status?.detail == "Run `codex login`")
+  #expect(providers.first { $0.provider == .codex }?.status?.detail == "Account setup required.")
   #expect(providers.first { $0.provider == .claude }?.status?.kind == .unavailable)
   #expect(
     providers.first { $0.provider == .claude }?.status?.detail
@@ -327,7 +327,7 @@ func refreshFailureKeepsCachedAuthIssueAndShowsWarning() async throws {
   #expect(refreshWarning == "Synthetic collection failure.")
   #expect(providers.map(\.provider) == [.codex])
   #expect(providers.first?.status?.kind == .needsSignIn)
-  #expect(providers.first?.status?.detail == "Run `codex login`")
+  #expect(providers.first?.status?.detail == "Account setup required.")
 }
 
 @Test @MainActor

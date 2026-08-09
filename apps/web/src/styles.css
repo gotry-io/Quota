@@ -9,12 +9,17 @@
   --charcoal: #525252;
   --body: #737373;
   --mute: #a3a3a3;
+  --brand-emerald: #087456;
+  --brand-mint: #82ddb8;
+  --brand-compact-mint: #39c991;
+  --brand-surface: #f2f8f5;
   --canvas: #ffffff;
   --surface-soft: #fafafa;
   --surface-dark: #171717;
   --hairline: #e5e5e5;
   --hairline-strong: #d4d4d4;
-  --focus-ring: rgba(59, 130, 246, 0.5);
+  --focus-ring: rgba(8, 116, 86, 0.45);
+  --usage-healthy: var(--brand-emerald);
   --content-width: 1120px;
 }
 
@@ -204,6 +209,7 @@ h1 {
 
 .product-preview {
   overflow: hidden;
+  margin: 0;
   border: 1px solid var(--hairline);
   border-radius: 12px;
   background: var(--canvas);
@@ -335,7 +341,7 @@ h1 {
   display: block;
   height: 100%;
   border-radius: inherit;
-  background: var(--ink);
+  background: var(--usage-healthy);
 }
 
 .preview-footer {
@@ -423,6 +429,7 @@ h3 {
   flex-direction: column;
   gap: 12px;
   align-items: stretch;
+  margin: 0;
 }
 
 .flow-node {

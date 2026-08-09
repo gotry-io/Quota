@@ -40,20 +40,24 @@ struct MenuBarShell<Content: View>: View {
         showsLeadingIcon: showsLeadingIcon,
         trailing: trailing
       )
+      .zIndex(1)
 
       Divider()
+        .opacity(0.35)
 
       content
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .clipped()
 
       Divider()
+        .opacity(0.35)
 
       MenuBarFooterView(model: model)
     }
     .frame(width: QuotaDesign.Layout.panelWidth)
     // MenuBarExtra often ignores flexible height on first open. Pin the shared ceiling.
     .frame(height: QuotaDesign.Layout.panelMaxHeight)
+    .background(QuotaPalette.panelWash)
   }
 }
 
@@ -65,20 +69,14 @@ struct MenuBarFooterView: View {
       Spacer(minLength: 0)
 
       Button {
+        guard !model.isRefreshing else { return }
         Task { await model.refresh() }
       } label: {
-        Group {
-          if model.isRefreshing {
-            Text("Refreshing…")
-          } else {
-            Text(lastCheckedLabel)
-          }
-        }
+        Text(lastCheckedLabel)
         .frame(minHeight: QuotaDesign.Layout.minimumInteractiveDimension)
         .contentShape(Rectangle())
       }
       .buttonStyle(.plain)
-      .disabled(model.isRefreshing)
       .accessibilityLabel("Refresh all quota. \(lastCheckedLabel)")
     }
     .quotaSecondaryStyle()

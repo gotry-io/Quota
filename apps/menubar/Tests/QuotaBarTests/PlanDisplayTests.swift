@@ -38,20 +38,6 @@ struct PlanDisplayTests {
     #expect(PlanDisplay.accountLabel("  ") == nil)
   }
 
-  @Test
-  func buildsPlainAccountSummary() {
-    #expect(
-      PlanDisplay.accountSummary(plan: "prolite", label: "eg***@dhao.me")
-        == "Pro Lite · eg***@dhao.me"
-    )
-    #expect(
-      PlanDisplay.accountSummary(plan: "supergrok", label: "pv***@gmail.com")
-        == "SuperGrok · pv***@gmail.com"
-    )
-    #expect(PlanDisplay.accountSummary(plan: nil, label: "pv***@gmail.com") == "pv***@gmail.com")
-    #expect(PlanDisplay.accountSummary(plan: "max", label: nil) == "Max")
-    #expect(PlanDisplay.accountSummary(plan: "  ", label: "  ") == nil)
-  }
 }
 
 struct QuotaUsageToneTests {

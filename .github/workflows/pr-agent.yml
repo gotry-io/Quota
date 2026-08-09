@@ -85,5 +85,9 @@ jobs:
           PR_REVIEWER.REQUIRE_TESTS_REVIEW: "true"
           PR_REVIEWER.REQUIRE_SECURITY_REVIEW: "true"
           PR_REVIEWER.ENABLE_HELP_TEXT: "false"
+          # Still re-run and edit the persistent review on each push; do not post
+          # extra "updated to latest commit" timeline comments.
+          PR_REVIEWER.FINAL_UPDATE_MESSAGE: "false"
           PR_DESCRIPTION.ENABLE_HELP_TEXT: "false"
+          PR_DESCRIPTION.FINAL_UPDATE_MESSAGE: "false"
           config.publish_output_progress: "false"

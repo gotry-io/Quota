@@ -153,12 +153,10 @@ struct MenuBarContentView: View {
       )
     case .agents:
       AgentsSettingsView(
-        model: model,
         onOpenProvider: { provider in navigate(to: .provider(provider)) }
       )
     case .provider(let provider):
       ProviderSettingsView(
-        model: model,
         provider: provider,
         saveRequest: providerSaveRequest,
         onIssue: { pageIssue = $0 }
@@ -173,8 +171,8 @@ struct MenuBarContentView: View {
     }
   }
 
-  private var enabledProviders: Set<ProviderID> {
-    ProviderVisibility.enabledSet()
+  private var enabledProviders: [ProviderID] {
+    ProviderDisplayOrder.enabledProviders()
   }
 
   private func openSettings() {

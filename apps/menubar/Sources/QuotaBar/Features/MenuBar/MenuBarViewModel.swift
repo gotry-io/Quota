@@ -17,12 +17,6 @@ struct ProviderQuotaPresentation: Equatable, Identifiable {
 
   var id: ProviderID { provider }
 
-  /// Newest selected-snapshot observation among presentable accounts for this provider.
-  /// All windows under one account share the same snapshot `observedAt`.
-  var latestObservedAt: Date? {
-    accounts.map(\.snapshot.observedAt).max()
-  }
-
   init(
     provider: ProviderID,
     accounts: [AccountQuotaPresentation],
@@ -215,16 +209,15 @@ final class MenuBarViewModel {
   }
 
   func overviewState(
-    enabledProviders: Set<ProviderID>,
+    enabledProviders: [ProviderID],
     now: Date = Date()
   ) -> QuotaOverviewState {
     let warning = refreshWarning
 
-    let providers: [ProviderQuotaPresentation] = ProviderID.allCases.compactMap { provider in
-      guard enabledProviders.contains(provider) else { return nil }
+    let providers: [ProviderQuotaPresentation] = enabledProviders.compactMap { provider in
       let accounts = displaySnapshots(for: provider, now: now)
       // Local auth/error chrome is only for issue-only rows. Once any account (local or
-      // remote) is presentable, Overview shows that quota without blending Needs Sign-In.
+      // remote) is presentable, Overview shows that quota without blending setup-required copy.
       let status = accounts.isEmpty ? providerStatus(for: provider) : nil
       guard !accounts.isEmpty || status != nil else { return nil }
       return ProviderQuotaPresentation(provider: provider, accounts: accounts, status: status)

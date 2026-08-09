@@ -29,13 +29,6 @@ enum PlanDisplay {
     nonempty(label)
   }
 
-  /// Plain identity line: `Pro Lite · eg***@example.com`.
-  static func accountSummary(plan: String?, label: String?) -> String? {
-    let parts = [displayName(plan), nonempty(label)].compactMap { $0 }
-    guard !parts.isEmpty else { return nil }
-    return parts.joined(separator: " · ")
-  }
-
   private static let knownPlans: [String: String] = [
     "free": "Free",
     "plus": "Plus",

@@ -2,7 +2,7 @@ import SwiftUI
 
 struct QuotaOverviewView: View {
   let model: MenuBarViewModel
-  let enabledProviders: Set<ProviderID>
+  let enabledProviders: [ProviderID]
   let onOpenSettings: () -> Void
 
   var body: some View {

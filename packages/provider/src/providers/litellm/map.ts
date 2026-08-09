@@ -131,17 +131,7 @@ function budgetWindow(id: string, budget: LiteLLMBudget): QuotaWindow | undefine
     }
     return window;
   }
-  // Spend-only: no hard budget — surface absolute spend as remaining=0 of a soft window.
-  if (budget.spendUsd > 0) {
-    return {
-      id,
-      title: `${budget.label} spend`,
-      used_percent: 100,
-      remaining_value: 0,
-      limit_value: budget.spendUsd,
-      value_unit: "usd",
-    };
-  }
+  // Spend without a hard budget is not quota and cannot be represented honestly by v1.
   return undefined;
 }
 

@@ -124,10 +124,26 @@ struct QuotaBarApp: App {
       guard bounds.width >= minimumEdge, bounds.height >= minimumEdge else {
         return .notReady
       }
-      guard let rep = contentView.bitmapImageRepForCachingDisplay(in: bounds) else {
+      // Keep visual fixtures deterministic across Retina and non-Retina hosts. The acceptance
+      // contract is expressed in logical panel points, so capture into an explicit 1x bitmap.
+      guard
+        let rep = NSBitmapImageRep(
+          bitmapDataPlanes: nil,
+          pixelsWide: Int(bounds.width.rounded(.up)),
+          pixelsHigh: Int(bounds.height.rounded(.up)),
+          bitsPerSample: 8,
+          samplesPerPixel: 4,
+          hasAlpha: true,
+          isPlanar: false,
+          colorSpaceName: .deviceRGB,
+          bytesPerRow: 0,
+          bitsPerPixel: 0
+        )
+      else {
         reportFailure()
         return .failed
       }
+      rep.size = bounds.size
       contentView.cacheDisplay(in: bounds, to: rep)
       guard let pngData = rep.representation(using: .png, properties: [:]), !pngData.isEmpty else {
         reportFailure()

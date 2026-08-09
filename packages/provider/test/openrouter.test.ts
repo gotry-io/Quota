@@ -131,6 +131,33 @@ describe("openrouter collector", () => {
     expect(snapshot.windows[0]?.id).toBe("credits");
   });
 
+  it("fetches independent credits and key meters concurrently", async () => {
+    let active = 0;
+    let maximumActive = 0;
+    const transport = async (request: HttpRequest): Promise<HttpResponse> => {
+      active += 1;
+      maximumActive = Math.max(maximumActive, active);
+      await Promise.resolve();
+      active -= 1;
+      return request.url.endsWith("/credits")
+        ? jsonResponse(200, { data: { total_credits: 10, total_usage: 1 } })
+        : jsonResponse(200, { data: { limit: 20, limit_remaining: 10, usage: 10 } });
+    };
+    const collector = new ApiKeyHttpCollector(openrouterSpec, {
+      environment: { OPENROUTER_API_KEY: "sk-or-v1-fixture" },
+      configPath: "/tmp/quota-openrouter-missing-config.json",
+      transport,
+    });
+
+    await collector.collect({
+      provider: "openrouter",
+      session_id: "ambient",
+      display_label: "OpenRouter",
+      credential_source: "env:OPENROUTER_API_KEY",
+    });
+    expect(maximumActive).toBe(2);
+  });
+
   it("succeeds with key-limit alone when credits are zero", async () => {
     const transport = async (request: HttpRequest): Promise<HttpResponse> => {
       if (request.url.endsWith("/credits")) {
@@ -187,6 +214,26 @@ describe("openrouter collector", () => {
     });
     expect(snapshot.windows).toHaveLength(1);
     expect(snapshot.windows[0]?.id).toBe("key_daily");
+  });
+
+  it("preserves unavailable when both independent quota endpoints fail", async () => {
+    const transport = async (): Promise<HttpResponse> =>
+      jsonResponse(503, { error: "provider-owned detail should not escape" });
+    const collector = new ApiKeyHttpCollector(openrouterSpec, {
+      environment: { OPENROUTER_API_KEY: "sk-or-v1-fixture" },
+      configPath: "/tmp/quota-openrouter-missing-config.json",
+      transport,
+    });
+    const collection = collector.collect({
+      provider: "openrouter",
+      session_id: "ambient",
+      display_label: "OpenRouter",
+      credential_source: "env:OPENROUTER_API_KEY",
+    });
+    await expect(collection).rejects.toMatchObject({
+      category: "unavailable",
+    });
+    await expect(collection).rejects.not.toThrow(/provider-owned detail/);
   });
 
   it("reports auth_required for 401 without echoing the key", async () => {

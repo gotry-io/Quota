@@ -53,9 +53,13 @@ data requirements.
   owner-only QuotaCLI config file (`$XDG_CONFIG_HOME/quotacli/providers.json` or
   `~/.config/quotacli/providers.json`, directory `0700`, file `0600`). QuotaBar Settings writes the
   same file. Never store provider API keys in UserDefaults, logs, or Relay payloads. Prefer
-  interactive `quotacli config set <provider>` (hidden prompt) or `--api-key-stdin` pipes for
-  scripts; do not accept raw keys on argv. `config get` / `list` and Settings UI may show only a
-  masked tip.
+  interactive `quotacli config set <provider>` (hidden prompt); do not accept raw keys on argv or
+  unbounded secret stdin. `config get` / `list` and Settings UI may show only a masked tip.
+  QuotaCLI and QuotaBar coordinate updates with an owner-only lock directory, atomically isolate
+  released or stale locks before deletion, and use atomic file replacement, so concurrent writers
+  cannot lose another provider's update.
+  API keys available only from process environment are foreground-only: the macOS LaunchAgent
+  intentionally does not inherit provider secret variables and therefore cannot collect them.
 - Plans, OAuth scopes, tokens, email addresses, and anonymous fallback values must not produce a
   globally scoped fingerprint. When the quota owner is unavailable, emit a source-scoped
   fingerprint. Every normalized account must declare its fingerprint scope.

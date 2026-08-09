@@ -1,7 +1,7 @@
 {
   "name": "@gotry-io/quotacli",
   "version": "0.0.3",
-  "description": "Inspect Codex, Claude Code, Grok, and OpenRouter quota locally from one CLI.",
+  "description": "Collect local provider quota and diagnose Relay readiness from one CLI.",
   "license": "MIT",
   "private": false,
   "type": "module",

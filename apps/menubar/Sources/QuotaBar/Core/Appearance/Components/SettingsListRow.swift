@@ -27,7 +27,7 @@ struct SettingsListRow<Leading: View, Trailing: View>: View {
             .quotaSettingsLabelStyle()
             .lineLimit(1)
           Text(resolvedSubtitle)
-            .quotaMetaStyle()
+            .quotaListSecondaryStyle()
             .lineLimit(1)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -40,7 +40,8 @@ struct SettingsListRow<Leading: View, Trailing: View>: View {
 
       trailing()
     }
-    // minHeight only — lineLimit(1) keeps intrinsic size ≤ height; title-only centers.
+    .padding(.horizontal, QuotaDesign.Layout.groupContentInset)
+    // The row owns content inset; the hit surface still spans the full group width.
     .frame(maxWidth: .infinity, minHeight: height, alignment: .center)
     .contentShape(Rectangle())
   }
@@ -70,6 +71,9 @@ struct SettingsListLeadingIcon: View {
     Image(systemName: systemImage)
       .quotaFont(.secondary)
       .foregroundStyle(QuotaPalette.body)
-      .frame(width: QuotaDesign.Layout.settingsIconColumnWidth, height: QuotaDesign.Layout.settingsIconColumnWidth)
+      .frame(
+        width: QuotaDesign.Layout.settingsIconColumnWidth,
+        height: QuotaDesign.Layout.settingsIconColumnWidth
+      )
   }
 }

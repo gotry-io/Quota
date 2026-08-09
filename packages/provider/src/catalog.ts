@@ -98,7 +98,7 @@ export const PROVIDER_CATALOG = {
     config: {
       kind: "api_key",
       envKey: "OPENROUTER_API_KEY",
-      supportsBaseUrl: true,
+      supportsBaseUrl: false,
       maskLabel: "OpenRouter",
     },
   },
@@ -116,7 +116,7 @@ export const PROVIDER_CATALOG = {
     config: {
       kind: "api_key",
       envKey: "DEEPSEEK_API_KEY",
-      supportsBaseUrl: true,
+      supportsBaseUrl: false,
       maskLabel: "DeepSeek",
     },
   },
@@ -134,7 +134,7 @@ export const PROVIDER_CATALOG = {
     config: {
       kind: "api_key",
       envKey: "KIMI_CODE_API_KEY",
-      supportsBaseUrl: true,
+      supportsBaseUrl: false,
       maskLabel: "Kimi",
     },
   },
