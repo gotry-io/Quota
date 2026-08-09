@@ -28,6 +28,28 @@ describe("SQLiteRelayState", () => {
     database.close();
   });
 
+  it("rejects an unversioned non-release schema without modifying it", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "quota-relay-unknown-schema-test-"));
+    const path = join(directory, "relay.db");
+    const database = new Database(path, { create: true, strict: true });
+    database.exec("CREATE TABLE unrelated (id TEXT PRIMARY KEY)");
+    database.close();
+
+    const state = new SQLiteRelayState(path);
+    await expect(state.initialize()).rejects.toThrow("SQLite schema state is unsupported");
+
+    const unchanged = new Database(path, { readonly: true, strict: true });
+    expect(
+      unchanged
+        .query<{ name: string }, []>("SELECT name FROM sqlite_schema WHERE type = 'table'")
+        .all(),
+    ).toEqual([{ name: "unrelated" }]);
+    expect(
+      unchanged.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version,
+    ).toBe(0);
+    unchanged.close();
+  });
+
   it("migrates the released provider whitelist without losing snapshots", async () => {
     const directory = mkdtempSync(join(tmpdir(), "quota-relay-migration-test-"));
     const path = join(directory, "relay.db");

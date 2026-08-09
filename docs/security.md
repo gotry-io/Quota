@@ -113,7 +113,8 @@ data requirements.
   Before a macOS pair, push, or unpair, the helper accepts only that fixed regular-file path, boots
   out only that fixed service label, and then deletes the plist. It rejects symlink paths; pairing
   does not start when cleanup fails, and an existing device credential is retained on push or unpair
-  failure so two schedulers cannot race snapshot sequences.
+  failure so two schedulers cannot race snapshot sequences. Failure output contains only the fixed
+  service label and plist path needed for manual recovery, never launchctl output or credentials.
 - QuotaCLI persists the next device snapshot sequence only after Relay acceptance. Retrying after a
   local persistence failure reuses the prior sequence and relies on Relay's idempotent `204`
   response for that device sequence.

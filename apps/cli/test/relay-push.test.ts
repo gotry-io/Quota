@@ -68,7 +68,7 @@ describe("relay push", () => {
     expect(dependencies.createClient).not.toHaveBeenCalled();
     expect(dependencies.collect).not.toHaveBeenCalled();
     expect(capture.stderr).toEqual([
-      "QuotaCLI could not remove the legacy background task. Push was not started.",
+      "QuotaCLI could not remove the legacy background task. Push was not started. Unload io.gotry.quotacli.relay and remove ~/Library/LaunchAgents/io.gotry.quotacli.relay.plist, then retry.",
     ]);
   });
 

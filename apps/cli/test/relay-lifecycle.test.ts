@@ -49,7 +49,7 @@ describe("relay lifecycle", () => {
     expect(events).toEqual(["cleanup"]);
     expect(dependencies.store.load).not.toHaveBeenCalled();
     expect(capture.stderr).toEqual([
-      "QuotaCLI could not remove the legacy background task. Pairing was retained.",
+      "QuotaCLI could not remove the legacy background task. Pairing was retained. Unload io.gotry.quotacli.relay and remove ~/Library/LaunchAgents/io.gotry.quotacli.relay.plist, then retry.",
     ]);
     expect(capture.stderr.join("\n")).not.toContain(pairedCredential.device_token);
   });

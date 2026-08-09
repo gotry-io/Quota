@@ -26,6 +26,9 @@ import {
 } from "./store.ts";
 import { canonicalRelayUrl, DEFAULT_RELAY_URL } from "./url.ts";
 
+const legacyCleanupRecovery =
+  "Unload io.gotry.quotacli.relay and remove ~/Library/LaunchAgents/io.gotry.quotacli.relay.plist, then retry.";
+
 export interface RelayCommandOutput {
   stdout(message: string): void;
   stderr(message: string): void;
@@ -186,7 +189,7 @@ async function runPair(
         await dependencies.cleanupLegacyService();
       } catch {
         throw new RelayCommandError(
-          "QuotaCLI could not remove the legacy background task. Pairing was not started.",
+          `QuotaCLI could not remove the legacy background task. Pairing was not started. ${legacyCleanupRecovery}`,
         );
       }
     }
@@ -251,7 +254,9 @@ async function runUnpair(
     try {
       await dependencies.cleanupLegacyService();
     } catch {
-      output.stderr("QuotaCLI could not remove the legacy background task. Pairing was retained.");
+      output.stderr(
+        `QuotaCLI could not remove the legacy background task. Pairing was retained. ${legacyCleanupRecovery}`,
+      );
       return 1;
     }
   }
@@ -305,7 +310,9 @@ async function runPush(
     try {
       await dependencies.cleanupLegacyService();
     } catch {
-      output.stderr("QuotaCLI could not remove the legacy background task. Push was not started.");
+      output.stderr(
+        `QuotaCLI could not remove the legacy background task. Push was not started. ${legacyCleanupRecovery}`,
+      );
       return 1;
     }
   }

@@ -53,16 +53,34 @@ export class SQLiteRelayState implements RelayState {
     if (!schemaVersion) {
       throw new Error("SQLite schema version is unavailable");
     }
-    if (schemaVersion.user_version >= SQLITE_SCHEMA_VERSION) {
+    if (schemaVersion.user_version === SQLITE_SCHEMA_VERSION) {
       return;
     }
-    const existingTable = this.database
-      .query<{ name: string }, []>(
-        "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%' LIMIT 1",
+    if (schemaVersion.user_version !== 0) {
+      throw new Error("SQLite schema version is unsupported");
+    }
+    const tableCount = this.database
+      .query<{ count: number }, []>(
+        "SELECT COUNT(*) AS count FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+      )
+      .get()?.count;
+    if (tableCount === undefined) {
+      throw new Error("SQLite schema state is unavailable");
+    }
+    const legacySnapshotTable = this.database
+      .query<{ sql: string }, []>(
+        "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'quota_snapshots'",
       )
       .get();
+    const isEmpty = tableCount === 0;
+    const isReleasedSchema = legacySnapshotTable?.sql.includes(
+      "CHECK (provider IN ('codex', 'claude', 'grok'))",
+    );
+    if (!isEmpty && !isReleasedSchema) {
+      throw new Error("SQLite schema state is unsupported");
+    }
     this.database.transaction(() => {
-      this.database.exec(existingTable ? SQLITE_MIGRATION_0002 : SQLITE_SCHEMA);
+      this.database.exec(isEmpty ? SQLITE_SCHEMA : SQLITE_MIGRATION_0002);
       this.database.exec(`PRAGMA user_version = ${SQLITE_SCHEMA_VERSION}`);
     })();
   }

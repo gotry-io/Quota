@@ -236,6 +236,7 @@ final class MenuBarViewModel {
     }
   }
 
+  /// App-lifetime monitor: pairing may appear or disappear through QuotaCLI while QuotaBar runs.
   func startRelayPushLoop() {
     guard relayPushTask == nil, relayPusher != nil else { return }
     let interval = relayPushInterval

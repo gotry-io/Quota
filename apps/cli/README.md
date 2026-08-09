@@ -151,6 +151,8 @@ checks for the local Relay device credential once at app launch and every five m
 remains running, and invokes the bundled helper only while paired. Quitting QuotaBar pauses uploads;
 there is no separate QuotaCLI LaunchAgent. Before a macOS pair, push, or unpair, the helper removes
 the fixed `io.gotry.quotacli.relay` service left by earlier releases.
+If that safe cleanup fails, the operation stops before Relay state changes and prints the fixed
+service label and plist path for manual recovery; it never includes launchctl output or credentials.
 
 The local device credential is stored at `$XDG_CONFIG_HOME/quotacli/device.json` or
 `~/.config/quotacli/device.json`. `doctor` reports provider readiness, pairing, Relay, device,
