@@ -34,23 +34,25 @@ struct MenuBarContentView: View {
   }
 
   var body: some View {
-    MenuBarShell(
-      model: model,
-      title: navigation.title,
-      issue: pageIssue,
-      canNavigateBack: navigation.canNavigateBack,
-      onNavigateBack: navigateBack,
-      showsLeadingIcon: navigation.currentRoute == nil,
-      trailing: headerTrailingAction
-    ) {
-      ZStack(alignment: .topLeading) {
-        currentPage
-          .id(navigation.pageIdentity)
-          .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-          .transition(pageTransition)
+    TimelineView(.periodic(from: .now, by: 1)) { context in
+      MenuBarShell(
+        model: model,
+        title: navigation.title,
+        issue: pageIssue,
+        canNavigateBack: navigation.canNavigateBack,
+        onNavigateBack: navigateBack,
+        showsLeadingIcon: navigation.currentRoute == nil,
+        trailing: headerTrailingAction
+      ) {
+        ZStack(alignment: .topLeading) {
+          currentPage(now: context.date)
+            .id(navigation.pageIdentity)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .transition(pageTransition)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .clipped()
       }
-      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-      .clipped()
     }
     .animation(panelAnimation, value: navigation.pageIdentity)
     .confirmationDialog(
@@ -88,6 +90,7 @@ struct MenuBarContentView: View {
       guard performsInitialRefresh else { return }
       await model.refreshIfNeeded()
     }
+    .focusEffectDisabled()
   }
 
   private var panelAnimation: Animation? {
@@ -136,12 +139,13 @@ struct MenuBarContentView: View {
   }
 
   @ViewBuilder
-  private var currentPage: some View {
+  private func currentPage(now: Date) -> some View {
     switch navigation.currentRoute {
     case nil:
       QuotaOverviewView(
         model: model,
         enabledProviders: enabledProviders,
+        now: now,
         onOpenSettings: openSettings
       )
     case .settings:
@@ -153,11 +157,14 @@ struct MenuBarContentView: View {
       )
     case .agents:
       AgentsSettingsView(
+        relayReportedProviders: model.relayReportingProviders(now: now),
         onOpenProvider: { provider in navigate(to: .provider(provider)) }
       )
     case .provider(let provider):
       ProviderSettingsView(
         provider: provider,
+        reportingSources: model.reportingSources(for: provider, now: now),
+        now: now,
         saveRequest: providerSaveRequest,
         onIssue: { pageIssue = $0 }
       )

@@ -55,6 +55,32 @@ struct AccountQuotaPresentation: Equatable, Identifiable {
   }
 }
 
+struct ProviderReportingSourcePresentation: Equatable, Identifiable {
+  enum Kind: String, Equatable {
+    case local = "Local"
+    case relay = "Relay"
+  }
+
+  let id: String
+  let displayName: String
+  let kind: Kind
+  let observedAt: Date
+  let isStale: Bool
+
+  var symbolName: String {
+    kind == .local ? "laptopcomputer" : "network"
+  }
+
+  func detailLabel(now: Date) -> String {
+    var parts = [kind.rawValue]
+    if isStale {
+      parts.append("Stale")
+    }
+    parts.append("\(CompactAgeFormatter.string(since: observedAt, now: now)) ago")
+    return parts.joined(separator: " · ")
+  }
+}
+
 @MainActor
 @Observable
 final class MenuBarViewModel {
@@ -208,6 +234,58 @@ final class MenuBarViewModel {
       .map { presentation(for: $0) }
   }
 
+  func reportingSources(
+    for provider: ProviderID,
+    now: Date
+  ) -> [ProviderReportingSourcePresentation] {
+    var sources: [ProviderReportingSourcePresentation] = []
+
+    if let snapshot = latestPresentableLocalSnapshot(for: provider) {
+      sources.append(
+        ProviderReportingSourcePresentation(
+          id: "local",
+          displayName: "This Mac",
+          kind: .local,
+          observedAt: snapshot.observedAt,
+          isStale: Self.isStale(snapshot, now: now)
+        )
+      )
+    }
+
+    var seenSources = Set<String>()
+    for owned in relayStateModel.ownedDevices where seenSources.insert(owned.id).inserted {
+      guard let state = relayStateModel.state(for: owned.profileID) else { continue }
+      let snapshots = state.observations.compactMap { observation in
+        observation.deviceID == owned.device.deviceID
+          && observation.snapshot.provider == provider
+          && Self.isPresentable(observation.snapshot)
+          ? observation.snapshot
+          : nil
+      }
+      guard let snapshot = snapshots.max(by: { $0.observedAt < $1.observedAt }) else { continue }
+
+      sources.append(
+        ProviderReportingSourcePresentation(
+          id: owned.id,
+          displayName: owned.device.displayName,
+          kind: .relay,
+          observedAt: snapshot.observedAt,
+          isStale: Self.isStale(snapshot, now: now)
+        )
+      )
+    }
+
+    return sources
+  }
+
+  func relayReportingProviders(now: Date) -> Set<ProviderID> {
+    Set(
+      ProviderID.allCases.filter { provider in
+        reportingSources(for: provider, now: now).contains { $0.kind == .relay }
+      }
+    )
+  }
+
   func overviewState(
     enabledProviders: [ProviderID],
     now: Date = Date()
@@ -290,8 +368,19 @@ final class MenuBarViewModel {
     return observations
   }
 
+  private func latestPresentableLocalSnapshot(for provider: ProviderID) -> QuotaSnapshot? {
+    guard let result = result(for: provider), result.outcome == .success else { return nil }
+    return result.snapshots
+      .filter(Self.isPresentable)
+      .max(by: { $0.observedAt < $1.observedAt })
+  }
+
   private static func isPresentable(_ snapshot: QuotaSnapshot) -> Bool {
     !snapshot.windows.isEmpty && (snapshot.status == .available || snapshot.status == .stale)
+  }
+
+  private static func isStale(_ snapshot: QuotaSnapshot, now: Date) -> Bool {
+    snapshot.status == .stale || snapshot.validUntil.map { $0 <= now } == true
   }
 
   private func presentation(

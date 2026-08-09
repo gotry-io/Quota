@@ -16,8 +16,11 @@ defined in [`docs/security.md`](../../docs/security.md) and
 [`docs/decisions/0005-url-only-relay-enrollment.md`](../../docs/decisions/0005-url-only-relay-enrollment.md).
 
 Settings is multi-level: **General** (Launch at Login); **Agents** (list → per-provider detail with
-Overview visibility and API keys when configurable); **Remote Devices** → **Pair Device**; **About**. API-key
-forms write `~/.config/quotacli/providers.json` (shared with QuotaCLI).
+provider-wide Overview visibility, read-only reporting sources, and This Mac configuration);
+**Remote Devices** → **Pair Device**; **About**. Reporting sources are derived from the latest
+presentable local snapshots and observations from currently owned Relay devices; they describe who
+last reported, not remote credential configuration. API-key forms write
+`~/.config/quotacli/providers.json` (shared with QuotaCLI).
 Launch at Login mirrors macOS Login Items (`SMAppService.mainApp`): the toggle reflects system
 status, and a one-shot first-run seed registers default-on when still unregistered. Agent names,
 defaults, and login recovery commands come from generated catalog bindings

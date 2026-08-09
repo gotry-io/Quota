@@ -316,6 +316,22 @@
           observedAt: referenceDate.addingTimeInterval(-60),
           validUntil: referenceDate.addingTimeInterval(300)
         ),
+        snapshot(
+          provider: .openrouter,
+          fingerprint: "visual_remote_openrouter",
+          label: "Remote API account",
+          plan: nil,
+          windows: [
+            window(
+              id: "credits",
+              title: "Credits",
+              usedPercent: 52,
+              resetsAt: referenceDate.addingTimeInterval(14 * 86_400)
+            )
+          ],
+          observedAt: referenceDate.addingTimeInterval(-3_600),
+          validUntil: referenceDate.addingTimeInterval(-60)
+        ),
       ]
       let encoder = QuotaWireCodec.makeEncoder()
       let encodedSnapshots = try snapshots.map { snapshot in
@@ -325,7 +341,7 @@
       let capturedAt = dateFormatter.string(from: referenceDate)
       let updatedAt = dateFormatter.string(from: referenceDate.addingTimeInterval(1))
       let responseJSON =
-        #"{"observations":[{"device_id":"device_visual_studio_mac_01","sequence":42,"captured_at":"\#(capturedAt)","snapshot":\#(encodedSnapshots[0]),"updated_at":"\#(updatedAt)"},{"device_id":"device_visual_studio_mac_01","sequence":42,"captured_at":"\#(capturedAt)","snapshot":\#(encodedSnapshots[1]),"updated_at":"\#(updatedAt)"}]}"#
+        #"{"observations":[{"device_id":"device_visual_studio_mac_01","sequence":42,"captured_at":"\#(capturedAt)","snapshot":\#(encodedSnapshots[0]),"updated_at":"\#(updatedAt)"},{"device_id":"device_visual_studio_mac_01","sequence":42,"captured_at":"\#(capturedAt)","snapshot":\#(encodedSnapshots[1]),"updated_at":"\#(updatedAt)"},{"device_id":"device_visual_studio_mac_01","sequence":42,"captured_at":"\#(capturedAt)","snapshot":\#(encodedSnapshots[2]),"updated_at":"\#(updatedAt)"}]}"#
       return try QuotaWireCodec.makeDecoder()
         .decode(OwnerSnapshotListResponse.self, from: Data(responseJSON.utf8))
         .observations

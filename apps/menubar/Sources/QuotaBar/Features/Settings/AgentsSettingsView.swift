@@ -2,6 +2,7 @@ import SwiftUI
 
 /// Settings → Agents: catalog providers with drill-in to visibility and configuration.
 struct AgentsSettingsView: View {
+  let relayReportedProviders: Set<ProviderID>
   let onOpenProvider: (ProviderID) -> Void
 
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -18,7 +19,7 @@ struct AgentsSettingsView: View {
     ScrollView {
       VStack(alignment: .leading, spacing: QuotaDesign.Spacing.md) {
         if !enabledProviders.isEmpty {
-          SettingsSection(title: "Enabled") {
+          SettingsSection(title: "Shown in Overview") {
             VStack(alignment: .leading, spacing: 0) {
               ForEach(enabledProviders) { provider in
                 providerRow(provider, isEnabled: true)
@@ -28,7 +29,7 @@ struct AgentsSettingsView: View {
         }
 
         if !disabledProviders.isEmpty {
-          SettingsSection(title: "Disabled") {
+          SettingsSection(title: "Hidden from Overview") {
             VStack(alignment: .leading, spacing: 0) {
               ForEach(disabledProviders) { provider in
                 providerRow(provider, isEnabled: false)
@@ -48,6 +49,7 @@ struct AgentsSettingsView: View {
 
   @ViewBuilder
   private func providerRow(_ provider: ProviderID, isEnabled: Bool) -> some View {
+    let isRelayReported = relayReportedProviders.contains(provider)
     let row = Button {
       onOpenProvider(provider)
     } label: {
@@ -58,6 +60,12 @@ struct AgentsSettingsView: View {
         },
         trailing: {
           HStack(spacing: QuotaDesign.Spacing.inline) {
+            if isRelayReported {
+              Image(systemName: "network")
+                .quotaAffordanceStyle()
+                .help("Reported through Relay")
+                .accessibilityHidden(true)
+            }
             if isEnabled {
               Image(systemName: "line.3.horizontal")
                 .quotaAffordanceStyle()
@@ -78,8 +86,9 @@ struct AgentsSettingsView: View {
     }
     .buttonStyle(QuotaListRowButtonStyle())
     .accessibilityLabel(provider.displayName)
+    .accessibilityValue(isRelayReported ? "Source: Relay" : "")
     .accessibilityHint(
-      "\(isEnabled ? "Enabled" : "Disabled"). Opens \(provider.displayName) settings"
+      "\(isEnabled ? "Shown in Overview" : "Hidden from Overview"). Opens \(provider.displayName) settings"
     )
 
     if isEnabled {

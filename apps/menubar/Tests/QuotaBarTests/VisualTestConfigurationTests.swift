@@ -117,7 +117,7 @@
       return
     }
     #expect(warning == nil)
-    #expect(providers.map(\.provider) == [.codex, .claude, .grok])
+    #expect(providers.map(\.provider) == [.codex, .claude, .grok, .openrouter])
     #expect(providers.first?.accounts.map(\.isStale) == [false, true])
   }
 
@@ -199,10 +199,15 @@
     #expect(profile.baseURL.absoluteString == "https://quota.gotry.io")
     #expect(profile.mode == .managed)
     #expect(profile.capabilities.multiTenant)
-    #expect(state.observations.count == 2)
+    #expect(state.observations.count == 3)
     #expect(state.devices.map(\.displayName) == ["Studio Mac", "Old build host"])
     #expect(relayModel.ownedDevices.map(\.device.displayName) == ["Studio Mac"])
     #expect(relayModel.remoteDeviceSummary == "1 device")
+    #expect(menuModel.relayReportingProviders(now: referenceDate).contains(.openrouter))
+    #expect(
+      menuModel.reportingSources(for: .openrouter, now: referenceDate).first?
+        .detailLabel(now: referenceDate) == "Relay · Stale · 1h ago"
+    )
     #expect(configuration.initialPath == [.settings, .remoteDevices])
     #expect(state.lastSuccessfulRefreshAt == referenceDate.addingTimeInterval(-45))
     #expect(!relayModel.isPolling)

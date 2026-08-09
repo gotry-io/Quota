@@ -3,15 +3,14 @@ import SwiftUI
 struct QuotaOverviewView: View {
   let model: MenuBarViewModel
   let enabledProviders: [ProviderID]
+  let now: Date
   let onOpenSettings: () -> Void
 
   var body: some View {
     ScrollView {
-      TimelineView(.periodic(from: .now, by: 60)) { context in
-        providerContent(now: context.date)
-          .frame(maxWidth: .infinity, alignment: .topLeading)
-          .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
-      }
+      providerContent(now: now)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
     }
   }
 
@@ -47,13 +46,14 @@ struct QuotaOverviewView: View {
         )
       }
     case .content(let providers, let refreshWarning):
-      loadedProviderContent(providers: providers, refreshWarning: refreshWarning)
+      loadedProviderContent(providers: providers, refreshWarning: refreshWarning, now: now)
     }
   }
 
   private func loadedProviderContent(
     providers: [ProviderQuotaPresentation],
-    refreshWarning: String?
+    refreshWarning: String?,
+    now: Date
   ) -> some View {
     VStack(spacing: 0) {
       if let refreshWarning {
@@ -61,7 +61,7 @@ struct QuotaOverviewView: View {
       }
 
       ForEach(Array(providers.enumerated()), id: \.element.id) { index, provider in
-        ProviderQuotaView(presentation: provider)
+        ProviderQuotaView(presentation: provider, now: now)
 
         if index < providers.count - 1 {
           Divider()

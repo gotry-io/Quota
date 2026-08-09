@@ -1,8 +1,10 @@
 import SwiftUI
 
-/// Settings → Agents → <Provider>: visibility + optional API-key configuration.
+/// Settings → Agents → <Provider>: visibility, reporting provenance, and This Mac configuration.
 struct ProviderSettingsView: View {
   let provider: ProviderID
+  let reportingSources: [ProviderReportingSourcePresentation]
+  let now: Date
   var saveRequest: Int = 0
   var onIssue: (String?) -> Void = { _ in }
 
@@ -10,10 +12,14 @@ struct ProviderSettingsView: View {
 
   init(
     provider: ProviderID,
+    reportingSources: [ProviderReportingSourcePresentation] = [],
+    now: Date,
     saveRequest: Int = 0,
     onIssue: @escaping (String?) -> Void = { _ in }
   ) {
     self.provider = provider
+    self.reportingSources = reportingSources
+    self.now = now
     self.saveRequest = saveRequest
     self.onIssue = onIssue
     _isVisible = State(initialValue: ProviderVisibility.isVisible(provider))
@@ -25,6 +31,7 @@ struct ProviderSettingsView: View {
         SettingsSection(title: "Overview") {
           SettingsListRow(
             title: "Show in Overview",
+            subtitle: "Applies to This Mac and Relay sources",
             height: QuotaDesign.Layout.settingsListRowHeight,
             leading: {
               ProviderBrandIcon(provider: provider, size: QuotaDesign.Layout.settingsIconColumnWidth)
@@ -41,8 +48,38 @@ struct ProviderSettingsView: View {
           )
         }
 
+        SettingsSection(title: "Reporting From") {
+          if reportingSources.isEmpty {
+            Text("No reports yet")
+              .quotaSecondaryStyle()
+              .padding(.horizontal, QuotaDesign.Layout.groupContentInset)
+              .frame(
+                maxWidth: .infinity,
+                minHeight: QuotaDesign.Layout.settingsRowHeight,
+                alignment: .leading
+              )
+          } else {
+            VStack(alignment: .leading, spacing: 0) {
+              ForEach(reportingSources) { source in
+                SettingsListRow(
+                  title: source.displayName,
+                  systemImage: source.symbolName
+                ) {
+                  Text(source.detailLabel(now: now))
+                    .quotaListSecondaryStyle()
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(source.displayName)
+                .accessibilityValue(source.detailLabel(now: now))
+              }
+            }
+          }
+        }
+
         if provider.isConfigurable {
-          SettingsSection(title: "API key") {
+          SettingsSection(title: "This Mac API Key") {
             ApiKeyProviderSettingsForm(
               provider: provider,
               isVisible: visibilityBinding,
@@ -53,7 +90,7 @@ struct ProviderSettingsView: View {
             .padding(.vertical, QuotaDesign.Layout.settingsRowVerticalPadding)
           }
         } else {
-          SettingsSection(title: "Sign-in") {
+          SettingsSection(title: "This Mac Sign-in") {
             QuotaCommandRow(
               command: provider.loginCommand,
               copyLabel: "Copy sign-in command"
