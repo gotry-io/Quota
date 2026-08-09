@@ -217,8 +217,8 @@ live in one **Sources** group.
 | Page | Content |
 | --- | --- |
 | **Settings** | Dense menu rows only; no inline API-key forms. |
-| **Agents** | Two title-only groups: Enabled and Disabled, matching Show in Overview. |
-| **Provider** | Overview visibility switch; API-key form or copyable CLI sign-in command. |
+| **Agents** | Two title-only groups: Shown in Overview and Hidden from Overview. Rows may show one quiet `network` symbol when an active Relay device has reported that provider. |
+| **Provider** | Provider-wide Overview visibility; read-only Reporting From; This Mac API-key form or copyable sign-in command. |
 | **Devices** | Device list; header `plus` pairs. |
 | **About** | Version, website, feedback (same icon+title row style). |
 
@@ -251,16 +251,20 @@ live in one **Sources** group.
   subtitle) + trailing. The row owns its 8pt content inset and full-width hit target. Its interaction
   surface stays 4pt inside the group on every side, leaving another 4pt between fill and horizontal
   content. Fixed heights — do not free-size rows per content:
-  - Home and title-only Agents: `settingsRowHeight` **38**
+  - Home, title-only Agents, and Reporting From: `settingsRowHeight` **38**
   - Two-line Devices / provider Overview: `settingsListRowHeight` **46**
 - Title-only stacked rows **vertically center** the title (no empty meta slot pushing it up). With a
   subtitle, title + support stack and stay centered in the same 46pt height.
 - Agents rows never repeat scan errors, configuration state, recovery text, commands, or key masks.
-  Enabled / Disabled reflects only the Show in Overview preference; VoiceOver receives that state in
-  the row hint. Enabled rows add a quiet 28pt reorder handle before the chevron. Dragging the handle
+  Shown in Overview / Hidden from Overview reflects only the provider-wide Show in Overview
+  preference; VoiceOver receives that state in the row hint. A quiet `network` symbol before the
+  reorder/disclosure controls means at least one currently owned, non-revoked Relay device has a
+  presentable observation for that provider. It has no badge, count, background, device name, or
+  local counterpart; multiple Relay devices still produce one symbol, including in the Hidden
+  group. Shown rows add a quiet 28pt reorder handle before the chevron. Dragging the handle
   reorders locally in a stable global coordinate space, avoiding a system drag session inside the
   menu panel. Adjacent rows use a 60% enter / 40% return hysteresis band so pointer noise near the
-  midpoint cannot make them oscillate. The saved order is the Overview provider order; Disabled
+  midpoint cannot make them oscillate. The saved order is the Overview provider order; Hidden
   stays in catalog order.
   VoiceOver exposes only valid Move Up / Move Down actions: the first row has no Move Up and the last
   row has no Move Down. Disabling and later re-enabling a provider restores its position in the full
@@ -531,6 +535,9 @@ Rules:
    units are `s` / `min` / `h` / `d` / `w` / `y`; VoiceOver receives a full named relative time.
    Provenance is never aggregated at Provider level; accounts from different devices or observation
    times stay explicit.
+   One panel-level native timeline supplies the same current time to every visible compact age once
+   per second, so labels advance continuously while the panel is open and never jump merely because
+   an unrelated view redraws. This display clock does not change local collection or Relay polling.
 7. Provider hover adds no background, radius, shadow, or layout. It raises the source icon, source
    name, stale state, and observation age together from `mute` to `body` over 100ms. Account separators
    are quieter than Provider separators.
@@ -657,7 +664,8 @@ an 80ms fade. There is no translation or spring. Clicking outside or choosing an
 menu, and Reduce Motion removes the transition. Opening moves keyboard focus to the selected Relay
 or first enabled action. Up/Down moves through enabled rows without wrapping, Return or Space
 activates the focused row, and Escape closes the menu and restores focus to its trigger. Disabled
-Settings actions are skipped.
+Settings actions are skipped. The panel disables system focus effects at its root, so controls retain
+keyboard focus and activation without drawing the default macOS focus ring.
 
 ### Settings
 
@@ -666,17 +674,26 @@ Settings actions are skipped.
 - General: Launch at Login (title + native mini switch). UI reads/writes `SMAppService.mainApp`
   only — not a separate UserDefaults preference — so System Settings changes stay aligned on next
   Settings open. First production launch seeds default-on once when still unregistered.
-- Agents list: two destination-only groups, **Enabled** and **Disabled**, derived only from the Show
-  in Overview preference. Rows contain brand icon, name, and chevron via `SettingsListRow` at the
-  title-only `settingsRowHeight`; no configuration inference, helper prose, visibility switch, key
-  mask, recovery detail, or command appears on the list. Enabled rows are draggable by their reorder
-  affordance; `provider.display_order` persists that sequence, and Overview consumes it directly.
-  Disabled rows remain in catalog order and are not draggable.
+- Agents list: two destination-only groups, **Shown in Overview** and **Hidden from Overview**,
+  derived only from the Show in Overview preference. Rows contain brand icon, name, and chevron via
+  `SettingsListRow` at the title-only `settingsRowHeight`; no configuration inference, helper prose,
+  visibility switch, key mask, recovery detail, or command appears on the list. A single quiet
+  `network` symbol reports Relay provenance as defined above. Shown rows are draggable by their
+  reorder affordance; `provider.display_order` persists that sequence, and Overview consumes it
+  directly. Hidden rows remain in catalog order and are not draggable.
 - Devices list: same grouped + list-row language; subtitle is health · short last-seen (· endpoint
   when multi-Relay). Trailing **Remove** stays plain destructive text.
-- Provider detail: Overview contains only the **Show in Overview** product toggle. The second group
-  is either the API-key form or a copyable CLI sign-in command; no scan/recovery status is repeated
-  on this page. Visibility defaults from `defaultVisible`.
+- Provider detail: Overview contains the **Show in Overview** product toggle plus `Applies to This
+  Mac and Relay sources`; the provider-wide switch has no per-source variant. **Reporting From** is
+  read-only: show This Mac when the current successful local report has a presentable snapshot, and
+  one row per currently owned, non-revoked Relay device with a presentable observation. Deduplicate
+  Relay rows by endpoint profile + device id. Each row is single-line: source icon and device name
+  lead; Local/Relay, optional Stale, and compact observed age trail. Relay endpoint addresses are
+  never shown here. `No reports yet` is the empty state. This provenance means last reported, not
+  remote configuration; device actions stay in Remote Devices. Visibility defaults from
+  `defaultVisible`.
+- The final group is either **This Mac API Key** or **This Mac Sign-in**; no scan/recovery status is
+  repeated on this page.
 - API-key forms: fields only (no status blurb); SecureField plus a LiteLLM base URL field when
   applicable, in-field ×; header **Save** (empty key deletes); failures in the title bar; never show
   the full key.

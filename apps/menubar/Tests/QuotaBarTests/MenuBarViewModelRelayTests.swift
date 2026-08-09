@@ -324,6 +324,136 @@ struct MenuBarViewModelRelayTests {
   }
 
   @Test
+  func derivesLocalAndActiveRelayReportingSourcesWithAgeAndStaleness() async throws {
+    let profile = try overviewProfile()
+    let activeDevice = try overviewDevice(deviceID: "device-a", displayName: "Studio Mac")
+    let revokedDevice = try overviewDevice(
+      deviceID: "device-revoked",
+      displayName: "Old Build Host",
+      revokedAt: "2026-08-03T11:00:00Z"
+    )
+    let remoteSnapshot = overviewSnapshot(
+      fingerprint: "remote-account",
+      scope: .global,
+      observedAt: overviewNow.addingTimeInterval(-120),
+      validUntil: overviewNow
+    )
+    let client = OverviewRelayClient(
+      snapshotResults: [
+        .success(OwnerSnapshotListResponse(observations: [
+          try overviewObservation(deviceID: activeDevice.deviceID, snapshot: remoteSnapshot),
+          try overviewObservation(deviceID: revokedDevice.deviceID, snapshot: remoteSnapshot),
+          try overviewObservation(deviceID: "device-orphaned", snapshot: remoteSnapshot),
+        ]))
+      ],
+      deviceResults: [
+        .success(DeviceListResponse(devices: [activeDevice, revokedDevice]))
+      ]
+    )
+    let localSnapshot = overviewSnapshot(
+      fingerprint: "local-account",
+      scope: .global,
+      observedAt: overviewNow.addingTimeInterval(-30)
+    )
+    let model = MenuBarViewModel(
+      collector: OverviewLocalCollector(report: overviewReport([localSnapshot])),
+      reportCache: nil,
+      relayStateModel: makeOverviewRelayStateModel(profiles: [profile], client: client)
+    )
+
+    await model.refresh()
+    let sources = model.reportingSources(for: .codex, now: overviewNow)
+
+    #expect(sources.map(\.displayName) == ["This Mac", "Studio Mac"])
+    #expect(sources.map(\.kind) == [.local, .relay])
+    #expect(sources[0].detailLabel(now: overviewNow) == "Local · 30s ago")
+    #expect(sources[1].detailLabel(now: overviewNow) == "Relay · Stale · 2min ago")
+  }
+
+  @Test
+  func collapsesMultipleRelayDevicesToOneProviderIndicatorEvenWhenHidden() async throws {
+    let profile = try overviewProfile()
+    let deviceA = try overviewDevice(deviceID: "device-a", displayName: "Studio Mac")
+    let deviceB = try overviewDevice(deviceID: "device-b", displayName: "Build Mac")
+    let snapshot = overviewSnapshot(fingerprint: "remote-account", scope: .source)
+    let client = OverviewRelayClient(
+      snapshotResults: [
+        .success(OwnerSnapshotListResponse(observations: [
+          try overviewObservation(deviceID: deviceA.deviceID, snapshot: snapshot),
+          try overviewObservation(deviceID: deviceB.deviceID, snapshot: snapshot),
+        ]))
+      ],
+      deviceResults: [
+        // Duplicate device rows still identify one source by profileID + deviceID.
+        .success(DeviceListResponse(devices: [deviceA, deviceA, deviceB]))
+      ]
+    )
+    let model = MenuBarViewModel(
+      collector: OverviewLocalCollector(report: emptyOverviewReport),
+      reportCache: nil,
+      relayStateModel: makeOverviewRelayStateModel(profiles: [profile], client: client)
+    )
+
+    await model.refresh()
+    let sources = model.reportingSources(for: .codex, now: overviewNow)
+    let relayReportedProviders = model.relayReportingProviders(now: overviewNow)
+    let suiteName = "QuotaBarTests.\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suiteName))
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+    ProviderVisibility.setVisible(.codex, false, defaults: defaults)
+
+    #expect(sources.count == 2)
+    #expect(Set(sources.map(\.id)).count == 2)
+    #expect(relayReportedProviders == [.codex])
+    #expect(!ProviderVisibility.isVisible(.codex, defaults: defaults))
+  }
+
+  @Test
+  func keepsSameDeviceIDSeparateAcrossRelayEndpointsWithoutDisplayingAddresses() async throws {
+    let first = try overviewProfile(
+      id: UUID(uuidString: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")!,
+      name: "Primary Relay",
+      host: "primary-relay.example",
+      instanceID: "relay-primary"
+    )
+    let second = try overviewProfile(
+      id: UUID(uuidString: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")!,
+      name: "Backup Relay",
+      host: "backup-relay.example",
+      instanceID: "relay-backup"
+    )
+    let device = try overviewDevice(deviceID: "shared-device", displayName: "Build Mac")
+    let snapshot = overviewSnapshot(fingerprint: "remote-account", scope: .source)
+    let client = OverviewRelayClient(
+      snapshotResults: [
+        .success(OwnerSnapshotListResponse(observations: [
+          try overviewObservation(deviceID: device.deviceID, snapshot: snapshot)
+        ])),
+        .success(OwnerSnapshotListResponse(observations: [
+          try overviewObservation(deviceID: device.deviceID, snapshot: snapshot)
+        ])),
+      ],
+      deviceResults: [
+        .success(DeviceListResponse(devices: [device])),
+        .success(DeviceListResponse(devices: [device])),
+      ]
+    )
+    let model = MenuBarViewModel(
+      collector: OverviewLocalCollector(report: emptyOverviewReport),
+      reportCache: nil,
+      relayStateModel: makeOverviewRelayStateModel(profiles: [first, second], client: client)
+    )
+
+    await model.refresh()
+    let sources = model.reportingSources(for: .codex, now: overviewNow)
+
+    #expect(sources.count == 2)
+    #expect(Set(sources.map(\.id)).count == 2)
+    #expect(Set(sources.map { $0.detailLabel(now: overviewNow) }) == ["Relay · 0s ago"])
+    #expect(model.relayReportingProviders(now: overviewNow) == [.codex])
+  }
+
+  @Test
   func relayRefreshFailureKeepsLastGoodContentAndShowsOnlyRefreshWarning() async throws {
     let profile = try overviewProfile()
     let observation = try overviewObservation(
@@ -459,9 +589,14 @@ private enum OverviewRelayCall: Equatable, Sendable {
 private actor OverviewRelayClient: RelayOwnerClientServing {
   private(set) var calls: [OverviewRelayCall] = []
   private var snapshotResults: [Result<OwnerSnapshotListResponse, RelayClientError>]
+  private var deviceResults: [Result<DeviceListResponse, RelayClientError>]
 
-  init(snapshotResults: [Result<OwnerSnapshotListResponse, RelayClientError>] = []) {
+  init(
+    snapshotResults: [Result<OwnerSnapshotListResponse, RelayClientError>] = [],
+    deviceResults: [Result<DeviceListResponse, RelayClientError>] = []
+  ) {
     self.snapshotResults = snapshotResults
+    self.deviceResults = deviceResults
   }
 
   func discover(baseURL _: URL) async throws -> RelayInfo {
@@ -504,7 +639,10 @@ private actor OverviewRelayClient: RelayOwnerClientServing {
     ownerBearer _: String
   ) async throws -> DeviceListResponse {
     calls.append(.devices)
-    return DeviceListResponse(devices: [])
+    guard !deviceResults.isEmpty else {
+      return DeviceListResponse(devices: [])
+    }
+    return try deviceResults.removeFirst().get()
   }
 
   func revokeDevice(
@@ -612,6 +750,22 @@ private func overviewObservation(
     QuotaWireCodec.makeDecoder()
       .decode(OwnerSnapshotListResponse.self, from: responseData)
       .observations.first
+  )
+}
+
+private func overviewDevice(
+  deviceID: String,
+  displayName: String,
+  revokedAt: String? = nil
+) throws -> RelayDevice {
+  let revokedAtJSON = revokedAt.map { "\"\($0)\"" } ?? "null"
+  let responseData = Data(
+    #"{"devices":[{"device_id":"\#(deviceID)","display_name":"\#(displayName)","created_at":"2026-08-03T10:00:00Z","last_seen_at":"2026-08-03T12:00:00Z","last_sequence":1,"revoked_at":\#(revokedAtJSON)}]}"#.utf8
+  )
+  return try #require(
+    QuotaWireCodec.makeDecoder()
+      .decode(DeviceListResponse.self, from: responseData)
+      .devices.first
   )
 }
 

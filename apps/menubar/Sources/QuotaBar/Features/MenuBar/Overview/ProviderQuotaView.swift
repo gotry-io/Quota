@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ProviderQuotaView: View {
   let presentation: ProviderQuotaPresentation
+  let now: Date
   @State private var isHovered = false
 
   var body: some View {
@@ -19,6 +20,7 @@ struct ProviderQuotaView: View {
         AccountQuotaView(
           presentation: account,
           accountIndex: index,
+          now: now,
           emphasizesMetadata: isHovered
         )
 
@@ -83,6 +85,7 @@ private extension AccountQuotaPresentation {
 private struct AccountQuotaView: View {
   let presentation: AccountQuotaPresentation
   let accountIndex: Int
+  let now: Date
   let emphasizesMetadata: Bool
 
   var body: some View {
@@ -153,7 +156,7 @@ private struct AccountQuotaView: View {
   }
 
   private var observedAge: String {
-    CompactAgeFormatter.string(since: presentation.snapshot.observedAt)
+    CompactAgeFormatter.string(since: presentation.snapshot.observedAt, now: now)
   }
 }
 

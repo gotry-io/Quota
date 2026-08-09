@@ -92,9 +92,12 @@ storage requirements are defined only in [`security.md`](security.md).
 - Settings **General** Launch at Login mirrors `SMAppService.mainApp` system status (one-shot
   first-run default-on seed when still unregistered).
 - Settings is multi-level: home destinations for **Agents** and **Remote Devices**; Agents lists
-  catalog providers and opens a per-provider page (visibility + API key when
-  `ProviderID.configurableCases`). API keys write the same owner-only
-  `~/.config/quotacli/providers.json` file as QuotaCLI.
+  catalog providers and opens a per-provider page. Its visibility switch applies to local and Relay
+  sources, while a read-only reporting section derives This Mac and active owned-device provenance
+  from existing snapshots. Provider credentials remain explicitly scoped to This Mac; API keys for
+  `ProviderID.configurableCases` write the same owner-only
+  `~/.config/quotacli/providers.json` file as QuotaCLI. Remote Devices remains the device-management
+  boundary.
 - Provider metadata (names, defaults, login commands, brand icons) comes from the generated catalog
   bindings; do not hardcode parallel provider switch tables in views.
 - Its macOS owner-path acceptance flow launches the real app boundary and composes the same
