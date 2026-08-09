@@ -56,7 +56,7 @@ export class SQLiteRelayState implements RelayState {
     if (schemaVersion.user_version === SQLITE_SCHEMA_VERSION) {
       return;
     }
-    if (schemaVersion.user_version !== 0) {
+    if (schemaVersion.user_version !== 0 && schemaVersion.user_version !== 1) {
       throw new Error("SQLite schema version is unsupported");
     }
     const tableCount = this.database

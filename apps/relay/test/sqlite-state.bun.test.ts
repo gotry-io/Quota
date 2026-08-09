@@ -50,6 +50,24 @@ describe("SQLiteRelayState", () => {
     unchanged.close();
   });
 
+  it("migrates an explicitly stamped initial schema", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "quota-relay-v1-schema-test-"));
+    const path = join(directory, "relay.db");
+    const database = new Database(path, { create: true, strict: true });
+    database.exec(readFileSync(new URL("../migrations/0001_initial.sql", import.meta.url), "utf8"));
+    database.exec("PRAGMA user_version = 1");
+    database.close();
+
+    const state = new SQLiteRelayState(path);
+    await state.initialize();
+
+    const migrated = new Database(path, { readonly: true, strict: true });
+    expect(
+      migrated.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version,
+    ).toBe(2);
+    migrated.close();
+  });
+
   it("migrates the released provider whitelist without losing snapshots", async () => {
     const directory = mkdtempSync(join(tmpdir(), "quota-relay-migration-test-"));
     const path = join(directory, "relay.db");
