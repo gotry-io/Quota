@@ -55,8 +55,9 @@ data requirements.
   same file. Never store provider API keys in UserDefaults, logs, or Relay payloads. Prefer
   interactive `quotacli config set <provider>` (hidden prompt); do not accept raw keys on argv or
   unbounded secret stdin. `config get` / `list` and Settings UI may show only a masked tip.
-  QuotaCLI and QuotaBar coordinate updates with an owner-only lock directory and use atomic file
-  replacement, so concurrent writers cannot lose another provider's update.
+  QuotaCLI and QuotaBar coordinate updates with an owner-only lock directory, atomically isolate
+  released or stale locks before deletion, and use atomic file replacement, so concurrent writers
+  cannot lose another provider's update.
   API keys available only from process environment are foreground-only: the macOS LaunchAgent
   intentionally does not inherit provider secret variables and therefore cannot collect them.
 - Plans, OAuth scopes, tokens, email addresses, and anonymous fallback values must not produce a

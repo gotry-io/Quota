@@ -150,6 +150,9 @@ struct ProviderConfigStoreTests {
     let store = ProviderConfigStore(fileURL: fileURL)
     try store.setApiKey(.openrouter, apiKey: "sk-or-v1-after-stale-lock")
     #expect(store.status(for: .openrouter) != .missing)
+    #expect(
+      try FileManager.default.contentsOfDirectory(atPath: directory.path) == ["providers.json"]
+    )
   }
 
   private func ownerOnlyTempDirectory() throws -> URL {

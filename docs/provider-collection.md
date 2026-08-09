@@ -190,6 +190,11 @@ Aligned with CodexBar's LiteLLM virtual-key budget path.
    spend as a budget or fabricate remaining quota.
 5. Missing key or base URL → `auth_required` (discovery unavailable). HTTP 401/403 → `auth_required`.
 
+QuotaCLI 0.0.2 allowed custom base URLs for OpenRouter, DeepSeek, and Kimi. Current releases ignore
+those already-persisted `base_url` fields and use each provider's official endpoint; saving the
+provider again removes the stale field. New custom URLs remain rejected for these fixed-endpoint
+providers.
+
 ## Identity and normalization
 
 - A global `account.fingerprint` is SHA-256 over the provider, the identifier namespace, and the

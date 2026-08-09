@@ -141,12 +141,8 @@ function resolveBaseUrl(
   config: ApiKeyResolveConfig,
 ): string | undefined {
   const allowPrivateHttp = config.allowPrivateHttp === true;
-  if (storedBaseUrl !== undefined) {
-    // A configured URL is an explicit routing choice. Invalid values, and values
-    // on fixed-endpoint providers, fail closed instead of falling through to env.
-    if (!config.urlEnvKey) {
-      return undefined;
-    }
+  if (storedBaseUrl !== undefined && config.urlEnvKey) {
+    // Custom endpoints are explicit routing choices and fail closed when invalid.
     return normalizeBaseUrl(storedBaseUrl, { allowPrivateHttp });
   }
   if (config.urlEnvKey) {

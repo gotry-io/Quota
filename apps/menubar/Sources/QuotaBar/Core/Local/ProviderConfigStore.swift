@@ -292,7 +292,7 @@ struct ProviderConfigStore {
             options: .withoutOverwriting
           )
         } catch {
-          try? fileManager.removeItem(at: lockURL)
+          _ = Self.discardWriteLock(lockURL: lockURL, state: "failed")
           throw ProviderConfigStoreError.locked
         }
         break
@@ -310,11 +310,45 @@ struct ProviderConfigStore {
         Thread.sleep(forTimeInterval: 0.01)
       }
     }
-    defer { try? fileManager.removeItem(at: lockURL) }
+    defer { _ = Self.discardWriteLock(lockURL: lockURL, state: "released") }
     return try action()
   }
 
   private static func removeStaleWriteLock(lockURL: URL, ownerURL: URL) -> Bool {
+    let fileManager = FileManager.default
+    let reclaimURL = URL(fileURLWithPath: "\(lockURL.path).reclaim", isDirectory: true)
+    do {
+      try fileManager.createDirectory(
+        at: reclaimURL,
+        withIntermediateDirectories: false,
+        attributes: [.posixPermissions: 0o700]
+      )
+    } catch {
+      return false
+    }
+    defer { try? fileManager.removeItem(at: reclaimURL) }
+
+    guard isWriteLockStale(lockURL: lockURL, ownerURL: ownerURL) else { return false }
+    return discardWriteLock(lockURL: lockURL, state: "stale")
+  }
+
+  private static func discardWriteLock(lockURL: URL, state: String) -> Bool {
+    let fileManager = FileManager.default
+    let discardedURL = URL(
+      fileURLWithPath:
+        "\(lockURL.path).\(state)-\(ProcessInfo.processInfo.processIdentifier)-\(UUID().uuidString)",
+      isDirectory: true
+    )
+    do {
+      try fileManager.moveItem(at: lockURL, to: discardedURL)
+    } catch {
+      return (error as? CocoaError)?.code == .fileNoSuchFile
+    }
+    try? fileManager.removeItem(at: discardedURL)
+    return true
+  }
+
+  private static func isWriteLockStale(lockURL: URL, ownerURL: URL) -> Bool {
     let fileManager = FileManager.default
     let stale: Bool
     if let data = try? Data(contentsOf: ownerURL),
@@ -337,13 +371,7 @@ struct ProviderConfigStore {
       }
       stale = Date().timeIntervalSince(modifiedAt) >= 1
     }
-    guard stale else { return false }
-    do {
-      try fileManager.removeItem(at: lockURL)
-      return true
-    } catch {
-      return false
-    }
+    return stale
   }
 
   /// Refuse group/other access, matching QuotaCLI `ProviderConfigStore`.

@@ -265,7 +265,7 @@ export class ProviderConfigStore {
             mode: 0o600,
           });
         } catch {
-          await rmdir(lockPath).catch(() => undefined);
+          await discardWriteLock(lockPath, "failed");
           throw new ProviderConfigStoreError("Could not initialize the provider config lock.");
         }
         break;
@@ -285,13 +285,41 @@ export class ProviderConfigStore {
     try {
       return await action();
     } finally {
-      await unlink(ownerPath).catch(() => undefined);
-      await rmdir(lockPath).catch(() => undefined);
+      await discardWriteLock(lockPath, "released");
     }
   }
 }
 
 async function removeStaleWriteLock(lockPath: string, ownerPath: string): Promise<boolean> {
+  const reclaimPath = `${lockPath}.reclaim`;
+  try {
+    await mkdir(reclaimPath, { mode: 0o700 });
+  } catch {
+    return false;
+  }
+  try {
+    if (!(await isWriteLockStale(lockPath, ownerPath))) {
+      return false;
+    }
+    return await discardWriteLock(lockPath, "stale");
+  } finally {
+    await rmdir(reclaimPath).catch(() => undefined);
+  }
+}
+
+async function discardWriteLock(lockPath: string, state: string): Promise<boolean> {
+  const discardedPath = `${lockPath}.${state}-${process.pid}-${randomUUID()}`;
+  try {
+    await rename(lockPath, discardedPath);
+  } catch (error) {
+    return isFileSystemError(error, "ENOENT");
+  }
+  await unlink(join(discardedPath, "owner")).catch(() => undefined);
+  await rmdir(discardedPath).catch(() => undefined);
+  return true;
+}
+
+async function isWriteLockStale(lockPath: string, ownerPath: string): Promise<boolean> {
   let stale = false;
   try {
     const owner = (await readFile(ownerPath, "utf8")).trim();
@@ -313,20 +341,11 @@ async function removeStaleWriteLock(lockPath: string, ownerPath: string): Promis
     try {
       const metadata = await lstat(lockPath);
       stale = Date.now() - metadata.mtimeMs >= 1_000;
-    } catch {
-      return true;
+    } catch (metadataError) {
+      return isFileSystemError(metadataError, "ENOENT");
     }
   }
-  if (!stale) {
-    return false;
-  }
-  await unlink(ownerPath).catch(() => undefined);
-  try {
-    await rmdir(lockPath);
-    return true;
-  } catch {
-    return false;
-  }
+  return stale;
 }
 
 function assertConfigurable(provider: ProviderId): void {

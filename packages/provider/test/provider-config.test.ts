@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -61,7 +61,7 @@ describe("ProviderConfigStore", () => {
     );
   });
 
-  it("rejects fixed-provider base URLs and does not fall back after a stale one", async () => {
+  it("rejects new fixed-provider base URLs and ignores one saved by a released version", async () => {
     const root = await mkdtemp(join(tmpdir(), "quota-provider-config-"));
     const path = join(root, "providers.json");
     const store = new ProviderConfigStore({ path });
@@ -91,7 +91,11 @@ describe("ProviderConfigStore", () => {
         path,
         environment: { OPENROUTER_API_KEY: "sk-or-v1-env-fallback" },
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toMatchObject({
+      apiKey: "sk-or-v1-stale-url",
+      baseUrl: "https://openrouter.ai/api/v1",
+      source: "config:openrouter",
+    });
   });
 
   it("serializes concurrent read-modify-write updates from separate stores", async () => {
@@ -117,10 +121,18 @@ describe("ProviderConfigStore", () => {
     await mkdir(lockPath, { mode: 0o700 });
     await writeFile(join(lockPath, "owner"), "2147483647\n", { mode: 0o600 });
 
-    const store = new ProviderConfigStore({ path });
-    await store.set("openrouter", { api_key: "sk-or-v1-after-stale-lock" });
-    await expect(store.get("openrouter")).resolves.toMatchObject({
+    const openrouter = new ProviderConfigStore({ path });
+    const deepseek = new ProviderConfigStore({ path });
+    await Promise.all([
+      openrouter.set("openrouter", { api_key: "sk-or-v1-after-stale-lock" }),
+      deepseek.set("deepseek", { api_key: "sk-deepseek-after-stale-lock" }),
+    ]);
+    await expect(openrouter.get("openrouter")).resolves.toMatchObject({
       api_key: "sk-or-v1-after-stale-lock",
     });
+    await expect(deepseek.get("deepseek")).resolves.toMatchObject({
+      api_key: "sk-deepseek-after-stale-lock",
+    });
+    await expect(readdir(root)).resolves.toEqual(["providers.json"]);
   });
 });

@@ -56,9 +56,11 @@ export async function collectQuotaReport(
       if (frozenNow) {
         context.now = frozenNow;
       }
-      const result = await collectOne(collectors[provider], context);
-      options.onProviderProgress?.(provider, "done");
-      return result;
+      try {
+        return await collectOne(collectors[provider], context);
+      } finally {
+        options.onProviderProgress?.(provider, "done");
+      }
     }),
   );
 
