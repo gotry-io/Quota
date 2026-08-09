@@ -1,13 +1,4 @@
-import {
-  chmod,
-  mkdir,
-  mkdtemp,
-  readFile,
-  readdir,
-  stat,
-  utimes,
-  writeFile,
-} from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -123,14 +114,12 @@ describe("ProviderConfigStore", () => {
     expect(config.providers.deepseek?.api_key).toBe("sk-deepseek-concurrent");
   });
 
-  it("recovers an expired write lock even when its PID is alive", async () => {
+  it("recovers a write lock whose owner process no longer exists", async () => {
     const root = await mkdtemp(join(tmpdir(), "quota-provider-config-"));
     const path = join(root, "providers.json");
     const lockPath = `${path}.lock`;
     await mkdir(lockPath, { mode: 0o700 });
-    await writeFile(join(lockPath, "owner"), `${process.pid}\n`, { mode: 0o600 });
-    const expiredAt = new Date(Date.now() - 6_000);
-    await utimes(lockPath, expiredAt, expiredAt);
+    await writeFile(join(lockPath, "owner"), "2147483647\n", { mode: 0o600 });
 
     const openrouter = new ProviderConfigStore({ path });
     const deepseek = new ProviderConfigStore({ path });

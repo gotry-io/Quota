@@ -350,28 +350,28 @@ struct ProviderConfigStore {
 
   private static func isWriteLockStale(lockURL: URL, ownerURL: URL) -> Bool {
     let fileManager = FileManager.default
-    guard
-      let attributes = try? fileManager.attributesOfItem(atPath: lockURL.path),
-      let modifiedAt = attributes[.modificationDate] as? Date
-    else {
-      return !fileManager.fileExists(atPath: lockURL.path)
-    }
-    let age = Date().timeIntervalSince(modifiedAt)
-
+    let stale: Bool
     if let data = try? Data(contentsOf: ownerURL),
       let text = String(data: data, encoding: .utf8)?.trimmingCharacters(
         in: .whitespacesAndNewlines
       ),
       let ownerPID = Int32(text), ownerPID > 0
     {
-      if age >= 5 { return true }
       errno = 0
       if kill(ownerPID, 0) == 0 || errno == EPERM {
         return false
       }
-      return errno == ESRCH
+      stale = errno == ESRCH
+    } else {
+      guard
+        let attributes = try? fileManager.attributesOfItem(atPath: lockURL.path),
+        let modifiedAt = attributes[.modificationDate] as? Date
+      else {
+        return false
+      }
+      stale = Date().timeIntervalSince(modifiedAt) >= 1
     }
-    return age >= 1
+    return stale
   }
 
   /// Refuse group/other access, matching QuotaCLI `ProviderConfigStore`.
