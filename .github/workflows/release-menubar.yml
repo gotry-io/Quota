@@ -64,6 +64,18 @@ jobs:
           echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
           echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
 
+      - name: Validate product version
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          SOURCE_VERSION="$(plutil -extract CFBundleShortVersionString raw apps/menubar/Support/Info.plist)"
+          if [ "$SOURCE_VERSION" != "$VERSION" ]; then
+            echo "menubar-v${VERSION} does not match QuotaBar's Info.plist (${SOURCE_VERSION})" >&2
+            echo "bump and commit the QuotaBar version before creating the release tag" >&2
+            exit 1
+          fi
+
       - name: Install pinned toolchain packages
         run: |
           set -euo pipefail

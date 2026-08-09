@@ -63,6 +63,18 @@ jobs:
           echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
           echo "npm_tag=$NPM_TAG" >> "$GITHUB_OUTPUT"
 
+      - name: Validate product version
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          SOURCE_VERSION="$(node -p "require('./apps/cli/package.json').version")"
+          if [ "$SOURCE_VERSION" != "$VERSION" ]; then
+            echo "cli-v${VERSION} does not match apps/cli/package.json (${SOURCE_VERSION})" >&2
+            echo "bump and commit the QuotaCLI version before creating the release tag" >&2
+            exit 1
+          fi
+
       - uses: actions/setup-node@v6
         with:
           node-version: "24"
@@ -86,16 +98,6 @@ jobs:
           pnpm check
           pnpm -r --if-present test
 
-      - name: Stamp and inspect package
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          set -euo pipefail
-          npm pkg set "version=${VERSION}" --prefix apps/cli
-          test "$(node -p "require('./apps/cli/package.json').version")" = "$VERSION"
-          cd apps/cli
-          npm pack --dry-run
-
       - name: Check registry
         id: registry
         env:
@@ -109,6 +111,17 @@ jobs:
             echo "publish=true" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Pack and inspect package
+        if: steps.registry.outputs.publish == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          cd apps/cli
+          npm pack --pack-destination "$RUNNER_TEMP"
+          test -f "$RUNNER_TEMP/gotry-io-quotacli-${VERSION}.tgz"
+          mv "$RUNNER_TEMP/gotry-io-quotacli-${VERSION}.tgz" "$RUNNER_TEMP/quotacli.tgz"
+
       - name: Publish QuotaCLI
         if: steps.registry.outputs.publish == 'true'
         working-directory: apps/cli
@@ -118,7 +131,7 @@ jobs:
         run: |
           set -euo pipefail
           echo "Publishing @gotry-io/quotacli as channel=${CHANNEL} tag=${NPM_TAG}"
-          npm publish --tag "$NPM_TAG"
+          npm publish "$RUNNER_TEMP/quotacli.tgz" --tag "$NPM_TAG"
 
       # Stable tags also push Formula/quotacli.rb to gotry-io/homebrew-tap (npm tarball install).
       # Prerelease tags skip Homebrew; use npm @beta instead.
@@ -127,18 +140,18 @@ jobs:
         env:
           TAP_PUSH_TOKEN: ${{ secrets.TAP_PUSH_TOKEN }}
           VERSION: ${{ steps.version.outputs.version }}
+          PUBLISHED_THIS_RUN: ${{ steps.registry.outputs.publish }}
         run: |
           set -euo pipefail
           test -n "$TAP_PUSH_TOKEN"
-          # Package must already be on npm (this run or a prior publish).
-          if ! npm view "@gotry-io/quotacli@${VERSION}" version >/dev/null 2>&1; then
-            echo "@gotry-io/quotacli@${VERSION} is not on npm; cannot render Formula" >&2
-            exit 1
+          TARBALL_URL="https://registry.npmjs.org/@gotry-io/quotacli/-/quotacli-${VERSION}.tgz"
+          REGISTRY_TARBALL="$RUNNER_TEMP/registry-quotacli.tgz"
+          curl -fsSL --retry 60 --retry-all-errors --retry-delay 5 --retry-max-time 300 \
+            "$TARBALL_URL" -o "$REGISTRY_TARBALL"
+          if [ "$PUBLISHED_THIS_RUN" = "true" ]; then
+            cmp "$RUNNER_TEMP/quotacli.tgz" "$REGISTRY_TARBALL"
           fi
-          TARBALL_URL="$(npm view "@gotry-io/quotacli@${VERSION}" dist.tarball)"
-          EXPECTED_URL="https://registry.npmjs.org/@gotry-io/quotacli/-/quotacli-${VERSION}.tgz"
-          test "$TARBALL_URL" = "$EXPECTED_URL"
-          SHA256="$(curl -fsSL "$TARBALL_URL" | sha256sum | cut -d' ' -f1)"
+          SHA256="$(sha256sum "$REGISTRY_TARBALL" | cut -d' ' -f1)"
           git clone --depth 1 \
             "https://x-access-token:${TAP_PUSH_TOKEN}@github.com/gotry-io/homebrew-tap.git" \
             "$RUNNER_TEMP/homebrew-tap"
