@@ -135,8 +135,9 @@ without user accounts or a bootstrap token. Owners can revoke their own devices 
 group; devices can revoke themselves; devices and owner groups inactive for 30 days are reclaimed by
 scheduled maintenance. QuotaCLI implements Relay pairing with one foreground upload after join,
 one-shot `relay push`, and remote unpairing. On macOS, the signed QuotaBar login item invokes its
-bundled helper at app launch and every five minutes while the menu-bar app is running and a device
-credential exists; unpaired checks do not start the helper. Before pairing or uploading, QuotaCLI
+bundled helper at app launch and every five minutes while the menu-bar app is running to refresh the
+local Overview; when a device credential exists, each cycle also uploads a snapshot. Before pairing
+or uploading, QuotaCLI
 removes the LaunchAgent left by older CLI releases. Top-level `doctor` summarizes local provider
 readiness and Relay pairing state without collecting quota.
 

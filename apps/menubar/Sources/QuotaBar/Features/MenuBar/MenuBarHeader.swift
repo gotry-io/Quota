@@ -284,7 +284,10 @@ struct MenuBarHeader: View {
   }
 
   private func performOverflowAction(_ action: () -> Void) {
-    setOverflowMenuExpanded(false)
+    // Action selection replaces the menu with its destination in the same render pass.
+    // The animated close path is reserved for dismissing the menu without choosing an action.
+    isOverflowMenuExpanded = false
+    focusedOverflowAction = nil
     action()
   }
 

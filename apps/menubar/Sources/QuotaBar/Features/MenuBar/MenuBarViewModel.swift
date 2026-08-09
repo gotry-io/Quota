@@ -117,28 +117,28 @@ final class MenuBarViewModel {
   private let reportCache: LocalQuotaReportCache?
 
   @ObservationIgnored
-  private let relayPushInterval: Duration
+  private let refreshInterval: Duration
 
   @ObservationIgnored
-  private let relayPushSleep: @Sendable (Duration) async throws -> Void
+  private let refreshSleep: @Sendable (Duration) async throws -> Void
 
   @ObservationIgnored
-  private var relayPushTask: Task<Void, Never>?
+  private var refreshTask: Task<Void, Never>?
 
   init(
     collector: (any LocalQuotaCollecting)? = nil,
     relayPusher: (any RelaySnapshotPushing)? = nil,
     reportCache: LocalQuotaReportCache? = .live,
     relayStateModel: RelayStateModel = RelayStateModel.live(),
-    relayPushInterval: Duration = .seconds(300),
-    relayPushSleep: @escaping @Sendable (Duration) async throws -> Void = { duration in
+    refreshInterval: Duration = .seconds(300),
+    refreshSleep: @escaping @Sendable (Duration) async throws -> Void = { duration in
       try await Task.sleep(for: duration)
     }
   ) {
     self.relayStateModel = relayStateModel
     self.reportCache = reportCache
-    self.relayPushInterval = relayPushInterval
-    self.relayPushSleep = relayPushSleep
+    self.refreshInterval = refreshInterval
+    self.refreshSleep = refreshSleep
     if let cached = reportCache?.load() {
       report = cached.report
       localLastCheckedAt = cached.refreshedAt
@@ -177,15 +177,15 @@ final class MenuBarViewModel {
       relayPusher = nil
       initializationError = nil
       reportCache = nil
-      relayPushInterval = .seconds(300)
-      relayPushSleep = { duration in
+      refreshInterval = .seconds(300)
+      refreshSleep = { duration in
         try await Task.sleep(for: duration)
       }
     }
   #endif
 
   deinit {
-    relayPushTask?.cancel()
+    refreshTask?.cancel()
   }
 
   func refreshIfNeeded(now: Date = Date()) async {
@@ -207,42 +207,17 @@ final class MenuBarViewModel {
   }
 
   func refresh() async {
-    guard !localRefreshInProgress else { return }
-
-    localRefreshInProgress = true
-    defer { localRefreshInProgress = false }
-
-    if let collector {
-      do {
-        report = try await collector.collect()
-        localLastCheckedAt = Date()
-        if let report, let localLastCheckedAt {
-          reportCache?.save(report: report, refreshedAt: localLastCheckedAt)
-        }
-        errorMessage = nil
-      } catch is CancellationError {
-        if Task.isCancelled {
-          return
-        }
-      } catch {
-        errorMessage = Self.message(for: error)
-      }
-    } else {
-      errorMessage = initializationError ?? "QuotaCLI is unavailable."
-    }
-
-    if !Task.isCancelled {
-      await relayStateModel.refreshAllProfiles()
-    }
+    guard await refreshLocalQuota(), !Task.isCancelled else { return }
+    await relayStateModel.refreshAllProfiles()
   }
 
-  /// App-lifetime monitor: pairing may appear or disappear through QuotaCLI while QuotaBar runs.
-  func startRelayPushLoop() {
-    guard relayPushTask == nil, relayPusher != nil else { return }
-    let interval = relayPushInterval
-    let sleep = relayPushSleep
-    relayPushTask = Task { @MainActor [weak self] in
-      await self?.pushRelaySnapshot()
+  /// App-lifetime refresh; paired devices also upload each freshly collected interval.
+  func startRefreshLoop() {
+    guard refreshTask == nil, collector != nil || relayPusher != nil else { return }
+    let interval = refreshInterval
+    let sleep = refreshSleep
+    refreshTask = Task { @MainActor [weak self] in
+      await self?.runRefreshCycle()
       while !Task.isCancelled {
         do {
           try await sleep(interval)
@@ -250,7 +225,7 @@ final class MenuBarViewModel {
           break
         }
         guard !Task.isCancelled else { break }
-        await self?.pushRelaySnapshot()
+        await self?.runRefreshCycle()
       }
     }
   }
@@ -274,6 +249,38 @@ final class MenuBarViewModel {
     errorMessage = nil
     localLastCheckedAt = nil
     reportCache?.clear()
+  }
+
+  private func refreshLocalQuota() async -> Bool {
+    guard !localRefreshInProgress else { return false }
+
+    localRefreshInProgress = true
+    defer { localRefreshInProgress = false }
+
+    if let collector {
+      do {
+        report = try await collector.collect()
+        localLastCheckedAt = Date()
+        if let report, let localLastCheckedAt {
+          reportCache?.save(report: report, refreshedAt: localLastCheckedAt)
+        }
+        errorMessage = nil
+      } catch is CancellationError {
+        if Task.isCancelled {
+          return true
+        }
+      } catch {
+        errorMessage = Self.message(for: error)
+      }
+    } else {
+      errorMessage = initializationError ?? "QuotaCLI is unavailable."
+    }
+    return true
+  }
+
+  private func runRefreshCycle() async {
+    guard await refreshLocalQuota(), !Task.isCancelled else { return }
+    await pushRelaySnapshot()
   }
 
   private func pushRelaySnapshot() async {

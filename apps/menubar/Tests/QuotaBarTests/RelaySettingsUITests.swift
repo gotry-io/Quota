@@ -153,6 +153,17 @@ struct RelaySettingsUITests {
     }
   }
 
+  @Test
+  func destructiveButtonTextMeetsAAContrastAcrossAppearances() throws {
+    for appearanceName in [NSAppearance.Name.aqua, .darkAqua] {
+      let appearance = try #require(NSAppearance(named: appearanceName))
+      let background = QuotaPalette.resolvedCriticalAction(for: appearance)
+      #expect(
+        QuotaPalette.contrastRatio(foreground: .white, background: background) >= 4.5
+      )
+    }
+  }
+
 }
 
 private struct LeakyError: LocalizedError {

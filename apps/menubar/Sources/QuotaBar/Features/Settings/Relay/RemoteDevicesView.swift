@@ -3,10 +3,9 @@ import SwiftUI
 struct RemoteDevicesView: View {
   let model: RelayStateModel
   let performsInitialRefresh: Bool
-
-  @State private var pendingRemoval: OwnedRemoteDevice?
-  @State private var errorMessage: String?
-  @State private var isRemoving = false
+  let errorMessage: String?
+  let isRemoving: Bool
+  let onRequestRemoval: (OwnedRemoteDevice) -> Void
 
   var body: some View {
     ScrollView {
@@ -44,23 +43,6 @@ struct RemoteDevicesView: View {
       guard performsInitialRefresh else { return }
       await model.refreshAllProfiles()
     }
-    .confirmationDialog(
-      "Remove \(pendingRemoval?.device.displayName ?? "this device")?",
-      isPresented: Binding(
-        get: { pendingRemoval != nil },
-        set: { if !$0 { pendingRemoval = nil } }
-      ),
-      titleVisibility: .visible
-    ) {
-      Button("Remove Device", role: .destructive) {
-        removePendingDevice()
-      }
-      Button("Cancel", role: .cancel) {
-        pendingRemoval = nil
-      }
-    } message: {
-      Text("This device will stop reporting to this QuotaBar.")
-    }
   }
 
   private var devices: [OwnedRemoteDevice] {
@@ -95,7 +77,7 @@ struct RemoteDevicesView: View {
       height: QuotaDesign.Layout.settingsListRowHeight
     ) {
       Button("Remove", role: .destructive) {
-        pendingRemoval = owned
+        onRequestRemoval(owned)
       }
       .buttonStyle(.plain)
       .quotaMetaStyle()
@@ -126,24 +108,4 @@ struct RemoteDevicesView: View {
     return lastSeenAt.formatted(date: .abbreviated, time: .shortened)
   }
 
-  private func removePendingDevice() {
-    guard let pending = pendingRemoval, !isRemoving else { return }
-    pendingRemoval = nil
-    isRemoving = true
-    errorMessage = nil
-    Task {
-      defer { isRemoving = false }
-      do {
-        try await model.revokeDevice(
-          profileID: pending.profileID,
-          deviceID: pending.device.deviceID
-        )
-      } catch {
-        errorMessage = RelaySettingsErrorPresentation.message(
-          for: error,
-          fallback: "QuotaBar could not remove the device."
-        )
-      }
-    }
-  }
 }

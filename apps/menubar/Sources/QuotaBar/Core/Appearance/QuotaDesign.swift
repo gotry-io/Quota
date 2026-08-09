@@ -275,3 +275,24 @@ struct QuotaPrimaryButtonStyle: ButtonStyle {
       .scaleEffect(configuration.isPressed && isEnabled && !reduceMotion ? 0.98 : 1)
   }
 }
+
+struct QuotaDestructiveButtonStyle: ButtonStyle {
+  @Environment(\.isEnabled) private var isEnabled
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+  func makeBody(configuration: Configuration) -> some View {
+    configuration.label
+      .quotaFont(.settingsLabel)
+      .foregroundStyle(isEnabled ? QuotaPalette.onCritical : QuotaPalette.body)
+      .padding(.horizontal, 10)
+      .frame(minHeight: QuotaDesign.Layout.fieldMinHeight)
+      .background(
+        isEnabled ? QuotaPalette.criticalAction : QuotaPalette.soft,
+        in: RoundedRectangle(
+          cornerRadius: QuotaDesign.Layout.floatingMenuRowCornerRadius,
+          style: .continuous
+        )
+      )
+      .scaleEffect(configuration.isPressed && isEnabled && !reduceMotion ? 0.98 : 1)
+  }
+}

@@ -310,7 +310,7 @@ allowed:
 | Panel | native `MenuBarExtra` material + `panelWash` | continuous canvas | header, page, footer |
 | Group | `settingsGroupFill` | related or read-only content | Settings groups, Devices list, command preview |
 | Control | `fieldFill` | editable or selectable value | text field, Relay pop-up, pairing cells |
-| Transient | regular material + `floatingMenuFill` | temporary choice/action layer | Settings overflow, Relay options |
+| Transient | regular material + `floatingMenuFill` | temporary choice/action layer | Settings overflow, Relay options, confirmations |
 
 Hover, pressed, focus, error, and disabled are overlays on these levels, never additional opaque
 cards. A Transient surface is the sole exception because it must separate from existing content
@@ -335,6 +335,7 @@ From `QuotaPalette` — **do not hardcode paper whites/grays for these roles**:
 | `settingsGroupFill` | white @ 16% (light) / white @ 4.5% (dark) |
 | `floatingMenuFill` | white @ 32% (light) / 9% (dark), layered over regular material |
 | `floatingMenuShadow` | black @ 13% (light) / 30% (dark), softened in two layers |
+| `modalScrim` | black @ 12% (light) / 24% (dark) |
 | `rowHoverFill` | black @ 3% (light) / white @ 6% (dark) |
 | `fieldFill` | white @ 44% (light) / white @ 12% (dark) |
 | `progressTrack` | black @ 10% (light) / white @ 12% (dark) |
@@ -355,6 +356,10 @@ changes once and propagates everywhere.
 | Accent | Emerald `#087456` (light) / Soft Mint `#82ddb8` (dark) | primary actions, focus, healthy meter fill |
 | Warning | `systemOrange` | remaining 15%–39% meter fill |
 | Critical | `systemRed` | remaining &lt; 15% meter fill |
+
+Destructive action surfaces derive from the Critical role by darkening the resolved system red 20%,
+then use a stable white label. This preserves AA contrast without the visually inconsistent black-on-red
+pairing; status indicators continue to use unmodified `systemRed`.
 
 Compact Mint `#39c991` is an asset-only optical color for the diagonal tail in 16–64px app icons
 and the favicon. It is intentionally more saturated than Soft Mint so the short stroke survives at
@@ -635,9 +640,12 @@ system control bezel with a second custom field background.
 | Quiet | `.buttonStyle(.plain)` | No chrome; `body` / `mute` text | Copy, field × |
 | List/header action | Quota row/header styles | Inset neutral hover, accent press; no persistent fill or shadow | destinations, links, header icons, disclosures |
 | Destructive quiet | plain + role/critical | No chrome; destructive label | Remove Device |
+| Destructive primary | `QuotaDestructiveButtonStyle` | Flat darkened-critical rounded surface with white `onCritical` label | Confirm Delete or Remove |
 
 Primary press feedback is a slight scale change (not translucent accent) so label contrast stays
 stable on light and dark material. Do not put form Save as a filled body control next to fields.
+Confirmation actions share 10pt horizontal label padding, 32pt surface height, and the floating-menu
+corner radius; the quiet Cancel surface has no inset and appears only on hover or press.
 
 Copy is not assembled as a bare quiet button in Features. `QuotaCommandRow` owns its label state,
 clipboard write, 1.5s reset, 28pt response height, disabled opacity, and VoiceOver label. The command
@@ -701,6 +709,13 @@ keyboard focus and activation without drawing the default macOS focus ring.
 - Non-configurable Sign-in: login command (mono) + quiet **Copy**, no surrounding explanation.
 - Overflow menu (ellipsis): app-owned transient list with Delete all QuotaBar data… (critical) and
   Quit QuotaBar. It uses r12 outer / 4pt inset / r8 hover geometry.
+- Destructive confirmation: centered app-owned Transient surface over `modalScrim`. Cancel remains a
+  quiet secondary row action; the destructive primary action uses the flat `critical` surface. Keep
+  it inside the panel; never use a system alert, confirmation dialog, menu, or popover that can
+  dismiss the `MenuBarExtra` before interaction. Selecting an overflow action removes that menu
+  immediately without restoring focus to its trigger, then the confirmation scrim and surface fade
+  in together over 120ms. Ordinary menu dismissal retains its 80ms fade. Reduce Motion makes the
+  replacement immediate.
 - About: Version, Website, Feedback rows (no product-name label, no copyright blurb). Rows share
   compact text height; do not force `minimumInteractiveDimension` as the About row body height.
 

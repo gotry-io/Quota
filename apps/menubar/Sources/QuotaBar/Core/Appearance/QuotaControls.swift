@@ -63,14 +63,20 @@ struct QuotaTextFieldStyleModifier: ViewModifier {
 /// Neutral hover plus restrained accent press feedback for destination/list rows.
 struct QuotaListRowButtonStyle: ButtonStyle {
   var cornerRadius = QuotaDesign.Layout.rowCornerRadius
+  var surfaceInset = QuotaDesign.Layout.groupSurfaceInset
 
   func makeBody(configuration: Configuration) -> some View {
-    QuotaListRowButtonBody(configuration: configuration, cornerRadius: cornerRadius)
+    QuotaListRowButtonBody(
+      configuration: configuration,
+      cornerRadius: cornerRadius,
+      surfaceInset: surfaceInset
+    )
   }
 
   private struct QuotaListRowButtonBody: View {
     let configuration: Configuration
     let cornerRadius: CGFloat
+    let surfaceInset: CGFloat
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.isEnabled) private var isEnabled
@@ -84,7 +90,7 @@ struct QuotaListRowButtonStyle: ButtonStyle {
             style: .continuous
           )
           .fill(surfaceFill)
-          .padding(QuotaDesign.Layout.groupSurfaceInset)
+          .padding(surfaceInset)
         }
         .contentShape(Rectangle())
         .opacity(isEnabled ? 1 : 0.55)

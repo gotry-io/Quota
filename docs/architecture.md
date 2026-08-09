@@ -23,7 +23,8 @@ QuotaBar ── user-only local IPC ── QuotaCLI ── local provider sessio
 QuotaBar starts its bundled QuotaCLI helper. QuotaCLI discovers logged-in provider sessions,
 collects quota, and returns a validated normalized report. Provider credentials remain inside the
 QuotaCLI process boundary. QuotaBar retains one last normalized local report so it can render
-immediately after launch, then replaces that cache after a successful background collection.
+immediately after launch, then replaces that cache after a successful app-lifecycle collection at
+launch and every five minutes while running.
 
 ### Remote Relay agent
 
@@ -34,9 +35,10 @@ macOS QuotaBar ── bundled QuotaCLI ─── outbound HTTPS ─────�
 
 QuotaCLI explicitly pairs with a selected Relay, receives a Relay-bound device credential, and on
 `relay pair` uploads one normalized snapshot immediately after the device credential is saved. On
-macOS, the signed QuotaBar login item checks for that credential at app launch and every five
-minutes while QuotaBar is running, and invokes its bundled helper only while paired. Other platforms
-use an operator-owned external scheduler for recurring `relay push` calls.
+macOS, the signed QuotaBar login item refreshes its local report at app launch and every five minutes
+while QuotaBar is running. Each cycle also checks for the device credential and invokes `relay push`
+only while paired. Other platforms use an operator-owned external scheduler for recurring
+`relay push` calls.
 Relay persists accepted snapshots and serves QuotaBar instances authenticated by anonymous owner
 capabilities. It never receives provider credentials or runs provider collectors. Pairing and token
 generation are defined in
@@ -84,10 +86,9 @@ storage requirements are defined only in [`security.md`](security.md).
 - Ships its exact compatible QuotaCLI helper inside the signed app bundle and never resolves it from
   the user's `PATH`; the Homebrew Cask exposes this same signed helper as `quotacli` for pairing and
   one-shot commands.
-- Owns the macOS recurring upload lifecycle: it checks for the local device credential immediately
-  after app launch and every 300 seconds while running, invoking `relay push` only while paired.
-  Quitting QuotaBar stops recurring uploads, and Launch at Login is the only automatic-start
-  mechanism.
+- Owns the macOS recurring refresh and upload lifecycle: it collects the local Overview immediately
+  after app launch and every 300 seconds while running, then invokes `relay push` only while paired.
+  Quitting QuotaBar stops recurring work, and Launch at Login is the only automatic-start mechanism.
 - Stores hidden owner capabilities in a user-only Application Support file and keeps endpoint
   records as internal state only.
   Pairing through any Relay URL automatically registers an isolated anonymous owner capability;

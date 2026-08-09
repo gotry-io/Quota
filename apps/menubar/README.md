@@ -23,9 +23,10 @@ last reported, not remote credential configuration. API-key forms write
 `~/.config/quotacli/providers.json` (shared with QuotaCLI).
 Launch at Login mirrors macOS Login Items (`SMAppService.mainApp`): the toggle reflects system
 status, and a one-shot first-run seed registers default-on when still unregistered. QuotaBar invokes
-its bundled helper immediately after app launch and every five minutes while running only when the
-local Relay device credential exists; unpaired checks do not start the helper. Quitting the menu-bar
-app stops recurring uploads. Agent names, defaults, and login recovery commands come from generated
+its bundled helper immediately after app launch and every five minutes while running to refresh the
+local Overview. When a local Relay device credential exists, the same lifecycle cycle also performs
+an upload; unpaired cycles skip only that upload. Quitting the menu-bar app stops recurring refreshes
+and uploads. Agent names, defaults, and login recovery commands come from generated
 catalog bindings
 (`ProviderID.generated.swift`); do not hand-edit that file—run `pnpm generate:provider-catalog`.
 **Delete all QuotaBar data** deletes each reachable owner group before clearing the local owners
@@ -39,7 +40,7 @@ its own.
 The Relay state model coordinates endpoint enrollment, pairing, last-known-good snapshot and device
 state, explicit refresh, and a cancellable five-minute read loop. The production app creates one
 shared model for its lifecycle, Overview, and Settings stack and starts Relay reads plus the bundled
-helper's five-minute upload loop when the app starts.
+helper's five-minute local-refresh and conditional-upload loop when the app starts.
 
 The observation-preserving subscription resolver groups only globally scoped provider identities
 across local and remote sources, keeps source-scoped observations separate, selects one preferred
@@ -47,8 +48,10 @@ snapshot without accumulating quota values, and retains every contributing sourc
 Overview presents that resolved result with compact local and remote provenance.
 
 The current menu panel invokes its bundled QuotaCLI helper, combines its normalized results with
-configured Relay observations, and supports manual refresh plus explicit loading, authentication,
-unavailable, and error states. The panel is a window-style `MenuBarExtra` with an overview-rooted,
+configured Relay observations, and supports automatic five-minute and manual refresh plus explicit
+loading, authentication, unavailable, and error states. Destructive confirmations use app-owned
+surfaces inside the panel so they do not dismiss the `MenuBarExtra`. The panel is a window-style
+`MenuBarExtra` with an overview-rooted,
 strongly typed page stack rendered inside one shared shell. Settings, Remote Devices, and Pair
 Device use the shell's single custom back control rather than a system navigation bar. The panel
 keeps flat provider rows, system-material chrome, monochrome provider marks, and restrained

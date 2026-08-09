@@ -104,11 +104,13 @@ data requirements.
   `$XDG_CONFIG_HOME/quotacli/device.json` or `~/.config/quotacli/device.json`. Its containing
   QuotaCLI directory is `0700`, its credential file is `0600`, writes use a same-directory temporary
   file and atomic rename, and POSIX reads reject group/other-accessible directories or files.
-- QuotaBar invokes only its signed bundled helper with the fixed `relay push` argument array; it
-  never uses a shell or resolves a helper from `PATH`. Each push is bounded to 60 seconds and 1 MiB
-  of stdout and discards stderr. It checks only for the local device credential before invocation,
-  so unpaired lifecycle ticks start no process. Recurring scheduling exists only while the QuotaBar
-  process runs; no separate macOS background task contains or inherits credentials.
+- QuotaBar invokes only its signed bundled helper with fixed argument arrays. A
+  `status --provider all --format json` invocation refreshes the local model every lifecycle cycle;
+  `relay push` runs afterward only when the local device credential exists. It never uses a shell or
+  resolves a helper from `PATH`. Each invocation is bounded to 60 seconds and 1 MiB of stdout and
+  discards stderr.
+  Recurring scheduling exists only while the QuotaBar process runs; no separate macOS background
+  task contains or inherits credentials.
 - Earlier production releases installed `~/Library/LaunchAgents/io.gotry.quotacli.relay.plist`.
   Before a macOS pair, push, or unpair, the helper accepts only that fixed regular-file path, boots
   out only that fixed service label, and then deletes the plist. It rejects symlink paths; pairing

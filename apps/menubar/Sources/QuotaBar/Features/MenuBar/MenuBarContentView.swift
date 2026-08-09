@@ -10,6 +10,9 @@ struct MenuBarContentView: View {
   @State private var showsLocalDeleteConfirmation = false
   @State private var isDeletingAllData = false
   @State private var deleteAllErrorMessage: String?
+  @State private var pendingDeviceRemoval: OwnedRemoteDevice?
+  @State private var isRemovingDevice = false
+  @State private var deviceRemovalErrorMessage: String?
   /// Page-level issue shown in the shell title bar (API key failures, etc.).
   @State private var pageIssue: String?
   /// Bumped by header **Save** on configurable provider pages.
@@ -34,54 +37,32 @@ struct MenuBarContentView: View {
   }
 
   var body: some View {
-    TimelineView(.periodic(from: .now, by: 1)) { context in
-      MenuBarShell(
-        model: model,
-        title: navigation.title,
-        issue: pageIssue,
-        canNavigateBack: navigation.canNavigateBack,
-        onNavigateBack: navigateBack,
-        showsLeadingIcon: navigation.currentRoute == nil,
-        trailing: headerTrailingAction
-      ) {
-        ZStack(alignment: .topLeading) {
-          currentPage(now: context.date)
-            .id(navigation.pageIdentity)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .transition(pageTransition)
+    ZStack {
+      TimelineView(.periodic(from: .now, by: 1)) { context in
+        MenuBarShell(
+          model: model,
+          title: navigation.title,
+          issue: pageIssue,
+          canNavigateBack: navigation.canNavigateBack,
+          onNavigateBack: navigateBack,
+          showsLeadingIcon: navigation.currentRoute == nil,
+          trailing: headerTrailingAction
+        ) {
+          ZStack(alignment: .topLeading) {
+            currentPage(now: context.date)
+              .id(navigation.pageIdentity)
+              .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+              .transition(pageTransition)
+          }
+          .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+          .clipped()
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .clipped()
       }
-    }
-    .animation(panelAnimation, value: navigation.pageIdentity)
-    .confirmationDialog(
-      "Delete all QuotaBar data?",
-      isPresented: $showsDeleteAllConfirmation,
-      titleVisibility: .visible
-    ) {
-      Button("Delete All Data", role: .destructive) {
-        deleteAllData()
-      }
-      Button("Cancel", role: .cancel) {}
-    } message: {
-      Text(
-        "QuotaBar will remove its remote device groups when reachable, then delete its cached quota and preferences. Paired devices will stop appearing in this QuotaBar."
-      )
-    }
-    .confirmationDialog(
-      "Finish by deleting local data?",
-      isPresented: $showsLocalDeleteConfirmation,
-      titleVisibility: .visible
-    ) {
-      Button("Delete Locally Anyway", role: .destructive) {
-        deleteAllDataLocally()
-      }
-      Button("Keep Data", role: .cancel) {}
-    } message: {
-      Text(
-        "QuotaBar could not confirm remote cleanup. Deleting locally may leave remote device groups behind while paired devices continue reporting. Use this only if you cannot retry while online."
-      )
+      .animation(panelAnimation, value: navigation.pageIdentity)
+      .allowsHitTesting(!showsConfirmation)
+      .accessibilityHidden(showsConfirmation)
+
+      confirmationLayer
     }
     .task {
       if seedsLaunchAtLogin {
@@ -95,6 +76,52 @@ struct MenuBarContentView: View {
 
   private var panelAnimation: Animation? {
     reduceMotion ? nil : .snappy(duration: 0.28)
+  }
+
+  private var showsConfirmation: Bool {
+    showsDeleteAllConfirmation || showsLocalDeleteConfirmation || pendingDeviceRemoval != nil
+  }
+
+  private var confirmationLayer: some View {
+    ZStack {
+      if showsLocalDeleteConfirmation {
+        QuotaConfirmationDialog(
+          title: "Finish by deleting local data?",
+          message:
+            "QuotaBar could not confirm remote cleanup. Deleting locally may leave remote device groups behind while paired devices continue reporting. Use this only if you cannot retry while online.",
+          confirmTitle: "Delete Locally Anyway",
+          cancelTitle: "Keep Data",
+          onConfirm: {
+            showsLocalDeleteConfirmation = false
+            deleteAllDataLocally()
+          },
+          onCancel: { showsLocalDeleteConfirmation = false }
+        )
+      } else if let pendingDeviceRemoval {
+        QuotaConfirmationDialog(
+          title: "Remove \(pendingDeviceRemoval.device.displayName)?",
+          message: "This device will stop reporting to this QuotaBar.",
+          confirmTitle: "Remove Device",
+          cancelTitle: "Cancel",
+          onConfirm: removePendingDevice,
+          onCancel: { self.pendingDeviceRemoval = nil }
+        )
+      } else if showsDeleteAllConfirmation {
+        QuotaConfirmationDialog(
+          title: "Delete all QuotaBar data?",
+          message:
+            "QuotaBar will remove its remote device groups when reachable, then delete its cached quota and preferences. Paired devices will stop appearing in this QuotaBar.",
+          confirmTitle: "Delete All Data",
+          cancelTitle: "Cancel",
+          onConfirm: {
+            showsDeleteAllConfirmation = false
+            deleteAllData()
+          },
+          onCancel: { showsDeleteAllConfirmation = false }
+        )
+      }
+    }
+    .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: showsConfirmation)
   }
 
   private var pageTransition: AnyTransition {
@@ -171,7 +198,10 @@ struct MenuBarContentView: View {
     case .remoteDevices:
       RemoteDevicesView(
         model: model.relayStateModel,
-        performsInitialRefresh: performsRelayRefreshes
+        performsInitialRefresh: performsRelayRefreshes,
+        errorMessage: deviceRemovalErrorMessage,
+        isRemoving: isRemovingDevice,
+        onRequestRemoval: { pendingDeviceRemoval = $0 }
       )
     case .pairDevice:
       PairDeviceView(model: model.relayStateModel, onFinished: navigateBack)
@@ -242,6 +272,27 @@ struct MenuBarContentView: View {
         for: error,
         fallback: "QuotaBar could not delete its local data."
       )
+    }
+  }
+
+  private func removePendingDevice() {
+    guard let pending = pendingDeviceRemoval, !isRemovingDevice else { return }
+    pendingDeviceRemoval = nil
+    isRemovingDevice = true
+    deviceRemovalErrorMessage = nil
+    Task {
+      defer { isRemovingDevice = false }
+      do {
+        try await model.relayStateModel.revokeDevice(
+          profileID: pending.profileID,
+          deviceID: pending.device.deviceID
+        )
+      } catch {
+        deviceRemovalErrorMessage = RelaySettingsErrorPresentation.message(
+          for: error,
+          fallback: "QuotaBar could not remove the device."
+        )
+      }
     }
   }
 }
