@@ -215,8 +215,9 @@ jobs:
             "$RUNNER_TEMP/homebrew-tap"
           ./scripts/render-homebrew-cask.sh \
             "$VERSION" "$SHA256" "$URL" "$RUNNER_TEMP/homebrew-tap/Casks/quotabar.rb"
+          rm -f "$RUNNER_TEMP/homebrew-tap/Formula/quotacli.rb"
           cd "$RUNNER_TEMP/homebrew-tap"
-          git add Casks/quotabar.rb
+          git add -A
           if git diff --cached --quiet; then
             echo "QuotaBar Cask is already at ${VERSION}"
             exit 0
@@ -224,7 +225,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "quotabar ${VERSION}"
-          # Formula and Cask may land from concurrent release jobs; rebase before push.
+          # Preserve any tap changes that landed while this release was running.
           git pull --rebase origin main
           git push
 

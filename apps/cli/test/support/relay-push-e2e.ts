@@ -7,7 +7,6 @@ import {
   type RelayCommandOutput,
   runRelayCommand,
 } from "../../src/relay/commands.ts";
-import type { RelayPushService } from "../../src/relay/launch-agent.ts";
 import { RelayCredentialStore } from "../../src/relay/store.ts";
 
 const reportPath = process.argv[2];
@@ -29,20 +28,11 @@ if (!parsedReport.success) {
   process.exit(2);
 }
 
-const unusedService: RelayPushService = {
-  async start() {
-    throw new Error("The E2E report runner does not manage a background service.");
-  },
-  async status() {
-    return "stopped";
-  },
-  async stop() {},
-};
 const dependencies: RelayCommandDependencies = {
   createClient: (relayUrl) => new RelayClient(relayUrl),
   store: new RelayCredentialStore(),
   platform: process.platform,
-  service: unusedService,
+  cleanupLegacyService: async () => undefined,
   now: () => new Date(),
   deviceName: () => "Quota E2E",
   collect: async () => parsedReport.data,

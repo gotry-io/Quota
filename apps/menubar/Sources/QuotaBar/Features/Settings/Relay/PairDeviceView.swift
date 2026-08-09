@@ -46,7 +46,8 @@ struct PairDeviceView: View {
     )
   }
 
-  private let installCommand = "npm install -g @gotry-io/quotacli"
+  private let macOSInstallCommand = "brew install --cask gotry-io/tap/quotabar"
+  private let headlessInstallCommand = "npm install -g @gotry-io/quotacli"
 
   private var knownEndpoints: [URL] {
     model.knownEndpointURLs.filter { $0 != officialURL }
@@ -121,12 +122,24 @@ struct PairDeviceView: View {
           )
           .quotaGroupSurface()
 
-          collapsibleSection(title: "Need QuotaCLI?", isExpanded: $showsInstallHelp) {
-            QuotaCommandRow(
-              command: installCommand,
-              copyLabel: "Copy install command"
-            )
-            .quotaGroupSurface()
+          collapsibleSection(title: "Need Quota?", isExpanded: $showsInstallHelp) {
+            VStack(alignment: .leading, spacing: QuotaDesign.Spacing.sm) {
+              Text("macOS")
+                .quotaMetaStyle()
+              QuotaCommandRow(
+                command: macOSInstallCommand,
+                copyLabel: "Copy macOS install command"
+              )
+              .quotaGroupSurface()
+
+              Text("Linux or Windows")
+                .quotaMetaStyle()
+              QuotaCommandRow(
+                command: headlessInstallCommand,
+                copyLabel: "Copy npm install command"
+              )
+              .quotaGroupSurface()
+            }
           }
         }
       }

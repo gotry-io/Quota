@@ -1,7 +1,7 @@
 # QuotaCLI
 
 QuotaCLI is the local provider collector and remote Relay agent. One TypeScript entry point produces
-a Node ESM npm package and a standalone Bun executable.
+a Node ESM npm package for non-macOS headless machines and QuotaBar's private Bun helper on macOS.
 
 Provider credentials are read locally and never sent to QuotaRelay. Supported collectors: Codex,
 Claude Code, Grok (ambient sessions), and API-key collectors (OpenRouter, DeepSeek, Kimi Code,
@@ -50,12 +50,10 @@ Exit codes for `status`:
 - `2`: invalid CLI arguments
 
 Relay commands return `0` on complete success, `1` for pairing, push, credential-store, or partial
-provider-collection outcomes, and `2` for invalid commands or arguments. `doctor` returns `0` only
-when at least one local provider credential source is available, launchd inspection succeeds, and
-macOS background state matches pairing (`loaded` when paired, `stopped` when unpaired). Otherwise
-it returns `1`. Missing providers do not fail `doctor` by themselves if another provider is present.
-On macOS, a paired Relay also requires a persistent provider credential; environment-only API keys
-are marked foreground-only because LaunchAgent does not inherit provider secrets.
+provider-collection outcomes, and `2` for invalid commands or arguments. `doctor` returns `0` when
+at least one local provider credential source is available; it reports pairing and the platform's
+recurring scheduling owner without inspecting a background service. Missing providers do not fail
+`doctor` by themselves if another provider is present.
 
 JSON output is one versioned `QuotaCollectionReport`. Provider failures stay inside the report.
 QuotaCLI never prints credentials, authorization headers, cookies, raw JWTs, or unredacted response
@@ -64,14 +62,12 @@ bodies.
 ## Distribution artifacts
 
 `build:npm` creates the Node-based `dist/npm/quotacli.js` intended for publication as
-`@gotry-io/quotacli`. `build:standalone` creates `dist/standalone/quotacli` for the QuotaBar app
-bundle and direct release downloads. The npm package installs the same `quotacli` command and does
-not require Bun at runtime. A `cli-v*` Git tag publishes the package from `release-cli.yml` through
-npm Trusted Publishing; the release workflow stores no long-lived npm credential. Stable tags
-publish to the `latest` dist-tag and update the Homebrew Formula `gotry-io/tap/quotacli` (installs
-the npm tarball via Node). Prerelease tags such as `cli-v0.0.2-beta.1` publish to `beta` only
-(`npm install -g @gotry-io/quotacli@beta`); they do not update Homebrew. QuotaBar uses separate
-`menubar-v*` tags and is not published by this workflow.
+`@gotry-io/quotacli`. `build:menubar-helper` creates `dist/menubar-helper/quotacli` only for the
+signed QuotaBar app bundle; it is not a standalone macOS release artifact. The npm package does not
+require Bun at runtime. A `cli-v*` Git tag publishes the package from `release-cli.yml` through npm
+Trusted Publishing; the workflow stores no long-lived npm credential and does not update Homebrew.
+Prerelease tags such as `cli-v0.0.2-beta.1` publish to `beta`. QuotaBar uses separate `menubar-v*`
+tags and its Cask exposes the bundled helper as the macOS `quotacli` command.
 
 Local version bump (commits `apps/cli/package.json` by default):
 
@@ -84,13 +80,13 @@ git push origin "cli-v$(node -p "require('./apps/cli/package.json').version")"
 ### Install
 
 ```bash
-# Homebrew (stable; requires Node via brew)
-brew install gotry-io/tap/quotacli
+# macOS: installs QuotaBar and its signed bundled command
+brew install --cask gotry-io/tap/quotabar
 
-# npm (stable)
+# Non-macOS npm (stable)
 npm install -g @gotry-io/quotacli
 
-# npm (beta)
+# Non-macOS npm (beta)
 npm install -g @gotry-io/quotacli@beta
 ```
 
@@ -125,18 +121,17 @@ quotacli doctor
 `pair` discovers and validates Relay capabilities, displays a Relay-generated user code for
 approval in QuotaBar, and stores the issued Relay-bound device credential. It does not accept a
 manually created token. After the credential is saved, `pair` performs one foreground collection
-and upload so the owner can see the device leave Waiting promptly. On macOS it then installs the
-background LaunchAgent, which continues `relay push` every five minutes. QuotaBar registers an
-isolated anonymous owner capability for the selected Relay URL (managed or self-hosted) without a
-user account or bootstrap token, then approves the displayed pairing code.
+and upload so the owner can see the device leave Waiting promptly. QuotaBar registers an isolated
+anonymous owner capability for the selected Relay URL (managed or self-hosted) without a user
+account or bootstrap token, then approves the displayed pairing code.
 
-If that first upload fails on macOS, the issued pairing is retained and the LaunchAgent is still
-loaded so it can retry every five minutes. Outside macOS, the pairing is retained and the operator
-retries explicitly with `quotacli relay push`.
+If that first upload fails, the issued pairing is retained. On macOS the running QuotaBar app
+retries through its bundled helper; elsewhere the operator retries explicitly with
+`quotacli relay push`.
 
-`unpair` stops and removes the macOS background service, verifies the saved Relay instance, revokes
-the current device with its device credential, and then deletes the local credential. If discovery
-or revocation fails, the local credential is retained so the command can be retried. The Relay
+`unpair` verifies the saved Relay instance, revokes the current device with its device credential,
+and then deletes the local credential. If discovery or revocation fails, the local credential is
+retained so the command can be retried. The Relay
 returns the same successful response when that exact device credential has already revoked itself;
 an unknown or rejected credential is not treated as proof of revocation. Pairing and credential
 ownership are defined in
@@ -151,16 +146,12 @@ is uploaded but returns exit code `1` with an explicit notice.
 
 ## Recurring relay push
 
-On macOS, after the foreground first upload, `pair` installs and loads the user LaunchAgent
-`io.gotry.quotacli.relay`. The agent runs the same executable's `relay push` command at load
-(login/reboot) and every five minutes. The local device credential is stored at
-`$XDG_CONFIG_HOME/quotacli/device.json` or `~/.config/quotacli/device.json`.
-`doctor` reports provider readiness, pairing, Relay, device, sequence, and loaded/stopped background
-state without displaying the device token. `unpair` removes the LaunchAgent together with the remote
-device and local credential.
+On macOS, QuotaBar owns recurring reporting. Its signed Login Item starts the menu-bar app, which
+runs the bundled helper once at app launch and every five minutes while the app remains running.
+Quitting QuotaBar pauses uploads; there is no separate QuotaCLI LaunchAgent. The helper removes the
+fixed `io.gotry.quotacli.relay` service left by earlier releases before a push or unpair.
 
-The LaunchAgent preserves only the allowlisted path and provider-location settings needed for the
-same collection behavior outside an interactive shell. It does not contain Relay or provider
-credentials. Background push is supported only on macOS; one-shot `pair`, `push`, and `unpair`
-remain cross-platform. Outside macOS, `pair` saves the credential and tells the operator to run
-`relay push` manually when needed.
+The local device credential is stored at `$XDG_CONFIG_HOME/quotacli/device.json` or
+`~/.config/quotacli/device.json`. `doctor` reports provider readiness, pairing, Relay, device,
+sequence, and the platform scheduling owner without displaying the device token. Outside macOS,
+recurring uploads require an external scheduler calling `quotacli relay push`.

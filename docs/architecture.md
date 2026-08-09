@@ -7,10 +7,10 @@ implemented; the repository's current milestone is maintained in the root
 ## Products
 
 The product list and user-facing descriptions are maintained in the root
-[`README.md`](../README.md). Architecturally, QuotaBar, QuotaCLI, QuotaRelay, and Quota Web are four
-independently runnable or deployable boundaries. Local collection must continue to work without the
-managed service. Relay has anonymous capability-based owners rather than user accounts, and the
-website does not participate in credential discovery or quota collection.
+[`README.md`](../README.md). QuotaBar, QuotaCLI, QuotaRelay, and Quota Web remain separate runtime
+boundaries, but macOS distributes QuotaCLI only inside QuotaBar. Local collection must continue to
+work without the managed service. Relay has anonymous capability-based owners rather than user
+accounts, and the website does not participate in credential discovery or quota collection.
 
 ## Data paths
 
@@ -28,12 +28,15 @@ immediately after launch, then replaces that cache after a successful background
 ### Remote Relay agent
 
 ```text
-Remote QuotaCLI ── outbound HTTPS ── QuotaRelay ── QuotaBar
+Linux/Windows QuotaCLI ─────────────── outbound HTTPS ── QuotaRelay ── QuotaBar
+macOS QuotaBar ── bundled QuotaCLI ─── outbound HTTPS ───────┘
 ```
 
 QuotaCLI explicitly pairs with a selected Relay, receives a Relay-bound device credential, and on
-`relay pair` uploads one normalized snapshot immediately after the device credential is saved; on
-macOS it then enables a LaunchAgent that continues uploading every five minutes.
+`relay pair` uploads one normalized snapshot immediately after the device credential is saved. On
+macOS, the signed QuotaBar login item invokes its bundled helper at app launch and every five
+minutes while QuotaBar is running. Other platforms use an operator-owned external scheduler for
+recurring `relay push` calls.
 Relay persists accepted snapshots and serves QuotaBar instances authenticated by anonymous owner
 capabilities. It never receives provider credentials or runs provider collectors. Pairing and token
 generation are defined in
@@ -79,7 +82,11 @@ storage requirements are defined only in [`security.md`](security.md).
   local and remote observations as defined by
   [`decisions/0003-observation-preserving-subscription-merge.md`](decisions/0003-observation-preserving-subscription-merge.md).
 - Ships its exact compatible QuotaCLI helper inside the signed app bundle and never resolves it from
-  the user's `PATH`.
+  the user's `PATH`; the Homebrew Cask exposes this same signed helper as `quotacli` for pairing and
+  one-shot commands.
+- Owns the macOS recurring upload lifecycle: it invokes `relay push` immediately after app launch
+  and every 300 seconds while running. Quitting QuotaBar stops recurring uploads, and Launch at Login
+  is the only automatic-start mechanism.
 - Stores hidden owner capabilities in a user-only Application Support file and keeps endpoint
   records as internal state only.
   Pairing through any Relay URL automatically registers an isolated anonymous owner capability;
@@ -107,8 +114,8 @@ storage requirements are defined only in [`security.md`](security.md).
 
 ### QuotaCLI
 
-- TypeScript bundled as a Node ESM npm package and as a standalone Bun executable from the same
-  entry point.
+- TypeScript bundled as a Node ESM npm package for non-macOS headless machines and as QuotaBar's
+  private Bun helper from the same entry point. There is no standalone macOS CLI artifact.
 - Owns all provider credential discovery and quota collection via `@gotry-io/quota-provider`.
 - Uses the same normalized schemas for local output and Relay uploads.
 - `quotacli config` stores API-key provider secrets in owner-only
@@ -118,20 +125,19 @@ storage requirements are defined only in [`security.md`](security.md).
   same owner-only lock directory while read-modify-writing this shared file, then replace it
   atomically.
 - Owns Relay discovery, Device Code pairing, and the single Relay-bound local device credential.
-  Successful pairing enables recurring push on macOS.
 - Provides an explicit one-shot `relay push` path that validates the bound Relay instance, collects
   all providers, uploads one normalized envelope, and commits its local sequence after acceptance.
-- On macOS, manages one user LaunchAgent that invokes that same `relay push` path at load and every
-  300 seconds. Pairing installs it after a foreground first upload (so owners see data before the
-  agent starts); RunAtLoad still covers login/reboot. Unpairing removes it. No background-service
-  runtime is provided on other platforms.
-- Unpairing stops that service, uses the device capability to revoke the remote device, and removes
-  the local credential only after the Relay reaches a terminal revoked state.
-- Exposes `doctor` as a read-only summary of local provider readiness and Relay pairing/background
-  state without performing collection or upload. `status` defaults to locally discovered providers,
+- Does not own a background-service runtime. Before a macOS push or unpair, it removes the legacy
+  `io.gotry.quotacli.relay` LaunchAgent shipped by earlier releases; this compatibility cleanup is
+  retained only for that released artifact.
+- Unpairing uses the device capability to revoke the remote device and removes the local credential
+  only after the Relay reaches a terminal revoked state.
+- Exposes `doctor` as a read-only summary of local provider readiness and Relay pairing state
+  without performing collection or upload. `status` defaults to locally discovered providers,
   supports explicit provider/all selection, and keeps terminal progress on stderr so stdout remains
   machine-readable.
-- Avoids native Node addons so standalone cross-platform builds remain possible.
+- Avoids native Node addons so the npm package and QuotaBar helper remain portable to their build
+  environments.
 
 ### QuotaRelay
 

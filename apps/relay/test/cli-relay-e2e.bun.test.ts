@@ -131,7 +131,7 @@ describe("QuotaCLI relay against self-hosted QuotaRelay", () => {
       const pairedCredential = await readCredential(credentialPath);
       assertBearerMaterialAbsent(pairOutput, [ownerToken, pairedCredential.device_token]);
       expect(pairOutput.stdout).toContain("Uploaded 0 snapshots with sequence 0.");
-      expect(pairOutput.stdout).toContain("Background relay push is supported only on macOS");
+      expect(pairOutput.stdout).toContain("external scheduler");
       expect(pairOutput.stderr).toContain("provider collection was incomplete");
       expect(pairedCredential.relay_url).toBe(relayOrigin);
       expect(pairedCredential.instance_id).toBe(instanceID);

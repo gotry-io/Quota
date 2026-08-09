@@ -673,7 +673,8 @@ keyboard focus and activation without drawing the default macOS focus ring.
   Remote Devices → Pair Device.
 - General: Launch at Login (title + native mini switch). UI reads/writes `SMAppService.mainApp`
   only — not a separate UserDefaults preference — so System Settings changes stay aligned on next
-  Settings open. First production launch seeds default-on once when still unregistered.
+  Settings open. This is also the only automatic-start path for recurring Relay uploads. First
+  production launch seeds default-on once when still unregistered.
 - Agents list: two destination-only groups, **Shown in Overview** and **Hidden from Overview**,
   derived only from the Show in Overview preference. Rows contain brand icon, name, and chevron via
   `SettingsListRow` at the title-only `settingsRowHeight`; no configuration inference, helper prose,

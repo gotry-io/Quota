@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Date: 2026-08-02
-- Updated: 2026-08-03
+- Updated: 2026-08-09
 
 ## Decision
 
@@ -30,13 +30,14 @@ The flow is:
 7. QuotaCLI stores the credential in the platform credential store or a user-only file.
 8. QuotaCLI performs one foreground collection and upload before treating pair as complete, so the
    owner can observe the device as reporting as soon as join succeeds.
-9. On macOS, QuotaCLI then installs the background LaunchAgent that runs `relay push` every five
-   minutes thereafter. LaunchAgent load is no longer the sole path for the first upload.
+9. On macOS, the running QuotaBar app invokes its bundled helper every five minutes. Other
+   platforms require an operator-owned external scheduler for recurring uploads.
 
-Pairing therefore both authorizes the device, publishes an initial snapshot, and enables recurring
-uploads on platforms that support background push. Operators stop reporting by unpairing; there is
-no separate start/stop lifecycle. Manual `quotacli relay push` remains available for one-shot
-uploads, recovery after a failed initial push, and non-macOS recurring use.
+Pairing therefore authorizes the device and publishes an initial snapshot. Recurring scheduling is
+owned by the host: QuotaBar's app lifecycle on macOS and an external scheduler elsewhere. Quitting
+QuotaBar pauses macOS uploads without revoking the device; unpairing revokes it. Manual
+`quotacli relay push` remains available for one-shot uploads and recovery after a failed initial
+push.
 
 ## Credential control
 
@@ -69,5 +70,7 @@ uploads, recovery after a failed initial push, and non-macOS recurring use.
   code from QuotaBar.
 - Relay persistence must represent pending, approved, denied, consumed, and expired pairing
   states.
-- macOS pairing leaves a user LaunchAgent installed until `relay unpair`; failed background-service
-  installation keeps the local credential so the operator can unpair and retry.
+- macOS has no QuotaCLI LaunchAgent. QuotaBar's signed Login Item is the only automatic-start path,
+  and recurring uploads stop when QuotaBar exits.
+- Earlier releases installed `io.gotry.quotacli.relay`; a macOS push or unpair removes that fixed
+  legacy service before continuing so the old and new schedulers cannot race.

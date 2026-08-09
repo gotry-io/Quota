@@ -2,11 +2,11 @@ import { Database } from "bun:sqlite";
 import { type QuotaSnapshotEnvelope, QuotaSnapshotSchema } from "@gotry-io/quota-protocol";
 import type {
   ConsumePairingSessionInput,
-  OwnerSessionRecord,
   CreateOwnerInput,
   CreatePairingSessionInput,
   DecidePairingSessionInput,
   DeviceRecord,
+  OwnerSessionRecord,
   PairingConsumeOutcome,
   PairingDecisionOutcome,
   RateLimitInput,
@@ -18,9 +18,9 @@ import type {
   StoredQuotaSnapshot,
 } from "@gotry-io/relay-core";
 import {
-  type OwnerSessionRow,
   decodeOwnerSession,
   encodeOwnerScopes,
+  type OwnerSessionRow,
   type PairingSessionRow,
   pairingDecisionOutcome,
   pairingUnavailableConsumeOutcome,
@@ -28,7 +28,7 @@ import {
   rateLimitResult,
   validateRateLimitInput,
 } from "./records.ts";
-import { SQLITE_SCHEMA } from "./schema.ts";
+import { SQLITE_MIGRATION_0002, SQLITE_SCHEMA, SQLITE_SCHEMA_VERSION } from "./schema.ts";
 
 interface SnapshotRow {
   device_id: string;
@@ -47,6 +47,19 @@ export class SQLiteRelayState implements RelayState {
 
   async initialize(): Promise<void> {
     this.database.exec(SQLITE_SCHEMA);
+    const schemaVersion = this.database
+      .query<{ user_version: number }, []>("PRAGMA user_version")
+      .get();
+    if (!schemaVersion) {
+      throw new Error("SQLite schema version is unavailable");
+    }
+    if (schemaVersion.user_version >= SQLITE_SCHEMA_VERSION) {
+      return;
+    }
+    this.database.transaction(() => {
+      this.database.exec(SQLITE_MIGRATION_0002);
+      this.database.exec(`PRAGMA user_version = ${SQLITE_SCHEMA_VERSION}`);
+    })();
   }
 
   async ping(): Promise<void> {

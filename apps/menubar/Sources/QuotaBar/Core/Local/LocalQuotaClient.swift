@@ -28,7 +28,11 @@ protocol LocalQuotaCollecting: Sendable {
   func collect() async throws -> QuotaCollectionReport
 }
 
-struct LocalQuotaClient: LocalQuotaCollecting {
+protocol RelaySnapshotPushing: Sendable {
+  func push() async throws
+}
+
+struct LocalQuotaClient: LocalQuotaCollecting, RelaySnapshotPushing {
   private static let defaultTimeout: Duration = .seconds(60)
   private static let defaultMaximumOutputBytes = 1_048_576
   private static let defaultTerminationGracePeriod: Duration = .milliseconds(250)
@@ -69,26 +73,9 @@ struct LocalQuotaClient: LocalQuotaCollecting {
   }
 
   func collect() async throws -> QuotaCollectionReport {
-    let execution = BoundedProcessExecution(
-      executableURL: executableURL,
+    let result = try await run(
       arguments: ["status", "--provider", "all", "--format", "json"],
-      timeout: timeout,
-      maximumOutputBytes: maximumOutputBytes,
-      terminationGracePeriod: terminationGracePeriod
     )
-    let result: BoundedProcessResult
-
-    do {
-      result = try await execution.run()
-    } catch BoundedProcessError.timedOut {
-      throw LocalQuotaClientError.timedOut
-    } catch BoundedProcessError.outputTooLarge {
-      throw LocalQuotaClientError.outputTooLarge
-    } catch is CancellationError {
-      throw CancellationError()
-    } catch {
-      throw LocalQuotaClientError.launchFailed
-    }
 
     guard result.exitedNormally, result.status == 0 || result.status == 1 else {
       throw LocalQuotaClientError.launchFailed
@@ -107,6 +94,34 @@ struct LocalQuotaClient: LocalQuotaCollecting {
       throw error
     } catch {
       throw LocalQuotaClientError.invalidOutput
+    }
+  }
+
+  func push() async throws {
+    let result = try await run(arguments: ["relay", "push"])
+
+    guard result.exitedNormally, result.status == 0 || result.status == 1 else {
+      throw LocalQuotaClientError.launchFailed
+    }
+  }
+
+  private func run(arguments: [String]) async throws -> BoundedProcessResult {
+    do {
+      return try await BoundedProcessExecution(
+        executableURL: executableURL,
+        arguments: arguments,
+        timeout: timeout,
+        maximumOutputBytes: maximumOutputBytes,
+        terminationGracePeriod: terminationGracePeriod
+      ).run()
+    } catch BoundedProcessError.timedOut {
+      throw LocalQuotaClientError.timedOut
+    } catch BoundedProcessError.outputTooLarge {
+      throw LocalQuotaClientError.outputTooLarge
+    } catch is CancellationError {
+      throw CancellationError()
+    } catch {
+      throw LocalQuotaClientError.launchFailed
     }
   }
 }

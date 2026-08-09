@@ -11,7 +11,7 @@ OUTPUT_DIR="$(cd "$OUTPUT_DIR" && pwd)"
 APP_PATH="${OUTPUT_DIR}/QuotaBarVisual.app"
 
 cd "$ROOT_DIR"
-pnpm --filter @gotry-io/quotacli build:standalone:macos-arm64
+pnpm --filter @gotry-io/quotacli build:menubar-helper
 swift build \
   --package-path apps/menubar \
   --configuration debug \
@@ -27,7 +27,7 @@ SWIFT_BIN_DIR="$(
     --show-bin-path
 )"
 APP_BINARY="${SWIFT_BIN_DIR}/QuotaBar"
-HELPER_BINARY="${ROOT_DIR}/apps/cli/dist/standalone/quotacli"
+HELPER_BINARY="${ROOT_DIR}/apps/cli/dist/menubar-helper/quotacli"
 
 for binary in "$APP_BINARY" "$HELPER_BINARY"; do
   if [[ ! -x "$binary" ]]; then

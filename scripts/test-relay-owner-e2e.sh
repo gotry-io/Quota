@@ -77,16 +77,6 @@ cleanup() {
     fi
   fi
   stop_process "$RELAY_PID"
-  # pair installs a user LaunchAgent; always boot it out so a failed run cannot leave
-  # a five-minute push scheduled against the deleted worktree paths.
-  if [[ "$(uname -s)" == "Darwin" ]]; then
-    local uid
-    uid="$(id -u)"
-    /bin/launchctl bootout "gui/${uid}/io.gotry.quotacli.relay" >/dev/null 2>&1 || true
-    if [[ -n "$WORK_DIR" ]]; then
-      rm -f "${WORK_DIR}/home/Library/LaunchAgents/io.gotry.quotacli.relay.plist" 2>/dev/null || true
-    fi
-  fi
   if [[ -n "$WORK_DIR" && -d "$WORK_DIR" ]]; then
     rm -rf "$WORK_DIR"
   fi
@@ -297,20 +287,17 @@ run_mode() {
     pair_status=$?
   fi
   CLI_PID=""
-  [[ $pair_status -eq 0 ]] || fail "QuotaCLI pairing failed"
+  [[ $pair_status -eq 1 ]] || fail "QuotaCLI pairing returned an unexpected status"
   [[ -f "${WORK_DIR}/config/quotacli/device.json" ]] || fail "QuotaCLI did not save a pairing credential"
-  rg -F "Background relay push is loaded, runs immediately, and every 5 minutes." \
+  rg -F "Uploaded 0 snapshots with sequence 0." "${WORK_DIR}/pair.stdout.log" >/dev/null \
+    || fail "QuotaCLI did not upload the initial empty heartbeat"
+  rg -F "Pairing complete. QuotaBar uploads every 5 minutes while it is running." \
     "${WORK_DIR}/pair.stdout.log" >/dev/null \
-    || fail "QuotaCLI did not enable background relay push"
+    || fail "QuotaCLI did not hand recurring uploads to QuotaBar"
   if rg -i --regexp 'owner_token|Authorization:|Bearer [A-Za-z0-9_-]{20,}' \
     "${WORK_DIR}/pair.stdout.log" "${WORK_DIR}/pair.stderr.log" >/dev/null; then
     fail "QuotaCLI pairing output exposed credential material"
   fi
-
-  # Stop the just-installed agent so RunAtLoad cannot race the deterministic fixture push.
-  local uid
-  uid="$(id -u)"
-  /bin/launchctl bootout "gui/${uid}/io.gotry.quotacli.relay" >/dev/null 2>&1 || true
 
   local report_status
   if cli_environment \
@@ -321,7 +308,7 @@ run_mode() {
     report_status=$?
   fi
   [[ $report_status -eq 1 ]] || fail "QuotaCLI push returned an unexpected status"
-  rg -F "Uploaded 1 snapshot with sequence 0." "${WORK_DIR}/report.stdout.log" >/dev/null \
+  rg -F "Uploaded 1 snapshot with sequence 1." "${WORK_DIR}/report.stdout.log" >/dev/null \
     || fail "QuotaCLI did not upload the deterministic non-empty snapshot"
   write_marker "${coordination_dir}/report-ready"
 
@@ -376,7 +363,7 @@ run_mode() {
     const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
     process.stdout.write(String(value.last_sequence));
   ' "${WORK_DIR}/config/quotacli/device.json")"
-  [[ "$last_sequence" == "0" ]] || fail "rejected push advanced the local sequence"
+  [[ "$last_sequence" == "1" ]] || fail "rejected push advanced the local sequence"
 
   cli_environment \
     "$BUN_PATH" apps/cli/src/main.ts relay unpair \

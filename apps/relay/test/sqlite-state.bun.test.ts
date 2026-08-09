@@ -1,11 +1,79 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, it } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SQLiteRelayState } from "../src/state/sqlite-state.ts";
 
 describe("SQLiteRelayState", () => {
+  it("migrates the released provider whitelist without losing snapshots", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "quota-relay-migration-test-"));
+    const path = join(directory, "relay.db");
+    const database = new Database(path, { create: true, strict: true });
+    database.exec(readFileSync(new URL("../migrations/0001_initial.sql", import.meta.url), "utf8"));
+    database
+      .query("INSERT INTO owners (id, created_at) VALUES (?1, ?2)")
+      .run("owner_01", "2026-08-02T00:00:00Z");
+    database
+      .query(
+        `INSERT INTO devices
+          (id, owner_id, display_name, token_hash, created_at, last_seen_at, last_sequence)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
+      )
+      .run(
+        "device_01",
+        "owner_01",
+        "Relay Mac",
+        "test-token-hash",
+        "2026-08-02T00:00:00Z",
+        "2026-08-02T01:00:01Z",
+        1,
+      );
+    const codexSnapshot = snapshot("codex", "codex_api", "2026-08-02T01:00:00Z");
+    database
+      .query(
+        `INSERT INTO quota_snapshots
+          (device_id, provider, account_fingerprint, sequence, captured_at,
+           observed_at, snapshot_json, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)`,
+      )
+      .run(
+        "device_01",
+        codexSnapshot.provider,
+        codexSnapshot.account.fingerprint,
+        1,
+        codexSnapshot.observed_at,
+        codexSnapshot.observed_at,
+        JSON.stringify(codexSnapshot),
+        "2026-08-02T01:00:01Z",
+      );
+    database.close();
+
+    const state = new SQLiteRelayState(path);
+    await state.initialize();
+    const deepseekSnapshot = snapshot("deepseek", "deepseek_balance_api", "2026-08-02T02:00:00Z");
+    await state.recordSnapshot(
+      {
+        schema_version: 1,
+        device_id: "device_01",
+        sequence: 2,
+        captured_at: deepseekSnapshot.observed_at,
+        snapshots: [deepseekSnapshot],
+      },
+      "2026-08-02T02:00:01Z",
+    );
+
+    expect(
+      (await state.listLatestSnapshots("owner_01")).map(({ snapshot }) => snapshot.provider),
+    ).toEqual(["deepseek", "codex"]);
+    const migrated = new Database(path, { readonly: true, strict: true });
+    expect(
+      migrated.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version,
+    ).toBe(2);
+    expect(migrated.query("PRAGMA foreign_key_check").all()).toEqual([]);
+    migrated.close();
+  });
+
   it("persists the latest normalized snapshot", async () => {
     const state = await makeState();
     await state.recordSnapshot(
@@ -548,5 +616,20 @@ function envelopeForDevice(
         observed_at: capturedAt,
       },
     ],
+  };
+}
+
+function snapshot(
+  provider: "codex" | "deepseek",
+  source: "codex_api" | "deepseek_balance_api",
+  observedAt: string,
+) {
+  return {
+    provider,
+    account: { fingerprint: `account_${provider}`, fingerprint_scope: "source" as const },
+    windows: [{ id: "balance", title: "Balance", used_percent: 20 }],
+    source,
+    status: "available" as const,
+    observed_at: observedAt,
   };
 }

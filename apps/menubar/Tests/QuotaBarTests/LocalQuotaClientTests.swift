@@ -7,6 +7,35 @@ import Testing
 @Suite(.serialized)
 struct LocalQuotaClientTests {
   @Test(arguments: [Int32(0), Int32(1)])
+  func relayPushAcceptsDocumentedExitCodes(exitCode: Int32) async throws {
+    let helper = try TemporaryHelper(
+      body: """
+        test "$1" = relay
+        test "$2" = push
+        exit \(exitCode)
+        """
+    )
+    defer { helper.remove() }
+    let client = try LocalQuotaClient(executableURL: helper.url, timeout: .seconds(2))
+
+    try await client.push()
+  }
+
+  @Test
+  func relayPushRejectsUnexpectedExitCodes() async throws {
+    let helper = try TemporaryHelper(body: "exit 2")
+    defer { helper.remove() }
+    let client = try LocalQuotaClient(executableURL: helper.url, timeout: .seconds(2))
+
+    do {
+      try await client.push()
+      Issue.record("Expected an unsupported helper exit code to fail.")
+    } catch LocalQuotaClientError.launchFailed {
+      // Expected.
+    }
+  }
+
+  @Test(arguments: [Int32(0), Int32(1)])
   func acceptsDocumentedExitCodes(exitCode: Int32) async throws {
     let helper = try TemporaryHelper(
       body: """

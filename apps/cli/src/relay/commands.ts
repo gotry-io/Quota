@@ -18,7 +18,7 @@ import {
 } from "@gotry-io/quota-provider";
 import packageMetadata from "../../package.json" with { type: "json" };
 import { RelayClient, RelayClientError } from "./client.ts";
-import { MacOSLaunchAgent, type RelayPushService } from "./launch-agent.ts";
+import { cleanupLegacyMacOSLaunchAgent } from "./legacy-launch-agent.ts";
 import {
   type RelayCredential,
   RelayCredentialStore,
@@ -52,7 +52,7 @@ export interface RelayCommandDependencies {
   createClient(relayUrl: string): RelayCommandClient;
   store: RelayCredentialStoreContract;
   platform: NodeJS.Platform;
-  service: RelayPushService;
+  cleanupLegacyService(): Promise<void>;
   now(): Date;
   deviceName(): string;
   collect(options: { providers: "all"; clientVersion: string }): Promise<unknown>;
@@ -120,8 +120,8 @@ Usage:
   quotacli relay --help
 
 pair stores a Relay-bound device credential, performs one foreground collection and upload, then
-enables macOS background push every 5 minutes. push performs one collection and upload. unpair
-stops background push, revokes the remote device, and removes the local credential.`;
+leaves recurring scheduling to the host application. push performs one collection and upload.
+unpair revokes the remote device and removes the local credential.`;
 }
 
 export async function runDoctorCommand(
@@ -136,14 +136,6 @@ export async function runDoctorCommand(
   try {
     const diagnostics = await resolved.diagnoseProviders();
     const credential = await resolved.store.load();
-    let background: "loaded" | "stopped" | "unsupported" | "error" = "unsupported";
-    if (resolved.platform === "darwin") {
-      try {
-        background = await resolved.service.status();
-      } catch {
-        background = "error";
-      }
-    }
 
     output.stdout(`CLI version: ${packageMetadata.version}`);
     output.stdout("Providers:");
@@ -152,13 +144,7 @@ export async function runDoctorCommand(
     } else {
       for (const diagnostic of diagnostics) {
         const marker = diagnostic.available ? "found" : "missing";
-        const foregroundOnly =
-          diagnostic.available && diagnostic.credential_source.startsWith("env:")
-            ? " (foreground only; LaunchAgent does not inherit environment secrets)"
-            : "";
-        output.stdout(
-          `  ${diagnostic.provider}\t${marker}\t${diagnostic.credential_source}${foregroundOnly}`,
-        );
+        output.stdout(`  ${diagnostic.provider}\t${marker}\t${diagnostic.credential_source}`);
       }
     }
 
@@ -169,38 +155,17 @@ export async function runDoctorCommand(
       output.stdout(`  Device ID: ${credential.device_id}`);
       output.stdout(`  Last sequence: ${credential.last_sequence}`);
     }
-    output.stdout(`  Background: ${backgroundLabel(background)}`);
+    output.stdout(
+      `  Recurring uploads: ${
+        resolved.platform === "darwin" ? "QuotaBar while running" : "external scheduler required"
+      }`,
+    );
 
     const providerReady = diagnostics.some((diagnostic) => diagnostic.available);
-    // Healthy means: at least one persistent local provider credential, no launchd probe error,
-    // and background state matches pairing (loaded iff paired on macOS). Environment-only API
-    // keys are intentionally foreground-only because LaunchAgent does not inherit secrets.
-    const hasPersistentProvider = diagnostics.some(
-      (diagnostic) => diagnostic.available && !diagnostic.credential_source.startsWith("env:"),
-    );
-    const backgroundHealthy =
-      background !== "error" &&
-      (resolved.platform !== "darwin" ||
-        (credential ? background === "loaded" : background === "stopped"));
-    const providerHealthy =
-      resolved.platform === "darwin" && credential ? hasPersistentProvider : providerReady;
-    return providerHealthy && backgroundHealthy ? 0 : 1;
+    return providerReady ? 0 : 1;
   } catch {
     output.stderr("QuotaCLI could not complete local diagnostics.");
     return 1;
-  }
-}
-
-function backgroundLabel(status: "loaded" | "stopped" | "unsupported" | "error"): string {
-  switch (status) {
-    case "loaded":
-      return "loaded (every 5 minutes)";
-    case "stopped":
-      return "stopped";
-    case "unsupported":
-      return "unsupported on this platform";
-    case "error":
-      return "unavailable";
   }
 }
 
@@ -243,22 +208,12 @@ async function runPair(
     return 1;
   }
 
-  // Foreground first upload so QuotaBar can leave Waiting immediately. LaunchAgent still uses
-  // RunAtLoad for login/reboot; pair may therefore push once more when the agent loads.
+  // Foreground first upload so QuotaBar can leave Waiting immediately.
   const initialPush = await pushOnce(dependencies);
   if (initialPush.kind !== "uploaded") {
     writePushFailure(output, initialPush);
     if (dependencies.platform === "darwin") {
-      try {
-        await dependencies.service.start();
-        output.stdout(
-          "Pairing was saved. Background relay push is loaded and will retry every 5 minutes.",
-        );
-      } catch {
-        output.stderr(
-          "Pairing was saved, but the initial upload and background setup failed. Run `quotacli relay push` to retry now; run `quotacli relay unpair` before pairing again.",
-        );
-      }
+      output.stderr("Pairing was saved. QuotaBar will retry while it is running.");
     } else {
       output.stderr(
         "Pairing was saved, but the initial relay push failed. Run `quotacli relay push` to retry the upload.",
@@ -269,20 +224,12 @@ async function runPair(
   writePushSuccess(output, initialPush);
 
   if (dependencies.platform === "darwin") {
-    try {
-      await dependencies.service.start();
-      output.stdout("Pairing complete. Background relay push is loaded and runs every 5 minutes.");
-      return initialPush.complete ? 0 : 1;
-    } catch {
-      output.stderr(
-        "Pairing and the initial upload were saved, but QuotaCLI could not start background relay push. Run `quotacli relay unpair` before retrying.",
-      );
-      return 1;
-    }
+    output.stdout("Pairing complete. QuotaBar uploads every 5 minutes while it is running.");
+    return initialPush.complete ? 0 : 1;
   }
 
   output.stdout(
-    "Pairing complete. Background relay push is supported only on macOS; recurring uploads require `quotacli relay push`.",
+    "Pairing complete. Recurring uploads require `quotacli relay push` from an external scheduler.",
   );
   return initialPush.complete ? 0 : 1;
 }
@@ -293,9 +240,9 @@ async function runUnpair(
 ): Promise<number> {
   if (dependencies.platform === "darwin") {
     try {
-      await dependencies.service.stop();
+      await dependencies.cleanupLegacyService();
     } catch {
-      output.stderr("QuotaCLI could not stop background relay push. Pairing was retained.");
+      output.stderr("QuotaCLI could not remove the legacy background task. Pairing was retained.");
       return 1;
     }
   }
@@ -397,6 +344,9 @@ function writePushFailure(
 
 async function pushOnce(dependencies: RelayCommandDependencies): Promise<PushOnceResult> {
   try {
+    if (dependencies.platform === "darwin") {
+      await dependencies.cleanupLegacyService();
+    }
     const credential = await dependencies.store.load();
     if (!credential) {
       return { kind: "not_paired" };
@@ -525,7 +475,7 @@ function defaultDependencies(): RelayCommandDependencies {
     createClient: (relayUrl) => new RelayClient(relayUrl),
     store: new RelayCredentialStore(),
     platform: process.platform,
-    service: new MacOSLaunchAgent(),
+    cleanupLegacyService: cleanupLegacyMacOSLaunchAgent,
     now: () => new Date(),
     deviceName: () => hostname(),
     collect: collectQuotaReport,

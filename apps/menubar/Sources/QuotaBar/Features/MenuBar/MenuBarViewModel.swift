@@ -108,18 +108,37 @@ final class MenuBarViewModel {
   private let collector: (any LocalQuotaCollecting)?
 
   @ObservationIgnored
+  private let relayPusher: (any RelaySnapshotPushing)?
+
+  @ObservationIgnored
   private let initializationError: String?
 
   @ObservationIgnored
   private let reportCache: LocalQuotaReportCache?
 
+  @ObservationIgnored
+  private let relayPushInterval: Duration
+
+  @ObservationIgnored
+  private let relayPushSleep: @Sendable (Duration) async throws -> Void
+
+  @ObservationIgnored
+  private var relayPushTask: Task<Void, Never>?
+
   init(
     collector: (any LocalQuotaCollecting)? = nil,
+    relayPusher: (any RelaySnapshotPushing)? = nil,
     reportCache: LocalQuotaReportCache? = .live,
-    relayStateModel: RelayStateModel = RelayStateModel.live()
+    relayStateModel: RelayStateModel = RelayStateModel.live(),
+    relayPushInterval: Duration = .seconds(300),
+    relayPushSleep: @escaping @Sendable (Duration) async throws -> Void = { duration in
+      try await Task.sleep(for: duration)
+    }
   ) {
     self.relayStateModel = relayStateModel
     self.reportCache = reportCache
+    self.relayPushInterval = relayPushInterval
+    self.relayPushSleep = relayPushSleep
     if let cached = reportCache?.load() {
       report = cached.report
       localLastCheckedAt = cached.refreshedAt
@@ -127,13 +146,17 @@ final class MenuBarViewModel {
 
     if let collector {
       self.collector = collector
+      self.relayPusher = relayPusher
       initializationError = nil
     } else {
       do {
-        self.collector = try LocalQuotaClient()
+        let client = try LocalQuotaClient()
+        self.collector = client
+        self.relayPusher = relayPusher ?? client
         initializationError = nil
       } catch {
         self.collector = nil
+        self.relayPusher = nil
         initializationError = Self.message(for: error)
       }
     }
@@ -151,10 +174,19 @@ final class MenuBarViewModel {
       self.errorMessage = errorMessage
       localLastCheckedAt = lastCheckedAt
       collector = nil
+      relayPusher = nil
       initializationError = nil
       reportCache = nil
+      relayPushInterval = .seconds(300)
+      relayPushSleep = { duration in
+        try await Task.sleep(for: duration)
+      }
     }
   #endif
+
+  deinit {
+    relayPushTask?.cancel()
+  }
 
   func refreshIfNeeded(now: Date = Date()) async {
     let localIsFresh = if collector == nil {
@@ -204,6 +236,24 @@ final class MenuBarViewModel {
     }
   }
 
+  func startRelayPushLoop() {
+    guard relayPushTask == nil, relayPusher != nil else { return }
+    let interval = relayPushInterval
+    let sleep = relayPushSleep
+    relayPushTask = Task { @MainActor [weak self] in
+      await self?.pushRelaySnapshot()
+      while !Task.isCancelled {
+        do {
+          try await sleep(interval)
+        } catch {
+          break
+        }
+        guard !Task.isCancelled else { break }
+        await self?.pushRelaySnapshot()
+      }
+    }
+  }
+
   func deleteAllQuotaBarData() async throws {
     try await relayStateModel.deleteAllQuotaBarData()
     clearLocalState()
@@ -223,6 +273,17 @@ final class MenuBarViewModel {
     errorMessage = nil
     localLastCheckedAt = nil
     reportCache?.clear()
+  }
+
+  private func pushRelaySnapshot() async {
+    guard let relayPusher else { return }
+    do {
+      try await relayPusher.push()
+    } catch is CancellationError {
+      return
+    } catch {
+      // Relay state already exposes stale remote data; the next lifecycle tick retries.
+    }
   }
 
   func displaySnapshots(

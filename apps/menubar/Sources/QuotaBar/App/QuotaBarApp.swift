@@ -72,6 +72,7 @@ struct QuotaBarApp: App {
     init() {
       let model = MenuBarViewModel()
       model.relayStateModel.startPolling()
+      model.startRelayPushLoop()
       _model = State(initialValue: model)
     }
 

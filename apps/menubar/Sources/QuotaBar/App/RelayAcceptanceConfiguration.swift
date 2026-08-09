@@ -281,7 +281,7 @@
         window.remainingPercent == 58,
         let device = state.devices.first(where: { $0.deviceID == observation.deviceID }),
         device.revokedAt == nil,
-        device.lastSequence == 0
+        device.lastSequence == 1
       else {
         throw RelayAcceptanceError.validationFailed
       }
