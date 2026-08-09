@@ -18,6 +18,7 @@ import type { ProviderId } from "@gotry-io/quota-protocol";
 import { configurableProviderIds, isConfigurableProviderId, PROVIDER_CATALOG } from "../catalog.ts";
 
 export const PROVIDER_CONFIG_SCHEMA_VERSION = 1 as const;
+const WRITE_LOCK_LEASE_MS = 5_000;
 
 /** Per-provider secret entry (api_key providers). */
 export interface ProviderSecretEntry {
@@ -320,32 +321,35 @@ async function discardWriteLock(lockPath: string, state: string): Promise<boolea
 }
 
 async function isWriteLockStale(lockPath: string, ownerPath: string): Promise<boolean> {
-  let stale = false;
+  let ageMs: number;
   try {
-    const owner = (await readFile(ownerPath, "utf8")).trim();
-    const ownerPid = Number(owner);
-    if (!Number.isSafeInteger(ownerPid) || ownerPid <= 0) {
-      const metadata = await lstat(lockPath);
-      stale = Date.now() - metadata.mtimeMs >= 1_000;
-    } else {
-      try {
-        process.kill(ownerPid, 0);
-      } catch (error) {
-        stale = isFileSystemError(error, "ESRCH");
-      }
-    }
+    ageMs = Date.now() - (await lstat(lockPath)).mtimeMs;
   } catch (error) {
-    if (!isFileSystemError(error, "ENOENT")) {
-      return false;
-    }
-    try {
-      const metadata = await lstat(lockPath);
-      stale = Date.now() - metadata.mtimeMs >= 1_000;
-    } catch (metadataError) {
-      return isFileSystemError(metadataError, "ENOENT");
+    return isFileSystemError(error, "ENOENT");
+  }
+
+  let owner: string;
+  try {
+    owner = (await readFile(ownerPath, "utf8")).trim();
+  } catch (error) {
+    return isFileSystemError(error, "ENOENT") && ageMs >= 1_000;
+  }
+
+  const ownerPid = Number(owner);
+  if (!Number.isSafeInteger(ownerPid) || ownerPid <= 0) {
+    return ageMs >= 1_000;
+  }
+  if (ageMs >= WRITE_LOCK_LEASE_MS) {
+    return true;
+  }
+  try {
+    process.kill(ownerPid, 0);
+  } catch (error) {
+    if (isFileSystemError(error, "ESRCH")) {
+      return true;
     }
   }
-  return stale;
+  return false;
 }
 
 function assertConfigurable(provider: ProviderId): void {

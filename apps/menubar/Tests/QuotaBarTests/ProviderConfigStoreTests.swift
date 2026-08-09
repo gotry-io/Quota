@@ -130,7 +130,7 @@ struct ProviderConfigStoreTests {
   }
 
   @Test
-  func recoversWriteLockWhoseOwnerProcessNoLongerExists() throws {
+  func recoversExpiredWriteLockEvenWhenItsPIDIsAlive() throws {
     let directory = try ownerOnlyTempDirectory()
     defer { try? FileManager.default.removeItem(at: directory) }
 
@@ -141,10 +141,14 @@ struct ProviderConfigStoreTests {
       withIntermediateDirectories: false,
       attributes: [.posixPermissions: 0o700]
     )
-    try "2147483647\n".write(
+    try "\(ProcessInfo.processInfo.processIdentifier)\n".write(
       to: lockURL.appendingPathComponent("owner"),
       atomically: false,
       encoding: .utf8
+    )
+    try FileManager.default.setAttributes(
+      [.modificationDate: Date().addingTimeInterval(-6)],
+      ofItemAtPath: lockURL.path
     )
 
     let store = ProviderConfigStore(fileURL: fileURL)

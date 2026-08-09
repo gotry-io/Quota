@@ -1,3 +1,6 @@
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { ApiKeyHttpCollector } from "../src/api-key/collector.ts";
 import {
@@ -82,6 +85,23 @@ describe("litellm collector", () => {
       configPath: "/tmp/quota-litellm-missing-config.json",
     });
     expect(await collector.discover()).toEqual([]);
+  });
+
+  it("treats an invalid stored base URL as unavailable", async () => {
+    const root = await mkdtemp(join(tmpdir(), "quota-litellm-invalid-url-"));
+    const configPath = join(root, "providers.json");
+    await writeFile(
+      configPath,
+      `${JSON.stringify({
+        schema_version: 1,
+        providers: {
+          litellm: { api_key: "sk-litellm-invalid-url", base_url: "ftp://invalid.example" },
+        },
+      })}\n`,
+      { mode: 0o600 },
+    );
+    const collector = new ApiKeyHttpCollector(litellmSpec, { configPath, environment: {} });
+    await expect(collector.discover()).resolves.toEqual([]);
   });
 
   it("fetches independent user and team budgets concurrently after key discovery", async () => {
