@@ -44,6 +44,49 @@ func accountSummaryCommandRunsOnlyForAnExplicitAccountRefresh() async throws {
   #expect(model.accountDisplayLabel == "octocat")
 }
 
+@Test @MainActor
+func loginUpdatesAccountStateBeforeTheFollowingSyncCompletes() async throws {
+  let client = LoginThenBlockingSyncClient()
+  let model = MenuBarViewModel(client: client, reportCache: nil)
+
+  model.startLogin()
+  for _ in 0..<100 {
+    if await client.didStartSync { break }
+    await Task.yield()
+  }
+
+  #expect(await client.didStartSync)
+  #expect(model.accountState == .signedIn)
+  #expect(!model.isLoggingIn)
+  model.cancelLogin()
+}
+
+@Test @MainActor
+func loginQueuesAFreshSyncAndDiscardsTheSignedOutRequestAlreadyInFlight() async throws {
+  let summary = try makeAccountSummary()
+  let client = LoginDuringSyncClient(summary: summary)
+  let model = MenuBarViewModel(client: client, reportCache: nil)
+
+  let initialRefresh = Task { await model.refresh() }
+  for _ in 0..<100 {
+    if await client.syncCount == 1 { break }
+    await Task.yield()
+  }
+  model.startLogin()
+  for _ in 0..<100 {
+    if model.accountState == .signedIn { break }
+    await Task.yield()
+  }
+
+  #expect(model.accountState == .signedIn)
+  await client.finishFirstSync()
+  await initialRefresh.value
+
+  #expect(await client.syncCount == 2)
+  #expect(model.accountState == .signedIn)
+  #expect(model.accountDisplayLabel == "octocat")
+}
+
 private actor RecordingAccountClient: LocalQuotaServing {
   struct Counts: Sendable {
     var sync = 0
@@ -113,6 +156,84 @@ private actor OneTickSleep {
     calls += 1
     if calls > 1 { throw CancellationError() }
   }
+}
+
+private actor LoginThenBlockingSyncClient: LocalQuotaServing {
+  private(set) var didStartSync = false
+
+  func sync() async throws -> CLIAccountSyncOutput {
+    didStartSync = true
+    try await Task.sleep(for: .seconds(60))
+    throw CancellationError()
+  }
+
+  func login() throws -> CLIAccountAuthOutput {
+    try QuotaWireCodec.makeDecoder().decode(
+      CLIAccountAuthOutput.self,
+      from: Data(
+        #"{"schemaVersion":1,"status":"signed_in","accountId":"account_test","deviceId":"device_test","deviceGeneration":1}"#
+          .utf8
+      )
+    )
+  }
+
+  func logout() async throws -> CLIAccountAuthOutput { throw UnexpectedAccountCommand() }
+  func accountSummary() async throws -> AccountSummary { throw UnexpectedAccountCommand() }
+}
+
+private actor LoginDuringSyncClient: LocalQuotaServing {
+  private let summary: AccountSummary
+  private var firstSyncContinuation: CheckedContinuation<Void, Never>?
+  private(set) var syncCount = 0
+
+  init(summary: AccountSummary) {
+    self.summary = summary
+  }
+
+  func sync() async throws -> CLIAccountSyncOutput {
+    syncCount += 1
+    if syncCount == 1 {
+      await withCheckedContinuation { firstSyncContinuation = $0 }
+      return CLIAccountSyncOutput(
+        status: .signedOut,
+        localReport: QuotaCollectionReport(
+          schemaVersion: 2,
+          capturedAt: summary.generatedAt,
+          results: []
+        ),
+        localUsage: localUsage(from: summary),
+        accountSummary: nil
+      )
+    }
+    return CLIAccountSyncOutput(
+      status: .synced,
+      localReport: QuotaCollectionReport(
+        schemaVersion: 2,
+        capturedAt: summary.generatedAt,
+        results: []
+      ),
+      localUsage: localUsage(from: summary),
+      accountSummary: summary
+    )
+  }
+
+  func finishFirstSync() {
+    firstSyncContinuation?.resume()
+    firstSyncContinuation = nil
+  }
+
+  func login() throws -> CLIAccountAuthOutput {
+    try QuotaWireCodec.makeDecoder().decode(
+      CLIAccountAuthOutput.self,
+      from: Data(
+        #"{"schemaVersion":1,"status":"signed_in","accountId":"account_test","deviceId":"device_test","deviceGeneration":1}"#
+          .utf8
+      )
+    )
+  }
+
+  func logout() async throws -> CLIAccountAuthOutput { throw UnexpectedAccountCommand() }
+  func accountSummary() async throws -> AccountSummary { throw UnexpectedAccountCommand() }
 }
 
 private struct UnexpectedAccountCommand: Error {}

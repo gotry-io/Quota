@@ -13,9 +13,18 @@ describe("browser account login", () => {
       open: async (value) => {
         authorizeUrl = new URL(value);
         const callback = new URL(authorizeUrl.searchParams.get("redirect_uri") ?? "invalid:");
+        callback.searchParams.set("state", "wrong-local-state");
+        callback.searchParams.set("code", "ignored-code");
+        expect((await fetch(callback)).status).toBe(400);
+
+        callback.search = "";
         callback.searchParams.set("state", authorizeUrl.searchParams.get("state") ?? "");
         callback.searchParams.set("code", "single-use-synthetic-code");
-        expect(await (await fetch(callback)).text()).toContain("complete");
+        const response = await fetch(callback);
+        expect(response.headers.get("content-type")).toBe("text/html; charset=utf-8");
+        const body = await response.text();
+        expect(body).toContain("window.close()");
+        expect(body).toContain("close it manually");
       },
     });
 
@@ -29,7 +38,7 @@ describe("browser account login", () => {
     expect(result.code).toBe("single-use-synthetic-code");
   });
 
-  it("rejects a state mismatch without exposing the authorization code", async () => {
+  it("ignores a state mismatch without exposing the authorization code", async () => {
     const error = await captureError(
       runBrowserAuthorization({
         origin: "https://quota.gotry.io",
@@ -40,14 +49,15 @@ describe("browser account login", () => {
           callback.searchParams.set("code", "secret-authorization-code");
           expect((await fetch(callback)).status).toBe(400);
         },
+        timeoutMilliseconds: 5,
       }),
     );
 
-    expect(error).toMatchObject({ code: "invalid_callback" });
+    expect(error).toMatchObject({ code: "expired" });
     expect(error.message).not.toContain("secret-authorization-code");
   });
 
-  it("rejects callback query additions", async () => {
+  it("ignores callback query additions", async () => {
     const error = await captureError(
       runBrowserAuthorization({
         origin: "https://quota.gotry.io",
@@ -59,10 +69,11 @@ describe("browser account login", () => {
           callback.searchParams.set("next", "unexpected");
           expect((await fetch(callback)).status).toBe(400);
         },
+        timeoutMilliseconds: 5,
       }),
     );
 
-    expect(error).toMatchObject({ code: "invalid_callback" });
+    expect(error).toMatchObject({ code: "expired" });
   });
 
   it("expires and supports cancellation", async () => {

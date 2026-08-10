@@ -151,10 +151,12 @@ Quota Web ── quota-protocol ── managed HTTP APIs
 ### Quota Web
 
 - Static Vite assets are built independently under `apps/web/dist` and served by the managed Worker.
-- `/app` reads the account summary and manages Devices and Account deletion; `/activate` approves or
-  denies a native device grant. Better Auth owns GitHub login, browser sign-out, and Account deletion.
-  A deletion hook removes the corresponding Quota domain Account. Product-specific authorization
-  and Device deletion require a recent browser session and an exact same-origin request.
+- `/my` reads the account summary and manages quota, Usage, Devices, and Account deletion;
+  `/activate` approves or denies a native device grant. The `/app` path shipped in 0.0.4 and is a
+  single bookmark redirect to `/my`. Better Auth owns GitHub login, browser sign-out, and Account
+  deletion. A deletion hook removes the corresponding Quota domain Account. Product-specific
+  authorization and Device deletion require a recent browser session and an exact same-origin
+  request.
 - Production Web and Worker deploy together through `deploy-cloudflare.yml`; there is no separate
   website deployment or self-hosted bundle.
 

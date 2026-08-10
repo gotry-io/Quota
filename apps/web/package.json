@@ -9,7 +9,8 @@
     "build": "vite build && node scripts/publish-protocol-schemas.mjs",
     "check": "tsc -p tsconfig.json",
     "dev": "vite",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node --test test/routes.test.ts"
   },
   "devDependencies": {
     "@gotry-io/quota-protocol": "workspace:*",

@@ -141,16 +141,18 @@ Account states:
 
 - Signed out or not checked: short benefit copy and **Continue with GitHub**.
 - Login running: browser completion copy and **Cancel**. Cancellation terminates the helper.
-- Signed in: account display label, **Signed in with GitHub**, and **Log Out**.
+- Signed in: one compact account row with a local avatar, account display label, and **Log Out**.
 - Logout pending: explicit offline completion copy and **Retry Logout**.
 - Removed or expired device session: concise reconnect copy; never show raw reason codes or ids.
 
 The Account group is the only place for authentication actions. Buttons start fixed bundled CLI
 commands; there are no embedded web views or credential fields.
+The account row is followed by a **Manage account** link to the web account surface.
 
 Usage is a first-class destination showing This Mac without requiring an account. General contains
 the native mini **Launch at Login** switch. Account Data contains Devices. Local Providers contains
-Agents. About contains version, Website, and Feedback.
+Agents. About contains version, Website, and Feedback. The Usage source control is a compact native
+segmented control inside the shared Settings group surface.
 
 ### Devices
 
@@ -167,7 +169,11 @@ This Mac/Account control changes the source without changing the presentation. I
 - Period: inclusive `from` and `to` dates.
 - Tokens: input, cached input, output, reasoning, and requests.
 - Cost: amount, basis, pricing catalog revision, and unpriced row count.
+- Models: model-dimension rows with compact token/request totals and estimated cost.
 - Coverage: Codex and Claude Code complete/partial range counts.
+
+Usage counts use locale-aware decimal formatting below 1,000 and compact SI-style `k`, `M`, and `B`
+suffixes for larger values. Model rows are sorted by token volume, then model name.
 
 Cost copy is exact:
 
@@ -176,8 +182,7 @@ Cost copy is exact:
 - unavailable: `— unpriced`.
 
 Do not infer missing prices, silently treat partial cost as total cost, or recompute typed output.
-Large integer counts use locale grouping. USD formatting may show up to six fractional digits so
-small costs remain meaningful.
+USD formatting may show up to six fractional digits so small costs remain meaningful.
 
 ### Agents
 

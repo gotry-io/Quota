@@ -30,5 +30,12 @@ routes return `Cache-Control: no-store`; only the versioned pricing catalog is p
 Production migration and deployment remain workflow-owned and must not be run manually without
 explicit authorization.
 
+The checked-in catalog in [`src/pricing-catalog.ts`](./src/pricing-catalog.ts) is a versioned
+snapshot with no runtime pricing network dependency. Model metadata and current rates are traced to
+models.dev snapshots and the official OpenAI/Anthropic pricing pages listed in that file; effective
+date intervals preserve known historical changes. Unknown models and missing component rates stay
+unpriced; wildcard dimension matches and the inferred-cache approximation remain explicit in the
+calculation assumptions.
+
 Readiness probes and the hourly Worker schedule run the bounded credential cleanup defined in
 [`docs/security.md`](../../docs/security.md).

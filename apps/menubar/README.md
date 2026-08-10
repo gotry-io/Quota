@@ -49,9 +49,11 @@ Settings contains:
 - About: version, website, and feedback links.
 
 Usage defaults to the local report and shows its date range, token totals, requests, estimated cost,
-cost basis, pricing catalog revision, unpriced row count, and Codex/Claude Code coverage. When an
-account summary is available, the same page offers an Account source. QuotaBar formats the typed
-result; it does not carry a price table or recalculate cost.
+cost basis, pricing catalog revision, unpriced row count, model breakdown, and Codex/Claude Code
+coverage. Token and request counts use locale-aware decimal grouping for small values and compact
+`k`/`M`/`B` suffixes for larger values. When an account summary is available, the same page offers
+an Account source. QuotaBar formats the typed result; it does not carry a price table or recalculate
+cost.
 
 The visual and interaction specification is [`DESIGN.md`](DESIGN.md).
 
