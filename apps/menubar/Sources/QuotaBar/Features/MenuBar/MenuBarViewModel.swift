@@ -129,6 +129,12 @@ final class MenuBarViewModel {
   @ObservationIgnored
   private var loginTask: Task<Void, Never>?
 
+  @ObservationIgnored
+  private var accountMutationRevision = 0
+
+  @ObservationIgnored
+  private var queuedRefresh = false
+
   init(
     client: (any LocalQuotaServing)? = nil,
     reportCache: LocalQuotaReportCache? = .live,
@@ -189,8 +195,11 @@ final class MenuBarViewModel {
     await refresh()
   }
 
-  func refresh() async {
-    guard !isRefreshing else { return }
+  func refresh(forceAfterCurrent: Bool = false) async {
+    guard !isRefreshing else {
+      if forceAfterCurrent { queuedRefresh = true }
+      return
+    }
     guard let client else {
       errorMessage = initializationError ?? "QuotaCLI is unavailable."
       return
@@ -198,20 +207,27 @@ final class MenuBarViewModel {
 
     isRefreshing = true
     defer { isRefreshing = false }
-    do {
-      let output = try await client.sync()
-      let refreshedAt = Date()
-      apply(output, refreshedAt: refreshedAt)
-      reportCache?.save(output: output, refreshedAt: refreshedAt)
-      errorMessage =
-        output.status == .accountUnavailable
-        ? "Account sync is unavailable. Local quota and Usage are still current."
-        : nil
-    } catch is CancellationError {
-      return
-    } catch {
-      errorMessage = Self.message(for: error)
-    }
+    repeat {
+      queuedRefresh = false
+      let revision = accountMutationRevision
+      do {
+        let output = try await client.sync()
+        guard revision == accountMutationRevision else { continue }
+        let refreshedAt = Date()
+        apply(output, refreshedAt: refreshedAt)
+        reportCache?.save(output: output, refreshedAt: refreshedAt)
+        errorMessage =
+          output.status == .accountUnavailable
+          ? "Account sync is unavailable. Local quota and Usage are still current."
+          : nil
+      } catch is CancellationError {
+        return
+      } catch {
+        if revision == accountMutationRevision {
+          errorMessage = Self.message(for: error)
+        }
+      }
+    } while queuedRefresh && !Task.isCancelled
   }
 
   /// The only app-lifetime scheduler: one sync at launch, then one every five minutes.
@@ -252,7 +268,11 @@ final class MenuBarViewModel {
       do {
         _ = try await client.login()
         try Task.checkCancellation()
-        await refresh()
+        accountMutationRevision += 1
+        syncStatus = .synced
+        syncReason = nil
+        isLoggingIn = false
+        await refresh(forceAfterCurrent: true)
       } catch is CancellationError {
         return
       } catch {
@@ -270,19 +290,20 @@ final class MenuBarViewModel {
     isLoggingOut = true
     defer { isLoggingOut = false }
     accountErrorMessage = nil
+    accountMutationRevision += 1
     do {
       _ = try await client.logout()
       accountSummary = nil
       syncStatus = .signedOut
       syncReason = nil
       reportCache?.clear()
-      await refresh()
+      await refresh(forceAfterCurrent: true)
     } catch is CancellationError {
       return
     } catch {
       accountErrorMessage = Self.message(for: error)
       // QuotaCLI may have committed a retryable logout-pending state before an offline revoke.
-      await refresh()
+      await refresh(forceAfterCurrent: true)
     }
   }
 

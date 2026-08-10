@@ -17,10 +17,12 @@ pnpm --filter @gotry-io/quota-web check
 pnpm --filter @gotry-io/quota-web build
 ```
 
-`/app` is the GitHub-backed account dashboard and `/activate` approves or denies a QuotaCLI device
-authorization grant. Better Auth owns GitHub sign-in, browser sessions, sign-out, OAuth state/PKCE,
-account deletion, and standard auth-route origin validation. Quota's authorization decision and
-Device deletion routes additionally require a recent session and an exact same-origin request.
+`/my` is the GitHub-backed account dashboard and `/activate` approves or denies a QuotaCLI device
+authorization grant. `/app` shipped in 0.0.4, so it remains a single bookmark redirect to `/my`; new
+links and OAuth callbacks use `/my`. Better Auth owns GitHub sign-in, browser sessions, sign-out,
+OAuth state/PKCE, account deletion, and standard auth-route origin validation. Quota's authorization
+decision and Device deletion routes additionally require a recent session and an exact same-origin
+request.
 
 The site follows [`DESIGN.md`](./DESIGN.md) in this package. QuotaBar has a separate design system at
 [`apps/menubar/DESIGN.md`](../menubar/DESIGN.md). The site links to GitHub while product downloads and

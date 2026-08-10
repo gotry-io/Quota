@@ -132,12 +132,6 @@ async function waitForCallback(
         response
           .writeHead(400)
           .end("Quota login callback was rejected. You can close this window.");
-        finish({
-          error: new BrowserAuthorizationError(
-            "invalid_callback",
-            "Quota login callback was invalid.",
-          ),
-        });
         return;
       }
       if (error !== null) {
@@ -157,7 +151,12 @@ async function waitForCallback(
         });
         return;
       }
-      response.writeHead(200).end("Quota login complete. You can close this window.");
+      response.setHeader("Content-Type", "text/html; charset=utf-8");
+      response
+        .writeHead(200)
+        .end(
+          '<!doctype html><meta charset="utf-8"><title>Quota login complete</title><p>Quota login complete. Return to QuotaBar or your terminal.</p><p>If this tab stays open, close it manually.</p><script>window.close()</script>',
+        );
       finish({ code });
     });
   });

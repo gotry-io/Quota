@@ -257,6 +257,8 @@ extension DynamicTypeSize {
 // MARK: - Shared chrome
 
 struct QuotaPrimaryButtonStyle: ButtonStyle {
+  var isCompact = false
+
   @Environment(\.isEnabled) private var isEnabled
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -264,8 +266,12 @@ struct QuotaPrimaryButtonStyle: ButtonStyle {
     configuration.label
       .quotaFont(.rowTitle)
       .foregroundStyle(isEnabled ? QuotaPalette.onAccent : QuotaPalette.body)
-      .padding(.horizontal, 18)
-      .frame(minHeight: QuotaDesign.Layout.controlMinHeight)
+      .padding(.horizontal, isCompact ? 14 : 18)
+      .frame(
+        minHeight: isCompact
+          ? QuotaDesign.Layout.fieldMinHeight
+          : QuotaDesign.Layout.controlMinHeight
+      )
       .background(
         isEnabled ? QuotaPalette.accent : QuotaPalette.soft
       )

@@ -92,7 +92,9 @@ struct AccountUsageView: View {
               }
             }
             .pickerStyle(.segmented)
+            .controlSize(.small)
             .labelsHidden()
+            .accessibilityLabel("Usage source")
             .padding(QuotaDesign.Layout.groupContentInset)
           } else {
             usageValueRow(title: "Scope", systemImage: "laptopcomputer", value: "This Mac")
@@ -135,6 +137,28 @@ struct AccountUsageView: View {
                 systemImage: "number",
                 value: UsageValueFormatter.count(usage.totals.requests)
               )
+            }
+          }
+
+          SettingsSection(title: "Models") {
+            let modelBreakdowns = usage.breakdowns
+              .filter { $0.dimension == .model }
+              .sorted {
+                let lhsTokens = $0.totals.inputTokens + $0.totals.outputTokens
+                let rhsTokens = $1.totals.inputTokens + $1.totals.outputTokens
+                return lhsTokens == rhsTokens
+                  ? $0.key.localizedStandardCompare($1.key) == .orderedAscending
+                  : lhsTokens > rhsTokens
+              }
+
+            if modelBreakdowns.isEmpty {
+              settingsEmptyCopy("No model usage is available for this period.")
+            } else {
+              VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(modelBreakdowns.enumerated()), id: \.offset) { _, breakdown in
+                  modelUsageRow(breakdown)
+                }
+              }
             }
           }
 
@@ -216,7 +240,8 @@ struct AccountUsageView: View {
         range: report.range,
         totals: totals,
         cost: cost,
-        coverage: report.coverage
+        coverage: report.coverage,
+        breakdowns: report.breakdowns
       )
     case .account:
       guard let usage = model.accountSummary?.usage else { return nil }
@@ -231,7 +256,8 @@ struct AccountUsageView: View {
             endAt: $0.endAt,
             status: $0.status
           )
-        }
+        },
+        breakdowns: usage.breakdowns
       )
     }
   }
@@ -246,6 +272,27 @@ struct AccountUsageView: View {
     .accessibilityElement(children: .ignore)
     .accessibilityLabel(title)
     .accessibilityValue(value)
+  }
+
+  private func modelUsageRow(_ breakdown: UsageBreakdown) -> some View {
+    let tokens = breakdown.totals.inputTokens + breakdown.totals.outputTokens
+    let detail =
+      "\(UsageValueFormatter.count(tokens)) tokens · "
+      + "\(UsageValueFormatter.count(breakdown.totals.requests)) requests"
+    return SettingsListRow(
+      title: breakdown.key,
+      subtitle: detail,
+      systemImage: "cube",
+      height: QuotaDesign.Layout.settingsListRowHeight
+    ) {
+      Text(UsageValueFormatter.cost(breakdown.cost))
+        .quotaMonoListValueStyle()
+        .lineLimit(1)
+        .minimumScaleFactor(0.75)
+    }
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel(breakdown.key)
+    .accessibilityValue("\(detail). \(UsageValueFormatter.cost(breakdown.cost))")
   }
 }
 
@@ -262,6 +309,7 @@ private struct PresentedUsage {
   let totals: UsageTokenTotals
   let cost: UsageCostOutcome
   let coverage: [UsageCoverage]
+  let breakdowns: [UsageBreakdown]
 }
 
 @ViewBuilder
@@ -286,7 +334,12 @@ private func settingsEmptyCopy(_ message: String) -> some View {
 
 enum UsageValueFormatter {
   static func count(_ value: Int) -> String {
-    NumberFormatter.localizedString(from: NSNumber(value: value), number: .decimal)
+    value.formatted(
+      .number
+        .notation(.compactName)
+        .precision(.significantDigits(1...3))
+    )
+    .replacingOccurrences(of: "K", with: "k")
   }
 
   static func cost(_ outcome: UsageCostOutcome) -> String {

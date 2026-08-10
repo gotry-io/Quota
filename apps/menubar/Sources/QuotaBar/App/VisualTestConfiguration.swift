@@ -451,7 +451,68 @@
           status: .partial
         ),
       ],
-      breakdowns: []
+      breakdowns: [
+        UsageBreakdown(
+          dimension: .model,
+          key: "gpt-5",
+          totals: UsageTokenTotals(
+            inputTokens: 1_120_000,
+            cacheReadTokens: 400_000,
+            cacheWrite5mTokens: 10_000,
+            cacheWrite1hTokens: 0,
+            cacheWriteInferredTokens: 0,
+            outputTokens: 240_000,
+            reasoningTokens: 80_000,
+            requests: 132,
+            webSearchRequests: 6,
+            webFetchRequests: 2,
+            sourceCostMicrousd: nil,
+            sourceCostCoveredRequests: 0
+          ),
+          cost: UsageCostOutcome(
+            mode: .calculate,
+            basis: .calculated,
+            status: .complete,
+            amountMicrousd: "1200000",
+            catalogRevision: "pricing_2026_08_01",
+            calculatedRows: 1,
+            reportedRows: 0,
+            unpricedRows: 0,
+            assumptions: [.modelAlias],
+            unpriced: []
+          )
+        ),
+        UsageBreakdown(
+          dimension: .model,
+          key: "claude-sonnet-4",
+          totals: UsageTokenTotals(
+            inputTokens: 300_500,
+            cacheReadTokens: 80_000,
+            cacheWrite5mTokens: 10_000,
+            cacheWrite1hTokens: 0,
+            cacheWriteInferredTokens: 0,
+            outputTokens: 44_120,
+            reasoningTokens: 12_400,
+            requests: 32,
+            webSearchRequests: 2,
+            webFetchRequests: 1,
+            sourceCostMicrousd: nil,
+            sourceCostCoveredRequests: 0
+          ),
+          cost: UsageCostOutcome(
+            mode: .calculate,
+            basis: .calculated,
+            status: .complete,
+            amountMicrousd: "289234",
+            catalogRevision: "pricing_2026_08_01",
+            calculatedRows: 1,
+            reportedRows: 0,
+            unpricedRows: 0,
+            assumptions: [.modelAlias],
+            unpriced: []
+          )
+        ),
+      ]
     )
   }
 

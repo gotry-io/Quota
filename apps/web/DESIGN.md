@@ -21,8 +21,9 @@ open-source tool, not a hosting console or a promotional SaaS dashboard.
 The site has three surfaces:
 
 1. `/` explains local collection, one GitHub-backed Account, Devices, and API-equivalent Usage cost.
-2. `/app` shows account totals, cost coverage, Devices, and agent breakdowns. It supports browser
-   logout and explicit Device deletion.
+2. `/my` shows the signed-in user's name, quota snapshots, account totals, cost coverage, Usage
+   activity, model/agent breakdowns, Devices, and explicit Device deletion. Account actions live in
+   the account menu. The shipped `/app` bookmark is a single redirect to `/my`.
 3. `/activate` approves or denies a QuotaCLI device authorization code.
 
 GitHub is the only sign-in action. There is no Relay selection, pairing group, owner capability,
@@ -123,8 +124,8 @@ autofill. Approve is primary; Deny is secondary. Success tells the user to retur
 Before shipping a Web change:
 
 - run the package check and production build;
-- inspect `/`, `/app`, and `/activate` at desktop and narrow mobile widths when browser tooling is
-  available;
+- inspect `/`, `/my` (and the shipped `/app` redirect), and `/activate` at desktop and narrow mobile
+  widths when browser tooling is available;
 - navigate all controls with a keyboard;
 - verify loading, signed-out, empty, partial/unpriced cost, recent-auth, and failure states;
 - confirm no credential, raw Usage, prompt, path, or untrusted HTML reaches the DOM.

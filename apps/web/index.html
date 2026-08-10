@@ -31,7 +31,7 @@
       <nav aria-label="Primary navigation">
         <a href="/#product">Product</a>
         <a href="https://github.com/gotry-io/Quota">GitHub</a>
-        <a class="button button-primary header-action" href="/app">Open Quota</a>
+        <a class="button button-primary header-action" href="/my">Open Quota</a>
       </nav>
     </header>
 
@@ -135,8 +135,15 @@
 
       <section id="dashboard-view" class="dashboard" aria-labelledby="dashboard-title" hidden>
         <div class="dashboard-heading">
-          <div><p class="eyebrow">Quota account</p><h1 id="dashboard-title">Usage</h1><p id="account-label" class="hero-summary"></p></div>
-          <form id="logout-form" action="/api/auth/v2/logout" method="post"><button class="button button-secondary" type="submit">Sign out</button></form>
+          <div><p class="eyebrow">Quota account · Usage</p><h1 id="dashboard-title">My account</h1></div>
+          <details class="account-menu">
+            <summary class="button button-secondary">Account menu</summary>
+            <div class="account-menu-popover">
+              <form id="logout-form" action="/api/auth/v2/sign-out" method="post">
+                <button class="text-button" type="submit">Sign out</button>
+              </form>
+            </div>
+          </details>
         </div>
         <div id="account-error" class="notice" role="alert" hidden></div>
         <div class="summary-grid">
@@ -144,6 +151,10 @@
           <article><span>Output tokens</span><strong id="output-total">—</strong></article>
           <article><span>API-equivalent cost</span><strong id="cost-total">—</strong><small id="cost-coverage"></small></article>
         </div>
+        <section class="dashboard-section" aria-labelledby="quota-title">
+          <div class="dashboard-section-heading"><div><p class="eyebrow">Plan limits</p><h2 id="quota-title">Quota</h2></div></div>
+          <div id="quota-list" class="quota-grid"></div>
+        </section>
         <section class="dashboard-section" aria-labelledby="devices-title">
           <div class="dashboard-section-heading"><div><p class="eyebrow">Installations</p><h2 id="devices-title">Devices</h2></div><span id="device-count" class="count-pill"></span></div>
           <div id="device-list" class="device-grid"></div>
@@ -151,6 +162,17 @@
         <section class="dashboard-section" aria-labelledby="breakdown-title">
           <div class="dashboard-section-heading"><div><p class="eyebrow">Usage</p><h2 id="breakdown-title">By agent</h2></div></div>
           <div class="table-wrap"><table><thead><tr><th scope="col">Agent</th><th scope="col">Input</th><th scope="col">Output</th><th scope="col">Cost</th></tr></thead><tbody id="usage-breakdown"></tbody></table></div>
+        </section>
+        <section class="dashboard-section" aria-labelledby="model-breakdown-title">
+          <div class="dashboard-section-heading"><div><p class="eyebrow">Usage</p><h2 id="model-breakdown-title">By model</h2></div></div>
+          <div class="table-wrap"><table><thead><tr><th scope="col">Model</th><th scope="col">Input</th><th scope="col">Output</th><th scope="col">Cost</th></tr></thead><tbody id="model-breakdown"></tbody></table></div>
+        </section>
+        <section class="dashboard-section" aria-labelledby="usage-activity-title">
+          <div class="dashboard-section-heading"><div><p class="eyebrow">Usage</p><h2 id="usage-activity-title">Activity</h2></div><span id="usage-activity-status" class="count-pill" aria-live="polite"></span></div>
+          <div class="usage-activity-card">
+            <div id="usage-activity-grid" class="usage-activity-state" aria-live="polite">Loading Usage activity…</div>
+            <div class="activity-legend" aria-hidden="true"><span>Less</span><i class="usage-activity-cell activity-level-0"></i><i class="usage-activity-cell activity-level-1"></i><i class="usage-activity-cell activity-level-2"></i><i class="usage-activity-cell activity-level-3"></i><i class="usage-activity-cell activity-level-4"></i><span>More</span></div>
+          </div>
         </section>
         <section class="dashboard-section danger-zone" aria-labelledby="account-actions-title">
           <div><p class="eyebrow">Danger zone</p><h2 id="account-actions-title">Delete Account</h2><p>Remove this Account, every Device, all Quota and Usage data, sessions, and deletion controls.</p></div>
@@ -170,7 +192,7 @@
       </section>
     </main>
 
-    <footer><span>© <span id="copyright-year"></span> gotry-io contributors · MIT</span><div class="footer-links"><a href="https://github.com/gotry-io/Quota">GitHub</a><a href="/app">Account</a></div></footer>
+    <footer><span>© <span id="copyright-year"></span> gotry-io contributors · MIT</span><div class="footer-links"><a href="https://github.com/gotry-io/Quota">GitHub</a><a href="/my">Account</a></div></footer>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

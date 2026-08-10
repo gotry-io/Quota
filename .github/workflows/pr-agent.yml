@@ -78,7 +78,9 @@ jobs:
           config.ai_timeout: "180"
 
           github_action_config.auto_review: "true"
-          github_action_config.auto_describe: "true"
+          # The PR body is authored before opening the PR. Generating it again doubles the model
+          # work and can exhaust the review window before the actual review starts on large diffs.
+          github_action_config.auto_describe: "false"
           github_action_config.auto_improve: "false"
           github_action_config.pr_actions: '["opened", "reopened", "ready_for_review", "synchronize"]'
 

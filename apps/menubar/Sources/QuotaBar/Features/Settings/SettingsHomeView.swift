@@ -95,32 +95,37 @@ struct SettingsHomeView: View {
         case .signedIn:
           SettingsListRow(
             title: model.accountDisplayLabel,
-            subtitle: "Signed in with GitHub",
             systemImage: "person.crop.circle.fill",
-            height: QuotaDesign.Layout.settingsListRowHeight
+            height: QuotaDesign.Layout.settingsRowHeight
           ) {
-            Text("Connected")
-              .quotaListSecondaryStyle()
-          }
-
-          Button {
-            Task { await model.logout() }
-          } label: {
-            SettingsListRow(title: "Log Out", systemImage: "rectangle.portrait.and.arrow.right") {
-              if model.isLoggingOut {
-                ProgressView().controlSize(.small)
+            Button {
+              Task { await model.logout() }
+            } label: {
+              Group {
+                if model.isLoggingOut {
+                  ProgressView().controlSize(.small)
+                } else {
+                  Text("Log Out")
+                }
               }
+              .quotaFont(.listSecondary)
+              .foregroundStyle(QuotaPalette.critical)
+              .frame(
+                minWidth: QuotaDesign.Layout.minimumInteractiveDimension,
+                minHeight: QuotaDesign.Layout.minimumInteractiveDimension
+              )
             }
+            .buttonStyle(.plain)
+            .disabled(model.isLoggingOut)
+            .accessibilityLabel(model.isLoggingOut ? "Logging out" : "Log Out")
           }
-          .buttonStyle(QuotaListRowButtonStyle())
-          .disabled(model.isLoggingOut)
-          .accessibilityLabel(model.isLoggingOut ? "Logging out" : "Log Out")
 
         case .logoutPending:
           accountAction(
             message: "Logout is pending and will finish when this Mac is online.",
             title: model.isLoggingOut ? "Retrying…" : "Retry Logout",
-            isEnabled: !model.isLoggingOut
+            isEnabled: !model.isLoggingOut,
+            isCompact: true
           ) {
             Task { await model.logout() }
           }
@@ -136,10 +141,17 @@ struct SettingsHomeView: View {
             accountAction(
               message: signedOutMessage,
               title: "Continue with GitHub",
+              isCompact: true,
               action: model.startLogin
             )
           }
         }
+
+        settingsLinkRow(
+          title: "Manage account",
+          systemImage: "globe",
+          url: AppMetadata.accountURL
+        )
 
         if let accountErrorMessage = model.accountErrorMessage {
           Label(accountErrorMessage, systemImage: "exclamationmark.circle")
@@ -180,6 +192,7 @@ struct SettingsHomeView: View {
     message: String,
     title: String,
     isEnabled: Bool = true,
+    isCompact: Bool = false,
     action: @escaping () -> Void
   ) -> some View {
     VStack(alignment: .leading, spacing: QuotaDesign.Spacing.sm) {
@@ -188,7 +201,7 @@ struct SettingsHomeView: View {
         .fixedSize(horizontal: false, vertical: true)
 
       Button(title, action: action)
-        .buttonStyle(QuotaPrimaryButtonStyle())
+        .buttonStyle(QuotaPrimaryButtonStyle(isCompact: isCompact))
         .disabled(!isEnabled)
     }
     .padding(QuotaDesign.Layout.groupContentInset)
