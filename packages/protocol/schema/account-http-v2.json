@@ -1101,6 +1101,7 @@
         "aws_bedrock",
         "google_vertex",
         "openrouter",
+        "xai_direct",
         "unknown"
       ]
     },
@@ -1134,7 +1135,7 @@
     },
     "__schema31": {
       "type": "string",
-      "enum": ["codex", "claude_code"]
+      "enum": ["codex", "claude_code", "grok", "opencode", "pi"]
     },
     "__schema32": {
       "type": "string",

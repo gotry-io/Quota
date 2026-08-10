@@ -5,6 +5,9 @@ private let jsonSafeIntegerMaximum = 9_007_199_254_740_991
 enum BillingAgent: String, Codable, Sendable {
   case codex
   case claudeCode = "claude_code"
+  case grok
+  case opencode
+  case pi
 }
 
 enum BillingChannel: String, Codable, Sendable {
@@ -14,6 +17,7 @@ enum BillingChannel: String, Codable, Sendable {
   case awsBedrock = "aws_bedrock"
   case googleVertex = "google_vertex"
   case openrouter
+  case xaiDirect = "xai_direct"
   case unknown
 }
 
@@ -43,10 +47,13 @@ struct UsageCoverage: Codable, Equatable, Sendable {
   let status: CoverageStatus
 
   var isValid: Bool {
-    guard let start = Self.utcHour(startAt), let end = Self.utcHour(endAt), end > start else {
-      return false
-    }
+    guard let start = Self.utcHour(startAt), let end = Self.utcHour(endAt), end > start else { return false }
     return end.timeIntervalSince(start) <= 744 * 3_600
+  }
+
+  var isOrdered: Bool {
+    guard let start = Self.utcHour(startAt), let end = Self.utcHour(endAt) else { return false }
+    return end > start
   }
 
   static func utcHour(_ value: String) -> Date? {
@@ -477,14 +484,7 @@ struct UsageDateRange: Codable, Equatable, Sendable {
   let to: String
 
   var isValid: Bool {
-    guard isUsageDate(from), isUsageDate(to), from <= to,
-      let start = Self.date(from), let end = Self.date(to)
-    else { return false }
-    return end.timeIntervalSince(start) < 366 * 86_400
-  }
-
-  private static func date(_ value: String) -> Date? {
-    ISO8601DateFormatter().date(from: "\(value)T00:00:00Z")
+    isUsageDate(from) && isUsageDate(to) && from <= to
   }
 }
 
@@ -576,7 +576,7 @@ struct LocalUsageReport: Codable, Equatable, Sendable {
     guard protocolVersion == 2,
       range.isValid,
       coverage.count <= 2_048,
-      coverage.allSatisfy(\.isValid),
+      coverage.allSatisfy(\.isOrdered),
       breakdowns.count <= 1_000,
       breakdowns.allSatisfy(\.isValid),
       validAvailable || validUnavailable

@@ -146,7 +146,7 @@
           "$ref": "#/$defs/__schema44"
         },
         "breakdowns": {
-          "$ref": "#/$defs/__schema45"
+          "$ref": "#/$defs/__schema46"
         }
       },
       "required": [
@@ -210,7 +210,7 @@
     },
     "__schema6": {
       "type": "string",
-      "enum": ["codex", "claude_code"]
+      "enum": ["codex", "claude_code", "grok", "opencode", "pi"]
     },
     "__schema7": {
       "type": "string",
@@ -344,6 +344,7 @@
         "aws_bedrock",
         "google_vertex",
         "openrouter",
+        "xai_direct",
         "unknown"
       ]
     },
@@ -718,10 +719,29 @@
       "maxItems": 2048,
       "type": "array",
       "items": {
-        "$ref": "#/$defs/__schema5"
+        "$ref": "#/$defs/__schema45"
       }
     },
     "__schema45": {
+      "type": "object",
+      "properties": {
+        "agent": {
+          "$ref": "#/$defs/__schema6"
+        },
+        "start_at": {
+          "$ref": "#/$defs/__schema7"
+        },
+        "end_at": {
+          "$ref": "#/$defs/__schema7"
+        },
+        "status": {
+          "$ref": "#/$defs/__schema8"
+        }
+      },
+      "required": ["agent", "start_at", "end_at", "status"],
+      "additionalProperties": false
+    },
+    "__schema46": {
       "maxItems": 1000,
       "type": "array",
       "items": {

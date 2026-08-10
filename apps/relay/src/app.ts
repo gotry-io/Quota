@@ -6,6 +6,8 @@ import {
   AccountSummarySchema,
   AccountUsageHourlyResponseSchema,
   AccountUsageResponseSchema,
+  BILLING_AGENTS,
+  type BillingAgent,
   DeleteDeviceResponseSchema,
   DeviceAuthorizationDecisionRequestSchema,
   DeviceAuthorizationRequestSchema,
@@ -53,10 +55,12 @@ const maximumCredentialBodyBytes = 64 * 1024;
 const maximumSnapshotBodyBytes = 256 * 1024;
 const maximumAccountDevices = 256;
 const maximumAccountSnapshots = 8_192;
+const maximumAccountUsageSummaryRows = 100_000;
 const recentAuthenticationMilliseconds = 10 * 60 * 1000;
 const activeDeviceMilliseconds = 15 * 60 * 1000;
 const expiredSessionRetentionMilliseconds = 7 * 24 * 60 * 60 * 1000;
 const maintenanceBatchLimit = 100;
+const legacyUsageAgents = ["codex", "claude_code"] as const satisfies readonly BillingAgent[];
 
 const rateLimits = {
   nativeAuthorize: { limit: 60, windowSeconds: 10 * 60 },
@@ -104,6 +108,12 @@ export function createRelayApp(options: RelayAppOptions): Hono {
   const catalogETag = options.pricingCatalog
     ? `"${options.pricingCatalog.revision}"`
     : PRICING_CATALOG_ETAG;
+  const legacyCatalog = PricingCatalogSchema.parse({
+    ...catalog,
+    revision: `${catalog.revision}-legacy`,
+    entries: catalog.entries.filter((entry) => entry.billing_channel !== "xai_direct"),
+  });
+  const legacyCatalogETag = `"${legacyCatalog.revision}"`;
 
   app.get("/healthz", (context) => context.json({ status: "ok", ...managedServiceInfo() }));
   for (const path of [
@@ -457,7 +467,10 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     if (principal instanceof Response) {
       return principal;
     }
-    const selected = await accountUsageQuery(context, principal, options, catalog, now());
+    const selected = await accountUsageQuery(context, principal, options, catalog, now(), {
+      allByDefault: true,
+      includeHourlyBreakdowns: false,
+    });
     if (selected instanceof Response) {
       return selected;
     }
@@ -507,9 +520,13 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     if (principal instanceof Response) {
       return principal;
     }
-    if (!hasOnlyQueryKeys(context, ["start_at", "end_at", "device_id", "cost_mode"])) {
+    if (
+      !hasOnlyQueryKeys(context, ["start_at", "end_at", "device_id", "cost_mode", "usage_agents"])
+    ) {
       return invalidRequest(context);
     }
+    const agents = usageAgents(context);
+    if (!agents) return invalidRequest(context);
     const start = UtcHourSchema.safeParse(context.req.query("start_at"));
     const end = UtcHourSchema.safeParse(context.req.query("end_at"));
     const mode = UsageCostModeSchema.safeParse(context.req.query("cost_mode") ?? "calculate");
@@ -531,6 +548,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     }
     const result = await options.usageState.queryAccountUsage(principal.account_id, {
       ...(deviceId ? { device_id: deviceId } : {}),
+      agents,
       start_at: start.data,
       end_at: end.data,
       limit: MAXIMUM_USAGE_READ_ROWS,
@@ -753,12 +771,18 @@ export function createRelayApp(options: RelayAppOptions): Hono {
   });
 
   app.get("/api/v2/pricing/catalog", (context) => {
-    context.header("ETag", catalogETag);
+    if (!hasOnlyQueryKeys(context, ["usage_agents"])) return invalidRequest(context);
+    const agents = usageAgents(context);
+    if (!agents) return invalidRequest(context);
+    const expanded = agents === BILLING_AGENTS;
+    const selectedCatalog = expanded ? catalog : legacyCatalog;
+    const selectedETag = expanded ? catalogETag : legacyCatalogETag;
+    context.header("ETag", selectedETag);
     context.header("Cache-Control", "public, max-age=300, must-revalidate");
-    if (context.req.header("If-None-Match") === catalogETag) {
+    if (context.req.header("If-None-Match") === selectedETag) {
       return context.body(null, 304);
     }
-    return context.json(catalog);
+    return context.json(selectedCatalog);
   });
 
   app.notFound((context) => notFound(context));
@@ -774,20 +798,41 @@ async function accountUsageQuery(
   options: RelayAppOptions,
   catalog: PricingCatalog,
   checkedAt: Date,
+  summaryOptions: { allByDefault: boolean; includeHourlyBreakdowns: boolean } = {
+    allByDefault: false,
+    includeHourlyBreakdowns: true,
+  },
 ) {
-  if (!hasOnlyQueryKeys(context, ["from", "to", "device_id", "cost_mode"])) {
+  if (!hasOnlyQueryKeys(context, ["from", "to", "device_id", "cost_mode", "usage_agents"])) {
     return invalidRequest(context);
   }
+  const agents = usageAgents(context);
+  if (!agents) return invalidRequest(context);
   const defaultTo = checkedAt.toISOString().slice(0, 10);
   const defaultFrom = new Date(checkedAt.getTime() - 29 * 24 * 60 * 60 * 1000)
     .toISOString()
     .slice(0, 10);
-  const range = UsageDateRangeSchema.safeParse({
-    from: context.req.query("from") ?? defaultFrom,
-    to: context.req.query("to") ?? defaultTo,
-  });
+  const requestedFrom = context.req.query("from");
+  const requestedTo = context.req.query("to");
+  const allDates =
+    summaryOptions.allByDefault &&
+    context.req.query("usage_agents") === "all" &&
+    requestedFrom === undefined &&
+    requestedTo === undefined;
+  const range = allDates
+    ? null
+    : UsageDateRangeSchema.safeParse({
+        from: requestedFrom ?? defaultFrom,
+        to: requestedTo ?? defaultTo,
+      });
   const mode = UsageCostModeSchema.safeParse(context.req.query("cost_mode") ?? "calculate");
-  if (!range.success || !mode.success) {
+  const exceedsLegacyRange =
+    context.req.query("usage_agents") === undefined &&
+    range?.success === true &&
+    (Date.parse(`${range.data.to}T00:00:00Z`) - Date.parse(`${range.data.from}T00:00:00Z`)) /
+      86_400_000 >=
+      366;
+  if (range?.success === false || exceedsLegacyRange || !mode.success) {
     return invalidRequest(context);
   }
   const deviceId = context.req.query("device_id");
@@ -796,22 +841,55 @@ async function accountUsageQuery(
   }
   const result = await options.usageState.queryAccountUsage(principal.account_id, {
     ...(deviceId ? { device_id: deviceId } : {}),
-    from: range.data.from,
-    to: range.data.to,
-    ...usageDateUtcBounds(range.data),
-    limit: MAXIMUM_USAGE_READ_ROWS,
+    agents,
+    ...(range?.success
+      ? {
+          from: range.data.from,
+          to: range.data.to,
+          ...usageDateUtcBounds(range.data),
+        }
+      : {}),
+    limit: summaryOptions.includeHourlyBreakdowns
+      ? MAXIMUM_USAGE_READ_ROWS
+      : maximumAccountUsageSummaryRows,
   });
   if (result.truncated) {
     return resultLimit(context);
   }
   try {
-    return { summary: buildUsageSummary(result, range.data, mode.data, catalog) };
+    return {
+      summary: buildUsageSummary(
+        result,
+        range?.success ? range.data : retainedUsageRange(result.rows, defaultTo),
+        mode.data,
+        catalog,
+        summaryOptions.includeHourlyBreakdowns,
+      ),
+    };
   } catch (error) {
     if (error instanceof UsageSummaryLimitError) {
       return resultLimit(context);
     }
     throw error;
   }
+}
+
+function usageAgents(context: Context): readonly BillingAgent[] | undefined {
+  const requested = context.req.query("usage_agents");
+  return requested === undefined
+    ? legacyUsageAgents
+    : requested === "all"
+      ? BILLING_AGENTS
+      : undefined;
+}
+
+function retainedUsageRange(
+  rows: readonly { usage_date: string }[],
+  currentDate: string,
+): { from: string; to: string } {
+  if (rows.length === 0) return { from: currentDate, to: currentDate };
+  const dates = rows.map((row) => row.usage_date).sort();
+  return { from: dates[0] ?? currentDate, to: dates.at(-1) ?? currentDate };
 }
 
 function usageDateUtcBounds(range: { from: string; to: string }): {

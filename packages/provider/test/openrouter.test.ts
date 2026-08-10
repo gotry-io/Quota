@@ -38,11 +38,11 @@ describe("openrouter mapping", () => {
     expect(windows[1]).toMatchObject({
       id: "credits",
       title: "Credits",
-      used_percent: 90,
+      used_percent: 0,
       remaining_value: 5,
-      limit_value: 50,
       value_unit: "usd",
     });
+    expect(windows[1]?.limit_value).toBeUndefined();
   });
 
   it("omits key window when no limit is configured and keeps credits", () => {
@@ -55,7 +55,8 @@ describe("openrouter mapping", () => {
     const windows = mapOpenRouterWindows(credits!, key);
     expect(windows).toHaveLength(1);
     expect(windows[0]?.id).toBe("credits");
-    expect(windows[0]?.used_percent).toBe(20);
+    expect(windows[0]).toMatchObject({ used_percent: 0, remaining_value: 8, value_unit: "usd" });
+    expect(windows[0]?.limit_value).toBeUndefined();
   });
 
   it("keeps key-limit when prepaid credits are zero", () => {
@@ -100,6 +101,7 @@ describe("openrouter collector", () => {
     expect(sessions[0]?.credential_source).toBe("env:OPENROUTER_API_KEY");
     const snapshot = await collector.collect(sessions[0]!);
     expect(snapshot.provider).toBe("openrouter");
+    expect(snapshot.account.plan).toBe("Credits");
     expect(snapshot.windows[0]?.used_percent).toBe(40);
     expect(snapshot.windows[1]?.id).toBe("credits");
     expect(JSON.stringify(snapshot)).not.toContain("sk-or-v1-fixture");

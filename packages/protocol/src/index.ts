@@ -415,7 +415,8 @@ export const DeleteDeviceResponseSchema = z
   .strict();
 export type DeleteDeviceResponse = z.infer<typeof DeleteDeviceResponseSchema>;
 
-export const BillingAgentSchema = z.enum(["codex", "claude_code"]);
+export const BILLING_AGENTS = ["codex", "claude_code", "grok", "opencode", "pi"] as const;
+export const BillingAgentSchema = z.enum(BILLING_AGENTS);
 export type BillingAgent = z.infer<typeof BillingAgentSchema>;
 
 export const BillingChannelSchema = z.enum([
@@ -425,6 +426,7 @@ export const BillingChannelSchema = z.enum([
   "aws_bedrock",
   "google_vertex",
   "openrouter",
+  "xai_direct",
   "unknown",
 ]);
 export type BillingChannel = z.infer<typeof BillingChannelSchema>;
@@ -436,6 +438,7 @@ export const PricedBillingChannelSchema = z.enum([
   "aws_bedrock",
   "google_vertex",
   "openrouter",
+  "xai_direct",
 ]);
 export type PricedBillingChannel = z.infer<typeof PricedBillingChannelSchema>;
 
@@ -464,6 +467,16 @@ export const UsageCoverageSchema = z
   .strict()
   .superRefine(validateCoverageRange);
 export type UsageCoverage = z.infer<typeof UsageCoverageSchema>;
+
+const LocalUsageCoverageSchema = z
+  .object({
+    agent: BillingAgentSchema,
+    start_at: UtcHourSchema,
+    end_at: UtcHourSchema,
+    status: CoverageStatusSchema,
+  })
+  .strict()
+  .superRefine(validateCoverageOrder);
 
 export const UsageHourlyFactSchema = z
   .object({
@@ -704,12 +717,6 @@ export const UsageDateRangeSchema = z
     const to = Date.parse(`${range.to}T00:00:00Z`);
     if (from > to) {
       context.addIssue({ code: "custom", path: ["to"], message: "to must not precede from." });
-    } else if ((to - from) / 86_400_000 >= 366) {
-      context.addIssue({
-        code: "custom",
-        path: ["to"],
-        message: "Date range may contain at most 366 days.",
-      });
     }
   });
 export type UsageDateRange = z.infer<typeof UsageDateRangeSchema>;
@@ -737,7 +744,7 @@ export const LocalUsageReportSchema = z
     status: LocalUsageReportStatusSchema,
     totals: UsageTokenTotalsSchema.nullable(),
     cost: UsageCostOutcomeSchema.nullable(),
-    coverage: z.array(UsageCoverageSchema).max(MAXIMUM_USAGE_COVERAGE_ITEMS),
+    coverage: z.array(LocalUsageCoverageSchema).max(MAXIMUM_USAGE_COVERAGE_ITEMS),
     breakdowns: z.array(UsageBreakdownSchema).max(MAXIMUM_USAGE_BREAKDOWNS),
   })
   .strict()
@@ -1117,21 +1124,28 @@ function validateCoverageRange(
   coverage: { start_at: string; end_at: string },
   context: z.RefinementCtx,
 ): void {
+  validateCoverageOrder(coverage, context);
   const start = Date.parse(coverage.start_at);
   const end = Date.parse(coverage.end_at);
-  if (end <= start) {
-    context.addIssue({
-      code: "custom",
-      path: ["end_at"],
-      message: "Coverage end_at must be later than start_at.",
-    });
-    return;
-  }
+  if (end <= start) return;
   if ((end - start) / 3_600_000 > MAXIMUM_USAGE_COVERAGE_HOURS) {
     context.addIssue({
       code: "custom",
       path: ["end_at"],
       message: `Coverage may span at most ${MAXIMUM_USAGE_COVERAGE_HOURS} hours.`,
+    });
+  }
+}
+
+function validateCoverageOrder(
+  coverage: { start_at: string; end_at: string },
+  context: z.RefinementCtx,
+): void {
+  if (Date.parse(coverage.end_at) <= Date.parse(coverage.start_at)) {
+    context.addIssue({
+      code: "custom",
+      path: ["end_at"],
+      message: "Coverage end_at must be later than start_at.",
     });
   }
 }

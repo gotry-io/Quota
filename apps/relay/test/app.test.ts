@@ -145,6 +145,180 @@ describe("managed Relay on real Workers and D1", () => {
     }
   });
 
+  it("accepts a shipped unknown-model submission while discarding its invalid row", async () => {
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_legacy', 'subject_legacy', ?1, ?1)",
+      ).bind(now.toISOString()),
+      env.DB.prepare(
+        `INSERT INTO devices (
+           id, account_id, installation_id_hash, generation, created_at, last_login_at
+         ) VALUES ('device_legacy', 'account_legacy', 'installation_legacy', 1, ?1, ?1)`,
+      ).bind(now.toISOString()),
+    ]);
+    const principal: DevicePrincipal = {
+      kind: "device",
+      session_id: "session_legacy",
+      family_id: "family_legacy",
+      account_id: "account_legacy",
+      device_id: "device_legacy",
+      generation: 1,
+      scopes: ["usage:write:self"],
+    };
+    const submission = legacyUnknownSubmission();
+    const usage = new D1UsageState(env.DB);
+
+    expect(await usage.recordUsage(principal, submission, now.toISOString())).toMatchObject({
+      outcome: "accepted",
+      next_sequence: 1,
+    });
+    expect(await usage.recordUsage(principal, submission, now.toISOString())).toMatchObject({
+      outcome: "duplicate",
+      next_sequence: 1,
+    });
+    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM usage_hourly").first("count")).toBe(
+      0,
+    );
+  });
+
+  it("filters additive Usage agents for released v2 clients", async () => {
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_agents', 'subject_agents', ?1, ?1)",
+      ).bind(now.toISOString()),
+      env.DB.prepare(
+        `INSERT INTO devices (
+           id, account_id, installation_id_hash, generation, created_at, last_login_at
+         ) VALUES ('device_agents', 'account_agents', 'installation_agents', 1, ?1, ?1)`,
+      ).bind(now.toISOString()),
+      usageFactInsert("codex", "openai_direct", "gpt-5.6-sol"),
+      usageFactInsert("grok", "xai_direct", "grok-4.5"),
+    ]);
+
+    const state = new D1UsageState(env.DB);
+    const legacy = await state.queryAccountUsage("account_agents", {
+      agents: ["codex", "claude_code"],
+      limit: 100,
+    });
+    const expanded = await state.queryAccountUsage("account_agents", {
+      agents: ["codex", "claude_code", "grok", "opencode", "pi"],
+      limit: 100,
+    });
+
+    expect(legacy.rows.map((row) => row.agent)).toEqual(["codex"]);
+    expect(expanded.rows.map((row) => row.agent)).toEqual(["codex", "grok"]);
+  });
+
+  it("keeps additive pricing channels behind the v2 opt-in", async () => {
+    const state = new D1AccountState(env.DB);
+    const hasher = new SecretHasher(secret);
+    const app = createRelayApp({
+      state,
+      usageState: new D1UsageState(env.DB),
+      accountService: new AccountService(state, hasher, secret),
+      webAuth: createWebAccountAuth({
+        database: env.DB,
+        githubClientId: "github-client",
+        githubClientSecret: "github-secret",
+        githubSubjectKey: secret,
+        authSecret: secret,
+        origin: "https://quota.gotry.io",
+      }),
+      hasher,
+      now: () => now,
+    });
+
+    const legacy = (await (
+      await app.request("https://quota.gotry.io/api/v2/pricing/catalog")
+    ).json()) as { entries: Array<{ billing_channel: string }> };
+    const expanded = (await (
+      await app.request("https://quota.gotry.io/api/v2/pricing/catalog?usage_agents=all")
+    ).json()) as { entries: Array<{ billing_channel: string }> };
+
+    expect(legacy.entries.some((entry) => entry.billing_channel === "xai_direct")).toBe(false);
+    expect(expanded.entries.some((entry) => entry.billing_channel === "xai_direct")).toBe(true);
+  });
+
+  it("keeps the shipped summary range while new clients opt into retained history", async () => {
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_history', 'account_history', ?1, ?1)",
+      ).bind(now.toISOString()),
+      env.DB.prepare(
+        `INSERT INTO devices (
+           id, account_id, installation_id_hash, generation, created_at, last_login_at
+         ) VALUES ('device_history', 'account_history', 'installation_history', 1, ?1, ?1)`,
+      ).bind(now.toISOString()),
+      usageFactInsertAt("device_history", "2025-01-01T00:00:00Z", "2025-01-01"),
+      usageFactInsertAt("device_history", "2026-08-09T00:00:00Z", "2026-08-09"),
+    ]);
+    const state = new D1AccountState(env.DB);
+    const hasher = new SecretHasher(secret);
+    const webAuth: WebAccountAuth = {
+      handler: async () => new Response(null, { status: 404 }),
+      beginGitHubSignIn: async () => new Response(null, { status: 302 }),
+      getSession: async () => ({
+        user: { id: "account_history", name: "Quota Tester" },
+        session: {
+          id: "web_history",
+          createdAt: now,
+          expiresAt: new Date(now.getTime() + 60_000),
+        },
+      }),
+    };
+    const app = createRelayApp({
+      state,
+      usageState: new D1UsageState(env.DB),
+      accountService: new AccountService(state, hasher, secret),
+      webAuth,
+      hasher,
+      now: () => now,
+    });
+
+    const legacy = (await (
+      await app.request("https://quota.gotry.io/api/v2/account/summary")
+    ).json()) as {
+      usage: { range: { from: string; to: string }; totals: { requests: number } };
+    };
+    const expanded = (await (
+      await app.request("https://quota.gotry.io/api/v2/account/summary?usage_agents=all")
+    ).json()) as {
+      usage: {
+        range: { from: string; to: string };
+        totals: { requests: number };
+        breakdowns: Array<{ dimension: string }>;
+      };
+    };
+
+    expect(legacy.usage).toMatchObject({
+      range: { from: "2026-07-12", to: "2026-08-10" },
+      totals: { requests: 1 },
+    });
+    expect(expanded.usage).toMatchObject({
+      range: { from: "2025-01-01", to: "2026-08-09" },
+      totals: { requests: 2 },
+    });
+    expect(
+      expanded.usage.breakdowns.some(
+        ({ dimension }) => dimension === "usage_date" || dimension === "bucket_start_utc",
+      ),
+    ).toBe(false);
+    expect(
+      (
+        await app.request(
+          "https://quota.gotry.io/api/v2/account/summary?from=2025-01-01&to=2026-08-10",
+        )
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await app.request(
+          "https://quota.gotry.io/api/v2/account/summary?usage_agents=all&from=2025-01-01&to=2026-08-10",
+        )
+      ).status,
+    ).toBe(200);
+  });
+
   it("stores Better Auth sessions encrypted behind hashed keys", async () => {
     const storage = new D1EncryptedAuthStorage(env.DB, secret);
     await storage.set("raw-session-token", JSON.stringify({ token: "raw-session-token" }), 60);
@@ -412,3 +586,86 @@ describe("managed Relay on real Workers and D1", () => {
     ).toBe(0);
   });
 });
+
+function usageFactInsert(agent: string, channel: string, model: string): D1PreparedStatement {
+  return env.DB.prepare(
+    `INSERT INTO usage_hourly (
+         device_id, bucket_start_utc, usage_date, usage_hour, aggregation_timezone,
+         agent, billing_channel, channel_source, model, context_bucket,
+         service_tier, speed, inference_geo, input_tokens, cache_read_tokens,
+         cache_write_5m_tokens, cache_write_1h_tokens, cache_write_inferred_tokens,
+         output_tokens, reasoning_tokens, requests, web_search_requests, web_fetch_requests,
+         source_cost_microusd, source_cost_covered_requests
+       ) VALUES (
+         'device_agents', '2026-08-10T00:00:00Z', '2026-08-10', 8, 'Asia/Singapore',
+         ?1, ?2, 'agent_default', ?3, 'le_128k',
+         'unknown', 'unknown', 'unknown', 10, 0,
+         0, 0, 0, 2, 0, 1, 0, 0, NULL, 0
+       )`,
+  ).bind(agent, channel, model);
+}
+
+function usageFactInsertAt(
+  deviceID: string,
+  bucketStart: string,
+  usageDate: string,
+): D1PreparedStatement {
+  return env.DB.prepare(
+    `INSERT INTO usage_hourly (
+       device_id, bucket_start_utc, usage_date, usage_hour, aggregation_timezone,
+       agent, billing_channel, channel_source, model, context_bucket,
+       service_tier, speed, inference_geo, input_tokens, cache_read_tokens,
+       cache_write_5m_tokens, cache_write_1h_tokens, cache_write_inferred_tokens,
+       output_tokens, reasoning_tokens, requests, web_search_requests, web_fetch_requests,
+       source_cost_microusd, source_cost_covered_requests
+     ) VALUES (
+       ?1, ?2, ?3, 0, 'UTC', 'codex', 'openai_direct', 'agent_default',
+       'gpt-5.6-sol', 'le_128k', 'unknown', 'unknown', 'unknown', 10, 0,
+       0, 0, 0, 2, 0, 1, 0, 0, NULL, 0
+     )`,
+  ).bind(deviceID, bucketStart, usageDate);
+}
+
+function legacyUnknownSubmission(): UsageSubmission {
+  return {
+    protocol_version: 2,
+    submission_id: "submission_legacy_unknown",
+    device_id: "device_legacy",
+    generation: 1,
+    sequence: 0,
+    parser_revision: "quota-usage-2",
+    aggregation_timezone: "UTC",
+    coverage: {
+      agent: "codex",
+      start_at: "2026-08-09T10:00:00Z",
+      end_at: "2026-08-09T11:00:00Z",
+      status: "complete",
+    },
+    rows: [
+      {
+        bucket_start_utc: "2026-08-09T10:00:00Z",
+        usage_date: "2026-08-09",
+        usage_hour: 10,
+        agent: "codex",
+        billing_channel: "openai_direct",
+        channel_source: "agent_default",
+        model: "unknown",
+        context_bucket: "le_128k",
+        service_tier: "unknown",
+        speed: "unknown",
+        inference_geo: "unknown",
+        input_tokens: 10,
+        cache_read_tokens: 0,
+        cache_write_5m_tokens: 0,
+        cache_write_1h_tokens: 0,
+        cache_write_inferred_tokens: 0,
+        output_tokens: 2,
+        reasoning_tokens: 0,
+        requests: 1,
+        web_search_requests: 0,
+        web_fetch_requests: 0,
+        source_cost_covered_requests: 0,
+      },
+    ],
+  };
+}

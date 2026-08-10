@@ -37,6 +37,24 @@ export {
   scanCodexUsage,
 } from "./providers/codex/usage.ts";
 export {
+  discoverGrokUsageFiles,
+  type GrokUsageFile,
+  grokUsageRoots,
+  scanGrokUsage,
+} from "./providers/grok/usage.ts";
+export {
+  discoverOpenCodeUsageFiles,
+  type OpenCodeUsageFile,
+  openCodeUsageRoots,
+  scanOpenCodeUsage,
+} from "./providers/opencode/usage.ts";
+export {
+  discoverPiUsageFiles,
+  type PiUsageFile,
+  piUsageRoots,
+  scanPiUsage,
+} from "./providers/pi/usage.ts";
+export {
   type CollectorFactoryOptions,
   createDefaultCollectors,
 } from "./registry.ts";
@@ -60,3 +78,4 @@ export type {
   UsageScanResult,
   UsageSourceCursor,
 } from "./usage/contracts.ts";
+export { scanLocalUsage } from "./usage/scan.ts";

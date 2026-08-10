@@ -89,7 +89,8 @@ The header shows:
 - Settings root: Back, **Settings**, and an overflow menu containing **Quit QuotaBar**.
 
 The footer is a single quiet button: **Last checked HH:MM**, or **Not checked** before any sync. It is
-the sync completion clock, not the age of every provider observation. Selecting it runs one sync.
+the sync completion clock, not the age of every provider observation. Selecting it runs one sync;
+clicks while a sync is active are ignored.
 
 Navigation transitions move horizontally by direction and combine with opacity. Reduce Motion uses
 opacity only. A page change clears transient focus/menu state. Escape dismisses a transient menu;
@@ -142,6 +143,8 @@ Account states:
 - Signed out or not checked: short benefit copy and **Continue with GitHub**.
 - Login running: browser completion copy and **Cancel**. Cancellation terminates the helper.
 - Signed in: one compact account row with a local avatar, account display label, and **Log Out**.
+  The first click opens a native confirmation with **Cancel** and destructive **Log Out** actions;
+  it states that the remote Device and synced data remain.
 - Logout pending: explicit offline completion copy and **Retry Logout**.
 - Removed or expired device session: concise reconnect copy; never show raw reason codes or ids.
 
@@ -163,14 +166,14 @@ account surface.
 
 ### Usage
 
-Usage defaults to the typed local 30-day report. When an account summary is available, a segmented
+Usage defaults to the typed all-history local report. When an account summary is available, a segmented
 This Mac/Account control changes the source without changing the presentation. It contains:
 
 - Period: inclusive `from` and `to` dates.
 - Tokens: input, cached input, output, reasoning, and requests.
 - Cost: amount, basis, pricing catalog revision, and unpriced row count.
 - Models: model-dimension rows with compact token/request totals and estimated cost.
-- Coverage: Codex and Claude Code complete/partial range counts.
+- Coverage: Codex, Claude Code, Grok, OpenCode, and Pi complete/partial range counts.
 
 Usage counts use locale-aware decimal formatting below 1,000 and compact SI-style `k`, `M`, and `B`
 suffixes for larger values. Model rows are sorted by token volume, then model name.

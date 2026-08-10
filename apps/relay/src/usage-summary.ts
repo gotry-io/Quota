@@ -35,6 +35,7 @@ export function buildUsageSummary(
   range: { from: string; to: string },
   mode: UsageCostMode,
   catalog: PricingCatalog,
+  includeHourlyBreakdowns = true,
 ): AccountUsageSummary {
   const facts = result.rows.map(usageFact);
   const preparedCosts = prepareUsageCosts(facts, catalog, mode);
@@ -44,7 +45,9 @@ export function buildUsageSummary(
     const fact = facts[index];
     if (!fact) throw new UsageSummaryLimitError();
     addTotals(totals, fact);
-    for (const dimension of breakdownDimensions) {
+    for (const dimension of includeHourlyBreakdowns
+      ? breakdownDimensions
+      : breakdownDimensions.slice(0, -2)) {
       addGroup(groups, dimension, breakdownKey(row, dimension), fact, index);
     }
   }

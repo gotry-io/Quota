@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { aggregateUsageEvents } from "@gotry-io/quota-model";
 import {
+  BILLING_AGENTS,
   type BillingAgent,
   BillingAgentSchema,
   IanaTimezoneSchema,
@@ -15,8 +16,7 @@ import {
 } from "@gotry-io/quota-protocol";
 import {
   type NormalizedUsageEvent,
-  scanClaudeUsage,
-  scanCodexUsage,
+  scanLocalUsage,
   type UsageScanResult,
 } from "@gotry-io/quota-provider";
 import { z } from "zod";
@@ -28,8 +28,7 @@ import {
 } from "./state.ts";
 
 const USAGE_STATE_SCHEMA_VERSION = 1 as const;
-const USAGE_PARSER_REVISION = "quota-usage-2";
-const USAGE_AGENTS = ["codex", "claude_code"] as const;
+const USAGE_PARSER_REVISION = "quota-usage-4";
 const MAX_CONTEXTS = 32;
 const MAX_OUTBOX_ENTRIES = 64;
 const MAX_UPLOADS_PER_SYNC = 8;
@@ -82,11 +81,15 @@ const UsageCacheContextSchema = z
     parser_revision: UsageOpaqueIdSchema,
     aggregation_timezone: IanaTimezoneSchema,
     event_not_before: Rfc3339InstantSchema,
-    cursors: z.array(UsageCursorSchema).length(USAGE_AGENTS.length),
+    // QuotaCLI 0.0.5 shipped a two-agent cache. Parser revision 4 replaces it after decoding.
+    cursors: z.array(UsageCursorSchema).min(2).max(BILLING_AGENTS.length),
   })
   .strict()
   .superRefine((value, context) => {
-    if (new Set(value.cursors.map((cursor) => cursor.agent)).size !== USAGE_AGENTS.length) {
+    const agents = value.cursors.map((cursor) => cursor.agent);
+    const expected: readonly BillingAgent[] =
+      agents.length === 2 ? ["codex", "claude_code"] : BILLING_AGENTS;
+    if (agents.length !== expected.length || expected.some((agent) => !agents.includes(agent))) {
       context.addIssue({ code: "custom", message: "Usage cursors must contain each agent once." });
     }
   });
@@ -171,7 +174,7 @@ export async function syncUsage(
   const newEntries: UsageSubmissionV2[] = [];
   let nextSequence = session.next_usage_sequence;
 
-  for (const agent of USAGE_AGENTS) {
+  for (const agent of BILLING_AGENTS) {
     const cursor = context.cursors.find((value) => value.agent === agent);
     if (!cursor || Date.parse(cursor.next_start_at) >= Date.parse(completedHour)) continue;
     const uninitializedCursor = cursor.next_start_at === coverageStart;
@@ -384,7 +387,7 @@ function currentContext(
       parser_revision: USAGE_PARSER_REVISION,
       aggregation_timezone: timezone,
       event_not_before: eventNotBefore,
-      cursors: USAGE_AGENTS.map((agent) => ({ agent, next_start_at: coverageStart })),
+      cursors: BILLING_AGENTS.map((agent) => ({ agent, next_start_at: coverageStart })),
     }
   );
 }
@@ -532,9 +535,6 @@ export function defaultUsageSyncDependencies(
     client,
     store,
     aggregationTimezone: () => Intl.DateTimeFormat().resolvedOptions().timeZone,
-    scan: async (agent, startAt, endAt) =>
-      agent === "codex"
-        ? await scanCodexUsage({ startAt, endAt })
-        : await scanClaudeUsage({ startAt, endAt }),
+    scan: async (agent, startAt, endAt) => await scanLocalUsage(agent, { startAt, endAt }),
   };
 }

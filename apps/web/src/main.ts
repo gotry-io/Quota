@@ -9,7 +9,14 @@ import {
   type UsageCostOutcome,
 } from "@gotry-io/quota-protocol";
 import "./styles.css";
-import { accountEntryAction, DASHBOARD_PATH, legacyDashboardRedirect } from "./routes.ts";
+import {
+  accountEntryAction,
+  DASHBOARD_PATH,
+  legacyDashboardRedirect,
+  planDisplayName,
+} from "./routes.ts";
+
+const WEB_LOCALE = "en-US";
 
 const year = document.querySelector<HTMLElement>("#copyright-year");
 if (year) year.textContent = String(new Date().getFullYear());
@@ -44,7 +51,10 @@ async function showDashboard(): Promise<void> {
       redirect: "error",
       headers: { Accept: "application/json" },
     } satisfies RequestInit;
-    const response = await fetch("/api/v2/account/summary?cost_mode=calculate", request);
+    const response = await fetch(
+      "/api/v2/account/summary?cost_mode=calculate&usage_agents=all",
+      request,
+    );
     if (response.status === 401) {
       showAccountError("Continue with GitHub to see account devices and Usage.", DASHBOARD_PATH);
       showUsageActivityMessage("Sign in to see Usage activity.");
@@ -61,7 +71,9 @@ async function showDashboard(): Promise<void> {
 }
 
 function renderDashboard(summary: AccountSummary): void {
-  text("dashboard-title", summary.account.display_label ?? "GitHub account");
+  const accountLabel = summary.account.display_label ?? "GitHub account";
+  text("dashboard-title", accountLabel);
+  text("account-menu-label", accountLabel);
   text("input-total", formatCount(summary.usage.totals.input_tokens));
   text("output-total", formatCount(summary.usage.totals.output_tokens));
   text("cost-total", formatCost(summary.usage.cost));
@@ -116,7 +128,7 @@ function renderQuotaObservation(
   provider.className = "eyebrow";
   provider.textContent = titleCase(snapshot.provider);
   const plan = document.createElement("h3");
-  plan.textContent = snapshot.account.plan ?? snapshot.account.label ?? "Current plan";
+  plan.textContent = planDisplayName(snapshot.account.plan) ?? "Current plan";
   title.append(provider, plan);
   const status = document.createElement("span");
   status.className = `status-pill status-${snapshot.status}`;
@@ -178,7 +190,7 @@ function formatQuotaRemaining(
 ): string {
   if (window.remaining_value !== undefined) {
     if (window.value_unit === "usd") {
-      return new Intl.NumberFormat(undefined, {
+      return new Intl.NumberFormat(WEB_LOCALE, {
         style: "currency",
         currency: "USD",
         maximumFractionDigits: 2,
@@ -190,7 +202,7 @@ function formatQuotaRemaining(
 }
 
 function formatPercent(value: number): string {
-  return `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(value)}%`;
+  return `${new Intl.NumberFormat(WEB_LOCALE, { maximumFractionDigits: 0 }).format(value)}%`;
 }
 
 function renderBreakdownTable(
@@ -288,8 +300,8 @@ function renderBreakdown(item: UsageBreakdown): HTMLTableRowElement {
   const values = [
     item.dimension === "model"
       ? item.key
-      : item.key === "claude_code"
-        ? "Claude Code"
+      : item.dimension === "agent"
+        ? agentDisplayName(item.key)
         : titleCase(item.key),
     formatCount(item.totals.input_tokens),
     formatCount(item.totals.output_tokens),
@@ -301,6 +313,19 @@ function renderBreakdown(item: UsageBreakdown): HTMLTableRowElement {
     row.append(cell);
   }
   return row;
+}
+
+function agentDisplayName(agent: string): string {
+  switch (agent) {
+    case "claude_code":
+      return "Claude Code";
+    case "opencode":
+      return "OpenCode";
+    case "pi":
+      return "Pi";
+    default:
+      return titleCase(agent);
+  }
 }
 
 function renderUsageActivity(
@@ -369,7 +394,7 @@ function safeAdd(...values: number[]): number {
 }
 
 function formatShortDate(value: string): string {
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat(WEB_LOCALE, {
     month: "short",
     day: "numeric",
     timeZone: "UTC",
@@ -484,15 +509,16 @@ function emptyState(message: string): HTMLElement {
 }
 
 function formatCount(value: number): string {
-  return new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 }).format(
-    value,
-  );
+  return new Intl.NumberFormat(WEB_LOCALE, {
+    notation: "compact",
+    maximumFractionDigits: 1,
+  }).format(value);
 }
 
 function formatCost(cost: UsageCostOutcome): string {
   if (cost.amount_microusd === null) return "—";
   const cents = (BigInt(cost.amount_microusd) + 5_000n) / 10_000n;
-  const amount = `${new Intl.NumberFormat().format(cents / 100n)}.${(cents % 100n).toString().padStart(2, "0")}`;
+  const amount = `${new Intl.NumberFormat(WEB_LOCALE).format(cents / 100n)}.${(cents % 100n).toString().padStart(2, "0")}`;
   return `${cost.status === "partial" ? "≥ " : ""}$${amount}`;
 }
 
@@ -503,7 +529,7 @@ function costCoverage(cost: UsageCostOutcome): string {
 }
 
 function formatDate(value: string): string {
-  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(
+  return new Intl.DateTimeFormat(WEB_LOCALE, { dateStyle: "medium", timeStyle: "short" }).format(
     new Date(value),
   );
 }

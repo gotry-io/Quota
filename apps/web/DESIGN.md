@@ -23,7 +23,8 @@ The site has three surfaces:
 1. `/` explains local collection, one GitHub-backed Account, Devices, and API-equivalent Usage cost.
 2. `/my` shows the signed-in user's name, quota snapshots, account totals, cost coverage, Usage
    activity, model/agent breakdowns, Devices, and explicit Device deletion. Account actions live in
-   the account menu. The shipped `/app` bookmark is a single redirect to `/my`.
+   the account menu, whose trigger is the signed-in GitHub username. The shipped `/app` bookmark
+   is a single redirect to `/my`.
 3. `/activate` approves or denies a QuotaCLI device authorization code.
 
 GitHub is the only sign-in action. There is no Relay selection, pairing group, owner capability,
@@ -81,7 +82,7 @@ The explanation follows this order:
 - local collection and what never uploads;
 - one Account with Device visibility;
 - defensible, effective-dated cost;
-- the direct Codex/Claude Code → QuotaCLI → Account data path;
+- the direct local agent logs → QuotaCLI → Account data path;
 - a final GitHub sign-in action.
 
 Do not present unavailable downloads or documentation as active destinations.
@@ -90,7 +91,8 @@ Do not present unavailable downloads or documentation as active destinations.
 
 The dashboard leads with input tokens, output tokens, and API-equivalent cost. Cost always shows its
 coverage/basis; unavailable cost renders as an em dash plus “Unpriced”, and partial cost uses a lower
-bound marker.
+bound marker. It reads all retained Account Usage by default. User-facing dates, numbers, units, and
+plan names use the English presentation shared with QuotaBar rather than the browser locale.
 
 Device cards show display name, platform, lifecycle status, and last-seen time. Deletion copy must
 say that both the Device and its Quota/Usage data are removed. Agent Usage uses a semantic table with

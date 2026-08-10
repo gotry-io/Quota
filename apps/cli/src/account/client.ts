@@ -137,7 +137,9 @@ export class AccountClient {
 
   async accountSummary(accountAccessToken: string, query = ""): Promise<AccountSummary> {
     requireToken(accountAccessToken);
-    const suffix = query ? `?${query}` : "";
+    const parameters = new URLSearchParams(query);
+    parameters.set("usage_agents", "all");
+    const suffix = `?${parameters.toString()}`;
     const response = await this.#request(
       `/api/v2/account/summary${suffix}`,
       "GET",
@@ -154,7 +156,7 @@ export class AccountClient {
     | { status: "updated"; etag: string | null; catalog: PricingCatalog }
   > {
     const response = await this.#request(
-      "/api/v2/pricing/catalog",
+      "/api/v2/pricing/catalog?usage_agents=all",
       "GET",
       undefined,
       undefined,

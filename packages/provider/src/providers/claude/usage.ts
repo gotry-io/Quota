@@ -2,7 +2,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type {
   LocalUsageFile,
-  NormalizedUsageEvent,
+  NormalizedUsageRecord,
   UsageDiscoveryOptions,
   UsageFileDiscoveryResult,
   UsageScanOptions,
@@ -63,7 +63,7 @@ class ClaudeUsageParser implements UsageLineParser {
     value: Record<string, unknown>,
     _cursor: UsageSourceCursor,
   ): {
-    event?: NormalizedUsageEvent;
+    records?: readonly NormalizedUsageRecord[];
     reason?: "unknown_record" | "invalid_timestamp" | "invalid_model" | "invalid_usage";
   } {
     const message = record(value.message);
@@ -95,32 +95,58 @@ class ClaudeUsageParser implements UsageLineParser {
     if (!tokens || !dimensions || !tools || sourceCost.invalid) {
       return { reason: "invalid_usage" };
     }
+    if (isEmptyUsage(tokens, tools, sourceCost.microusd)) return {};
+
+    const channel = model.startsWith("claude-")
+      ? ({ billing: "anthropic_direct", source: "agent_default" } as const)
+      : ({ billing: "unknown", source: "unknown" } as const);
 
     return {
-      event: {
-        occurred_at: occurredAt,
-        agent: "claude_code",
-        model,
-        billing_channel: "anthropic_direct",
-        channel_source: "agent_default",
-        input_tokens: tokens.input,
-        cache_read_tokens: tokens.cacheRead,
-        cache_write_5m_tokens: tokens.cacheWrite5m,
-        cache_write_1h_tokens: tokens.cacheWrite1h,
-        cache_write_inferred_tokens: tokens.cacheWriteInferred,
-        output_tokens: tokens.output,
-        reasoning_tokens: tokens.reasoning,
-        requests: 1,
-        context_bucket: contextBucket(tokens.input),
-        service_tier: dimensions.serviceTier,
-        speed: dimensions.speed,
-        inference_geo: dimensions.inferenceGeo,
-        billable_tools: tools,
-        ...(sourceCost.microusd !== undefined ? { source_cost_microusd: sourceCost.microusd } : {}),
-        source_cost_covered_requests: sourceCost.microusd === undefined ? 0 : 1,
-      },
+      records: [
+        {
+          event: {
+            occurred_at: occurredAt,
+            agent: "claude_code",
+            model,
+            billing_channel: channel.billing,
+            channel_source: channel.source,
+            input_tokens: tokens.input,
+            cache_read_tokens: tokens.cacheRead,
+            cache_write_5m_tokens: tokens.cacheWrite5m,
+            cache_write_1h_tokens: tokens.cacheWrite1h,
+            cache_write_inferred_tokens: tokens.cacheWriteInferred,
+            output_tokens: tokens.output,
+            reasoning_tokens: tokens.reasoning,
+            requests: 1,
+            context_bucket: contextBucket(tokens.input),
+            service_tier: dimensions.serviceTier,
+            speed: dimensions.speed,
+            inference_geo: dimensions.inferenceGeo,
+            billable_tools: tools,
+            ...(sourceCost.microusd !== undefined
+              ? { source_cost_microusd: sourceCost.microusd }
+              : {}),
+            source_cost_covered_requests: sourceCost.microusd === undefined ? 0 : 1,
+          },
+          cursor: _cursor,
+        },
+      ],
     };
   }
+}
+
+function isEmptyUsage(
+  tokens: NonNullable<ReturnType<typeof parseClaudeTokens>>,
+  tools: Partial<Record<"web_search" | "web_fetch", number>>,
+  sourceCost: bigint | undefined,
+): boolean {
+  return (
+    tokens.input === 0 &&
+    tokens.output === 0 &&
+    (tools.web_search ?? 0) === 0 &&
+    (tools.web_fetch ?? 0) === 0 &&
+    (sourceCost ?? 0n) === 0n
+  );
 }
 
 function parseClaudeTokens(usage: Record<string, unknown>):

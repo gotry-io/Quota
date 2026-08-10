@@ -9,8 +9,8 @@ subscription quota and privacy-preserving Usage together across a user's devices
 - **Quota Web** — public site, GitHub login, device authorization, and account dashboard.
 
 Quota collection supports Codex, Claude Code, Grok, OpenRouter, DeepSeek, Kimi Code, and LiteLLM.
-Local Usage analytics currently supports Codex and Claude Code logs. Provider credentials, prompts,
-completions, raw events, local paths, and conversation identifiers never upload.
+Local Usage analytics supports Codex, Claude Code, Grok, OpenCode, and Pi logs. Provider credentials,
+prompts, completions, raw events, local paths, and conversation identifiers never upload.
 
 ## Architecture
 
@@ -66,9 +66,11 @@ pnpm dev:web
 pnpm dev:relay
 ```
 
-`quotacli status` is local-only. `quotacli sync` always returns local quota and a local 30-day Usage
-report, then uploads quota and a bounded durable Usage outbox only when an account session is active. Non-macOS recurring sync needs
-an external scheduler; QuotaBar schedules its bundled helper while the app is running.
+`quotacli status` is local-only. `quotacli sync` always returns local quota and an all-history local
+Usage report, then uploads quota and a bounded durable Usage outbox only when an account session is
+active. Non-macOS recurring sync needs an external scheduler; QuotaBar schedules its bundled helper
+while the app is running. Current clients request all retained Account Usage; query-less protocol v2
+reads retain the shipped 30-day compatibility range.
 
 Provider registration changes start in `packages/provider/src/catalog.ts`. After a catalog change,
 run `pnpm generate:provider-catalog` so protocol provider IDs, JSON Schemas, and Swift `ProviderID`
@@ -103,9 +105,9 @@ a CLI change.
 
 The repository implements Better Auth GitHub/Web sessions, protocol v2 native account/device
 authentication, independent quota and Usage upload sequencing, D1 persistence, destructive deletion
-watermarks, Codex/Claude Usage parsing, UTC-hour aggregation, effective-dated cost calculation,
-QuotaCLI durable state/outbox, QuotaBar account UI, and the Web account dashboard. Unknown prices
-remain visibly unpriced; partial scans do not replace remote facts.
+watermarks, Codex/Claude Code/Grok/OpenCode/Pi Usage parsing, UTC-hour aggregation, effective-dated
+cost calculation, QuotaCLI durable state/outbox, QuotaBar account UI, and the Web account dashboard.
+Unknown prices remain visibly unpriced; partial scans do not replace remote facts.
 
 Production GitHub OAuth and D1 deployment require the secrets documented by the managed Relay
 configuration. The checked-in deployment workflow is the only authorized production path.

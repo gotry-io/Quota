@@ -110,7 +110,8 @@
         "anthropic_direct",
         "aws_bedrock",
         "google_vertex",
-        "openrouter"
+        "openrouter",
+        "xai_direct"
       ]
     },
     "__schema4": {

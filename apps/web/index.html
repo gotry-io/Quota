@@ -41,7 +41,7 @@
       <div id="landing-view">
         <section class="hero" aria-labelledby="hero-title">
           <div class="hero-copy">
-            <p class="eyebrow">Codex · Claude Code · Your devices</p>
+            <p class="eyebrow">Five coding agents · Your devices</p>
             <h1 id="hero-title">Know what you have left.</h1>
             <p class="hero-summary">
               Quota keeps subscription limits and privacy-preserving Usage in one account, while
@@ -117,7 +117,7 @@
             <a class="text-link" href="https://github.com/gotry-io/Quota">Read the source →</a>
           </div>
           <div class="flow" role="img" aria-label="Quota data flow">
-            <div class="flow-node"><span class="diagram-tag">Local</span><strong>Codex + Claude Code</strong><span>Quota and Usage remain readable offline</span></div>
+            <div class="flow-node"><span class="diagram-tag">Local</span><strong>Five coding agents</strong><span>Quota and Usage remain readable offline</span></div>
             <span class="flow-arrow" aria-hidden="true">↓</span>
             <div class="flow-node flow-node-dark"><span class="diagram-tag diagram-tag-dark">QuotaCLI</span><strong>Collect · cache · sync</strong><span>Strict allowlist and device-scoped upload</span></div>
             <span class="flow-arrow" aria-hidden="true">↓</span>
@@ -137,7 +137,7 @@
         <div class="dashboard-heading">
           <div><p class="eyebrow">Quota account · Usage</p><h1 id="dashboard-title">My account</h1></div>
           <details class="account-menu">
-            <summary class="button button-secondary">Account menu</summary>
+            <summary id="account-menu-label" class="button button-secondary">Account</summary>
             <div class="account-menu-popover">
               <form id="logout-form" action="/api/auth/v2/sign-out" method="post">
                 <button class="text-button" type="submit">Sign out</button>

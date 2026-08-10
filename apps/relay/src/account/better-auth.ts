@@ -60,11 +60,9 @@ export function createWebAccountAuth(environment: BetterAuthEnvironment): WebAcc
           if (typeof profile.id !== "number" || !Number.isSafeInteger(profile.id)) return null;
           const subject = await hmacSha256Hex(environment.githubSubjectKey, `github:${profile.id}`);
           const label =
-            typeof profile.name === "string" && profile.name.trim()
-              ? profile.name.trim().slice(0, 64)
-              : typeof profile.login === "string" && profile.login.trim()
-                ? profile.login.trim().slice(0, 64)
-                : "GitHub account";
+            typeof profile.login === "string" && profile.login.trim()
+              ? profile.login.trim().slice(0, 64)
+              : "GitHub account";
           return {
             user: {
               id: subject,

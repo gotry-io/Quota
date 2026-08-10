@@ -28,6 +28,7 @@ export type UsageCostMode = ProtocolUsageCostMode;
 
 export interface UsageQuery {
   device_id?: string;
+  agents?: readonly UsageAgent[];
   start_at?: string;
   end_at?: string;
   from?: string;

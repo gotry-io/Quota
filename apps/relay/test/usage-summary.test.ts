@@ -34,6 +34,24 @@ describe("Usage summary", () => {
       ).toBe(rows.length);
     }
   });
+
+  it("summarizes retained history without an hourly breakdown", () => {
+    const rows = Array.from({ length: 1_500 }, usageRow);
+    const summary = buildUsageSummary(
+      { rows, coverage: [], truncated: false },
+      { from: "2026-02-01", to: "2026-08-10" },
+      "calculate",
+      PRICING_CATALOG,
+      false,
+    );
+
+    expect(summary.totals.requests).toBe(rows.length);
+    expect(
+      summary.breakdowns.some(
+        ({ dimension }) => dimension === "usage_date" || dimension === "bucket_start_utc",
+      ),
+    ).toBe(false);
+  });
 });
 
 function usageRow(_: unknown, index: number): StoredUsageHourlyFact {

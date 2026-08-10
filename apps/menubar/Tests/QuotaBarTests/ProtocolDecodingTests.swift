@@ -137,10 +137,10 @@ func decodesAccountHourlyUsageResponse() throws {
         "bucket_start_utc": "2026-08-02T12:00:00Z",
         "usage_date": "2026-08-02",
         "usage_hour": 20,
-        "agent": "codex",
-        "billing_channel": "openai_direct",
+        "agent": "grok",
+        "billing_channel": "xai_direct",
         "channel_source": "agent_default",
-        "model": "gpt-5",
+        "model": "grok-4.5",
         "context_bucket": "le_128k",
         "service_tier": "default",
         "speed": "standard",
@@ -159,7 +159,7 @@ func decodesAccountHourlyUsageResponse() throws {
       }],
       "coverage": [{
         "device_id": "device_01",
-        "agent": "codex",
+        "agent": "grok",
         "start_at": "2026-08-02T12:00:00Z",
         "end_at": "2026-08-02T13:00:00Z",
         "status": "complete"
@@ -186,6 +186,8 @@ func decodesAccountHourlyUsageResponse() throws {
   )
 
   #expect(response.facts.first?.deviceID == "device_01")
+  #expect(response.facts.first?.fact.agent == .grok)
+  #expect(response.facts.first?.fact.billingChannel == .xaiDirect)
   #expect(response.facts.first?.aggregationTimezone == "Asia/Singapore")
   #expect(response.cost.calculatedRows == response.facts.count)
 }
