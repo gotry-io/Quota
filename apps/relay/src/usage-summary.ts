@@ -78,7 +78,7 @@ export function buildUsageCost(
   mode: UsageCostMode,
   catalog: PricingCatalog,
 ): UsageCostOutcome {
-  return usageCost(rows, mode, catalog);
+  return boundedModelResult(() => calculateUsageCost(rows.map(usageFact), catalog, mode));
 }
 
 export class UsageSummaryLimitError extends Error {
@@ -86,14 +86,6 @@ export class UsageSummaryLimitError extends Error {
     super("Usage summary exceeds the response limit");
     this.name = "UsageSummaryLimitError";
   }
-}
-
-function usageCost(
-  rows: readonly StoredUsageHourlyFact[],
-  mode: UsageCostMode,
-  catalog: PricingCatalog,
-): UsageCostOutcome {
-  return boundedModelResult(() => calculateUsageCost(rows.map(usageFact), catalog, mode));
 }
 
 function usageFact(row: StoredUsageHourlyFact) {
@@ -139,15 +131,13 @@ function addGroup(
   rowIndex: number,
 ): void {
   const compound = `${dimension}:${key}`;
-  const group = groups.get(compound);
-  if (group) {
-    addTotals(group.totals, row);
-    group.rowIndexes.push(rowIndex);
-  } else {
-    const totals = emptyTotals();
-    addTotals(totals, row);
-    groups.set(compound, { totals, rowIndexes: [rowIndex] });
+  let group = groups.get(compound);
+  if (!group) {
+    group = { totals: emptyTotals(), rowIndexes: [] };
+    groups.set(compound, group);
   }
+  addTotals(group.totals, row);
+  group.rowIndexes.push(rowIndex);
 }
 
 interface UsageSummaryGroup {
@@ -155,20 +145,9 @@ interface UsageSummaryGroup {
   rowIndexes: number[];
 }
 
-interface MutableUsageTotals {
-  input_tokens: number;
-  cache_read_tokens: number;
-  cache_write_5m_tokens: number;
-  cache_write_1h_tokens: number;
-  cache_write_inferred_tokens: number;
-  output_tokens: number;
-  reasoning_tokens: number;
-  requests: number;
-  web_search_requests: number;
-  web_fetch_requests: number;
+type MutableUsageTotals = Omit<UsageTokenTotals, "source_cost_microusd"> & {
   source_cost_microusd: bigint;
-  source_cost_covered_requests: number;
-}
+};
 
 const countKeys = [
   "input_tokens",

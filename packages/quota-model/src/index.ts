@@ -364,7 +364,7 @@ export function prepareUsageCosts(
   });
   return {
     mode,
-    catalog_revision: catalog && mode !== "reported" ? catalog.revision : null,
+    catalog_revision: catalog?.revision ?? null,
     rows: prepared,
   };
 }
@@ -379,13 +379,12 @@ export function foldPreparedUsageCosts(
   let amount = 0n;
   let calculatedRows = 0;
   let reportedRows = 0;
-  let selectedRows = 0;
 
-  const selectedIndexes = indexes ?? prepared.rows.map((_, index) => index);
+  const selectedRows = indexes?.length ?? prepared.rows.length;
+  const selectedIndexes = indexes ?? prepared.rows.keys();
   for (const index of selectedIndexes) {
     const row = prepared.rows[index];
     if (!row) throw new RangeError(`Missing prepared Usage row at index ${index}.`);
-    selectedRows += 1;
     if (row.status === "priced") {
       amount += row.amount_microusd;
       if (row.basis === "calculated") calculatedRows += 1;
