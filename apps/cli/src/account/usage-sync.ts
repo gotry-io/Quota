@@ -8,10 +8,10 @@ import {
   MAXIMUM_USAGE_SUBMISSION_BYTES,
   PROTOCOL_VERSION,
   Rfc3339InstantSchema,
-  UtcHourSchema,
   UsageSubmissionSchema,
   type UsageSubmissionV2,
   type UsageUploadResponse,
+  UtcHourSchema,
 } from "@gotry-io/quota-protocol";
 import {
   type NormalizedUsageEvent,
@@ -327,13 +327,15 @@ async function drainOutbox(
     if (response.outcome !== "accepted" && response.outcome !== "duplicate") {
       throw new AccountStateStoreError("invalid_state", "Quota rejected complete Usage coverage.");
     }
-    queue.entries.shift();
-    await dependencies.store.saveArtifact("usage-outbox.json", outbox);
     session = await dependencies.store.updateActiveSession((current) => ({
       ...current,
       next_usage_sequence: response.next_sequence,
       usage_sync_revision: response.usage_sync_revision,
     }));
+    // Checkpoint the acknowledgement before removing its immutable request. If the outbox write
+    // fails, the server can safely return duplicate when the same submission is retried.
+    queue.entries.shift();
+    await dependencies.store.saveArtifact("usage-outbox.json", outbox);
     uploaded += 1;
   }
   return { outbox, session, uploaded };

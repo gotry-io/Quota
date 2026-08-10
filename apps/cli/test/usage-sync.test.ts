@@ -108,6 +108,67 @@ describe("Usage sync", () => {
     expect(retried?.submission_id).toBe(first?.submission_id);
     expect(retried?.sequence).toBe(first?.sequence);
   });
+
+  it("keeps an acknowledged submission until its session checkpoint is durable", async () => {
+    const dependencies = await makeDependencies([event("2026-08-09T10:06:00Z", 20)]);
+    vi.spyOn(dependencies.store, "updateActiveSession").mockRejectedValueOnce(
+      new Error("session checkpoint failed"),
+    );
+
+    await expect(
+      syncUsage(activeSession(), new Date("2026-08-09T12:30:00Z"), dependencies),
+    ).rejects.toThrow("session checkpoint failed");
+    const pending = (await dependencies.store.loadArtifact("usage-outbox.json")) as {
+      queues: Array<{ entries: UsageSubmissionV2[] }>;
+    };
+    expect(pending.queues[0]?.entries).toHaveLength(1);
+
+    await syncUsage(activeSession(), new Date("2026-08-09T12:30:00Z"), dependencies);
+
+    const uploads = vi.mocked(dependencies.client.uploadUsage).mock.calls.map((call) => call[1]);
+    expect(uploads[1]?.submission_id).toBe(uploads[0]?.submission_id);
+    expect(uploads[1]?.sequence).toBe(uploads[0]?.sequence);
+  });
+
+  it("replays an acknowledged submission if removing it from the outbox fails", async () => {
+    const dependencies = await makeDependencies([event("2026-08-09T10:06:00Z", 20)]);
+    const saveArtifact = dependencies.store.saveArtifact.bind(dependencies.store);
+    let failRemoval = true;
+    vi.spyOn(dependencies.store, "saveArtifact").mockImplementation(async (name, value) => {
+      const artifact = value as { queues?: Array<{ entries: UsageSubmissionV2[] }> };
+      if (
+        failRemoval &&
+        name === "usage-outbox.json" &&
+        artifact.queues?.some((queue) => queue.entries.length === 0)
+      ) {
+        failRemoval = false;
+        throw new Error("outbox removal failed");
+      }
+      await saveArtifact(name, value);
+    });
+
+    await expect(
+      syncUsage(activeSession(), new Date("2026-08-09T12:30:00Z"), dependencies),
+    ).rejects.toThrow("outbox removal failed");
+    const checkpoint = await dependencies.store.loadSession();
+    expect(checkpoint).toMatchObject({ next_usage_sequence: 1, usage_sync_revision: 1 });
+
+    vi.mocked(dependencies.client.uploadUsage).mockImplementationOnce(async (_token, submission) =>
+      duplicate(submission),
+    );
+    await syncUsage(
+      checkpoint as ActiveAccountSessionState,
+      new Date("2026-08-09T12:30:00Z"),
+      dependencies,
+    );
+
+    const uploads = vi.mocked(dependencies.client.uploadUsage).mock.calls.map((call) => call[1]);
+    expect(uploads[1]?.submission_id).toBe(uploads[0]?.submission_id);
+    expect(uploads[1]?.sequence).toBe(uploads[0]?.sequence);
+    expect(await dependencies.store.loadArtifact("usage-outbox.json")).toMatchObject({
+      queues: [{ entries: [] }],
+    });
+  });
 });
 
 async function makeDependencies(
@@ -187,6 +248,10 @@ function accepted(submission: UsageSubmissionV2): UsageUploadResponse {
     usage_sync_revision: submission.sequence + 1,
     deleted_before: null,
   };
+}
+
+function duplicate(submission: UsageSubmissionV2): UsageUploadResponse {
+  return { ...accepted(submission), outcome: "duplicate" };
 }
 
 function activeSession(): ActiveAccountSessionState {
