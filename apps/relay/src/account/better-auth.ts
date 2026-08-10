@@ -145,6 +145,7 @@ export function createWebAccountAuth(environment: BetterAuthEnvironment): WebAcc
         headers,
         asResponse: true,
       });
+      response.headers.set("Cache-Control", "no-store");
       return response.ok && response.headers.has("Location")
         ? new Response(null, { status: 302, headers: response.headers })
         : response;
