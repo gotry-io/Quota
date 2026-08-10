@@ -93,7 +93,8 @@ data requirements. Architecture and product behavior are defined in
   cancellation, or parser uncertainty make coverage partial. Partial coverage never deletes or
   replaces remote facts. On reads, `complete` describes only that returned half-open coverage
   interval; absent intervals remain visible gaps and no item claims that the entire query range is
-  complete.
+  complete. QuotaCLI keeps the cursor at the start of a partial range so later hours cannot be
+  silently accepted across an unresolved gap.
 - Outbox payloads contain allowlisted aggregate fields only. Source file IDs, byte offsets, record
   hashes, paths, raw events, and parser diagnostics remain local. Token/count invariants and payload,
   row, range, model, and dimension bounds are enforced by the v2 runtime schema before upload and by
@@ -102,9 +103,11 @@ data requirements. Architecture and product behavior are defined in
   generation, records a precise watermark, deletes quota/Usage/coverage/receipt rows, and retains a
   minimal hidden tombstone. Old tokens and old-generation outbox entries are terminally rejected.
   The new generation may rebuild the watermark's UTC hour only after QuotaCLI filters raw event
-  instants before the precise watermark.
-- Delete Account revokes its sessions and deletes its Devices and business data transactionally.
-  Local state becomes signed out; local provider data remains owned by provider tools.
+  instants before the precise watermark. The account-scoped browser session remains signed in.
+- Delete Account deletes its Devices and business data transactionally. Better Auth removes every
+  indexed browser session for the deleted user, and Relay additionally rejects any cached Web
+  principal whose business Account no longer exists. Local provider data remains owned by provider
+  tools.
 - Logout disables upload and revokes account/device sessions but intentionally retains the Device and
   remote facts. Re-login to the same Account may backfill locally readable history, including history
   created while signed out. Re-login revokes every prior session family for that installation before

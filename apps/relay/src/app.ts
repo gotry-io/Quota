@@ -195,6 +195,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     const loginToken = context.req.query("login_token");
     const webSession = await options.webAuth.getSession(context.req.raw.headers);
     if (!loginToken || loginToken.length > 4_096 || !webSession) return unauthorized(context);
+    if (!(await options.state.getAccount(webSession.user.id))) return unauthorized(context);
     try {
       const completion = await options.accountService.completeBrowserLogin(
         loginToken,
@@ -546,7 +547,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
             agent: item.agent,
             start_at: item.start_at,
             end_at: item.end_at,
-            status: "complete",
+            status: item.status,
           })),
           cost: buildUsageCost(result.rows, mode.data, catalog),
         }),
@@ -868,6 +869,7 @@ async function authorizeAccount(
   }
   const webSession = await options.webAuth.getSession(context.req.raw.headers);
   if (!webSession) return unauthorized(context);
+  if (!(await options.state.getAccount(webSession.user.id))) return unauthorized(context);
   const principal: AccountPrincipal = {
     kind: "account",
     session_id: webSession.session.id,

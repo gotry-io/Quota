@@ -1,5 +1,4 @@
 import { applyD1Migrations, env } from "cloudflare:test";
-import { beforeEach, describe, expect, inject, it } from "vitest";
 import type { D1Migration } from "@cloudflare/vitest-pool-workers";
 import {
   MAXIMUM_USAGE_COVERAGE_HOURS,
@@ -7,6 +6,7 @@ import {
   UsageCoverageSummaryItemSchema,
 } from "@gotry-io/quota-protocol";
 import type { DevicePrincipal, UsageSubmission } from "@gotry-io/relay-core";
+import { beforeEach, describe, expect, inject, it } from "vitest";
 import { createWebAccountAuth, type WebAccountAuth } from "../src/account/better-auth.ts";
 import { D1EncryptedAuthStorage } from "../src/account/better-auth-storage.ts";
 import { AccountService } from "../src/account/service.ts";
@@ -221,6 +221,12 @@ describe("managed Relay on real Workers and D1", () => {
     const state = new D1AccountState(env.DB);
     const hasher = new SecretHasher(secret);
     const service = new AccountService(state, hasher, secret);
+    await env.DB.prepare(
+      `INSERT INTO accounts (id, identity_subject, display_label, created_at, updated_at)
+       VALUES ('identity_subject', 'identity_subject', 'Quota Tester', ?1, ?1)`,
+    )
+      .bind(now.toISOString())
+      .run();
     let callbackURL = "";
     let sessionCreatedAt = now;
     const webAuth: WebAccountAuth = {
@@ -367,5 +373,21 @@ describe("managed Relay on real Workers and D1", () => {
     expect(await state.authorizeDeviceSession(oldAccessHash, deletedAt)).toBeNull();
     expect(await state.getDeviceSyncControl(tokens.device_id, 1)).toBeNull();
     expect(await state.getDeviceSyncControl(tokens.device_id, 2)).toMatchObject({ generation: 2 });
+
+    expect((await app.request(authorize)).status).toBe(200);
+    await env.DB.prepare("DELETE FROM accounts WHERE id = ?1").bind(tokens.account_id).run();
+    expect((await app.request(callbackURL)).status).toBe(401);
+    expect(
+      (
+        await app.request("https://quota.gotry.io/api/v2/account/devices", {
+          headers: { Origin: "https://quota.gotry.io" },
+        })
+      ).status,
+    ).toBe(401);
+    expect(
+      await env.DB.prepare("SELECT COUNT(*) AS count FROM accounts WHERE id = ?1")
+        .bind(tokens.account_id)
+        .first("count"),
+    ).toBe(0);
   });
 });

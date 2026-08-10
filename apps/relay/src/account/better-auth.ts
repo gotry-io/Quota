@@ -148,12 +148,6 @@ export function createWebAccountAuth(environment: BetterAuthEnvironment): WebAcc
     getSession: async (headers) => {
       const session = await auth.api.getSession({ headers });
       if (!session) return null;
-      await upsertDomainAccount(
-        environment.database,
-        session.user.id,
-        session.user.name,
-        session.user.createdAt,
-      );
       return {
         user: { id: session.user.id, name: session.user.name },
         session: {
