@@ -219,6 +219,7 @@ describe("managed Relay on real Workers and D1", () => {
     expect(nativeResponse.status).toBe(302);
     expect(nativeResponse.headers.get("location")).toContain("github.com/login/oauth/authorize");
     expect(nativeResponse.headers.get("set-cookie")).toContain("quota");
+    expect(nativeResponse.headers.get("cache-control")).toBe("no-store");
     expect(
       await env.DB.prepare("SELECT COUNT(*) AS count FROM auth_identities").first("count"),
     ).toBe(0);
