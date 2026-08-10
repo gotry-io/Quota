@@ -95,12 +95,5 @@ The visual binary accepts deterministic fixture arguments:
 Fixture mode performs no helper work and contains synthetic account, device, quota, cost, and
 coverage data. Live mode uses the packaged helper through the same production process boundary.
 
-For deterministic light/dark image regression tests backed by SnapshotTesting, run:
-
-```bash
-pnpm test:menubar:visual
-```
-
-Reference images under `Tests/QuotaBarTests/__Snapshots__` are reviewed test inputs and are committed.
-Generated `.build/`, packaged apps, failure diffs, and local preferences are development state and
-must not be committed.
+Generated `.build/`, packaged apps, and local preferences are development state and must not be
+committed.
