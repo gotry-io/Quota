@@ -287,6 +287,7 @@ export class D1UsageState implements UsageState {
     const coverage = await this.database
       .prepare(
         `SELECT coverage.device_id, coverage.agent, coverage.start_at, coverage.end_at,
+                'complete' AS status,
                 coverage.parser_revision, coverage.accepted_at
          FROM usage_coverage AS coverage
          INNER JOIN devices ON devices.id = coverage.device_id

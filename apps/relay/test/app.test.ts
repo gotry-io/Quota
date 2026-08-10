@@ -75,9 +75,10 @@ describe("managed Relay on real Workers and D1", () => {
           agent: item.agent,
           start_at: item.start_at,
           end_at: item.end_at,
-          status: "complete",
+          status: item.status,
         }).success,
       ).toBe(true);
+      expect(item.status).toBe("complete");
       expect((Date.parse(item.end_at) - Date.parse(item.start_at)) / 3_600_000).toBeLessThanOrEqual(
         MAXIMUM_USAGE_COVERAGE_HOURS,
       );
@@ -161,6 +162,7 @@ describe("managed Relay on real Workers and D1", () => {
     const hasher = new SecretHasher(secret);
     const service = new AccountService(state, hasher, secret);
     let callbackURL = "";
+    let sessionCreatedAt = now;
     const webAuth: WebAccountAuth = {
       handler: async () => new Response(null, { status: 404 }),
       beginGitHubSignIn: async (_headers, callback) => {
@@ -171,7 +173,7 @@ describe("managed Relay on real Workers and D1", () => {
         user: { id: "identity_subject", name: "Quota Tester" },
         session: {
           id: "web_session",
-          createdAt: now,
+          createdAt: sessionCreatedAt,
           expiresAt: new Date(now.getTime() + 60_000),
         },
       }),
@@ -211,6 +213,21 @@ describe("managed Relay on real Workers and D1", () => {
         })
       ).status,
     ).toBe(404);
+    sessionCreatedAt = new Date(now.getTime() - 10 * 60_000 - 1);
+    expect(
+      (
+        await app.request("https://quota.gotry.io/oauth/v2/device/authorize", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Origin: "https://quota.gotry.io",
+            "Sec-Fetch-Site": "same-origin",
+          },
+          body: decisionBody,
+        })
+      ).status,
+    ).toBe(403);
+    sessionCreatedAt = now;
 
     const verifier = "a".repeat(43);
     const challengeBuffer = await crypto.subtle.digest(
@@ -261,5 +278,34 @@ describe("managed Relay on real Workers and D1", () => {
         .bind(tokens.device_id)
         .first("count"),
     ).toBe(1);
+
+    const oldAccessHash = await hasher.hash("device-access", tokens.device_session.access_token);
+    expect(await state.authorizeDeviceSession(oldAccessHash, now.toISOString())).toMatchObject({
+      device_id: tokens.device_id,
+      generation: 1,
+    });
+    expect(
+      (
+        await app.request("https://quota.gotry.io/oauth/v2/revoke", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${tokens.device_session.refresh_token}` },
+        })
+      ).status,
+    ).toBe(204);
+    await env.DB.prepare("UPDATE devices SET signed_out_at = NULL WHERE id = ?1")
+      .bind(tokens.device_id)
+      .run();
+    expect(await state.authorizeDeviceSession(oldAccessHash, now.toISOString())).toBeNull();
+
+    const deletedAt = new Date(now.getTime() + 1_000).toISOString();
+    expect(
+      await state.deleteDeviceData(tokens.account_id, tokens.device_id, deletedAt),
+    ).toMatchObject({ device_id: tokens.device_id, generation: 2 });
+    await env.DB.prepare("UPDATE devices SET signed_out_at = NULL, deleted_at = NULL WHERE id = ?1")
+      .bind(tokens.device_id)
+      .run();
+    expect(await state.authorizeDeviceSession(oldAccessHash, deletedAt)).toBeNull();
+    expect(await state.getDeviceSyncControl(tokens.device_id, 1)).toBeNull();
+    expect(await state.getDeviceSyncControl(tokens.device_id, 2)).toMatchObject({ generation: 2 });
   });
 });

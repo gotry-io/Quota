@@ -75,7 +75,8 @@ data requirements. Architecture and product behavior are defined in
   Account deletion routes. Its user-deletion hook removes the Quota domain Account and cascading
   business data. Device authorization decisions and Delete Device additionally require a session
   created within ten minutes and an exact same-origin `Origin` (with same-origin Fetch Metadata when
-  present). Cross-account or unknown user codes return a generic not-found response.
+  present); session refresh does not advance this authentication timestamp. Cross-account or unknown
+  user codes return a generic not-found response.
 
 ## Upload, Usage, and deletion safety
 
@@ -104,7 +105,8 @@ data requirements. Architecture and product behavior are defined in
   Local state becomes signed out; local provider data remains owned by provider tools.
 - Logout disables upload and revokes account/device sessions but intentionally retains the Device and
   remote facts. Re-login to the same Account may backfill locally readable history, including history
-  created while signed out.
+  created while signed out. Re-login revokes every prior session family for that installation before
+  issuing new credentials; it never reactivates an old access or refresh token.
 
 ## Network, subprocesses, and diagnostics
 

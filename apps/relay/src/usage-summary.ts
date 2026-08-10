@@ -99,7 +99,7 @@ function coverageSummary(item: StoredUsageCoverage) {
     agent: item.agent,
     start_at: item.start_at,
     end_at: item.end_at,
-    status: "complete" as const,
+    status: item.status,
   };
 }
 

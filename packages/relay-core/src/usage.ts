@@ -40,6 +40,7 @@ export interface StoredUsageCoverage {
   agent: UsageAgent;
   start_at: string;
   end_at: string;
+  status: "complete";
   parser_revision: string;
   accepted_at: string;
 }
