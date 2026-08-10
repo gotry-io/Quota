@@ -9,8 +9,10 @@ import {
   aggregateUsageEvents,
   calculateUsageCost,
   calculateUsageRowCost,
+  foldPreparedUsageCosts,
   foldUsageFacts,
   type NormalizedUsageEvent,
+  prepareUsageCosts,
   remainingPercent,
   resolvePricingEntry,
   validatePricingCatalog,
@@ -366,6 +368,32 @@ describe("Usage cost", () => {
         "auto",
       ),
     ).toMatchObject({ status: "unavailable", amount_microusd: null });
+  });
+
+  it("prepares overlapping cost groups once without changing their outcomes", () => {
+    const priceCatalog = catalog([priceEntry()]);
+    const rows = [
+      usageRow({ input_tokens: 1_000_000 }),
+      usageRow({
+        model: "reported-model",
+        source_cost_microusd: "1234",
+        source_cost_covered_requests: 1,
+      }),
+      usageRow({ model: "unpriced-model" }),
+    ];
+    const prepared = prepareUsageCosts(rows, priceCatalog, "auto");
+
+    expect(foldPreparedUsageCosts(prepared)).toEqual(
+      calculateUsageCost(rows, priceCatalog, "auto"),
+    );
+    expect(foldPreparedUsageCosts(prepared, [0, 2])).toEqual(
+      calculateUsageCost(
+        [rows[0] as UsageHourlyFact, rows[2] as UsageHourlyFact],
+        priceCatalog,
+        "auto",
+      ),
+    );
+    expect(() => foldPreparedUsageCosts(prepared, [3])).toThrow(RangeError);
   });
 
   it("surfaces reviewed wildcard and agent-default assumptions", () => {
