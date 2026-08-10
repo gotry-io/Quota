@@ -91,7 +91,9 @@ data requirements. Architecture and product behavior are defined in
 - Only a complete collector scan may create authoritative replacement coverage. Permission errors,
   unreadable/changed sources, record limits, malformed or unknown usage records, truncated tails,
   cancellation, or parser uncertainty make coverage partial. Partial coverage never deletes or
-  replaces remote facts.
+  replaces remote facts. On reads, `complete` describes only that returned half-open coverage
+  interval; absent intervals remain visible gaps and no item claims that the entire query range is
+  complete.
 - Outbox payloads contain allowlisted aggregate fields only. Source file IDs, byte offsets, record
   hashes, paths, raw events, and parser diagnostics remain local. Token/count invariants and payload,
   row, range, model, and dimension bounds are enforced by the v2 runtime schema before upload and by

@@ -94,7 +94,7 @@ export class D1UsageState implements UsageState {
                AND signed_out_at IS NULL AND deleted_at IS NULL
                AND last_usage_sequence = ?4 - 1
                AND (deleted_before IS NULL OR
-                    (substr(deleted_before, 1, 13) || ':00:00.000Z') <= ?8)
+                    strftime('%Y-%m-%dT%H:00:00.000Z', deleted_before) <= ?8)
            )`,
         )
         .bind(

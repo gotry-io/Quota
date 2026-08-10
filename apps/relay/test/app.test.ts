@@ -6,6 +6,7 @@ import {
   type OAuthTokenResponse,
   UsageCoverageSummaryItemSchema,
 } from "@gotry-io/quota-protocol";
+import type { DevicePrincipal, UsageSubmission } from "@gotry-io/relay-core";
 import { createWebAccountAuth, type WebAccountAuth } from "../src/account/better-auth.ts";
 import { D1EncryptedAuthStorage } from "../src/account/better-auth-storage.ts";
 import { AccountService } from "../src/account/service.ts";
@@ -36,6 +37,65 @@ beforeEach(async () => {
 });
 
 describe("managed Relay on real Workers and D1", () => {
+  it("floors RFC3339 deletion watermarks with SQLite before accepting Usage", async () => {
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_watermark', 'subject_watermark', ?1, ?1)",
+      ).bind(now.toISOString()),
+      env.DB.prepare(
+        `INSERT INTO devices (
+             id, account_id, installation_id_hash, generation, deleted_before,
+             created_at, last_login_at
+           ) VALUES ('device_watermark', 'account_watermark', 'installation_watermark', 2,
+             '2026-08-10T10:05:00Z', ?1, ?1)`,
+      ).bind(now.toISOString()),
+    ]);
+    const principal: DevicePrincipal = {
+      kind: "device",
+      session_id: "session_test",
+      family_id: "family_test",
+      account_id: "account_watermark",
+      device_id: "device_watermark",
+      generation: 2,
+      scopes: ["usage:write:self"],
+    };
+    const submission: UsageSubmission = {
+      protocol_version: 2,
+      submission_id: "submission_old",
+      device_id: "device_watermark",
+      generation: 2,
+      sequence: 0,
+      parser_revision: "parser_test",
+      aggregation_timezone: "UTC",
+      coverage: {
+        agent: "codex",
+        start_at: "2026-08-10T09:00:00.000Z",
+        end_at: "2026-08-10T10:00:00.000Z",
+        status: "complete",
+      },
+      rows: [],
+    };
+    const usage = new D1UsageState(env.DB);
+    expect(await usage.recordUsage(principal, submission, now.toISOString())).toEqual({
+      outcome: "deleted_range",
+    });
+    expect(
+      await usage.recordUsage(
+        principal,
+        {
+          ...submission,
+          submission_id: "submission_current",
+          coverage: {
+            ...submission.coverage,
+            start_at: "2026-08-10T10:00:00.000Z",
+            end_at: "2026-08-10T11:00:00.000Z",
+          },
+        },
+        now.toISOString(),
+      ),
+    ).toMatchObject({ outcome: "accepted", next_sequence: 1 });
+  });
+
   it("keeps adjacent Usage coverage inside the wire range limit", async () => {
     await env.DB.batch([
       env.DB.prepare(
