@@ -280,16 +280,41 @@ export function calculateUsageCost(
   catalogInput: unknown,
   mode: UsageCostMode = "calculate",
 ): UsageCostOutcome {
+  return foldPreparedUsageCosts(prepareUsageCosts(inputRows, catalogInput, mode));
+}
+
+export type PreparedUsageCostRow =
+  | {
+      status: "priced";
+      billing_channel: BillingChannel;
+      model: string;
+      amount_microusd: bigint;
+      basis: "calculated" | "reported";
+      assumptions: readonly UsageCostAssumption[];
+    }
+  | {
+      status: "unpriced";
+      billing_channel: BillingChannel;
+      model: string;
+      reason: UsageUnpricedReason;
+    };
+
+export interface PreparedUsageCosts {
+  mode: UsageCostMode;
+  catalog_revision: string | null;
+  rows: readonly PreparedUsageCostRow[];
+}
+
+/** Resolve and round every row once so callers can cheaply fold overlapping breakdown groups. */
+export function prepareUsageCosts(
+  inputRows: readonly UsageHourlyFact[],
+  catalogInput: unknown,
+  mode: UsageCostMode = "calculate",
+): PreparedUsageCosts {
   const rows = inputRows.map((row) => UsageHourlyFactSchema.parse(row));
   const validation = mode === "reported" ? null : validatePricingCatalog(catalogInput);
   const catalog = validation?.valid === true ? validation.catalog : null;
-  const assumptions = new Set<UsageCostAssumption>();
-  const unpricedCounts = new Map<string, UsageUnpricedItem>();
-  let amount = 0n;
-  let calculatedRows = 0;
-  let reportedRows = 0;
-
-  for (const row of rows) {
+  const prepared = rows.map((row): PreparedUsageCostRow => {
     const calculated =
       mode === "reported"
         ? null
@@ -297,11 +322,17 @@ export function calculateUsageCost(
           ? ({ status: "unpriced", reason: "invalid_catalog" } as const)
           : calculateRowFromCatalog(catalog, row);
     if (calculated?.status === "priced") {
-      amount += calculated.amount_microusd;
-      calculatedRows += 1;
-      for (const assumption of calculated.assumptions) assumptions.add(assumption);
-      if (row.channel_source === "agent_default") assumptions.add("agent_default_channel");
-      continue;
+      return {
+        status: "priced",
+        billing_channel: row.billing_channel,
+        model: row.model,
+        amount_microusd: calculated.amount_microusd,
+        basis: "calculated",
+        assumptions:
+          row.channel_source === "agent_default"
+            ? [...calculated.assumptions, "agent_default_channel"]
+            : calculated.assumptions,
+      };
     }
 
     const canUseReported =
@@ -309,33 +340,75 @@ export function calculateUsageCost(
       row.source_cost_microusd !== undefined &&
       row.source_cost_covered_requests === row.requests;
     if (canUseReported) {
-      amount += BigInt(row.source_cost_microusd ?? "0");
-      reportedRows += 1;
-      assumptions.add("source_reported");
-      if (row.channel_source === "agent_default") assumptions.add("agent_default_channel");
-      continue;
+      return {
+        status: "priced",
+        billing_channel: row.billing_channel,
+        model: row.model,
+        amount_microusd: BigInt(row.source_cost_microusd ?? "0"),
+        basis: "reported",
+        assumptions:
+          row.channel_source === "agent_default"
+            ? ["source_reported", "agent_default_channel"]
+            : ["source_reported"],
+      };
     }
 
     const reason: UsageUnpricedReason =
       mode === "reported" ? "incomplete_source_cost" : (calculated?.reason ?? "invalid_catalog");
-    const key = `${row.billing_channel}\u0000${row.model}\u0000${reason}`;
+    return {
+      status: "unpriced",
+      billing_channel: row.billing_channel,
+      model: row.model,
+      reason,
+    };
+  });
+  return {
+    mode,
+    catalog_revision: catalog?.revision ?? null,
+    rows: prepared,
+  };
+}
+
+/** Fold all prepared rows, or a caller-selected set of row indexes, without re-resolving prices. */
+export function foldPreparedUsageCosts(
+  prepared: PreparedUsageCosts,
+  indexes?: readonly number[],
+): UsageCostOutcome {
+  const assumptions = new Set<UsageCostAssumption>();
+  const unpricedCounts = new Map<string, UsageUnpricedItem>();
+  let amount = 0n;
+  let calculatedRows = 0;
+  let reportedRows = 0;
+
+  const selectedRows = indexes?.length ?? prepared.rows.length;
+  const selectedIndexes = indexes ?? prepared.rows.keys();
+  for (const index of selectedIndexes) {
+    const row = prepared.rows[index];
+    if (!row) throw new RangeError(`Missing prepared Usage row at index ${index}.`);
+    if (row.status === "priced") {
+      amount += row.amount_microusd;
+      if (row.basis === "calculated") calculatedRows += 1;
+      else reportedRows += 1;
+      for (const assumption of row.assumptions) assumptions.add(assumption);
+      continue;
+    }
+    const key = `${row.billing_channel}\u0000${row.model}\u0000${row.reason}`;
     const existing = unpricedCounts.get(key);
-    if (existing) {
-      existing.rows += 1;
-    } else {
+    if (existing) existing.rows += 1;
+    else {
       unpricedCounts.set(key, {
         billing_channel: row.billing_channel,
         model: row.model,
-        reason,
+        reason: row.reason,
         rows: 1,
       });
     }
   }
 
   const unpriced = [...unpricedCounts.values()].sort(compareUnpricedItems);
-  const unpricedRows = rows.length - calculatedRows - reportedRows;
+  const unpricedRows = selectedRows - calculatedRows - reportedRows;
   return UsageCostOutcomeSchema.parse({
-    mode,
+    mode: prepared.mode,
     basis:
       calculatedRows > 0 && reportedRows > 0
         ? "mixed"
@@ -351,7 +424,7 @@ export function calculateUsageCost(
           ? "partial"
           : "unavailable",
     amount_microusd: calculatedRows + reportedRows > 0 ? amount.toString() : null,
-    catalog_revision: catalog && mode !== "reported" ? catalog.revision : null,
+    catalog_revision: prepared.catalog_revision,
     calculated_rows: calculatedRows,
     reported_rows: reportedRows,
     unpriced_rows: unpricedRows,

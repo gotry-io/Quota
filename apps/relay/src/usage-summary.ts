@@ -6,9 +6,15 @@ import {
   type UsageBreakdownDimension,
   type UsageCostMode,
   type UsageCostOutcome,
+  type UsageHourlyFact,
   type UsageTokenTotals,
+  UsageTokenTotalsSchema,
 } from "@gotry-io/quota-protocol";
-import { calculateUsageCost, foldUsageFacts } from "@gotry-io/quota-model";
+import {
+  calculateUsageCost,
+  foldPreparedUsageCosts,
+  prepareUsageCosts,
+} from "@gotry-io/quota-model";
 import type {
   StoredUsageCoverage,
   StoredUsageHourlyFact,
@@ -30,10 +36,16 @@ export function buildUsageSummary(
   mode: UsageCostMode,
   catalog: PricingCatalog,
 ): AccountUsageSummary {
-  const groups = new Map<string, StoredUsageHourlyFact[]>();
-  for (const row of result.rows) {
+  const facts = result.rows.map(usageFact);
+  const preparedCosts = prepareUsageCosts(facts, catalog, mode);
+  const totals = emptyTotals();
+  const groups = new Map<string, UsageSummaryGroup>();
+  for (const [index, row] of result.rows.entries()) {
+    const fact = facts[index];
+    if (!fact) throw new UsageSummaryLimitError();
+    addTotals(totals, fact);
     for (const dimension of breakdownDimensions) {
-      addGroup(groups, dimension, breakdownKey(row, dimension), row);
+      addGroup(groups, dimension, breakdownKey(row, dimension), fact, index);
     }
   }
   if (groups.size > MAXIMUM_USAGE_BREAKDOWNS) {
@@ -41,20 +53,20 @@ export function buildUsageSummary(
   }
   const breakdowns = [...groups]
     .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
-    .map(([compoundKey, rows]) => {
+    .map(([compoundKey, group]) => {
       const separator = compoundKey.indexOf(":");
       return {
         dimension: compoundKey.slice(0, separator),
         key: compoundKey.slice(separator + 1),
-        totals: usageTotals(rows),
-        cost: usageCost(rows, mode, catalog),
+        totals: serializedTotals(group.totals),
+        cost: foldPreparedUsageCosts(preparedCosts, group.rowIndexes),
       };
     });
   return boundedModelResult(() =>
     AccountUsageSummarySchema.parse({
       range,
-      totals: usageTotals(result.rows),
-      cost: usageCost(result.rows, mode, catalog),
+      totals: serializedTotals(totals),
+      cost: foldPreparedUsageCosts(preparedCosts),
       coverage: result.coverage.map(coverageSummary),
       breakdowns,
     }),
@@ -66,7 +78,7 @@ export function buildUsageCost(
   mode: UsageCostMode,
   catalog: PricingCatalog,
 ): UsageCostOutcome {
-  return usageCost(rows, mode, catalog);
+  return boundedModelResult(() => calculateUsageCost(rows.map(usageFact), catalog, mode));
 }
 
 export class UsageSummaryLimitError extends Error {
@@ -74,18 +86,6 @@ export class UsageSummaryLimitError extends Error {
     super("Usage summary exceeds the response limit");
     this.name = "UsageSummaryLimitError";
   }
-}
-
-function usageTotals(rows: readonly StoredUsageHourlyFact[]): UsageTokenTotals {
-  return boundedModelResult(() => foldUsageFacts(rows.map(usageFact)));
-}
-
-function usageCost(
-  rows: readonly StoredUsageHourlyFact[],
-  mode: UsageCostMode,
-  catalog: PricingCatalog,
-): UsageCostOutcome {
-  return boundedModelResult(() => calculateUsageCost(rows.map(usageFact), catalog, mode));
 }
 
 function usageFact(row: StoredUsageHourlyFact) {
@@ -124,18 +124,79 @@ function breakdownKey(
 }
 
 function addGroup(
-  groups: Map<string, StoredUsageHourlyFact[]>,
+  groups: Map<string, UsageSummaryGroup>,
   dimension: UsageBreakdownDimension,
   key: string,
-  row: StoredUsageHourlyFact,
+  row: UsageHourlyFact,
+  rowIndex: number,
 ): void {
   const compound = `${dimension}:${key}`;
-  const group = groups.get(compound);
-  if (group) {
-    group.push(row);
-  } else {
-    groups.set(compound, [row]);
+  let group = groups.get(compound);
+  if (!group) {
+    group = { totals: emptyTotals(), rowIndexes: [] };
+    groups.set(compound, group);
   }
+  addTotals(group.totals, row);
+  group.rowIndexes.push(rowIndex);
+}
+
+interface UsageSummaryGroup {
+  totals: MutableUsageTotals;
+  rowIndexes: number[];
+}
+
+type MutableUsageTotals = Omit<UsageTokenTotals, "source_cost_microusd"> & {
+  source_cost_microusd: bigint;
+};
+
+const countKeys = [
+  "input_tokens",
+  "cache_read_tokens",
+  "cache_write_5m_tokens",
+  "cache_write_1h_tokens",
+  "cache_write_inferred_tokens",
+  "output_tokens",
+  "reasoning_tokens",
+  "requests",
+  "web_search_requests",
+  "web_fetch_requests",
+  "source_cost_covered_requests",
+] as const;
+
+function emptyTotals(): MutableUsageTotals {
+  return {
+    input_tokens: 0,
+    cache_read_tokens: 0,
+    cache_write_5m_tokens: 0,
+    cache_write_1h_tokens: 0,
+    cache_write_inferred_tokens: 0,
+    output_tokens: 0,
+    reasoning_tokens: 0,
+    requests: 0,
+    web_search_requests: 0,
+    web_fetch_requests: 0,
+    source_cost_microusd: 0n,
+    source_cost_covered_requests: 0,
+  };
+}
+
+function addTotals(target: MutableUsageTotals, row: UsageHourlyFact): void {
+  for (const key of countKeys) {
+    const total = target[key] + row[key];
+    if (!Number.isSafeInteger(total)) throw new UsageSummaryLimitError();
+    target[key] = total;
+  }
+  target.source_cost_microusd += BigInt(row.source_cost_microusd ?? "0");
+}
+
+function serializedTotals(totals: MutableUsageTotals): UsageTokenTotals {
+  return boundedModelResult(() =>
+    UsageTokenTotalsSchema.parse({
+      ...totals,
+      source_cost_microusd:
+        totals.source_cost_covered_requests === 0 ? null : totals.source_cost_microusd.toString(),
+    }),
+  );
 }
 
 function boundedModelResult<Result>(operation: () => Result): Result {
