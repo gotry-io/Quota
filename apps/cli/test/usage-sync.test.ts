@@ -156,6 +156,9 @@ describe("Usage sync", () => {
     vi.mocked(dependencies.client.uploadUsage).mockImplementationOnce(async (_token, submission) =>
       duplicate(submission),
     );
+    vi.spyOn(dependencies.store, "updateActiveSession").mockRejectedValueOnce(
+      new Error("an already durable checkpoint must not be rewritten"),
+    );
     await syncUsage(
       checkpoint as ActiveAccountSessionState,
       new Date("2026-08-09T12:30:00Z"),

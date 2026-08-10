@@ -12,7 +12,7 @@ import {
   normalizeUserCode,
   randomOpaqueSecret,
   randomUserCode,
-  SecretHasher,
+  type SecretHasher,
   sha256Base64Url,
 } from "../security.ts";
 
@@ -172,10 +172,10 @@ export class AccountService {
     const tokenHash = await this.hasher.hash("login-token", loginToken);
     const grant = await this.state.getLoginGrantByLoginTokenHash(tokenHash, now.toISOString());
     if (
-      !grant ||
-      grant.grant_kind !== "browser_pkce" ||
+      grant?.grant_kind !== "browser_pkce" ||
       !grant.redirect_uri ||
-      !grant.client_state
+      !grant.client_state ||
+      !isLoopbackRedirect(grant.redirect_uri)
     ) {
       throw new AccountFlowError("invalid_state");
     }
@@ -448,7 +448,7 @@ function expiresAt(now: Date, milliseconds: number): string {
 function sanitizeLabel(value: string, maximumLength: number): string {
   const sanitized = value
     .trim()
-    .replace(/[^\p{L}\p{N} ._()\-]/gu, "")
+    .replace(/[^\p{L}\p{N} ._()-]/gu, "")
     .slice(0, maximumLength);
   if (!sanitized) {
     throw new AccountFlowError("invalid_request");

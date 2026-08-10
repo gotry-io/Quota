@@ -43,7 +43,7 @@ import type {
 import { type Context, Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import type { WebAccountAuth } from "./account/better-auth.ts";
-import { AccountFlowError, type AccountService } from "./account/service.ts";
+import { AccountFlowError, type AccountService, isLoopbackRedirect } from "./account/service.ts";
 import { managedServiceInfo } from "./config.ts";
 import { PRICING_CATALOG, PRICING_CATALOG_ETAG } from "./pricing-catalog.ts";
 import { bearerToken, type SecretHasher } from "./security.ts";
@@ -203,6 +203,9 @@ export function createRelayApp(options: RelayAppOptions): Hono {
         webSession.user.name,
         now(),
       );
+      if (!isLoopbackRedirect(completion.redirect_uri)) {
+        throw new AccountFlowError("invalid_state");
+      }
       const redirect = new URL(completion.redirect_uri);
       redirect.searchParams.set("code", completion.code);
       redirect.searchParams.set("state", completion.client_state);

@@ -375,6 +375,19 @@ describe("managed Relay on real Workers and D1", () => {
     expect(await state.getDeviceSyncControl(tokens.device_id, 2)).toMatchObject({ generation: 2 });
 
     expect((await app.request(authorize)).status).toBe(200);
+    await env.DB.prepare(
+      "UPDATE login_grants SET redirect_uri = 'https://attacker.invalid/callback' WHERE completed_at IS NULL",
+    ).run();
+    const unsafeRedirect = await app.request(callbackURL);
+    expect(unsafeRedirect.status).toBe(400);
+    expect(unsafeRedirect.headers.get("location")).toBeNull();
+    expect(
+      await env.DB.prepare(
+        "SELECT COUNT(*) AS count FROM login_grants WHERE completed_at IS NOT NULL AND redirect_uri = 'https://attacker.invalid/callback'",
+      ).first("count"),
+    ).toBe(0);
+
+    expect((await app.request(authorize)).status).toBe(200);
     await env.DB.prepare("DELETE FROM accounts WHERE id = ?1").bind(tokens.account_id).run();
     expect((await app.request(callbackURL)).status).toBe(401);
     expect(

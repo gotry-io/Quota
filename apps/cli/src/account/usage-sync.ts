@@ -327,11 +327,16 @@ async function drainOutbox(
     if (response.outcome !== "accepted" && response.outcome !== "duplicate") {
       throw new AccountStateStoreError("invalid_state", "Quota rejected complete Usage coverage.");
     }
-    session = await dependencies.store.updateActiveSession((current) => ({
-      ...current,
-      next_usage_sequence: response.next_sequence,
-      usage_sync_revision: response.usage_sync_revision,
-    }));
+    if (
+      session.next_usage_sequence !== response.next_sequence ||
+      session.usage_sync_revision !== response.usage_sync_revision
+    ) {
+      session = await dependencies.store.updateActiveSession((current) => ({
+        ...current,
+        next_usage_sequence: response.next_sequence,
+        usage_sync_revision: response.usage_sync_revision,
+      }));
+    }
     // Checkpoint the acknowledgement before removing its immutable request. If the outbox write
     // fails, the server can safely return duplicate when the same submission is retried.
     queue.entries.shift();
