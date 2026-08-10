@@ -156,7 +156,8 @@ async function scanDatabases(
     scannedSourceCount += 1;
     try {
       const parser = new OpenCodeUsageParser();
-      for (const [index, row] of queryDatabase(file.path).entries()) {
+      let index = 0;
+      for (const row of queryDatabase(file.path)) {
         rowsSeen += 1;
         if (rowsSeen > MAXIMUM_OPENCODE_ROWS) {
           reasons.push({ code: "record_limit" });
@@ -173,6 +174,7 @@ async function scanDatabases(
           const occurredAt = Date.parse(item.event.occurred_at);
           if (occurredAt >= start && occurredAt < end) records.push(item);
         }
+        index += 1;
       }
     } catch (error) {
       reasons.push({ code: readErrorReason(error) });
@@ -215,7 +217,7 @@ const DATABASE_QUERY = `
   ORDER BY time_created, id
 `;
 
-function queryDatabase(path: string): Record<string, unknown>[] {
+function* queryDatabase(path: string): Generator<Record<string, unknown>> {
   const runtimeRequire = createRequire(import.meta.url);
   if (process.versions.bun) {
     const module = runtimeRequire("bun:sqlite") as {
@@ -223,29 +225,30 @@ function queryDatabase(path: string): Record<string, unknown>[] {
         path: string,
         options: { readonly: boolean },
       ) => {
-        query(sql: string): { all(): Record<string, unknown>[] };
+        query(sql: string): { iterate(): IterableIterator<Record<string, unknown>> };
         close(): void;
       };
     };
     const database = new module.Database(path, { readonly: true });
     try {
-      return database.query(DATABASE_QUERY).all();
+      yield* database.query(DATABASE_QUERY).iterate();
     } finally {
       database.close();
     }
+    return;
   }
   const module = runtimeRequire("node:sqlite") as {
     DatabaseSync: new (
       path: string,
       options: { readOnly: boolean },
     ) => {
-      prepare(sql: string): { all(): Record<string, unknown>[] };
+      prepare(sql: string): { iterate(): IterableIterator<Record<string, unknown>> };
       close(): void;
     };
   };
   const database = new module.DatabaseSync(path, { readOnly: true });
   try {
-    return database.prepare(DATABASE_QUERY).all();
+    yield* database.prepare(DATABASE_QUERY).iterate();
   } finally {
     database.close();
   }
