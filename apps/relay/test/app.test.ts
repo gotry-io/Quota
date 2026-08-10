@@ -212,6 +212,13 @@ describe("managed Relay on real Workers and D1", () => {
     expect(body.url).toContain("scope=");
     expect(response.headers.get("set-cookie")).toContain("quota");
     expect(response.headers.get("cache-control")).toBe("no-store");
+    const nativeResponse = await auth.beginGitHubSignIn(
+      new Headers({ Origin: "https://quota.gotry.io" }),
+      "https://quota.gotry.io/oauth/v2/complete?login_token=synthetic",
+    );
+    expect(nativeResponse.status).toBe(302);
+    expect(nativeResponse.headers.get("location")).toContain("github.com/login/oauth/authorize");
+    expect(nativeResponse.headers.get("set-cookie")).toContain("quota");
     expect(
       await env.DB.prepare("SELECT COUNT(*) AS count FROM auth_identities").first("count"),
     ).toBe(0);
@@ -233,7 +240,7 @@ describe("managed Relay on real Workers and D1", () => {
       handler: async () => new Response(null, { status: 404 }),
       beginGitHubSignIn: async (_headers, callback) => {
         callbackURL = callback;
-        return Response.json({ url: "https://github.com/login/oauth/authorize", redirect: true });
+        return Response.redirect("https://github.com/login/oauth/authorize", 302);
       },
       getSession: async () => ({
         user: { id: "identity_subject", name: "Quota Tester" },
@@ -313,7 +320,7 @@ describe("managed Relay on real Workers and D1", () => {
       code_challenge: challenge,
       code_challenge_method: "S256",
     }).toString();
-    expect((await app.request(authorize)).status).toBe(200);
+    expect((await app.request(authorize)).status).toBe(302);
 
     const complete = await app.request(callbackURL);
     expect(complete.status).toBe(302);
@@ -374,7 +381,7 @@ describe("managed Relay on real Workers and D1", () => {
     expect(await state.getDeviceSyncControl(tokens.device_id, 1)).toBeNull();
     expect(await state.getDeviceSyncControl(tokens.device_id, 2)).toMatchObject({ generation: 2 });
 
-    expect((await app.request(authorize)).status).toBe(200);
+    expect((await app.request(authorize)).status).toBe(302);
     await env.DB.prepare(
       "UPDATE login_grants SET redirect_uri = 'https://attacker.invalid/callback' WHERE completed_at IS NULL",
     ).run();
@@ -387,7 +394,7 @@ describe("managed Relay on real Workers and D1", () => {
       ).first("count"),
     ).toBe(0);
 
-    expect((await app.request(authorize)).status).toBe(200);
+    expect((await app.request(authorize)).status).toBe(302);
     await env.DB.prepare("DELETE FROM accounts WHERE id = ?1").bind(tokens.account_id).run();
     expect((await app.request(callbackURL)).status).toBe(401);
     expect(
