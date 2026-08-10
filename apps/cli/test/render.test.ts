@@ -5,7 +5,7 @@ import { renderText } from "../src/render.ts";
 describe("text rendering", () => {
   it("groups quota data with a remaining meter and partial marker", () => {
     const report: QuotaCollectionReport = {
-      schema_version: 1,
+      protocol_version: 2,
       captured_at: "2026-08-02T12:00:00Z",
       results: [
         {
@@ -53,7 +53,7 @@ describe("text rendering", () => {
 
   it("renders a unitless balance without inventing a percent meter", () => {
     const report: QuotaCollectionReport = {
-      schema_version: 1,
+      protocol_version: 2,
       captured_at: "2026-08-02T12:00:00Z",
       results: [
         {
@@ -89,7 +89,7 @@ describe("text rendering", () => {
 
   it("renders an empty auto-selection with a doctor recovery hint", () => {
     const output = renderText({
-      schema_version: 1,
+      protocol_version: 2,
       captured_at: "2026-08-02T12:00:00Z",
       results: [],
     });
@@ -99,7 +99,7 @@ describe("text rendering", () => {
 
   it("strips provider-owned control characters from terminal text", () => {
     const output = renderText({
-      schema_version: 1,
+      protocol_version: 2,
       captured_at: "2026-08-02T12:00:00Z",
       results: [
         {

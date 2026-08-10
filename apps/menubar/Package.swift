@@ -14,5 +14,7 @@ let package = Package(
     .executableTarget(
       name: "QuotaBar",
       resources: [.process("Resources")]),
-    .testTarget(name: "QuotaBarTests", dependencies: ["QuotaBar"]),
+    .testTarget(
+      name: "QuotaBarTests",
+      dependencies: ["QuotaBar"]),
   ])

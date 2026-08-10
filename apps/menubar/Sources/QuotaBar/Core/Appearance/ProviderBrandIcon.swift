@@ -100,5 +100,3 @@ enum ProviderBrandAssets {
     return image
   }
 }
-
-

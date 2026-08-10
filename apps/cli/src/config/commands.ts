@@ -1,3 +1,4 @@
+import { parseArgs } from "node:util";
 import type { ProviderId } from "@gotry-io/quota-protocol";
 import {
   isConfigurableProviderId,
@@ -9,6 +10,7 @@ import {
   type ProviderApiKeyConfigSpec,
 } from "@gotry-io/quota-provider";
 import type { CliOutput } from "../commands.ts";
+import { cliParseError } from "../arguments.ts";
 import { promptLine } from "./prompt.ts";
 
 export async function runConfigCommand(
@@ -231,7 +233,27 @@ function parseConfigSetArgs(args: readonly string[]): ConfigSetParse {
     };
   }
 
-  const providerRaw = args[0]!;
+  let parsed: {
+    values: { "base-url"?: string; "api-key"?: string };
+    positionals: string[];
+  };
+  try {
+    parsed = parseArgs({
+      args: [...args],
+      options: {
+        "base-url": { type: "string" },
+        "api-key": { type: "string" },
+      },
+      strict: true,
+      allowPositionals: true,
+    });
+  } catch (error) {
+    return { ok: false, error: cliParseError(error) };
+  }
+  if (parsed.positionals.length !== 1) {
+    return { ok: false, error: "Expected exactly one provider." };
+  }
+  const providerRaw = parsed.positionals[0]!;
   if (!isConfigurableProviderId(providerRaw)) {
     const supported = Object.values(PROVIDER_CATALOG)
       .filter((e) => e.config !== null)
@@ -244,26 +266,14 @@ function parseConfigSetArgs(args: readonly string[]): ConfigSetParse {
   }
   const provider = providerRaw;
 
-  let baseUrl: string | undefined;
-  for (let index = 1; index < args.length; index += 1) {
-    const arg = args[index]!;
-    if (arg === "--base-url" || arg.startsWith("--base-url=")) {
-      const value = arg === "--base-url" ? args[++index] : arg.slice("--base-url=".length);
-      if (!value) {
-        return { ok: false, error: "Missing value for --base-url." };
-      }
-      baseUrl = value;
-      continue;
-    }
-    if (arg === "--api-key" || arg.startsWith("--api-key=")) {
-      return {
-        ok: false,
-        error:
-          "Do not pass API keys on the command line. Run `quotacli config set <provider>` and enter the key when prompted.",
-      };
-    }
-    return { ok: false, error: `Unknown option: ${arg}` };
+  if (parsed.values["api-key"] !== undefined) {
+    return {
+      ok: false,
+      error:
+        "Do not pass API keys on the command line. Run `quotacli config set <provider>` and enter the key when prompted.",
+    };
   }
+  const baseUrl = parsed.values["base-url"];
 
   if (!process.stdin.isTTY) {
     return {

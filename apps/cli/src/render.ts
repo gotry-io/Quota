@@ -8,8 +8,8 @@ import type {
 } from "@gotry-io/quota-protocol";
 import { PROVIDER_CATALOG } from "@gotry-io/quota-provider";
 
-export function renderJson(report: QuotaCollectionReport, pretty: boolean): string {
-  return `${JSON.stringify(report, null, pretty ? 2 : undefined)}\n`;
+export function renderJson(value: unknown, pretty: boolean): string {
+  return `${JSON.stringify(value, null, pretty ? 2 : undefined)}\n`;
 }
 
 export function renderText(
@@ -155,11 +155,12 @@ function cardFooter(style: TextStyle): string {
   return style.rule(`└${"─".repeat(52)}`);
 }
 
-const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001F\u007F-\u009F]/g;
-
 function safeText(value: string): string {
-  return stripVTControlCharacters(value)
-    .replace(CONTROL_CHARACTER_PATTERN, " ")
+  return Array.from(stripVTControlCharacters(value), (character) => {
+    const code = character.charCodeAt(0);
+    return code <= 0x1f || (code >= 0x7f && code <= 0x9f) ? " " : character;
+  })
+    .join("")
     .replace(/\s+/g, " ")
     .trim();
 }

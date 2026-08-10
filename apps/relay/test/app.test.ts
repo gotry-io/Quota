@@ -1,266 +1,406 @@
-import type { QuotaSnapshotEnvelope, RelayInfo } from "@gotry-io/quota-protocol";
-import type {
-  ConsumePairingSessionInput,
-  OwnerSessionRecord,
-  CreateOwnerInput,
-  CreatePairingSessionInput,
-  DecidePairingSessionInput,
-  DeviceRecord,
-  PairingConsumeOutcome,
-  PairingDecisionOutcome,
-  RateLimitInput,
-  RateLimitResult,
-  RegisterDeviceInput,
-  RelayMaintenanceInput,
-  RelayState,
-  ReplaceOwnerSessionInput,
-  StoredQuotaSnapshot,
-} from "@gotry-io/relay-core";
-import { describe, expect, it } from "vitest";
-import { createRelayApp } from "../src/app.ts";
-import { managedRelayInfo, selfHostedRelayInfo } from "../src/config.ts";
+import { applyD1Migrations, env } from "cloudflare:test";
+import type { D1Migration } from "@cloudflare/vitest-pool-workers";
+import {
+  MAXIMUM_USAGE_COVERAGE_HOURS,
+  type OAuthTokenResponse,
+  UsageCoverageSummaryItemSchema,
+} from "@gotry-io/quota-protocol";
+import type { DevicePrincipal, UsageSubmission } from "@gotry-io/relay-core";
+import { beforeEach, describe, expect, inject, it } from "vitest";
+import { createWebAccountAuth, type WebAccountAuth } from "../src/account/better-auth.ts";
+import { D1EncryptedAuthStorage } from "../src/account/better-auth-storage.ts";
+import { AccountService } from "../src/account/service.ts";
+import { accountMaintenanceInput, createRelayApp } from "../src/app.ts";
+import { SecretHasher } from "../src/security.ts";
+import { D1AccountState } from "../src/state/d1-account-state.ts";
+import { D1UsageState } from "../src/state/d1-usage-state.ts";
 
-class TestRelayState implements RelayState {
-  ready = true;
-  rateLimitInputs: RateLimitInput[] = [];
-
-  async initialize(): Promise<void> {}
-
-  async ping(): Promise<void> {
-    if (!this.ready) {
-      throw new Error("not ready");
+declare global {
+  namespace Cloudflare {
+    interface Env {
+      DB: D1Database;
     }
-  }
-
-  async createOwner(_input: CreateOwnerInput): Promise<void> {}
-  async deleteOwner(_ownerId: string): Promise<boolean> {
-    return false;
-  }
-  async ensureOwner(_ownerId: string, _createdAt: string): Promise<void> {}
-  async replaceOwnerSession(_input: ReplaceOwnerSessionInput): Promise<void> {}
-  async getActiveOwnerSessionByTokenHash(
-    _tokenHash: string,
-    _checkedAt: string,
-  ): Promise<OwnerSessionRecord | null> {
-    return null;
-  }
-  async registerDevice(_input: RegisterDeviceInput): Promise<void> {}
-  async getDevice(_deviceId: string): Promise<DeviceRecord | null> {
-    return null;
-  }
-  async getDeviceByTokenHash(_tokenHash: string): Promise<DeviceRecord | null> {
-    return null;
-  }
-  async listDevices(_ownerId: string): Promise<DeviceRecord[]> {
-    return [];
-  }
-  async revokeDevice(_ownerId: string, _deviceId: string, _revokedAt: string): Promise<boolean> {
-    return false;
-  }
-  async revokeDeviceIfInactive(
-    _tokenHash: string,
-    _inactiveBefore: string,
-    _revokedAt: string,
-  ): Promise<boolean> {
-    return false;
-  }
-  async revokeInactiveDevicesForOwner(
-    _ownerId: string,
-    _inactiveBefore: string,
-    _revokedAt: string,
-  ): Promise<number> {
-    return 0;
-  }
-  async performMaintenance(_input: RelayMaintenanceInput): Promise<void> {}
-  async createPairingSession(_input: CreatePairingSessionInput): Promise<void> {}
-  async decidePairingSession(_input: DecidePairingSessionInput): Promise<PairingDecisionOutcome> {
-    return "not_found";
-  }
-  async consumePairingSession(_input: ConsumePairingSessionInput): Promise<PairingConsumeOutcome> {
-    return "not_found";
-  }
-  async consumeRateLimit(input: RateLimitInput): Promise<RateLimitResult> {
-    this.rateLimitInputs.push(input);
-    return { allowed: true, retry_after: 0 };
-  }
-  async recordSnapshot(_envelope: QuotaSnapshotEnvelope, _receivedAt: string): Promise<void> {}
-  async listLatestSnapshots(_ownerId: string): Promise<StoredQuotaSnapshot[]> {
-    return [];
   }
 }
 
-class ActivityRaceRelayState extends TestRelayState {
-  device: DeviceRecord = {
-    id: "device_race",
-    owner_id: "owner_race",
-    display_name: "Racing device",
-    created_at: "2026-07-04T01:00:00Z",
-    last_seen_at: null,
-    last_sequence: -1,
-    revoked_at: null,
-  };
-  snapshotRecorded = false;
-
-  override async getDeviceByTokenHash(_tokenHash: string): Promise<DeviceRecord | null> {
-    return { ...this.device };
-  }
-
-  override async revokeDeviceIfInactive(
-    _tokenHash: string,
-    _inactiveBefore: string,
-    _revokedAt: string,
-  ): Promise<boolean> {
-    this.device.last_seen_at = "2026-08-03T01:00:00Z";
-    return false;
-  }
-
-  override async recordSnapshot(
-    _envelope: QuotaSnapshotEnvelope,
-    _receivedAt: string,
-  ): Promise<void> {
-    this.snapshotRecorded = true;
+declare module "vitest" {
+  export interface ProvidedContext {
+    TEST_MIGRATIONS: D1Migration[];
   }
 }
 
-const relayInfo: RelayInfo = {
-  instance_id: "test-relay",
-  mode: "self_hosted",
-  version: "0.0.1",
-  api_versions: [1],
-  auth_methods: [],
-  capabilities: {
-    realtime: false,
-    persistent_snapshots: false,
-    instant_device_revocation: false,
-    history: false,
-    multi_tenant: false,
-  },
-};
+const now = new Date("2026-08-10T00:00:00.000Z");
+const secret = "test-secret-that-is-long-enough-for-hmac-and-aes";
 
-describe("QuotaRelay app", () => {
-  it("publishes only its implemented bootstrap capabilities", async () => {
-    const app = createRelayApp({ state: new TestRelayState(), relayInfo });
-    const response = await app.request("/.well-known/quotabar-relay");
+beforeEach(async () => {
+  await applyD1Migrations(env.DB, inject("TEST_MIGRATIONS"));
+});
 
-    expect(response.status).toBe(200);
-    expect(await response.json()).toEqual(relayInfo);
+describe("managed Relay on real Workers and D1", () => {
+  it("floors RFC3339 deletion watermarks with SQLite before accepting Usage", async () => {
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_watermark', 'subject_watermark', ?1, ?1)",
+      ).bind(now.toISOString()),
+      env.DB.prepare(
+        `INSERT INTO devices (
+             id, account_id, installation_id_hash, generation, deleted_before,
+             created_at, last_login_at
+           ) VALUES ('device_watermark', 'account_watermark', 'installation_watermark', 2,
+             '2026-08-10T10:05:00Z', ?1, ?1)`,
+      ).bind(now.toISOString()),
+    ]);
+    const principal: DevicePrincipal = {
+      kind: "device",
+      session_id: "session_test",
+      family_id: "family_test",
+      account_id: "account_watermark",
+      device_id: "device_watermark",
+      generation: 2,
+      scopes: ["usage:write:self"],
+    };
+    const submission: UsageSubmission = {
+      protocol_version: 2,
+      submission_id: "submission_old",
+      device_id: "device_watermark",
+      generation: 2,
+      sequence: 0,
+      parser_revision: "parser_test",
+      aggregation_timezone: "UTC",
+      coverage: {
+        agent: "codex",
+        start_at: "2026-08-10T09:00:00.000Z",
+        end_at: "2026-08-10T10:00:00.000Z",
+        status: "complete",
+      },
+      rows: [],
+    };
+    const usage = new D1UsageState(env.DB);
+    expect(await usage.recordUsage(principal, submission, now.toISOString())).toEqual({
+      outcome: "deleted_range",
+    });
+    expect(
+      await usage.recordUsage(
+        principal,
+        {
+          ...submission,
+          submission_id: "submission_current",
+          coverage: {
+            ...submission.coverage,
+            start_at: "2026-08-10T10:00:00.000Z",
+            end_at: "2026-08-10T11:00:00.000Z",
+          },
+        },
+        now.toISOString(),
+      ),
+    ).toMatchObject({ outcome: "accepted", next_sequence: 1 });
   });
 
-  it("publishes isolated multi-owner capabilities for managed and self-hosted modes", async () => {
-    for (const info of [
-      managedRelayInfo("managed-test"),
-      selfHostedRelayInfo("self-hosted-test"),
-    ]) {
-      const app = createRelayApp({
-        state: new TestRelayState(),
-        relayInfo: info,
-      });
-      const response = await app.request("/.well-known/quotabar-relay");
-      const discovery = (await response.json()) as RelayInfo;
+  it("keeps adjacent Usage coverage inside the wire range limit", async () => {
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_test', 'subject_test', ?1, ?1)",
+      ).bind(now.toISOString()),
+      env.DB.prepare(
+        `INSERT INTO devices (
+             id, account_id, installation_id_hash, generation, created_at, last_login_at
+           ) VALUES ('device_test', 'account_test', 'installation_test', 1, ?1, ?1)`,
+      ).bind(now.toISOString()),
+      env.DB.prepare(
+        `INSERT INTO usage_coverage (
+             device_id, agent, start_at, end_at, parser_revision, submission_id, accepted_at
+           ) VALUES ('device_test', 'codex', '2026-06-01T00:00:00Z',
+             '2026-07-02T00:00:00Z', 'parser_test', 'submission_1', ?1)`,
+      ).bind(now.toISOString()),
+      env.DB.prepare(
+        `INSERT INTO usage_coverage (
+             device_id, agent, start_at, end_at, parser_revision, submission_id, accepted_at
+           ) VALUES ('device_test', 'codex', '2026-07-02T00:00:00Z',
+             '2026-08-02T00:00:00Z', 'parser_test', 'submission_2', ?1)`,
+      ).bind(now.toISOString()),
+    ]);
 
-      expect(discovery.auth_methods).toEqual(["bearer"]);
-      expect(discovery.capabilities).toEqual({
-        realtime: false,
-        persistent_snapshots: true,
-        instant_device_revocation: true,
-        history: false,
-        multi_tenant: true,
-      });
+    const result = await new D1UsageState(env.DB).queryAccountUsage("account_test", {
+      start_at: "2026-06-01T00:00:00Z",
+      end_at: "2026-08-03T00:00:00Z",
+      limit: 1_000,
+    });
+
+    expect(result.truncated).toBe(false);
+    expect(result.coverage).toHaveLength(2);
+    for (const item of result.coverage) {
+      expect(
+        UsageCoverageSummaryItemSchema.safeParse({
+          device_id: item.device_id,
+          agent: item.agent,
+          start_at: item.start_at,
+          end_at: item.end_at,
+          status: item.status,
+        }).success,
+      ).toBe(true);
+      expect(item.status).toBe("complete");
+      expect((Date.parse(item.end_at) - Date.parse(item.start_at)) / 3_600_000).toBeLessThanOrEqual(
+        MAXIMUM_USAGE_COVERAGE_HOURS,
+      );
     }
   });
 
-  it("reports a storage readiness failure", async () => {
-    const state = new TestRelayState();
-    state.ready = false;
-    const app = createRelayApp({ state, relayInfo });
-    const response = await app.request("/readyz");
+  it("stores Better Auth sessions encrypted behind hashed keys", async () => {
+    const storage = new D1EncryptedAuthStorage(env.DB, secret);
+    await storage.set("raw-session-token", JSON.stringify({ token: "raw-session-token" }), 60);
 
-    expect(response.status).toBe(503);
+    const row = await env.DB.prepare(
+      "SELECT key_hash, value_ciphertext FROM auth_session_store",
+    ).first<{ key_hash: string; value_ciphertext: string }>();
+    expect(row?.key_hash).not.toContain("raw-session-token");
+    expect(row?.value_ciphertext).not.toContain("raw-session-token");
+    expect(await storage.get("raw-session-token")).toContain("raw-session-token");
+
+    const expiredKeyHash = await new SecretHasher(secret).hash(
+      "better-auth-storage",
+      "expired-session-token",
+    );
+    await env.DB.prepare(
+      "INSERT INTO auth_session_store (key_hash, value_ciphertext, expires_at) VALUES (?1, 'expired', ?2)",
+    )
+      .bind(expiredKeyHash, "2026-08-09T00:00:00.000Z")
+      .run();
+    expect(await storage.getAndDelete("expired-session-token")).toBeNull();
+    await env.DB.prepare(
+      "INSERT INTO auth_session_store (key_hash, value_ciphertext, expires_at) VALUES ('expired', 'expired', ?1)",
+    )
+      .bind("2026-08-09T00:00:00.000Z")
+      .run();
+    await new D1AccountState(env.DB).performMaintenance(accountMaintenanceInput(now));
+    expect(
+      await env.DB.prepare(
+        "SELECT COUNT(*) AS count FROM auth_session_store WHERE key_hash = 'expired'",
+      ).first("count"),
+    ).toBe(0);
   });
 
-  it("guards pairing polls with distinct client and per-code persistent limits", async () => {
-    const state = new TestRelayState();
+  it("uses Better Auth's standard GitHub redirect and stores no provider token", async () => {
+    const auth = createWebAccountAuth({
+      database: env.DB,
+      githubClientId: "github-client",
+      githubClientSecret: "github-secret",
+      githubSubjectKey: secret,
+      authSecret: secret,
+      origin: "https://quota.gotry.io",
+    });
+    const state = new D1AccountState(env.DB);
+    const hasher = new SecretHasher(secret);
     const app = createRelayApp({
       state,
-      relayInfo,
-      now: () => new Date("2026-08-03T01:00:00Z"),
+      usageState: new D1UsageState(env.DB),
+      accountService: new AccountService(state, hasher, secret),
+      webAuth: auth,
+      hasher,
+      now: () => now,
     });
-    const response = await app.request("/api/v1/pairings/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ device_code: "unknown-device-code" }),
-    });
-
-    expect(response.status).toBe(404);
-    expect(state.rateLimitInputs.map(({ limit }) => limit)).toEqual([10_000, 130]);
-    expect(state.rateLimitInputs[0]?.key_hash).not.toBe(state.rateLimitInputs[1]?.key_hash);
-  });
-
-  it("isolates managed pairing limits by the trusted Cloudflare client address", async () => {
-    const state = new TestRelayState();
-    const app = createRelayApp({
-      state,
-      relayInfo: managedRelayInfo("managed-test"),
-      now: () => new Date("2026-08-03T01:00:00Z"),
-    });
-
-    for (const clientAddress of ["192.0.2.10", "192.0.2.11"]) {
-      expect(
-        (
-          await app.request("/api/v1/pairings", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "CF-Connecting-IP": clientAddress,
-            },
-            body: JSON.stringify({ device_display_name: "Managed device" }),
-          })
-        ).status,
-      ).toBe(201);
-      expect(
-        (
-          await app.request("/api/v1/pairings/token", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "CF-Connecting-IP": clientAddress,
-            },
-            body: JSON.stringify({ device_code: "same-device-code" }),
-          })
-        ).status,
-      ).toBe(404);
-    }
-
-    expect(state.rateLimitInputs).toHaveLength(6);
-    expect(state.rateLimitInputs[0]?.key_hash).not.toBe(state.rateLimitInputs[3]?.key_hash);
-    expect(state.rateLimitInputs[1]?.key_hash).not.toBe(state.rateLimitInputs[4]?.key_hash);
-    expect(state.rateLimitInputs[2]?.key_hash).toBe(state.rateLimitInputs[5]?.key_hash);
-  });
-
-  it("does not revoke a device refreshed during the inactivity authorization check", async () => {
-    const state = new ActivityRaceRelayState();
-    const app = createRelayApp({
-      state,
-      relayInfo,
-      now: () => new Date("2026-08-03T01:00:00Z"),
-    });
-    const response = await app.request("/api/v1/snapshots", {
+    const response = await app.request("https://quota.gotry.io/api/auth/v2/sign-in/social", {
       method: "POST",
       headers: {
-        Authorization: "Bearer racing-device-token",
         "Content-Type": "application/json",
+        Origin: "https://quota.gotry.io",
+        "cf-connecting-ip": "203.0.113.10",
       },
+      body: JSON.stringify({ provider: "github", callbackURL: "/app" }),
+    });
+    const body = (await response.json()) as { url?: string };
+    expect(body.url).toContain("github.com/login/oauth/authorize");
+    expect(body.url).toContain("scope=");
+    expect(response.headers.get("set-cookie")).toContain("quota");
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(
+      await env.DB.prepare("SELECT COUNT(*) AS count FROM auth_identities").first("count"),
+    ).toBe(0);
+  });
+
+  it("completes browser PKCE through a Better Auth Web principal and issues device tokens", async () => {
+    const state = new D1AccountState(env.DB);
+    const hasher = new SecretHasher(secret);
+    const service = new AccountService(state, hasher, secret);
+    await env.DB.prepare(
+      `INSERT INTO accounts (id, identity_subject, display_label, created_at, updated_at)
+       VALUES ('identity_subject', 'identity_subject', 'Quota Tester', ?1, ?1)`,
+    )
+      .bind(now.toISOString())
+      .run();
+    let callbackURL = "";
+    let sessionCreatedAt = now;
+    const webAuth: WebAccountAuth = {
+      handler: async () => new Response(null, { status: 404 }),
+      beginGitHubSignIn: async (_headers, callback) => {
+        callbackURL = callback;
+        return Response.json({ url: "https://github.com/login/oauth/authorize", redirect: true });
+      },
+      getSession: async () => ({
+        user: { id: "identity_subject", name: "Quota Tester" },
+        session: {
+          id: "web_session",
+          createdAt: sessionCreatedAt,
+          expiresAt: new Date(now.getTime() + 60_000),
+        },
+      }),
+    };
+    const app = createRelayApp({
+      state,
+      usageState: new D1UsageState(env.DB),
+      accountService: service,
+      webAuth,
+      hasher,
+      now: () => now,
+    });
+    const decisionBody = JSON.stringify({
+      protocol_version: 2,
+      user_code: "ABCD-EFGH",
+      decision: "approve",
+    });
+    expect(
+      (
+        await app.request("https://quota.gotry.io/oauth/v2/device/authorize", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: decisionBody,
+        })
+      ).status,
+    ).toBe(403);
+    expect(
+      (
+        await app.request("https://quota.gotry.io/oauth/v2/device/authorize", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Origin: "https://quota.gotry.io",
+            "Sec-Fetch-Site": "same-origin",
+          },
+          body: decisionBody,
+        })
+      ).status,
+    ).toBe(404);
+    sessionCreatedAt = new Date(now.getTime() - 10 * 60_000 - 1);
+    expect(
+      (
+        await app.request("https://quota.gotry.io/oauth/v2/device/authorize", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Origin: "https://quota.gotry.io",
+            "Sec-Fetch-Site": "same-origin",
+          },
+          body: decisionBody,
+        })
+      ).status,
+    ).toBe(403);
+    sessionCreatedAt = now;
+
+    const verifier = "a".repeat(43);
+    const challengeBuffer = await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(verifier),
+    );
+    const challenge = btoa(String.fromCharCode(...new Uint8Array(challengeBuffer)))
+      .replaceAll("+", "-")
+      .replaceAll("/", "_")
+      .replace(/=+$/, "");
+    const authorize = new URL("https://quota.gotry.io/oauth/v2/authorize");
+    authorize.search = new URLSearchParams({
+      response_type: "code",
+      client_id: "quotacli",
+      redirect_uri: "http://127.0.0.1:43210/callback",
+      state: "client-state-123456789",
+      code_challenge: challenge,
+      code_challenge_method: "S256",
+    }).toString();
+    expect((await app.request(authorize)).status).toBe(200);
+
+    const complete = await app.request(callbackURL);
+    expect(complete.status).toBe(302);
+    const code = new URL(complete.headers.get("location") ?? "invalid:").searchParams.get("code");
+    expect(code).toBeTruthy();
+
+    const exchanged = await app.request("https://quota.gotry.io/oauth/v2/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        schema_version: 1,
-        device_id: "device_race",
-        sequence: 0,
-        captured_at: "2026-08-03T01:00:00Z",
-        snapshots: [],
+        protocol_version: 2,
+        grant_type: "authorization_code",
+        client_id: "quotacli",
+        code,
+        code_verifier: verifier,
+        redirect_uri: "http://127.0.0.1:43210/callback",
+        installation_id: "4a7f950d-89ea-4f64-a7c1-b4aeb46a67f8",
+        device_display_name: "Test Mac",
+        platform: "macos",
       }),
     });
+    expect(exchanged.status).toBe(200);
+    const tokens = (await exchanged.json()) as OAuthTokenResponse;
+    expect(tokens.account_id).toBe("identity_subject");
+    expect(tokens.device_generation).toBe(1);
+    expect(
+      await env.DB.prepare("SELECT COUNT(*) AS count FROM devices WHERE id = ?1")
+        .bind(tokens.device_id)
+        .first("count"),
+    ).toBe(1);
 
-    expect(response.status).toBe(204);
-    expect(state.snapshotRecorded).toBe(true);
-    expect(state.device.revoked_at).toBeNull();
+    const oldAccessHash = await hasher.hash("device-access", tokens.device_session.access_token);
+    expect(await state.authorizeDeviceSession(oldAccessHash, now.toISOString())).toMatchObject({
+      device_id: tokens.device_id,
+      generation: 1,
+    });
+    expect(
+      (
+        await app.request("https://quota.gotry.io/oauth/v2/revoke", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${tokens.device_session.refresh_token}` },
+        })
+      ).status,
+    ).toBe(204);
+    await env.DB.prepare("UPDATE devices SET signed_out_at = NULL WHERE id = ?1")
+      .bind(tokens.device_id)
+      .run();
+    expect(await state.authorizeDeviceSession(oldAccessHash, now.toISOString())).toBeNull();
+
+    const deletedAt = new Date(now.getTime() + 1_000).toISOString();
+    expect(
+      await state.deleteDeviceData(tokens.account_id, tokens.device_id, deletedAt),
+    ).toMatchObject({ device_id: tokens.device_id, generation: 2 });
+    await env.DB.prepare("UPDATE devices SET signed_out_at = NULL, deleted_at = NULL WHERE id = ?1")
+      .bind(tokens.device_id)
+      .run();
+    expect(await state.authorizeDeviceSession(oldAccessHash, deletedAt)).toBeNull();
+    expect(await state.getDeviceSyncControl(tokens.device_id, 1)).toBeNull();
+    expect(await state.getDeviceSyncControl(tokens.device_id, 2)).toMatchObject({ generation: 2 });
+
+    expect((await app.request(authorize)).status).toBe(200);
+    await env.DB.prepare(
+      "UPDATE login_grants SET redirect_uri = 'https://attacker.invalid/callback' WHERE completed_at IS NULL",
+    ).run();
+    const unsafeRedirect = await app.request(callbackURL);
+    expect(unsafeRedirect.status).toBe(400);
+    expect(unsafeRedirect.headers.get("location")).toBeNull();
+    expect(
+      await env.DB.prepare(
+        "SELECT COUNT(*) AS count FROM login_grants WHERE completed_at IS NOT NULL AND redirect_uri = 'https://attacker.invalid/callback'",
+      ).first("count"),
+    ).toBe(0);
+
+    expect((await app.request(authorize)).status).toBe(200);
+    await env.DB.prepare("DELETE FROM accounts WHERE id = ?1").bind(tokens.account_id).run();
+    expect((await app.request(callbackURL)).status).toBe(401);
+    expect(
+      (
+        await app.request("https://quota.gotry.io/api/v2/account/devices", {
+          headers: { Origin: "https://quota.gotry.io" },
+        })
+      ).status,
+    ).toBe(401);
+    expect(
+      await env.DB.prepare("SELECT COUNT(*) AS count FROM accounts WHERE id = ?1")
+        .bind(tokens.account_id)
+        .first("count"),
+    ).toBe(0);
   });
 });

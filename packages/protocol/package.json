@@ -9,6 +9,7 @@
   },
   "scripts": {
     "check": "tsc -p tsconfig.json",
+    "generate:schema": "node --experimental-strip-types scripts/generate-json-schemas.ts && pnpm exec biome format --write schema",
     "test": "vitest run"
   },
   "dependencies": {

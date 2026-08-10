@@ -11,8 +11,6 @@ enum QuotaOverviewState: Equatable {
 struct ProviderQuotaPresentation: Equatable, Identifiable {
   let provider: ProviderID
   let accounts: [AccountQuotaPresentation]
-  /// Local collection issue when this provider has no usable live windows, or a soft warning
-  /// alongside cached/remote accounts.
   let status: ProviderStatusCopy?
 
   var id: ProviderID { provider }
@@ -32,33 +30,20 @@ struct AccountQuotaPresentation: Equatable, Identifiable {
   let identity: QuotaSubscriptionIdentity
   let snapshot: QuotaSnapshot
   let isStale: Bool
-  /// Every contributing source (debug / future use). UI provenance follows selectedSource only.
   let sources: [QuotaObservationSource]
-  /// Snapshot chosen by SubscriptionResolver — single source of truth for numbers and badge.
   let selectedSource: QuotaObservationSource
-  /// Human label for selectedSource ("This Mac" or Relay device display name).
   let selectedSourceDisplayName: String
 
   var id: QuotaSubscriptionIdentity { identity }
-
-  /// Compact kind label aligned to selectedSource only (never a multi-source blend).
-  var sourceSummary: String {
-    selectedSource.isLocal ? "Local" : "Remote"
-  }
-
-  var sourceSymbolName: String {
-    selectedSource.isLocal ? "laptopcomputer" : "network"
-  }
-
-  var sourceAccessibilityLabel: String {
-    "Source: \(selectedSourceDisplayName)"
-  }
+  var sourceSummary: String { selectedSource.isLocal ? "Local" : "Device" }
+  var sourceSymbolName: String { selectedSource.isLocal ? "laptopcomputer" : "desktopcomputer" }
+  var sourceAccessibilityLabel: String { "Source: \(selectedSourceDisplayName)" }
 }
 
 struct ProviderReportingSourcePresentation: Equatable, Identifiable {
   enum Kind: String, Equatable {
     case local = "Local"
-    case relay = "Relay"
+    case device = "Device"
   }
 
   let id: String
@@ -67,48 +52,64 @@ struct ProviderReportingSourcePresentation: Equatable, Identifiable {
   let observedAt: Date
   let isStale: Bool
 
-  var symbolName: String {
-    kind == .local ? "laptopcomputer" : "network"
-  }
+  var symbolName: String { kind == .local ? "laptopcomputer" : "desktopcomputer" }
 
   func detailLabel(now: Date) -> String {
     var parts = [kind.rawValue]
-    if isStale {
-      parts.append("Stale")
-    }
+    if isStale { parts.append("Stale") }
     parts.append("\(CompactAgeFormatter.string(since: observedAt, now: now)) ago")
     return parts.joined(separator: " · ")
   }
 }
 
+enum AccountViewState: Equatable {
+  case notChecked
+  case signedOut
+  case logoutPending
+  case signedIn
+}
+
 @MainActor
 @Observable
 final class MenuBarViewModel {
-  let relayStateModel: RelayStateModel
   private(set) var report: QuotaCollectionReport?
+  private(set) var localUsage: LocalUsageReport?
+  private(set) var accountSummary: AccountSummary?
+  private(set) var syncStatus: CLIAccountSyncStatus?
+  private(set) var syncReason: CLIAccountSyncReason?
   private(set) var errorMessage: String?
+  private(set) var accountErrorMessage: String?
+  private(set) var isRefreshing = false
+  private(set) var isLoggingIn = false
+  private(set) var isLoggingOut = false
+  private(set) var isLoadingAccountSummary = false
+  private(set) var lastCheckedAt: Date?
 
-  var isRefreshing: Bool {
-    localRefreshInProgress || relayStateModel.profileStates.values.contains { $0.isRefreshing }
+  var accountState: AccountViewState {
+    switch syncStatus {
+    case .synced, .accountUnavailable: .signedIn
+    case .signedOut: .signedOut
+    case .logoutPending: .logoutPending
+    case nil: .notChecked
+    }
   }
 
-  /// When QuotaBar last finished a local collect and/or Relay pull (orchestration).
-  /// Not provider data age — use each snapshot's `observedAt` for that.
-  var lastCheckedAt: Date? {
-    ([localLastCheckedAt] + relayStateModel.profileStates.values.map(\.lastSuccessfulRefreshAt))
-      .compactMap { $0 }
-      .max()
+  var accountDisplayLabel: String {
+    let label = accountSummary?.account.displayLabel?
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    return label?.isEmpty == false ? label! : "Quota account"
   }
 
-  private var localRefreshInProgress = false
-
-  private var localLastCheckedAt: Date?
+  var accountDeviceSummary: String {
+    guard let devices = accountSummary?.devices else {
+      return accountState == .signedIn ? "Unavailable" : "Sign in"
+    }
+    let active = devices.filter { $0.status == .active }.count
+    return active == devices.count ? "\(devices.count)" : "\(active)/\(devices.count) active"
+  }
 
   @ObservationIgnored
-  private let collector: (any LocalQuotaCollecting)?
-
-  @ObservationIgnored
-  private let relayPusher: (any RelaySnapshotPushing)?
+  private let client: (any LocalQuotaServing)?
 
   @ObservationIgnored
   private let initializationError: String?
@@ -117,132 +118,109 @@ final class MenuBarViewModel {
   private let reportCache: LocalQuotaReportCache?
 
   @ObservationIgnored
-  private let relayPushInterval: Duration
+  private let refreshInterval: Duration
 
   @ObservationIgnored
-  private let relayPushSleep: @Sendable (Duration) async throws -> Void
+  private let refreshSleep: @Sendable (Duration) async throws -> Void
 
   @ObservationIgnored
-  private var relayPushTask: Task<Void, Never>?
+  private var refreshTask: Task<Void, Never>?
+
+  @ObservationIgnored
+  private var loginTask: Task<Void, Never>?
 
   init(
-    collector: (any LocalQuotaCollecting)? = nil,
-    relayPusher: (any RelaySnapshotPushing)? = nil,
+    client: (any LocalQuotaServing)? = nil,
     reportCache: LocalQuotaReportCache? = .live,
-    relayStateModel: RelayStateModel = RelayStateModel.live(),
-    relayPushInterval: Duration = .seconds(300),
-    relayPushSleep: @escaping @Sendable (Duration) async throws -> Void = { duration in
+    refreshInterval: Duration = .seconds(300),
+    refreshSleep: @escaping @Sendable (Duration) async throws -> Void = { duration in
       try await Task.sleep(for: duration)
     }
   ) {
-    self.relayStateModel = relayStateModel
     self.reportCache = reportCache
-    self.relayPushInterval = relayPushInterval
-    self.relayPushSleep = relayPushSleep
-    if let cached = reportCache?.load() {
-      report = cached.report
-      localLastCheckedAt = cached.refreshedAt
-    }
+    self.refreshInterval = refreshInterval
+    self.refreshSleep = refreshSleep
 
-    if let collector {
-      self.collector = collector
-      self.relayPusher = relayPusher
+    if let client {
+      self.client = client
       initializationError = nil
     } else {
       do {
-        let client = try LocalQuotaClient()
-        self.collector = client
-        self.relayPusher = relayPusher ?? client
+        self.client = try LocalQuotaClient()
         initializationError = nil
       } catch {
-        self.collector = nil
-        self.relayPusher = nil
+        self.client = nil
         initializationError = Self.message(for: error)
       }
+    }
+
+    if let cached = reportCache?.load() {
+      apply(cached.output, refreshedAt: cached.refreshedAt)
     }
   }
 
   #if DEBUG
     init(
-      visualTestReport: QuotaCollectionReport?,
+      visualTestOutput: CLIAccountSyncOutput?,
       errorMessage: String?,
-      lastCheckedAt: Date?,
-      relayStateModel: RelayStateModel = RelayStateModel.live()
+      lastCheckedAt: Date?
     ) {
-      self.relayStateModel = relayStateModel
-      report = visualTestReport
-      self.errorMessage = errorMessage
-      localLastCheckedAt = lastCheckedAt
-      collector = nil
-      relayPusher = nil
+      client = nil
       initializationError = nil
       reportCache = nil
-      relayPushInterval = .seconds(300)
-      relayPushSleep = { duration in
-        try await Task.sleep(for: duration)
+      refreshInterval = .seconds(300)
+      refreshSleep = { duration in try await Task.sleep(for: duration) }
+      self.errorMessage = errorMessage
+      if let visualTestOutput {
+        apply(visualTestOutput, refreshedAt: lastCheckedAt)
+      } else {
+        self.lastCheckedAt = lastCheckedAt
       }
     }
   #endif
 
   deinit {
-    relayPushTask?.cancel()
+    refreshTask?.cancel()
+    loginTask?.cancel()
   }
 
   func refreshIfNeeded(now: Date = Date()) async {
-    let localIsFresh = if collector == nil {
-      errorMessage != nil
-    } else {
-      localLastCheckedAt.map { now.timeIntervalSince($0) < 60 } == true
-    }
-    let relayIsFresh = relayStateModel.profiles.allSatisfy { profile in
-      guard let state = relayStateModel.state(for: profile.id), state.refreshIssue == nil else {
-        return false
-      }
-      return state.lastSuccessfulRefreshAt.map { now.timeIntervalSince($0) < 60 } == true
-    }
-    if localIsFresh, relayIsFresh {
-      return
-    }
+    guard lastCheckedAt.map({ now.timeIntervalSince($0) < 60 }) != true else { return }
     await refresh()
   }
 
   func refresh() async {
-    guard !localRefreshInProgress else { return }
-
-    localRefreshInProgress = true
-    defer { localRefreshInProgress = false }
-
-    if let collector {
-      do {
-        report = try await collector.collect()
-        localLastCheckedAt = Date()
-        if let report, let localLastCheckedAt {
-          reportCache?.save(report: report, refreshedAt: localLastCheckedAt)
-        }
-        errorMessage = nil
-      } catch is CancellationError {
-        if Task.isCancelled {
-          return
-        }
-      } catch {
-        errorMessage = Self.message(for: error)
-      }
-    } else {
+    guard !isRefreshing else { return }
+    guard let client else {
       errorMessage = initializationError ?? "QuotaCLI is unavailable."
+      return
     }
 
-    if !Task.isCancelled {
-      await relayStateModel.refreshAllProfiles()
+    isRefreshing = true
+    defer { isRefreshing = false }
+    do {
+      let output = try await client.sync()
+      let refreshedAt = Date()
+      apply(output, refreshedAt: refreshedAt)
+      reportCache?.save(output: output, refreshedAt: refreshedAt)
+      errorMessage =
+        output.status == .accountUnavailable
+        ? "Account sync is unavailable. Local quota and Usage are still current."
+        : nil
+    } catch is CancellationError {
+      return
+    } catch {
+      errorMessage = Self.message(for: error)
     }
   }
 
-  /// App-lifetime monitor: pairing may appear or disappear through QuotaCLI while QuotaBar runs.
-  func startRelayPushLoop() {
-    guard relayPushTask == nil, relayPusher != nil else { return }
-    let interval = relayPushInterval
-    let sleep = relayPushSleep
-    relayPushTask = Task { @MainActor [weak self] in
-      await self?.pushRelaySnapshot()
+  /// The only app-lifetime scheduler: one sync at launch, then one every five minutes.
+  func startRefreshLoop() {
+    guard refreshTask == nil, client != nil else { return }
+    let interval = refreshInterval
+    let sleep = refreshSleep
+    refreshTask = Task { @MainActor [weak self] in
+      await self?.refresh()
       while !Task.isCancelled {
         do {
           try await sleep(interval)
@@ -250,41 +228,81 @@ final class MenuBarViewModel {
           break
         }
         guard !Task.isCancelled else { break }
-        await self?.pushRelaySnapshot()
+        await self?.refresh()
       }
     }
   }
 
-  func deleteAllQuotaBarData() async throws {
-    try await relayStateModel.deleteAllQuotaBarData()
-    clearLocalState()
+  func startLogin() {
+    guard loginTask == nil, let client else {
+      if self.client == nil {
+        accountErrorMessage = initializationError ?? "QuotaCLI is unavailable."
+      }
+      return
+    }
+
+    accountErrorMessage = nil
+    isLoggingIn = true
+    loginTask = Task { @MainActor [weak self] in
+      guard let self else { return }
+      defer {
+        isLoggingIn = false
+        loginTask = nil
+      }
+      do {
+        _ = try await client.login()
+        try Task.checkCancellation()
+        await refresh()
+      } catch is CancellationError {
+        return
+      } catch {
+        accountErrorMessage = Self.message(for: error)
+      }
+    }
   }
 
-  func deleteAllQuotaBarDataLocally() throws {
-    try relayStateModel.deleteAllQuotaBarDataLocally()
-    clearLocalState()
+  func cancelLogin() {
+    loginTask?.cancel()
+  }
+
+  func logout() async {
+    guard !isLoggingOut, let client else { return }
+    isLoggingOut = true
+    defer { isLoggingOut = false }
+    accountErrorMessage = nil
+    do {
+      _ = try await client.logout()
+      accountSummary = nil
+      syncStatus = .signedOut
+      syncReason = nil
+      reportCache?.clear()
+      await refresh()
+    } catch is CancellationError {
+      return
+    } catch {
+      accountErrorMessage = Self.message(for: error)
+      // QuotaCLI may have committed a retryable logout-pending state before an offline revoke.
+      await refresh()
+    }
+  }
+
+  func refreshAccountSummary() async {
+    guard accountState == .signedIn, !isLoadingAccountSummary, let client else { return }
+    isLoadingAccountSummary = true
+    defer { isLoadingAccountSummary = false }
+    do {
+      accountSummary = try await client.accountSummary()
+      accountErrorMessage = nil
+      saveCurrentState()
+    } catch is CancellationError {
+      return
+    } catch {
+      accountErrorMessage = Self.message(for: error)
+    }
   }
 
   func result(for provider: ProviderID) -> QuotaCollectionResult? {
     report?.results.first { $0.provider == provider }
-  }
-
-  private func clearLocalState() {
-    report = nil
-    errorMessage = nil
-    localLastCheckedAt = nil
-    reportCache?.clear()
-  }
-
-  private func pushRelaySnapshot() async {
-    guard let relayPusher, relayPusher.hasRelayCredential else { return }
-    do {
-      try await relayPusher.push()
-    } catch is CancellationError {
-      return
-    } catch {
-      // Relay state already exposes stale remote data; the next lifecycle tick retries.
-    }
   }
 
   func displaySnapshots(
@@ -293,111 +311,79 @@ final class MenuBarViewModel {
   ) -> [AccountQuotaPresentation] {
     resolvedSubscriptions(now: now)
       .filter { $0.identity.provider == provider }
-      .map { presentation(for: $0) }
+      .map(presentation)
   }
 
   func reportingSources(
     for provider: ProviderID,
     now: Date
   ) -> [ProviderReportingSourcePresentation] {
-    var sources: [ProviderReportingSourcePresentation] = []
-
-    if let snapshot = latestPresentableLocalSnapshot(for: provider) {
-      sources.append(
-        ProviderReportingSourcePresentation(
-          id: "local",
-          displayName: "This Mac",
-          kind: .local,
-          observedAt: snapshot.observedAt,
-          isStale: Self.isStale(snapshot, now: now)
-        )
+    let grouped = Dictionary(grouping: observations.filter { $0.snapshot.provider == provider }) {
+      $0.source
+    }
+    return grouped.compactMap { source, observations in
+      guard let snapshot = observations.map(\.snapshot).max(by: { $0.observedAt < $1.observedAt })
+      else { return nil }
+      return ProviderReportingSourcePresentation(
+        id: source.stableID,
+        displayName: displayName(for: source),
+        kind: source.isLocal ? .local : .device,
+        observedAt: snapshot.observedAt,
+        isStale: Self.isStale(snapshot, now: now)
       )
     }
-
-    var seenSources = Set<String>()
-    for owned in relayStateModel.ownedDevices where seenSources.insert(owned.id).inserted {
-      guard let state = relayStateModel.state(for: owned.profileID) else { continue }
-      let snapshots = state.observations.compactMap { observation in
-        observation.deviceID == owned.device.deviceID
-          && observation.snapshot.provider == provider
-          && Self.isPresentable(observation.snapshot)
-          ? observation.snapshot
-          : nil
-      }
-      guard let snapshot = snapshots.max(by: { $0.observedAt < $1.observedAt }) else { continue }
-
-      sources.append(
-        ProviderReportingSourcePresentation(
-          id: owned.id,
-          displayName: owned.device.displayName,
-          kind: .relay,
-          observedAt: snapshot.observedAt,
-          isStale: Self.isStale(snapshot, now: now)
-        )
-      )
-    }
-
-    return sources
+    .sorted { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }
   }
 
-  func relayReportingProviders(now: Date) -> Set<ProviderID> {
-    Set(
-      ProviderID.allCases.filter { provider in
-        reportingSources(for: provider, now: now).contains { $0.kind == .relay }
-      }
-    )
+  func accountReportingProviders() -> Set<ProviderID> {
+    Set(accountSummary?.quota.map(\.snapshot.provider) ?? [])
   }
 
   func overviewState(
     enabledProviders: [ProviderID],
     now: Date = Date()
   ) -> QuotaOverviewState {
-    let warning = refreshWarning
-
     let providers: [ProviderQuotaPresentation] = enabledProviders.compactMap { provider in
       let accounts = displaySnapshots(for: provider, now: now)
-      // Local auth/error chrome is only for issue-only rows. Once any account (local or
-      // remote) is presentable, Overview shows that quota without blending setup-required copy.
       let status = accounts.isEmpty ? providerStatus(for: provider) : nil
       guard !accounts.isEmpty || status != nil else { return nil }
       return ProviderQuotaPresentation(provider: provider, accounts: accounts, status: status)
     }
 
     guard !providers.isEmpty else {
-      if hasCompletedRefresh {
-        return .empty(refreshWarning: warning)
-      }
-      if let warning {
-        return .unavailable(message: warning)
-      }
+      if report != nil { return .empty(refreshWarning: errorMessage) }
+      if let errorMessage { return .unavailable(message: errorMessage) }
       return .loading
     }
-    return .content(providers: providers, refreshWarning: warning)
+    return .content(providers: providers, refreshWarning: errorMessage)
   }
 
-  private var hasCompletedRefresh: Bool {
-    report != nil
-      || relayStateModel.profileStates.values.contains { $0.lastSuccessfulRefreshAt != nil }
+  private func apply(_ output: CLIAccountSyncOutput, refreshedAt: Date?) {
+    report = output.localReport
+    localUsage = output.localUsage
+    if output.status != .accountUnavailable {
+      accountSummary = output.accountSummary
+    }
+    syncStatus = output.status
+    syncReason = output.reason
+    lastCheckedAt = refreshedAt
   }
 
-  private var refreshWarning: String? {
-    var messages: [String] = []
-    if let errorMessage {
-      messages.append(errorMessage)
-    }
-    for profile in relayStateModel.profiles {
-      guard let message = relayStateModel.state(for: profile.id)?.refreshIssue?.message else {
-        continue
-      }
-      messages.append("\(profile.name): \(message)")
-    }
-    return messages.isEmpty ? nil : messages.joined(separator: " ")
+  private func saveCurrentState() {
+    guard let report, let localUsage, let accountSummary, let lastCheckedAt else { return }
+    reportCache?.save(
+      output: CLIAccountSyncOutput(
+        status: .synced,
+        localReport: report,
+        localUsage: localUsage,
+        accountSummary: accountSummary
+      ),
+      refreshedAt: lastCheckedAt
+    )
   }
 
   private func providerStatus(for provider: ProviderID) -> ProviderStatusCopy? {
-    // Prefer live local collection outcomes. Remote-only success still shows accounts above.
-    guard let result = result(for: provider) else { return nil }
-    return ProviderStatusCopy.from(result: result)
+    result(for: provider).flatMap(ProviderStatusCopy.from)
   }
 
   private func resolvedSubscriptions(now: Date) -> [ResolvedQuotaSubscription] {
@@ -405,7 +391,17 @@ final class MenuBarViewModel {
   }
 
   private var observations: [QuotaObservation] {
-    var observations = report?.results.flatMap { result in
+    if let accountSummary, !accountSummary.quota.isEmpty {
+      return accountSummary.quota.compactMap { observation in
+        Self.isPresentable(observation.snapshot)
+          ? QuotaObservation(
+            snapshot: observation.snapshot,
+            source: .device(deviceID: observation.deviceID)
+          )
+          : nil
+      }
+    }
+    return report?.results.flatMap { result in
       guard result.outcome == .success else { return [QuotaObservation]() }
       return result.snapshots.compactMap { snapshot in
         Self.isPresentable(snapshot)
@@ -413,28 +409,6 @@ final class MenuBarViewModel {
           : nil
       }
     } ?? []
-
-    for profile in relayStateModel.profiles {
-      guard let state = relayStateModel.state(for: profile.id) else { continue }
-      observations.append(contentsOf: state.observations.compactMap { observation in
-        guard Self.isPresentable(observation.snapshot) else { return nil }
-        return QuotaObservation(
-          snapshot: observation.snapshot,
-          source: .remote(
-            relayInstanceID: profile.instanceID,
-            deviceID: observation.deviceID
-          )
-        )
-      })
-    }
-    return observations
-  }
-
-  private func latestPresentableLocalSnapshot(for provider: ProviderID) -> QuotaSnapshot? {
-    guard let result = result(for: provider), result.outcome == .success else { return nil }
-    return result.snapshots
-      .filter(Self.isPresentable)
-      .max(by: { $0.observedAt < $1.observedAt })
   }
 
   private static func isPresentable(_ snapshot: QuotaSnapshot) -> Bool {
@@ -461,19 +435,10 @@ final class MenuBarViewModel {
   private func displayName(for source: QuotaObservationSource) -> String {
     switch source {
     case .local:
-      return "This Mac"
-    case .remote(let relayInstanceID, let deviceID):
-      if let profile = relayStateModel.profiles.first(where: { $0.instanceID == relayInstanceID }),
-        let device = relayStateModel.state(for: profile.id)?.devices.first(where: {
-          $0.deviceID == deviceID
-        })
-      {
-        let name = device.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !name.isEmpty {
-          return name
-        }
-      }
-      return "Relay Device"
+      "This Mac"
+    case .device(let deviceID):
+      accountSummary?.devices.first(where: { $0.deviceID == deviceID })?.displayName
+        ?? "Account device"
     }
   }
 
@@ -483,6 +448,6 @@ final class MenuBarViewModel {
     {
       return description
     }
-    return "Local quota could not be refreshed."
+    return "QuotaCLI could not complete the request."
   }
 }

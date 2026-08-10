@@ -1,4 +1,10 @@
 export {
+  maskApiKey,
+  normalizeBaseUrl,
+  resolveApiKeyCredentials,
+} from "./api-key/resolve.ts";
+export { API_KEY_SPECS, apiKeyProviderIds, isApiKeyProviderId } from "./api-key/specs.ts";
+export {
   authRequiredMessage,
   configurableProviderIds,
   isConfigurableProviderId,
@@ -19,12 +25,38 @@ export {
 } from "./config/store.ts";
 export { diagnoseProviderSessions } from "./discovery.ts";
 export {
-  maskApiKey,
-  normalizeBaseUrl,
-  resolveApiKeyCredentials,
-} from "./api-key/resolve.ts";
-export { API_KEY_SPECS, apiKeyProviderIds, isApiKeyProviderId } from "./api-key/specs.ts";
+  type ClaudeUsageFile,
+  claudeUsageRoots,
+  discoverClaudeUsageFiles,
+  scanClaudeUsage,
+} from "./providers/claude/usage.ts";
+export {
+  type CodexUsageFile,
+  codexUsageRoots,
+  discoverCodexUsageFiles,
+  scanCodexUsage,
+} from "./providers/codex/usage.ts";
 export {
   type CollectorFactoryOptions,
   createDefaultCollectors,
 } from "./registry.ts";
+export type {
+  BillingChannel,
+  ContextBucket,
+  CoverageReason,
+  CoverageReasonCode,
+  LocalUsageFile,
+  NormalizedUsageEvent,
+  NormalizedUsageRecord,
+  ScanCoverage,
+  UsageAgent,
+  UsageChannelSource,
+  UsageDirectoryEntry,
+  UsageDiscoveryOptions,
+  UsageFileDiscoveryResult,
+  UsageFileInfo,
+  UsageFileSystem,
+  UsageScanOptions,
+  UsageScanResult,
+  UsageSourceCursor,
+} from "./usage/contracts.ts";

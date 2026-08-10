@@ -94,7 +94,7 @@ describe("collection report", () => {
       status: "stale" as const,
     };
     const report = QuotaCollectionReportSchema.parse({
-      schema_version: 1,
+      protocol_version: 2,
       captured_at: NOW.toISOString().replace(/\.\d{3}Z$/, "Z"),
       results: [{ provider: "codex", outcome: "success", snapshots: [staleSnapshot] }],
     });

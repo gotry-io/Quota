@@ -1,12 +1,13 @@
 import Foundation
 
-private struct CachedQuotaReport: Codable {
-  let report: QuotaCollectionReport
+private struct CachedAccountSync: Codable {
+  let output: CLIAccountSyncOutput
   let refreshedAt: Date
 }
 
+/// Last-known credential-free CLI output used to paint the panel before the first sync completes.
 struct LocalQuotaReportCache {
-  static let storageKey = "localQuotaReport.v1"
+  static let storageKey = "accountSync.v2"
   private let defaults: UserDefaults
 
   static var live: LocalQuotaReportCache {
@@ -17,18 +18,15 @@ struct LocalQuotaReportCache {
     self.defaults = defaults
   }
 
-  func load() -> (report: QuotaCollectionReport, refreshedAt: Date)? {
+  func load() -> (output: CLIAccountSyncOutput, refreshedAt: Date)? {
     guard let data = defaults.data(forKey: Self.storageKey),
-      let cached = try? QuotaWireCodec.makeDecoder().decode(CachedQuotaReport.self, from: data),
-      cached.report.schemaVersion == 1
-    else {
-      return nil
-    }
-    return (cached.report, cached.refreshedAt)
+      let cached = try? QuotaWireCodec.makeDecoder().decode(CachedAccountSync.self, from: data)
+    else { return nil }
+    return (cached.output, cached.refreshedAt)
   }
 
-  func save(report: QuotaCollectionReport, refreshedAt: Date) {
-    let cached = CachedQuotaReport(report: report, refreshedAt: refreshedAt)
+  func save(output: CLIAccountSyncOutput, refreshedAt: Date) {
+    let cached = CachedAccountSync(output: output, refreshedAt: refreshedAt)
     guard let data = try? QuotaWireCodec.makeEncoder().encode(cached) else { return }
     defaults.set(data, forKey: Self.storageKey)
   }

@@ -24,6 +24,8 @@ enum QuotaPalette {
   static let floatingMenuFill = Color(nsColor: adaptiveFloatingMenuFill)
   /// Adaptive ambient shadow used only by transient menus.
   static let floatingMenuShadow = Color(nsColor: adaptiveFloatingMenuShadow)
+  /// Scrim behind app-owned confirmation surfaces inside the menu panel.
+  static let modalScrim = Color(nsColor: adaptiveModalScrim)
   /// Neutral interaction feedback for destination rows and header controls.
   static let rowHoverFill = Color(nsColor: adaptiveRowHoverFill)
   /// Accent is reserved for the active/pressed interaction state.
@@ -49,6 +51,9 @@ enum QuotaPalette {
   static let onAccent = Color(nsColor: adaptiveOnAccent)
   static let warning = Color(nsColor: .systemOrange)
   static let critical = Color(nsColor: .systemRed)
+  /// Darkened critical surface for destructive actions with a stable white label.
+  static let criticalAction = Color(nsColor: adaptiveCriticalAction)
+  static let onCritical = Color.white
 
   // MARK: Usage meters (remaining-based)
 
@@ -93,6 +98,14 @@ enum QuotaPalette {
     }
   )
 
+  private static let adaptiveCriticalAction = NSColor(
+    name: nil,
+    dynamicProvider: { appearance in
+      let critical = resolvedColor(.systemRed, for: appearance)
+      return critical.blended(withFraction: 0.2, of: .black) ?? critical
+    }
+  )
+
   private static let adaptiveSettingsGroupFill = adaptiveColor(
     light: NSColor.white.withAlphaComponent(0.16),
     dark: NSColor.white.withAlphaComponent(0.045)
@@ -106,6 +119,11 @@ enum QuotaPalette {
   private static let adaptiveFloatingMenuShadow = adaptiveColor(
     light: NSColor.black.withAlphaComponent(0.13),
     dark: NSColor.black.withAlphaComponent(0.30)
+  )
+
+  private static let adaptiveModalScrim = adaptiveColor(
+    light: NSColor.black.withAlphaComponent(0.12),
+    dark: NSColor.black.withAlphaComponent(0.24)
   )
 
   private static let adaptiveRowHoverFill = adaptiveColor(
@@ -147,6 +165,10 @@ enum QuotaPalette {
 
   static func resolvedAccent(for appearance: NSAppearance) -> NSColor {
     isDark(appearance) ? brandMintNSColor : brandEmeraldNSColor
+  }
+
+  static func resolvedCriticalAction(for appearance: NSAppearance) -> NSColor {
+    resolvedColor(adaptiveCriticalAction, for: appearance)
   }
 
   private static func adaptiveColor(light: NSColor, dark: NSColor) -> NSColor {

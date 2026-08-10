@@ -1,38 +1,23 @@
 import AppKit
 import SwiftUI
 
-/// Single header chrome for every page.
-///
-/// Edge rule: header, body, and footer share `panelHorizontalPadding` (16).
-/// Every trailing action is the same plain SwiftUI button. Settings overflow floats on the same
-/// app-owned Group/Row geometry as other Quota selection controls.
 struct MenuBarHeader: View {
-  private enum OverflowAction: Hashable {
-    case deleteAll
-    case quit
-  }
-
   enum TrailingAction {
     case none
     case openSettings(() -> Void)
-    case pairDevice(() -> Void)
-    /// Quiet text action in the header ops area (e.g. provider API key **Save**).
-    case textAction(title: String, accessibilityHint: String, action: () -> Void)
-    case overflowMenu(deleteEnabled: Bool, onDeleteAll: () -> Void)
+    case overflowMenu
   }
 
   let title: String
-  /// Page-level failure copy (e.g. API key save). Replaces the title while set.
   var issue: String? = nil
   let canNavigateBack: Bool
   let onNavigateBack: () -> Void
-  /// Overview root only: app mark before the title.
-  var showsLeadingIcon: Bool = false
+  var showsLeadingIcon = false
   let trailing: TrailingAction
 
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @FocusState private var isOverflowButtonFocused: Bool
-  @FocusState private var focusedOverflowAction: OverflowAction?
+  @FocusState private var isQuitFocused: Bool
   @State private var isOverflowMenuExpanded = false
 
   var body: some View {
@@ -54,21 +39,16 @@ struct MenuBarHeader: View {
           }
           .transition(
             .asymmetric(
-              insertion: .opacity.combined(
-                with: .scale(scale: 0.98, anchor: .topTrailing)
-              ),
+              insertion: .opacity.combined(with: .scale(scale: 0.98, anchor: .topTrailing)),
               removal: .opacity
             )
           )
         }
       }
-    .onExitCommand {
-      if isOverflowMenuExpanded { setOverflowMenuExpanded(false) }
-    }
-    .onChange(of: title) { _, _ in
-      isOverflowMenuExpanded = false
-      focusedOverflowAction = nil
-    }
+      .onExitCommand {
+        if isOverflowMenuExpanded { setOverflowMenuExpanded(false) }
+      }
+      .onChange(of: title) { _, _ in setOverflowMenuExpanded(false) }
   }
 
   private var headerRow: some View {
@@ -102,10 +82,9 @@ struct MenuBarHeader: View {
       }
 
       Spacer(minLength: QuotaDesign.Spacing.inline)
-
       trailingControl
     }
-    .frame(maxWidth: .infinity, minHeight: QuotaDesign.Layout.headerHeight, alignment: .center)
+    .frame(maxWidth: .infinity, minHeight: QuotaDesign.Layout.headerHeight)
     .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
   }
 
@@ -119,10 +98,7 @@ struct MenuBarHeader: View {
           .scaledToFit()
       }
     }
-    .frame(
-      width: QuotaDesign.Layout.headerBrandSize,
-      height: QuotaDesign.Layout.headerBrandSize
-    )
+    .frame(width: QuotaDesign.Layout.headerBrandSize, height: QuotaDesign.Layout.headerBrandSize)
     .frame(
       width: QuotaDesign.Layout.headerAccessoryWidth,
       height: QuotaDesign.Layout.headerHeight,
@@ -137,50 +113,19 @@ struct MenuBarHeader: View {
     switch trailing {
     case .none:
       EmptyView()
-
     case .openSettings(let action):
       headerButton(
         systemName: "gearshape",
         accessibilityLabel: "Open settings",
         action: action
       )
-
-    case .pairDevice(let action):
-      headerButton(
-        systemName: "plus",
-        accessibilityLabel: "Pair Device",
-        action: action
-      )
-
-    case .textAction(let title, let accessibilityHint, let action):
-      Button(action: action) {
-        Text(title)
-          .quotaFont(.settingsLabel)
-          .foregroundStyle(QuotaPalette.accent)
-          .frame(
-            minWidth: QuotaDesign.Layout.minimumInteractiveDimension,
-            minHeight: QuotaDesign.Layout.headerHeight,
-            alignment: .trailing
-          )
-          .contentShape(Rectangle())
-      }
-      .buttonStyle(.plain)
-      .accessibilityLabel(title)
-      .accessibilityHint(accessibilityHint)
-      .help(title)
-
     case .overflowMenu:
-      headerButton(
-        systemName: "ellipsis",
-        accessibilityLabel: "Settings menu"
-      ) {
+      headerButton(systemName: "ellipsis", accessibilityLabel: "Settings menu") {
         setOverflowMenuExpanded(!isOverflowMenuExpanded)
       }
       .focusable()
       .focused($isOverflowButtonFocused)
-      .accessibilityHint(
-        isOverflowMenuExpanded ? "Collapse settings menu" : "Expand settings menu"
-      )
+      .accessibilityHint(isOverflowMenuExpanded ? "Collapse settings menu" : "Expand settings menu")
       .onKeyPress(.upArrow) {
         setOverflowMenuExpanded(true)
         return .handled
@@ -192,100 +137,36 @@ struct MenuBarHeader: View {
     }
   }
 
-  @ViewBuilder
   private var overflowMenu: some View {
-    if case .overflowMenu(let deleteEnabled, let onDeleteAll) = trailing {
-      HStack(spacing: 0) {
-        Spacer(minLength: 0)
-
-        VStack(alignment: .leading, spacing: 0) {
-          overflowMenuButton(
-            title: "Delete All QuotaBar Data…",
-            systemName: "trash",
-            color: QuotaPalette.critical,
-            isEnabled: deleteEnabled,
-            focus: .deleteAll
-          ) {
-            onDeleteAll()
-          }
-
-          overflowMenuButton(
-            title: "Quit QuotaBar",
-            systemName: "power",
-            color: QuotaPalette.ink,
-            focus: .quit
-          ) {
-            NSApplication.shared.terminate(nil)
-          }
+    HStack(spacing: 0) {
+      Spacer(minLength: 0)
+      Button {
+        isOverflowMenuExpanded = false
+        NSApplication.shared.terminate(nil)
+      } label: {
+        HStack(spacing: QuotaDesign.Spacing.inline) {
+          Image(systemName: "power")
+            .font(.system(size: 11))
+            .foregroundStyle(QuotaPalette.ink)
+            .frame(width: QuotaDesign.Layout.headerGlyphWidth)
+          Text("Quit QuotaBar")
+            .quotaSettingsLabelStyle()
+          Spacer(minLength: 0)
         }
-        .frame(width: QuotaDesign.Layout.headerMenuWidth)
-        .quotaFloatingMenuSurface()
+        .padding(.horizontal, QuotaDesign.Layout.groupContentInset)
+        .frame(maxWidth: .infinity, minHeight: QuotaDesign.Layout.fieldMinHeight)
       }
-      .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
-      .padding(.top, 2)
-    }
-  }
-
-  private func overflowMenuButton(
-    title: String,
-    systemName: String,
-    color: Color,
-    isEnabled: Bool = true,
-    focus: OverflowAction,
-    action: @escaping () -> Void
-  ) -> some View {
-    Button {
-      performOverflowAction(action)
-    } label: {
-      HStack(spacing: QuotaDesign.Spacing.inline) {
-        Image(systemName: systemName)
-          .font(.system(size: 11, weight: .regular))
-          .foregroundStyle(color)
-          .frame(width: QuotaDesign.Layout.headerGlyphWidth)
-
-        Text(title)
-          .quotaFont(.settingsLabel)
-          .foregroundStyle(color)
-
-        Spacer(minLength: 0)
-      }
-      .padding(.horizontal, QuotaDesign.Layout.groupContentInset)
-      .frame(
-        maxWidth: .infinity,
-        minHeight: QuotaDesign.Layout.fieldMinHeight,
-        alignment: .leading
+      .buttonStyle(
+        QuotaListRowButtonStyle(cornerRadius: QuotaDesign.Layout.floatingMenuRowCornerRadius)
       )
+      .focusable()
+      .focused($isQuitFocused)
+      .accessibilityLabel("Quit QuotaBar")
+      .frame(width: QuotaDesign.Layout.headerMenuWidth)
+      .quotaFloatingMenuSurface()
     }
-    .buttonStyle(
-      QuotaListRowButtonStyle(
-        cornerRadius: QuotaDesign.Layout.floatingMenuRowCornerRadius
-      )
-    )
-    .disabled(!isEnabled)
-    .accessibilityLabel(title)
-    .focusable()
-    .focused($focusedOverflowAction, equals: focus)
-    .onKeyPress(.upArrow) {
-      moveOverflowFocus(from: focus, by: -1)
-      return .handled
-    }
-    .onKeyPress(.downArrow) {
-      moveOverflowFocus(from: focus, by: 1)
-      return .handled
-    }
-    .onKeyPress(.return) {
-      performOverflowAction(action)
-      return .handled
-    }
-    .onKeyPress(.space) {
-      performOverflowAction(action)
-      return .handled
-    }
-  }
-
-  private func performOverflowAction(_ action: () -> Void) {
-    setOverflowMenuExpanded(false)
-    action()
+    .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
+    .padding(.top, 2)
   }
 
   private func setOverflowMenuExpanded(_ expanded: Bool) {
@@ -296,40 +177,13 @@ struct MenuBarHeader: View {
         isOverflowMenuExpanded = expanded
       }
     }
-
-    if expanded {
-      Task { @MainActor in
-        await Task.yield()
-        guard isOverflowMenuExpanded else { return }
-        let action = overflowActions.first
-        focusedOverflowAction = action
-      }
-    } else {
-      focusedOverflowAction = nil
-      Task { @MainActor in
-        await Task.yield()
-        guard !isOverflowMenuExpanded else { return }
-        isOverflowButtonFocused = true
-      }
-    }
-  }
-
-  private var overflowActions: [OverflowAction] {
-    guard case .overflowMenu(let deleteEnabled, _) = trailing else { return [] }
-    return deleteEnabled ? [.deleteAll, .quit] : [.quit]
-  }
-
-  private func moveOverflowFocus(from action: OverflowAction, by offset: Int) {
-    let actions = overflowActions
-    guard let index = actions.firstIndex(of: action), !actions.isEmpty else { return }
-    let destination = min(
-      max(index + offset, actions.startIndex),
-      actions.index(before: actions.endIndex)
-    )
     Task { @MainActor in
       await Task.yield()
-      guard isOverflowMenuExpanded else { return }
-      focusedOverflowAction = actions[destination]
+      if expanded, isOverflowMenuExpanded {
+        isQuitFocused = true
+      } else if !isOverflowMenuExpanded {
+        isOverflowButtonFocused = true
+      }
     }
   }
 
@@ -346,8 +200,7 @@ struct MenuBarHeader: View {
         .frame(width: QuotaDesign.Layout.headerGlyphWidth)
         .frame(
           width: QuotaDesign.Layout.headerControlWidth,
-          height: QuotaDesign.Layout.headerHeight,
-          alignment: .center
+          height: QuotaDesign.Layout.headerHeight
         )
         .contentShape(Rectangle())
     }

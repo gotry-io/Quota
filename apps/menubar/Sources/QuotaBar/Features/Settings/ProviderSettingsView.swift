@@ -1,27 +1,20 @@
 import SwiftUI
 
-/// Settings → Agents → <Provider>: visibility, reporting provenance, and This Mac configuration.
+/// Settings → Agents → <Provider>: visibility, reporting provenance, and local setup.
 struct ProviderSettingsView: View {
   let provider: ProviderID
   let reportingSources: [ProviderReportingSourcePresentation]
   let now: Date
-  var saveRequest: Int = 0
-  var onIssue: (String?) -> Void = { _ in }
-
   @State private var isVisible: Bool
 
   init(
     provider: ProviderID,
     reportingSources: [ProviderReportingSourcePresentation] = [],
-    now: Date,
-    saveRequest: Int = 0,
-    onIssue: @escaping (String?) -> Void = { _ in }
+    now: Date
   ) {
     self.provider = provider
     self.reportingSources = reportingSources
     self.now = now
-    self.saveRequest = saveRequest
-    self.onIssue = onIssue
     _isVisible = State(initialValue: ProviderVisibility.isVisible(provider))
   }
 
@@ -31,10 +24,11 @@ struct ProviderSettingsView: View {
         SettingsSection(title: "Overview") {
           SettingsListRow(
             title: "Show in Overview",
-            subtitle: "Applies to This Mac and Relay sources",
+            subtitle: "Applies to local and account device reports",
             height: QuotaDesign.Layout.settingsListRowHeight,
             leading: {
-              ProviderBrandIcon(provider: provider, size: QuotaDesign.Layout.settingsIconColumnWidth)
+              ProviderBrandIcon(
+                provider: provider, size: QuotaDesign.Layout.settingsIconColumnWidth)
             },
             trailing: {
               Toggle("Show in Overview", isOn: visibilityBinding)
@@ -77,24 +71,15 @@ struct ProviderSettingsView: View {
           }
         }
 
-        if provider.isConfigurable {
-          SettingsSection(title: "This Mac API Key") {
-            ApiKeyProviderSettingsForm(
-              provider: provider,
-              isVisible: visibilityBinding,
-              saveRequest: saveRequest,
-              onIssue: onIssue
-            )
-            .padding(.horizontal, QuotaDesign.Layout.groupContentInset)
-            .padding(.vertical, QuotaDesign.Layout.settingsRowVerticalPadding)
-          }
-        } else {
-          SettingsSection(title: "This Mac Sign-in") {
-            QuotaCommandRow(
-              command: provider.loginCommand,
-              copyLabel: "Copy sign-in command"
-            )
-          }
+        SettingsSection(
+          title: provider.isConfigurable ? "This Mac Configuration" : "This Mac Sign-in"
+        ) {
+          QuotaCommandRow(
+            command: provider.loginCommand,
+            copyLabel: provider.isConfigurable
+              ? "Copy configuration command"
+              : "Copy sign-in command"
+          )
         }
       }
       .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -112,5 +97,4 @@ struct ProviderSettingsView: View {
       }
     )
   }
-
 }

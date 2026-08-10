@@ -1,222 +1,170 @@
 # Architecture
 
-This document defines the target v1 system boundaries. It does not claim that every path is already
-implemented; the repository's current milestone is maintained in the root
-[`README.md`](../README.md#status).
+This document defines Quota's system boundaries and data paths. Product status and commands live in
+the root [`README.md`](../README.md); credential and retained-data rules live in
+[`security.md`](security.md).
 
-## Products
+## Product boundaries
 
-The product list and user-facing descriptions are maintained in the root
-[`README.md`](../README.md). QuotaBar, QuotaCLI, QuotaRelay, and Quota Web remain separate runtime
-boundaries, but macOS distributes QuotaCLI only inside QuotaBar. Local collection must continue to
-work without the managed service. Relay has anonymous capability-based owners rather than user
-accounts, and the website does not participate in credential discovery or quota collection.
+Quota has four runtime products:
+
+- QuotaCLI owns provider collection, random installation identity, account/device sessions, upload
+  sequences, local Usage cache/outbox, pricing cache, and all managed-service HTTP calls.
+- QuotaBar owns macOS presentation and scheduling. It invokes only its signed bundled QuotaCLI with
+  fixed arguments and consumes bounded typed output.
+- QuotaRelay owns GitHub-backed Accounts, Devices, scoped native sessions, normalized quota/Usage
+  storage, deletion controls, and account queries. Better Auth owns its Web identity/session boundary.
+  Relay runs only as a Cloudflare Worker backed by D1.
+- Quota Web owns the public site and browser account UI. It shares `quota.gotry.io` with the Worker
+  but remains a separate Vite application and source boundary.
+
+GitHub is the only account identity provider. The service origin is fixed at
+`https://quota.gotry.io`. The accepted boundary has no anonymous owner, pairing group, arbitrary
+Relay URL, discovery document, self-hosted process, SQLite adapter, or protocol v1 route. The durable
+decision is [ADR 0006](decisions/0006-managed-account-device-usage.md).
 
 ## Data paths
 
-### Local provider
+### Local collection
 
 ```text
-QuotaBar ── user-only local IPC ── QuotaCLI ── local provider sessions
+provider sessions + agent logs
+            │ local reads only
+            ▼
+        QuotaCLI ───────── typed local report ─────────► terminal
+            │                                           QuotaBar
+            └── owner-only cache/outbox
 ```
 
-QuotaBar starts its bundled QuotaCLI helper. QuotaCLI discovers logged-in provider sessions,
-collects quota, and returns a validated normalized report. Provider credentials remain inside the
-QuotaCLI process boundary. QuotaBar retains one last normalized local report so it can render
-immediately after launch, then replaces that cache after a successful background collection.
+QuotaCLI uses `@gotry-io/quota-provider` to collect quota and to normalize supported Codex and Claude
+Code log records. Provider credentials remain inside the collector boundary. Raw log records are not
+written to the outbox. QuotaBar may retain one last safe normalized result for immediate display,
+then replaces it after a successful helper invocation.
 
-### Remote Relay agent
+### Managed account and sync
 
 ```text
-Linux/Windows QuotaCLI ─────────────── outbound HTTPS ── QuotaRelay ── QuotaBar
-macOS QuotaBar ── bundled QuotaCLI ─── outbound HTTPS ───────┘
+GitHub ── Better Auth web OAuth ──► QuotaRelay ──► browser account session
+                                          │
+browser PKCE / device authorization grant │ account + device token families
+                                          ▼
+QuotaCLI ── quota snapshots + hourly facts ──► D1
+    ▲                                          │
+    └──────── account summary / catalog ───────┘
+                         │
+                         ├──► QuotaBar
+                         └──► Quota Web
 ```
 
-QuotaCLI explicitly pairs with a selected Relay, receives a Relay-bound device credential, and on
-`relay pair` uploads one normalized snapshot immediately after the device credential is saved. On
-macOS, the signed QuotaBar login item checks for that credential at app launch and every five
-minutes while QuotaBar is running, and invokes its bundled helper only while paired. Other platforms
-use an operator-owned external scheduler for recurring `relay push` calls.
-Relay persists accepted snapshots and serves QuotaBar instances authenticated by anonymous owner
-capabilities. It never receives provider credentials or runs provider collectors. Pairing and token
-generation are defined in
-[`decisions/0002-relay-device-code-pairing.md`](decisions/0002-relay-device-code-pairing.md).
-The account-free control boundary is defined in
-[`decisions/0004-anonymous-relay-owners.md`](decisions/0004-anonymous-relay-owners.md).
-Relay observation retention and QuotaBar subscription presentation are defined in
-[`decisions/0003-observation-preserving-subscription-merge.md`](decisions/0003-observation-preserving-subscription-merge.md).
-Relay retains observations by reporting device rather than globally deduplicating subscriptions.
-QuotaBar attaches caller-owned source identity and combines local and remote observations only in
-its presentation resolver; Relay storage and protocol payloads remain unchanged.
+QuotaCLI is the only native OAuth public client. Loopback browser login uses Authorization Code with
+PKCE; headless login uses the OAuth Device Authorization Grant and a browser approval page. The
+service returns separate account-read and current-device-write sessions. Access and refresh expiry
+are explicit; refresh rotates atomically.
 
-Provider-specific collection order is defined only in
-[`provider-collection.md`](provider-collection.md). Credential handling, logging, transport, and
-storage requirements are defined only in [`security.md`](security.md).
+The random user-level installation ID is HMACed with an account-scoped server key before storage.
+The same installation restores its Device within the same Account without enabling cross-account
+correlation. Quota snapshot and Usage sequences are independent and are always recovered from
+server control before upload.
 
-## Runtime boundaries
+### Usage replacement
 
-### Provider catalog
+Collectors return events plus a typed complete/partial coverage result for a UTC-hour range.
+QuotaCLI aggregates only allowlisted billing dimensions into sparse hourly rows using a pinned
+device IANA timezone. Complete coverage becomes an immutable outbox submission; partial coverage is
+reported locally and never replaces remote rows. An accepted submission atomically replaces its
+Device, agent, and UTC range. Empty complete coverage is a valid deletion of old facts in that
+range.
 
-- `packages/provider/src/catalog.ts` is the single registration table: display name, product order,
-  menubar default visibility, login recovery command, auth message, brand icon asset, credential
-  sources, collection strategies, and optional API-key config metadata.
-- Adding a provider:
-  1. Catalog row (+ strategy section in [`provider-collection.md`](provider-collection.md)).
-  2. Ambient OAuth: collector under `packages/provider/src/providers/<id>/` + ambient factory in
-     `registry.ts`. API-key HTTPS: map + `ApiKeyHttpCollectorSpec` under `providers/<id>/`, register
-     in `packages/provider/src/api-key/specs.ts` (shared resolve/fetch shell).
-  3. `pnpm generate:provider-catalog` (writes protocol `ProviderId`, Swift `ProviderID`, and JSON
-     Schema provider enums).
-  4. Optional monochrome brand SVG under `apps/menubar/.../BrandIcons/`.
-- Do not hand-edit generated id files; re-run the generator after catalog changes.
-- `quotacli config set <provider>` and QuotaBar Settings API-key sections are table-driven from
-  catalog entries with `config.kind === "api_key"`. Ambient OAuth/session providers use `config: null`.
-- Agent visibility defaults and wipe keys follow the catalog via QuotaBar `ProviderVisibility`.
-- Windows may carry optional absolute `remaining_value` / `limit_value` / `value_unit` for credits
-  budgets; primary UI meters still use `used_percent` / remaining percent.
+Outbox retry reuses the same submission ID and sequence. The server records receipts so
+crash-after-commit is a duplicate rather than double counting. Parser/timezone changes rebuild from
+raw logs. A deletion watermark that cuts an hour causes the client to filter raw event instants and
+rebuild only the post-watermark portion of that hour under the new Device generation.
 
-### QuotaBar
-
-- Swift 6.2 and SwiftUI, targeting macOS 14 or newer.
-- Owns local presentation, internal Relay endpoint records, and presentation-time resolution of
-  local and remote observations as defined by
-  [`decisions/0003-observation-preserving-subscription-merge.md`](decisions/0003-observation-preserving-subscription-merge.md).
-- Ships its exact compatible QuotaCLI helper inside the signed app bundle and never resolves it from
-  the user's `PATH`; the Homebrew Cask exposes this same signed helper as `quotacli` for pairing and
-  one-shot commands.
-- Owns the macOS recurring upload lifecycle: it checks for the local device credential immediately
-  after app launch and every 300 seconds while running, invoking `relay push` only while paired.
-  Quitting QuotaBar stops recurring uploads, and Launch at Login is the only automatic-start
-  mechanism.
-- Stores hidden owner capabilities in a user-only Application Support file and keeps endpoint
-  records as internal state only.
-  Pairing through any Relay URL automatically registers an isolated anonymous owner capability;
-  users never enter tokens, profile names, or admin credentials.
-- Discovers and binds each endpoint before using its versioned owner endpoints. The owner client
-  covers pairing decisions, snapshot reads, device listing, and device revocation for that
-  QuotaBar's private group only.
-- Shares one `RelayStateModel` between five-minute app-lifecycle polling, the Overview, and the
-  panel's single typed Settings stack for Remote Devices and Pair Device.
-- Settings **General** Launch at Login mirrors `SMAppService.mainApp` system status (one-shot
-  first-run default-on seed when still unregistered).
-- Settings is multi-level: home destinations for **Agents** and **Remote Devices**; Agents lists
-  catalog providers and opens a per-provider page. Its visibility switch applies to local and Relay
-  sources, while a read-only reporting section derives This Mac and active owned-device provenance
-  from existing snapshots. Provider credentials remain explicitly scoped to This Mac; API keys for
-  `ProviderID.configurableCases` write the same owner-only
-  `~/.config/quotacli/providers.json` file as QuotaCLI. Remote Devices remains the device-management
-  boundary.
-- Provider metadata (names, defaults, login commands, brand icons) comes from the generated catalog
-  bindings; do not hardcode parallel provider switch tables in views.
-- Its macOS owner-path acceptance flow launches the real app boundary and composes the same
-  `RelayStateModel`, stores, owner client, resolver, and Settings actions against isolated
-  managed and self-hosted Relay runtimes; no second test implementation of the Relay protocol is
-  used.
-
-### QuotaCLI
-
-- TypeScript bundled as a Node ESM npm package for non-macOS headless machines and as QuotaBar's
-  private Bun helper from the same entry point. There is no standalone macOS CLI artifact.
-- Owns all provider credential discovery and quota collection via `@gotry-io/quota-provider`.
-- Uses the same normalized schemas for local output and Relay uploads.
-- `quotacli config` stores API-key provider secrets in owner-only
-  `$XDG_CONFIG_HOME/quotacli/providers.json` or `~/.config/quotacli/providers.json` (directory
-  `0700`, file `0600`). Collection prefers that file over env fallbacks. Keys are accepted only via
-  the interactive hidden prompt; get/list never print full secrets. QuotaCLI and QuotaBar take the
-  same owner-only lock directory while read-modify-writing this shared file, then replace it
-  atomically.
-- Owns Relay discovery, Device Code pairing, and the single Relay-bound local device credential.
-- Provides an explicit one-shot `relay push` path that validates the bound Relay instance, collects
-  all providers, uploads one normalized envelope, and commits its local sequence after acceptance.
-- Does not own a background-service runtime. Before a macOS pair, push, or unpair, it removes the
-  legacy `io.gotry.quotacli.relay` LaunchAgent shipped by earlier releases; this compatibility
-  cleanup is retained only for that released artifact.
-- Unpairing uses the device capability to revoke the remote device and removes the local credential
-  only after the Relay reaches a terminal revoked state.
-- Exposes `doctor` as a read-only summary of local provider readiness and Relay pairing state
-  without performing collection or upload. `status` defaults to locally discovered providers,
-  supports explicit provider/all selection, and keeps terminal progress on stderr so stdout remains
-  machine-readable.
-- Avoids native Node addons so the npm package and QuotaBar helper remain portable to their build
-  environments.
-
-### QuotaRelay
-
-- Hono application shared across Cloudflare and self-hosted entry points.
-- Owns device lifecycle, Relay authentication, and snapshot persistence.
-- Accepts normalized protocol payloads only.
-
-### Quota Web
-
-- Static Vite application built independently into `apps/web/dist`.
-- Shares the managed `quota.gotry.io` hostname and `quota` Worker deployment with Relay APIs.
-- Managed production deploys ship website assets with the Relay Worker (`deploy-cloudflare.yml` /
-  `pnpm deploy:cloudflare`); there is no separate website-only Cloudflare project.
-- Is not included in the self-hosted Relay executable or container image.
+Pricing is a versioned, effective-dated catalog served by QuotaRelay with ETag caching. The
+runtime-neutral calculator in `@gotry-io/quota-model` resolves exact channel/model/date/dimension
+matches. Missing or incomplete prices remain unpriced/partial; cost is not an invoice or subscription
+spend.
 
 ## Package dependency rules
 
 ```text
-@gotry-io/quota-protocol
-    ▲             ▲             ▲
-    │             │             │
-quota-model  quota-provider  relay-core
-                  ▲             ▲
-                  │             │
-              QuotaCLI       relay app
-                             ┌──┴──────────┐
-                             │             │
-                          D1 state    SQLite state
+                    quota-protocol
+                 ┌──────┼──────────┐
+                 ▼      ▼          ▼
+           quota-model provider relay-core
+                 ▲      │          │
+                 └──────┴──► QuotaCLI
+
+                            relay-core + protocol
+                                      │
+                                      ▼
+                                Relay Worker ──► D1
+
+QuotaBar ── bundled QuotaCLI output + Swift v2 models
+Quota Web ── quota-protocol ── managed HTTP APIs
 ```
 
 - `quota-protocol`, `quota-model`, and `relay-core` are runtime-neutral.
-- `quota-provider` owns both provider contracts and their local implementations. It may use Node/Bun
-  system APIs and is imported only by QuotaCLI.
-- Cloudflare code must not import filesystem, process execution, TCP, or `bun:sqlite` APIs.
-- Self-hosted Relay code may use Bun and `bun:sqlite`.
+- `quota-provider` owns provider registration, local I/O, parser contracts, and collector
+  implementations. It may use Node/Bun APIs and is imported only by QuotaCLI.
+- `quota-model` owns quota transforms, Usage aggregation, and catalog/cost calculation; it does not
+  perform I/O.
+- `relay-core` exposes narrow Account and Usage state contracts; it does not import D1 or Hono.
+- `apps/relay` is the only Cloudflare/D1 adapter and must not import filesystem, subprocess, TCP, or
+  native-addon APIs.
+- `apps/menubar` keeps Swift wire decoding and bundled-CLI invocation separate from SwiftUI views.
 
-## Relay runtimes
+## Runtime responsibilities
 
-The managed runtime uses Cloudflare Workers and D1. The self-hosted runtime uses Bun and an embedded
-SQLite file. Both implement the `@gotry-io/relay-core` state contract and expose the same protocol
-behavior. Versioned Relay operations live under `/api/v1`; the server core covers device-code
-pairing, device-owned snapshot writes and self-revocation, owner snapshot reads, and owner
-device management through scoped Bearer credentials. Pairing is defined in
-[`decisions/0002-relay-device-code-pairing.md`](decisions/0002-relay-device-code-pairing.md), while
-credential and scope rules are defined in [`security.md`](security.md).
+### QuotaCLI
 
-Both managed and self-hosted runtimes allow anonymous owner registration. Neither requires a
-bootstrap token or user account. Each registration creates an isolated expiring owner group scoped
-to the devices that QuotaBar pairs through that endpoint. See
-[`decisions/0005-url-only-relay-enrollment.md`](decisions/0005-url-only-relay-enrollment.md).
+- `status` and provider configuration remain local-only.
+- Account state lives outside the installation directory in the user configuration root. Files and
+  the shared lock are owner-only, symlink-resistant, and atomically replaced.
+- `login`, `logout`, `auth status`, `sync`, and `account` are the only account command surface.
+- `sync` emits local quota and a local 30-day Usage report even while signed out. While signed in it
+  refreshes authoritative Device control and the canonical pricing catalog, uploads a quota
+  envelope, drains a bounded Usage outbox, and reads the account summary. A failed catalog refresh
+  preserves the last valid cache.
+- It has no daemon. QuotaBar schedules it on macOS; other platforms use an external scheduler.
 
-Every successful device report advances `last_seen_at`. A device that has not reported for 30 days
-is revoked on the authorization path, while the Worker scheduled handler and self-hosted maintenance
-timer persist the same transition without waiting for a client request. The hourly maintenance also
-deletes ephemeral owner groups that are at least 30 days old with no device activity in that window
-and removes pairing sessions 24 hours after their expiry. Snapshot envelopes are bounded to 32
-observations before persistence.
+### QuotaBar
 
-QuotaBar reads snapshots over authenticated HTTP polling in v1. If later product measurements
-justify realtime push, the managed runtime may add one Durable Object per owner for WebSocket
-coordination while D1 remains the source of truth; the self-hosted runtime would provide an
-equivalent in-process connection hub.
+- Ships its exact compatible QuotaCLI helper and never resolves a helper from `PATH`.
+- Owns launch-at-login and the five-minute in-process refresh lifecycle; quitting stops recurring
+  work.
+- Presents local quota and Usage independently of account state, plus account status, Devices,
+  optional account Usage, and login/logout actions from typed CLI JSON.
+- Does not own OAuth, tokens, installation identity, upload sequence, cache, or outbox state.
 
-The persistence requirement, D1/SQLite choice, and R2 boundary are recorded in
-[`decisions/0001-persistent-relay-storage.md`](decisions/0001-persistent-relay-storage.md). That ADR is
-the source of truth for storage rationale.
+### QuotaRelay
 
-## Relay discovery
+- Hono application mounted at `/oauth/v2` and `/api/v2`, plus health/readiness routes. Better Auth's
+  standard handler is mounted at `/api/auth/v2`.
+- Uses D1 migrations for Better Auth identity/Web sessions, Accounts, Devices, native
+  sessions/grants, quota observations, hourly facts, coverage, receipts, and rate limits.
+- Authenticates each route with an account, device, or browser principal and the minimum scope.
+- Performs Device delete, Account delete, session rotation/revocation, and Usage replacement in
+  storage transactions.
+- Serves the canonical pricing catalog and account summaries; it never runs provider collectors.
 
-Every Relay exposes:
+### Quota Web
 
-```text
-GET /.well-known/quotabar-relay
-```
+- Static Vite assets are built independently under `apps/web/dist` and served by the managed Worker.
+- `/app` reads the account summary and manages Devices and Account deletion; `/activate` approves or
+  denies a native device grant. Better Auth owns GitHub login, browser sign-out, and Account deletion.
+  A deletion hook removes the corresponding Quota domain Account. Product-specific authorization
+  and Device deletion require a recent browser session and an exact same-origin request.
+- Production Web and Worker deploy together through `deploy-cloudflare.yml`; there is no separate
+  website deployment or self-hosted bundle.
 
-The managed discovery URL is
-`https://quota.gotry.io/.well-known/quotabar-relay`. The document identifies the Relay instance,
-supported API versions, authentication methods, deployment mode, and capabilities. Device
-credentials are bound to the advertised issuer and instance ID. Both runtimes advertise bearer
-authentication, persistent snapshots, instant device revocation, and `multi_tenant` for isolated
-anonymous owner groups. `multi_tenant` does not imply user accounts.
+## Persistence and deployment
+
+D1 is the only durable Relay store. Migration `0003_account_usage_v2.sql` intentionally removes the
+unreleased owner/pairing schema; migration `0004_better_auth.sql` replaces the unreleased custom Web
+identity/session tables with Better Auth and keeps QuotaCLI credentials separate. There is no
+compatibility copy. See [ADR 0001](decisions/0001-persistent-relay-storage.md).
+
+The checked-in Cloudflare workflow is the production deployment path. Local Worker builds use
+Wrangler dry-run and local D1 migration verification. Manual remote migration or deployment is not a
+development command.

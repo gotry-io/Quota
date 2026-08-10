@@ -1,114 +1,49 @@
 import {
-  OWNER_AUTH_SCOPES,
-  type OwnerAuthScope,
-  type OwnerSessionRecord,
-  type PairingConsumeOutcome,
-  type PairingDecisionOutcome,
+  ACCOUNT_SCOPES,
+  type AccountScope,
+  DEVICE_SCOPES,
+  type DeviceScope,
   type RateLimitInput,
+  type RateLimitResult,
 } from "@gotry-io/relay-core";
-
-export interface OwnerSessionRow {
-  owner_id: string;
-  scopes_json: string;
-}
-
-export interface PairingSessionRow {
-  expires_at: string;
-  approved_at: string | null;
-  denied_at: string | null;
-  consumed_at: string | null;
-}
 
 export interface RateLimitRow {
   request_count: number;
   window_expires_at: string;
 }
 
-export function encodeOwnerScopes(scopes: OwnerAuthScope[]): string {
-  const uniqueScopes = [...new Set(scopes)];
+export function encodeScopes(scopes: readonly string[], allowed: readonly string[]): string {
   if (
-    uniqueScopes.length !== scopes.length ||
-    uniqueScopes.some((scope) => !(OWNER_AUTH_SCOPES as readonly string[]).includes(scope))
+    scopes.length === 0 ||
+    new Set(scopes).size !== scopes.length ||
+    scopes.some((scope) => !allowed.includes(scope))
   ) {
-    throw new Error("Owner session contains invalid scopes");
+    throw new Error("Session contains invalid scopes");
   }
-  return JSON.stringify(uniqueScopes);
+  return JSON.stringify(scopes);
 }
 
-export function decodeOwnerSession(row: OwnerSessionRow): OwnerSessionRecord {
-  const value: unknown = JSON.parse(row.scopes_json);
-  if (
-    !Array.isArray(value) ||
-    new Set(value).size !== value.length ||
-    value.some(
-      (scope) =>
-        typeof scope !== "string" || !(OWNER_AUTH_SCOPES as readonly string[]).includes(scope),
-    )
-  ) {
-    throw new Error("Owner session contains invalid scopes");
-  }
-
-  return {
-    owner_id: row.owner_id,
-    scopes: value as OwnerAuthScope[],
-  };
+export function decodeAccountScopes(value: string): AccountScope[] {
+  return decodeScopes(value, ACCOUNT_SCOPES) as AccountScope[];
 }
 
-export function pairingDecisionOutcome(
-  row: PairingSessionRow | null,
-  checkedAt: string,
-): PairingDecisionOutcome | null {
-  if (!row) {
-    return "not_found";
-  }
-  if (row.consumed_at) {
-    return "consumed";
-  }
-  if (row.approved_at || row.denied_at) {
-    return "already_decided";
-  }
-  if (isExpired(row.expires_at, checkedAt)) {
-    return "expired";
-  }
-  return null;
-}
-
-export function pairingUnavailableConsumeOutcome(
-  row: PairingSessionRow | null,
-  checkedAt: string,
-): Exclude<PairingConsumeOutcome, "issued"> | null {
-  if (!row) {
-    return "not_found";
-  }
-  if (row.consumed_at) {
-    return "consumed";
-  }
-  if (row.denied_at) {
-    return "denied";
-  }
-  if (isExpired(row.expires_at, checkedAt)) {
-    return "expired";
-  }
-  return row.approved_at ? null : "pending";
+export function decodeDeviceScopes(value: string): DeviceScope[] {
+  return decodeScopes(value, DEVICE_SCOPES) as DeviceScope[];
 }
 
 export function validateRateLimitInput(input: RateLimitInput): void {
-  if (!input.key_hash) {
-    throw new Error("Rate-limit key hash is required");
+  if (!input.key_hash || !Number.isSafeInteger(input.limit) || input.limit < 1) {
+    throw new Error("Invalid rate-limit input");
   }
-  if (!Number.isSafeInteger(input.limit) || input.limit < 1) {
-    throw new Error("Rate-limit limit must be a positive integer");
-  }
-
   const startedAt = parseTimestamp(input.window_started_at);
   const expiresAt = parseTimestamp(input.window_expires_at);
   const checkedAt = parseTimestamp(input.checked_at);
   if (startedAt >= expiresAt || checkedAt < startedAt || checkedAt >= expiresAt) {
-    throw new Error("Rate-limit timestamps must describe the active fixed window");
+    throw new Error("Rate-limit timestamps do not describe an active fixed window");
   }
 }
 
-export function rateLimitResult(row: RateLimitRow, input: RateLimitInput) {
+export function rateLimitResult(row: RateLimitRow, input: RateLimitInput): RateLimitResult {
   const allowed = row.request_count <= input.limit;
   return {
     allowed,
@@ -123,8 +58,17 @@ export function rateLimitResult(row: RateLimitRow, input: RateLimitInput) {
   };
 }
 
-function isExpired(expiresAt: string, checkedAt: string): boolean {
-  return parseTimestamp(expiresAt) <= parseTimestamp(checkedAt);
+function decodeScopes(value: string, allowed: readonly string[]): string[] {
+  const parsed: unknown = JSON.parse(value);
+  if (
+    !Array.isArray(parsed) ||
+    parsed.length === 0 ||
+    new Set(parsed).size !== parsed.length ||
+    parsed.some((scope) => typeof scope !== "string" || !allowed.includes(scope))
+  ) {
+    throw new Error("Persisted session contains invalid scopes");
+  }
+  return parsed as string[];
 }
 
 function parseTimestamp(value: string): number {

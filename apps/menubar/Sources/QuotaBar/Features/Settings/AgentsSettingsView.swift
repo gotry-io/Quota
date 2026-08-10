@@ -2,7 +2,7 @@ import SwiftUI
 
 /// Settings → Agents: catalog providers with drill-in to visibility and configuration.
 struct AgentsSettingsView: View {
-  let relayReportedProviders: Set<ProviderID>
+  let accountReportedProviders: Set<ProviderID>
   let onOpenProvider: (ProviderID) -> Void
 
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -49,7 +49,7 @@ struct AgentsSettingsView: View {
 
   @ViewBuilder
   private func providerRow(_ provider: ProviderID, isEnabled: Bool) -> some View {
-    let isRelayReported = relayReportedProviders.contains(provider)
+    let isAccountReported = accountReportedProviders.contains(provider)
     let row = Button {
       onOpenProvider(provider)
     } label: {
@@ -60,10 +60,10 @@ struct AgentsSettingsView: View {
         },
         trailing: {
           HStack(spacing: QuotaDesign.Spacing.inline) {
-            if isRelayReported {
-              Image(systemName: "network")
+            if isAccountReported {
+              Image(systemName: "desktopcomputer")
                 .quotaAffordanceStyle()
-                .help("Reported through Relay")
+                .help("Reported by an account device")
                 .accessibilityHidden(true)
             }
             if isEnabled {
@@ -86,7 +86,7 @@ struct AgentsSettingsView: View {
     }
     .buttonStyle(QuotaListRowButtonStyle())
     .accessibilityLabel(provider.displayName)
-    .accessibilityValue(isRelayReported ? "Source: Relay" : "")
+    .accessibilityValue(isAccountReported ? "Reported by an account device" : "")
     .accessibilityHint(
       "\(isEnabled ? "Shown in Overview" : "Hidden from Overview"). Opens \(provider.displayName) settings"
     )

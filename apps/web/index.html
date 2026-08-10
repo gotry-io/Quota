@@ -5,247 +5,172 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta
       name="description"
-      content="QuotaBar keeps Codex, Claude Code, and Grok subscription quota visible from your Mac menu bar."
+      content="Quota keeps coding-agent subscription limits and API-equivalent Usage cost together across your devices."
     />
     <meta name="theme-color" content="#f2f8f5" />
-    <meta property="og:title" content="QuotaBar — Agent quota at a glance" />
+    <meta property="og:title" content="Quota — Know what you have left" />
     <meta
       property="og:description"
-      content="See local and remote coding-agent quota without sending provider credentials to a relay."
+      content="Private local collection, account-wide quota, and transparent API-equivalent Usage cost."
     />
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://quota.gotry.io" />
+    <meta property="og:image" content="https://quota.gotry.io/og.png" />
     <link rel="canonical" href="https://quota.gotry.io" />
-    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-    <title>QuotaBar — Agent quota at a glance</title>
+    <link rel="icon" href="/logo.svg" type="image/svg+xml" />
+    <title>Quota — Know what you have left</title>
   </head>
   <body>
     <a class="skip-link" href="#main">Skip to content</a>
 
     <header class="site-header">
-      <a class="brand" href="/" aria-label="QuotaBar home">
+      <a class="brand" href="/" aria-label="Quota home">
         <img class="brand-mark" src="/logo.svg" alt="" width="24" height="24" />
-        <span>QuotaBar</span>
+        <span>Quota</span>
       </a>
       <nav aria-label="Primary navigation">
-        <a href="#product">Product</a>
-        <a href="#architecture">Architecture</a>
+        <a href="/#product">Product</a>
         <a href="https://github.com/gotry-io/Quota">GitHub</a>
+        <a class="button button-primary header-action" href="/app">Open Quota</a>
       </nav>
     </header>
 
     <main id="main">
-      <section class="hero" aria-labelledby="hero-title">
-        <div class="hero-copy">
-          <p class="eyebrow">Codex · Claude Code · Grok</p>
-          <h1 id="hero-title">Know what you have left.</h1>
-          <p class="hero-summary">
-            QuotaBar keeps coding-agent subscription quota visible from your Mac menu bar—on this
-            machine and every edge device you pair.
-          </p>
-          <div class="hero-actions">
-            <a class="button button-primary" href="https://github.com/gotry-io/Quota"
-              >View on GitHub</a
-            >
-            <a class="button button-secondary" href="#architecture">How it works</a>
-          </div>
-          <p class="release-note">Open source · Early development</p>
-        </div>
+      <div id="route-loading" class="route-loading" role="status" hidden>Loading Quota…</div>
 
-        <figure class="product-preview">
-          <figcaption class="visually-hidden">QuotaBar menu preview</figcaption>
-          <div class="preview-header">
-            <p class="preview-title">QuotaBar</p>
-            <svg class="preview-settings" viewBox="0 0 24 24" aria-hidden="true">
-              <circle cx="12" cy="12" r="3" />
-              <path
-                d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.12 2.12-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.56V20h-3v-.08a1.7 1.7 0 0 0-1.1-1.56 1.7 1.7 0 0 0-1.88.34l-.06.06-2.12-2.12.06-.06A1.7 1.7 0 0 0 6.95 15a1.7 1.7 0 0 0-1.56-1.03H5v-3h.08A1.7 1.7 0 0 0 6.64 9.9a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.12-2.12.06.06a1.7 1.7 0 0 0 1.88.34A1.7 1.7 0 0 0 11.33 4.7V4h3v.39a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.88-.34l.06-.06 2.12 2.12-.06.06A1.7 1.7 0 0 0 19.02 9.6a1.7 1.7 0 0 0 1.56 1.03H21v3h-.08A1.7 1.7 0 0 0 19.4 15Z"
-              />
-            </svg>
-          </div>
-
-          <div class="provider-list">
-            <article class="provider-row">
-              <div class="provider-title-line">
-                <img
-                  class="provider-icon"
-                  src="../menubar/Sources/QuotaBar/Resources/BrandIcons/codex.svg"
-                  alt=""
-                />
-                <strong>Codex</strong>
-                <span class="source-tag">Local</span>
-              </div>
-              <p class="provider-meta">Plus</p>
-              <div class="quota-window">
-                <div class="quota-window-heading">
-                  <span>5 hour</span>
-                  <strong>72% left</strong>
-                </div>
-                <div
-                  class="quota-track"
-                  role="progressbar"
-                  aria-label="Codex 5 hour quota remaining"
-                  aria-valuemin="0"
-                  aria-valuemax="100"
-                  aria-valuenow="72"
-                >
-                  <span style="width: 72%"></span>
-                </div>
-                <p class="reset-time">Resets in 3h 18m</p>
-              </div>
-            </article>
-
-            <article class="provider-row">
-              <div class="provider-title-line">
-                <img
-                  class="provider-icon"
-                  src="../menubar/Sources/QuotaBar/Resources/BrandIcons/claudecode.svg"
-                  alt=""
-                />
-                <strong>Claude Code</strong>
-                <span class="source-tag">Local</span>
-              </div>
-              <p class="provider-meta">Max</p>
-              <div class="quota-window">
-                <div class="quota-window-heading">
-                  <span>Weekly</span>
-                  <strong>41% left</strong>
-                </div>
-                <div
-                  class="quota-track"
-                  role="progressbar"
-                  aria-label="Claude Code weekly quota remaining"
-                  aria-valuemin="0"
-                  aria-valuemax="100"
-                  aria-valuenow="41"
-                >
-                  <span style="width: 41%"></span>
-                </div>
-                <p class="reset-time">Resets tomorrow at 9:00</p>
-              </div>
-            </article>
-
-            <article class="provider-row">
-              <div class="provider-title-line">
-                <img
-                  class="provider-icon"
-                  src="../menubar/Sources/QuotaBar/Resources/BrandIcons/grok.svg"
-                  alt=""
-                />
-                <strong>Grok</strong>
-                <span class="source-tag">Local</span>
-              </div>
-              <p class="provider-meta">SuperGrok</p>
-              <div class="quota-window">
-                <div class="quota-window-heading">
-                  <span>Weekly</span>
-                  <strong>88% left</strong>
-                </div>
-                <div
-                  class="quota-track"
-                  role="progressbar"
-                  aria-label="Grok weekly quota remaining"
-                  aria-valuemin="0"
-                  aria-valuemax="100"
-                  aria-valuenow="88"
-                >
-                  <span style="width: 88%"></span>
-                </div>
-                <p class="reset-time">Resets in 14h</p>
-              </div>
-            </article>
-          </div>
-
-          <div class="preview-footer">
-            <span>v0.1.0</span>
-            <span>Updated just now</span>
-          </div>
-        </figure>
-      </section>
-
-      <section class="principles" id="product" aria-labelledby="product-title">
-        <div class="section-heading">
-          <p class="eyebrow">One quiet place</p>
-          <h2 id="product-title">Quota without the dashboard.</h2>
-        </div>
-        <div class="principle-grid">
-          <article>
-            <span class="index">01</span>
-            <h3>Local by default</h3>
-            <p>Read provider sessions already signed in on your Mac and show quota directly.</p>
-          </article>
-          <article>
-            <span class="index">02</span>
-            <h3>Remote by choice</h3>
-            <p>Run QuotaCLI on another machine, pair it once, and see its snapshots in QuotaBar.</p>
-          </article>
-          <article>
-            <span class="index">03</span>
-            <h3>Credentials stay put</h3>
-            <p>The Relay receives normalized quota snapshots—not provider tokens or cookies.</p>
-          </article>
-        </div>
-      </section>
-
-      <section class="architecture" id="architecture" aria-labelledby="architecture-title">
-        <div class="architecture-copy">
-          <p class="eyebrow">Simple architecture</p>
-          <h2 id="architecture-title">Your sessions stay on your machines.</h2>
-          <p>
-            QuotaCLI performs read-only collection where each provider is signed in. QuotaRelay
-            stores only normalized snapshots so QuotaBar can bring local and remote quota together.
-          </p>
-          <a class="text-link" href="https://github.com/gotry-io/Quota#architecture"
-            >Read the architecture on GitHub <span aria-hidden="true">→</span></a
-          >
-        </div>
-
-        <figure class="flow">
-          <figcaption class="visually-hidden">Quota data flow</figcaption>
-          <div class="flow-node">
-            <span class="diagram-tag">Machine</span>
-            <strong>Provider sessions</strong>
-            <span>Codex · Claude Code · Grok</span>
-          </div>
-          <span class="flow-arrow" aria-hidden="true">↓</span>
-          <div class="flow-node flow-node-dark">
-            <span class="diagram-tag diagram-tag-dark">Collector</span>
-            <strong>QuotaCLI</strong>
-            <span>Normalizes quota locally</span>
-          </div>
-          <span class="flow-arrow" aria-hidden="true">↓</span>
-          <div class="flow-node flow-node-split">
-            <div>
-              <span class="diagram-tag">Local</span>
-              <strong>QuotaBar</strong>
+      <div id="landing-view">
+        <section class="hero" aria-labelledby="hero-title">
+          <div class="hero-copy">
+            <p class="eyebrow">Codex · Claude Code · Your devices</p>
+            <h1 id="hero-title">Know what you have left.</h1>
+            <p class="hero-summary">
+              Quota keeps subscription limits and privacy-preserving Usage in one account, while
+              provider credentials and agent logs stay on your machines.
+            </p>
+            <div class="hero-actions">
+              <button class="button button-primary" type="button" data-web-login>
+                Continue with GitHub
+              </button>
+              <a class="button button-secondary" href="#product">How it works</a>
             </div>
-            <div>
-              <span class="diagram-tag">Remote</span>
-              <strong>QuotaRelay</strong>
-            </div>
+            <p class="release-note">Open source · GitHub is the only sign-in provider</p>
           </div>
-        </figure>
+
+          <figure class="product-preview account-preview">
+            <figcaption class="visually-hidden">Quota account summary preview</figcaption>
+            <div class="preview-header">
+              <div>
+                <p class="preview-title">August Usage</p>
+                <p class="provider-meta">3 devices · calculated API-equivalent cost</p>
+              </div>
+              <span class="coverage-tag">Complete</span>
+            </div>
+            <div class="metric-preview">
+              <div><span>Tokens</span><strong>42.8M</strong></div>
+              <div><span>Estimated</span><strong>$68.42</strong></div>
+            </div>
+            <div class="preview-breakdown">
+              <div><span>Studio Mac</span><strong>22.1M</strong></div>
+              <div><span>Build server</span><strong>14.6M</strong></div>
+              <div><span>Laptop</span><strong>6.1M</strong></div>
+            </div>
+            <div class="preview-footer">
+              <span>Unknown prices stay unpriced</span>
+              <span>UTC-hour facts</span>
+            </div>
+          </figure>
+        </section>
+
+        <section class="principles" id="product" aria-labelledby="product-title">
+          <div class="section-heading">
+            <p class="eyebrow">One quiet place</p>
+            <h2 id="product-title">Quota and Usage without leaking the work.</h2>
+          </div>
+          <div class="principle-grid">
+            <article>
+              <span class="index">01</span>
+              <h3>Local collection</h3>
+              <p>QuotaCLI reads provider sessions and agent logs locally. Credentials, prompts, paths, and raw events never upload.</p>
+            </article>
+            <article>
+              <span class="index">02</span>
+              <h3>One account</h3>
+              <p>Sign in once per installation and see every active or signed-out device, with account totals and device breakdowns.</p>
+            </article>
+            <article>
+              <span class="index">03</span>
+              <h3>Defensible cost</h3>
+              <p>Effective-dated channel prices calculate API-equivalent USD. Missing prices remain visible instead of becoming zero.</p>
+            </article>
+          </div>
+        </section>
+
+        <section class="architecture" aria-labelledby="architecture-title">
+          <div class="architecture-copy">
+            <p class="eyebrow">Direct by design</p>
+            <h2 id="architecture-title">Account to device. Nothing in between.</h2>
+            <p>
+              QuotaCLI owns installation identity, login, collection, cache, and upload. QuotaBar
+              schedules the bundled CLI and renders its safe output. The managed service stores
+              normalized snapshots and sparse hourly facts—not provider credentials or raw logs.
+            </p>
+            <a class="text-link" href="https://github.com/gotry-io/Quota">Read the source →</a>
+          </div>
+          <div class="flow" role="img" aria-label="Quota data flow">
+            <div class="flow-node"><span class="diagram-tag">Local</span><strong>Codex + Claude Code</strong><span>Quota and Usage remain readable offline</span></div>
+            <span class="flow-arrow" aria-hidden="true">↓</span>
+            <div class="flow-node flow-node-dark"><span class="diagram-tag diagram-tag-dark">QuotaCLI</span><strong>Collect · cache · sync</strong><span>Strict allowlist and device-scoped upload</span></div>
+            <span class="flow-arrow" aria-hidden="true">↓</span>
+            <div class="flow-node"><span class="diagram-tag">Account</span><strong>Web + QuotaBar</strong><span>Normalized totals, devices, coverage, and cost</span></div>
+          </div>
+        </section>
+
+        <section class="cta">
+          <div><p class="eyebrow eyebrow-dark">Ready when you are</p><h2>Bring every device into one view.</h2></div>
+          <button class="button button-on-dark" type="button" data-web-login>
+            Continue with GitHub
+          </button>
+        </section>
+      </div>
+
+      <section id="dashboard-view" class="dashboard" aria-labelledby="dashboard-title" hidden>
+        <div class="dashboard-heading">
+          <div><p class="eyebrow">Quota account</p><h1 id="dashboard-title">Usage</h1><p id="account-label" class="hero-summary"></p></div>
+          <form id="logout-form" action="/api/auth/v2/logout" method="post"><button class="button button-secondary" type="submit">Sign out</button></form>
+        </div>
+        <div id="account-error" class="notice" role="alert" hidden></div>
+        <div class="summary-grid">
+          <article><span>Input tokens</span><strong id="input-total">—</strong></article>
+          <article><span>Output tokens</span><strong id="output-total">—</strong></article>
+          <article><span>API-equivalent cost</span><strong id="cost-total">—</strong><small id="cost-coverage"></small></article>
+        </div>
+        <section class="dashboard-section" aria-labelledby="devices-title">
+          <div class="dashboard-section-heading"><div><p class="eyebrow">Installations</p><h2 id="devices-title">Devices</h2></div><span id="device-count" class="count-pill"></span></div>
+          <div id="device-list" class="device-grid"></div>
+        </section>
+        <section class="dashboard-section" aria-labelledby="breakdown-title">
+          <div class="dashboard-section-heading"><div><p class="eyebrow">Usage</p><h2 id="breakdown-title">By agent</h2></div></div>
+          <div class="table-wrap"><table><thead><tr><th scope="col">Agent</th><th scope="col">Input</th><th scope="col">Output</th><th scope="col">Cost</th></tr></thead><tbody id="usage-breakdown"></tbody></table></div>
+        </section>
+        <section class="dashboard-section danger-zone" aria-labelledby="account-actions-title">
+          <div><p class="eyebrow">Danger zone</p><h2 id="account-actions-title">Delete Account</h2><p>Remove this Account, every Device, all Quota and Usage data, sessions, and deletion controls.</p></div>
+          <button id="delete-account" class="button button-danger" type="button">Delete Account and data</button>
+        </section>
       </section>
 
-      <section class="cta" aria-labelledby="cta-title">
-        <div>
-          <p class="eyebrow eyebrow-dark">Built in the open</p>
-          <h2 id="cta-title">Follow QuotaBar from the first release.</h2>
-        </div>
-        <a class="button button-on-dark" href="https://github.com/gotry-io/Quota"
-          >Open GitHub</a
-        >
+      <section id="activate-view" class="activate" aria-labelledby="activate-title" hidden>
+        <p class="eyebrow">QuotaCLI login</p><h1 id="activate-title">Authorize this installation.</h1>
+        <p class="hero-summary">Confirm the code shown by QuotaCLI. This grants account read and current-device upload sessions; it does not share provider credentials.</p>
+        <form id="activate-form" class="activate-form">
+          <label for="user-code">Verification code</label>
+          <input id="user-code" name="user_code" autocomplete="one-time-code" maxlength="32" required />
+          <div class="hero-actions"><button class="button button-primary" type="submit" value="approve">Authorize</button><button class="button button-secondary" type="button" id="deny-activation">Deny</button></div>
+        </form>
+        <p id="activate-status" class="notice" role="status" hidden></p>
       </section>
     </main>
 
-    <footer>
-      <span>© <span id="copyright-year"></span> gotry-io contributors</span>
-      <div class="footer-links">
-        <a href="https://github.com/gotry-io/Quota/blob/main/LICENSE">MIT License</a>
-        <a href="https://github.com/gotry-io/Quota">Source</a>
-      </div>
-    </footer>
-
+    <footer><span>© <span id="copyright-year"></span> gotry-io contributors · MIT</span><div class="footer-links"><a href="https://github.com/gotry-io/Quota">GitHub</a><a href="/app">Account</a></div></footer>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

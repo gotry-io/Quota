@@ -2,14 +2,14 @@ import Foundation
 
 enum QuotaObservationSource: Equatable, Hashable, Sendable {
   case local
-  case remote(relayInstanceID: String, deviceID: String)
+  case device(deviceID: String)
 
   var stableID: String {
     switch self {
     case .local:
       "local"
-    case .remote(let relayInstanceID, let deviceID):
-      "remote:\(Self.component(relayInstanceID)):\(Self.component(deviceID))"
+    case .device(let deviceID):
+      "device:\(Self.component(deviceID))"
     }
   }
 

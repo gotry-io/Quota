@@ -15,48 +15,34 @@
 
     @MainActor
     fileprivate func makeModel(referenceDate: Date) -> MenuBarViewModel {
-      let relayRefreshAt: Date? = switch self {
-      case .loading, .unavailable: nil
-      case .content, .cachedRefreshError, .empty:
-        referenceDate.addingTimeInterval(-45)
-      }
-      let relayStateModel = VisualRelayFixture.makeStateModel(
-        referenceDate: referenceDate,
-        lastSuccessfulRefreshAt: relayRefreshAt,
-        includesQuotaObservations: self == .content || self == .cachedRefreshError
-      )
-      return switch self {
+      switch self {
       case .loading:
         MenuBarViewModel(
-          visualTestReport: nil,
+          visualTestOutput: nil,
           errorMessage: nil,
-          lastCheckedAt: nil,
-          relayStateModel: relayStateModel
+          lastCheckedAt: nil
         )
       case .content, .cachedRefreshError:
         MenuBarViewModel(
-          visualTestReport: contentReport(at: referenceDate),
+          visualTestOutput: contentSyncOutput(at: referenceDate),
           errorMessage: self == .cachedRefreshError
-            ? "Refresh failed. Showing the last local report."
+            ? "Sync failed. Showing the last known result."
             : nil,
           lastCheckedAt: referenceDate.addingTimeInterval(
             self == .cachedRefreshError ? -180 : -30
-          ),
-          relayStateModel: relayStateModel
+          )
         )
       case .empty:
         MenuBarViewModel(
-          visualTestReport: emptyReport(at: referenceDate),
+          visualTestOutput: signedOutSyncOutput(at: referenceDate),
           errorMessage: nil,
-          lastCheckedAt: referenceDate.addingTimeInterval(-30),
-          relayStateModel: relayStateModel
+          lastCheckedAt: referenceDate.addingTimeInterval(-30)
         )
       case .unavailable:
         MenuBarViewModel(
-          visualTestReport: nil,
+          visualTestOutput: nil,
           errorMessage: "The bundled QuotaCLI helper could not be started.",
-          lastCheckedAt: nil,
-          relayStateModel: relayStateModel
+          lastCheckedAt: nil
         )
       }
     }
@@ -68,8 +54,8 @@
     case agents
     case providerCodex = "provider-codex"
     case providerOpenRouter = "provider-openrouter"
-    case remoteDevices = "remote-devices"
-    case pairDevice = "pair-device"
+    case devices
+    case usage
 
     fileprivate var path: [MenuBarRoute] {
       switch self {
@@ -78,8 +64,8 @@
       case .agents: [.settings, .agents]
       case .providerCodex: [.settings, .agents, .provider(.codex)]
       case .providerOpenRouter: [.settings, .agents, .provider(.openrouter)]
-      case .remoteDevices: [.settings, .remoteDevices]
-      case .pairDevice: [.settings, .remoteDevices, .pairDevice]
+      case .devices: [.settings, .devices]
+      case .usage: [.settings, .usage]
       }
     }
   }
@@ -118,8 +104,6 @@
     let route: VisualTestRoute
     let appearance: VisualTestAppearance
     let textSize: VisualTestTextSize
-    /// Absolute file URL for an optional self-captured window PNG. `nil` means no screenshot.
-    let screenshotOutputPath: URL?
     let referenceDate: Date
 
     init?(
@@ -152,26 +136,13 @@
           in: arguments,
           default: .standard
         )
-      else {
-        return nil
-      }
-
-      let parsedScreenshotOutput: URL?
-      switch Self.absoluteScreenshotOutputPath(in: arguments) {
-      case .absent:
-        parsedScreenshotOutput = nil
-      case .value(let url):
-        parsedScreenshotOutput = url
-      case .invalid:
-        return nil
-      }
+      else { return nil }
 
       self.dataSource = dataSource
       self.fixture = fixture
       self.route = route
       self.appearance = appearance
       self.textSize = textSize
-      self.screenshotOutputPath = parsedScreenshotOutput
       self.referenceDate = referenceDate
     }
 
@@ -179,18 +150,12 @@
     var colorScheme: ColorScheme? { appearance.colorScheme }
     var dynamicTypeSize: DynamicTypeSize { textSize.dynamicTypeSize }
     var performsInitialRefresh: Bool { dataSource == .live }
-    var performsRelayRefreshes: Bool { false }
 
     @MainActor
     func makeModel() -> MenuBarViewModel {
       switch dataSource {
-      case .fixture:
-        fixture.makeModel(referenceDate: referenceDate)
-      case .live:
-        MenuBarViewModel(
-          reportCache: nil,
-          relayStateModel: RelayStateModel.visualFixture(profiles: [], profileStates: [:])
-        )
+      case .fixture: fixture.makeModel(referenceDate: referenceDate)
+      case .live: MenuBarViewModel(reportCache: nil)
       }
     }
 
@@ -212,169 +177,88 @@
       return Value(rawValue: arguments[valueIndex])
     }
 
-    private enum ScreenshotOutputArgument {
-      case absent
-      case value(URL)
-      case invalid
-    }
-
-    /// Parses optional `--screenshot-output <absolute path>`.
-    /// Absent means no screenshot. A missing value or relative path is invalid.
-    private static func absoluteScreenshotOutputPath(
-      in arguments: [String]
-    ) -> ScreenshotOutputArgument {
-      guard let index = arguments.firstIndex(of: "--screenshot-output") else {
-        return .absent
-      }
-      let valueIndex = arguments.index(after: index)
-      guard valueIndex < arguments.endIndex else { return .invalid }
-      let path = arguments[valueIndex]
-      guard !path.isEmpty, (path as NSString).isAbsolutePath else { return .invalid }
-      return .value(URL(fileURLWithPath: path, isDirectory: false))
-    }
   }
 
-  private enum VisualRelayFixture {
-    static let profileID = UUID(uuidString: "7A926551-3832-4E39-A931-695563D96541")!
+  private func contentSyncOutput(at date: Date) -> CLIAccountSyncOutput {
+    let report = contentReport(at: date)
+    let accountSummary = contentAccountSummary(at: date, report: report)
+    return CLIAccountSyncOutput(
+      status: .synced,
+      localReport: report,
+      localUsage: localUsageReport(at: date, summary: accountSummary.usage),
+      accountSummary: accountSummary
+    )
+  }
 
-    @MainActor
-    static func makeStateModel(
-      referenceDate: Date,
-      lastSuccessfulRefreshAt: Date?,
-      includesQuotaObservations: Bool
-    ) -> RelayStateModel {
-      do {
-        let profile = try RelayProfile(
-          id: profileID,
-          name: "Quota Relay",
-          baseURL: URL(string: "https://quota.gotry.io")!,
-          instanceID: "visual-managed-relay-instance-01",
-          mode: .managed,
-          capabilities: RelayCapabilities(
-            realtime: false,
-            persistentSnapshots: true,
-            instantDeviceRevocation: true,
-            history: false,
-            multiTenant: true
-          )
-        )
-        let deviceResponse = try QuotaWireCodec.makeDecoder().decode(
-          DeviceListResponse.self,
-          from: Data(deviceJSON.utf8)
-        )
-        let observations = includesQuotaObservations
-          ? try makeObservations(referenceDate: referenceDate)
-          : []
-        return RelayStateModel.visualFixture(
-          profiles: [profile],
-          profileStates: [
-            profileID: RelayProfileState(
-              observations: observations,
-              devices: deviceResponse.devices,
-              lastSuccessfulRefreshAt: lastSuccessfulRefreshAt
-            )
-          ]
-        )
-      } catch {
-        preconditionFailure("Invalid visual Relay fixture.")
-      }
-    }
-
-    private static func makeObservations(referenceDate: Date) throws
-      -> [OwnerSnapshotObservation]
-    {
-      let snapshots = [
-        snapshot(
-          provider: .codex,
-          fingerprint: "visual_personal",
-          label: "pe***@example.com",
-          plan: "Plus",
-          windows: [
-            window(
-              id: "five_hour",
-              title: "5 hour",
-              usedPercent: 34,
-              resetsAt: referenceDate.addingTimeInterval(2_700)
-            )
-          ],
-          observedAt: referenceDate.addingTimeInterval(-120),
-          validUntil: referenceDate.addingTimeInterval(300)
-        ),
-        snapshot(
-          provider: .grok,
-          fingerprint: "visual_remote_grok",
-          label: "Remote workstation",
-          plan: "SuperGrok",
-          windows: [
-            window(
-              id: "monthly",
-              title: "Monthly",
-              usedPercent: 41,
-              resetsAt: referenceDate.addingTimeInterval(9 * 86_400)
-            )
-          ],
-          observedAt: referenceDate.addingTimeInterval(-60),
-          validUntil: referenceDate.addingTimeInterval(300)
-        ),
-        snapshot(
-          provider: .openrouter,
-          fingerprint: "visual_remote_openrouter",
-          label: "Remote API account",
-          plan: nil,
-          windows: [
-            window(
-              id: "credits",
-              title: "Credits",
-              usedPercent: 52,
-              resetsAt: referenceDate.addingTimeInterval(14 * 86_400)
-            )
-          ],
-          observedAt: referenceDate.addingTimeInterval(-3_600),
-          validUntil: referenceDate.addingTimeInterval(-60)
-        ),
-      ]
-      let encoder = QuotaWireCodec.makeEncoder()
-      let encodedSnapshots = try snapshots.map { snapshot in
-        String(decoding: try encoder.encode(snapshot), as: UTF8.self)
-      }
-      let dateFormatter = ISO8601DateFormatter()
-      let capturedAt = dateFormatter.string(from: referenceDate)
-      let updatedAt = dateFormatter.string(from: referenceDate.addingTimeInterval(1))
-      let responseJSON =
-        #"{"observations":[{"device_id":"device_visual_studio_mac_01","sequence":42,"captured_at":"\#(capturedAt)","snapshot":\#(encodedSnapshots[0]),"updated_at":"\#(updatedAt)"},{"device_id":"device_visual_studio_mac_01","sequence":42,"captured_at":"\#(capturedAt)","snapshot":\#(encodedSnapshots[1]),"updated_at":"\#(updatedAt)"},{"device_id":"device_visual_studio_mac_01","sequence":42,"captured_at":"\#(capturedAt)","snapshot":\#(encodedSnapshots[2]),"updated_at":"\#(updatedAt)"}]}"#
-      return try QuotaWireCodec.makeDecoder()
-        .decode(OwnerSnapshotListResponse.self, from: Data(responseJSON.utf8))
-        .observations
-    }
-
-    private static let deviceJSON =
-      #"""
-      {
-        "devices": [
-          {
-            "device_id": "device_visual_studio_mac_01",
-            "display_name": "Studio Mac",
-            "created_at": "2026-08-03T08:00:00Z",
-            "last_seen_at": "2026-08-03T10:20:30Z",
-            "last_sequence": 42,
-            "revoked_at": null
-          },
-          {
-            "device_id": "device_visual_build_host_02",
-            "display_name": "Old build host",
-            "created_at": "2026-07-20T08:00:00Z",
-            "last_seen_at": "2026-07-31T18:15:00Z",
-            "last_sequence": 18,
-            "revoked_at": "2026-08-01T09:30:00Z"
-          }
+  private func signedOutSyncOutput(at date: Date) -> CLIAccountSyncOutput {
+    CLIAccountSyncOutput(
+      status: .signedOut,
+      localReport: QuotaCollectionReport(
+        schemaVersion: 2,
+        capturedAt: date,
+        results: [
+          failureResult(
+            provider: .codex,
+            outcome: .authRequired,
+            message: "Run `codex` to sign in."
+          ),
+          failureResult(
+            provider: .claude,
+            outcome: .authRequired,
+            message: "Run `claude auth login`."
+          ),
+          failureResult(
+            provider: .grok,
+            outcome: .unavailable,
+            message: "Grok quota is temporarily unavailable."
+          ),
         ]
-      }
-      """#
+      ),
+      localUsage: unavailableLocalUsage(at: date),
+      accountSummary: nil
+    )
+  }
+
+  private func localUsageReport(
+    at date: Date,
+    summary: AccountUsageSummary
+  ) -> LocalUsageReport {
+    let coverage = summary.coverage.map {
+      UsageCoverage(
+        agent: $0.agent,
+        startAt: $0.startAt,
+        endAt: $0.endAt,
+        status: $0.status
+      )
+    }
+    return LocalUsageReport(
+      generatedAt: date,
+      aggregationTimezone: "UTC",
+      range: summary.range,
+      status: coverage.allSatisfy { $0.status == .complete } ? .complete : .partial,
+      totals: summary.totals,
+      cost: summary.cost,
+      coverage: coverage,
+      breakdowns: summary.breakdowns
+    )
+  }
+
+  private func unavailableLocalUsage(at date: Date) -> LocalUsageReport {
+    LocalUsageReport(
+      generatedAt: date,
+      aggregationTimezone: nil,
+      range: UsageDateRange(from: "2026-07-03", to: "2026-08-01"),
+      status: .unavailable,
+      totals: nil,
+      cost: nil,
+      coverage: [],
+      breakdowns: []
+    )
   }
 
   private func contentReport(at date: Date) -> QuotaCollectionReport {
     QuotaCollectionReport(
-      schemaVersion: 1,
+      schemaVersion: 2,
       capturedAt: date,
       results: [
         successResult(
@@ -401,23 +285,7 @@
               ],
               observedAt: date.addingTimeInterval(-90),
               validUntil: date.addingTimeInterval(300)
-            ),
-            snapshot(
-              provider: .codex,
-              fingerprint: "visual_work",
-              label: "wo***@example.com",
-              plan: "Team",
-              windows: [
-                window(
-                  id: "weekly",
-                  title: "Weekly",
-                  usedPercent: 66,
-                  resetsAt: date.addingTimeInterval(2 * 86_400)
-                )
-              ],
-              observedAt: date.addingTimeInterval(-150),
-              validUntil: date.addingTimeInterval(-30)
-            ),
+            )
           ]
         ),
         successResult(
@@ -466,27 +334,124 @@
     )
   }
 
-  private func emptyReport(at date: Date) -> QuotaCollectionReport {
-    QuotaCollectionReport(
-      schemaVersion: 1,
-      capturedAt: date,
-      results: [
-        failureResult(
-          provider: .codex,
-          outcome: .authRequired,
-          message: "Run `codex` to sign in."
+  private func contentAccountSummary(
+    at date: Date,
+    report: QuotaCollectionReport
+  ) -> AccountSummary {
+    let studioID = "device_visual_studio_mac_01"
+    let travelID = "device_visual_travel_mac_02"
+    let snapshots = report.results.flatMap(\.snapshots)
+    let observations = snapshots.enumerated().map { index, snapshot in
+      AccountQuotaObservation(
+        deviceID: index == 2 ? travelID : studioID,
+        sequence: 42,
+        capturedAt: snapshot.observedAt,
+        snapshot: snapshot,
+        updatedAt: date
+      )
+    }
+    return AccountSummary(
+      generatedAt: date,
+      account: QuotaUserAccount(
+        accountID: "account_visual_octocat",
+        displayLabel: "octocat",
+        createdAt: date.addingTimeInterval(-30 * 86_400)
+      ),
+      devices: [
+        AccountDevice(
+          deviceID: studioID,
+          displayName: "Studio Mac",
+          platform: .macos,
+          deviceGeneration: 3,
+          status: .active,
+          createdAt: date.addingTimeInterval(-30 * 86_400),
+          lastLoginAt: date.addingTimeInterval(-5 * 86_400),
+          lastSeenAt: date.addingTimeInterval(-45),
+          signedOutAt: nil
         ),
-        failureResult(
-          provider: .claude,
-          outcome: .authRequired,
-          message: "Run `claude auth login`."
+        AccountDevice(
+          deviceID: travelID,
+          displayName: "Travel Mac",
+          platform: .macos,
+          deviceGeneration: 2,
+          status: .offline,
+          createdAt: date.addingTimeInterval(-20 * 86_400),
+          lastLoginAt: date.addingTimeInterval(-10 * 86_400),
+          lastSeenAt: date.addingTimeInterval(-3 * 86_400),
+          signedOutAt: nil
         ),
-        failureResult(
-          provider: .grok,
-          outcome: .unavailable,
-          message: "Grok quota is temporarily unavailable."
-        ),
+      ],
+      quota: observations,
+      usage: visualUsageSummary(at: date, studioID: studioID, travelID: travelID)
+    )
+  }
+
+  private func visualUsageSummary(
+    at date: Date,
+    studioID: String,
+    travelID: String
+  ) -> AccountUsageSummary {
+    let totals = UsageTokenTotals(
+      inputTokens: 1_420_500,
+      cacheReadTokens: 480_000,
+      cacheWrite5mTokens: 20_000,
+      cacheWrite1hTokens: 0,
+      cacheWriteInferredTokens: 0,
+      outputTokens: 284_120,
+      reasoningTokens: 92_400,
+      requests: 164,
+      webSearchRequests: 8,
+      webFetchRequests: 3,
+      sourceCostMicrousd: nil,
+      sourceCostCoveredRequests: 0
+    )
+    let cost = UsageCostOutcome(
+      mode: .calculate,
+      basis: .calculated,
+      status: .partial,
+      amountMicrousd: "1489234",
+      catalogRevision: "pricing_2026_08_01",
+      calculatedRows: 162,
+      reportedRows: 0,
+      unpricedRows: 2,
+      assumptions: [.agentDefaultChannel, .modelAlias],
+      unpriced: [
+        UsageUnpricedItem(
+          billingChannel: .unknown,
+          model: "custom-model",
+          reason: .unknownModel,
+          rows: 2
+        )
       ]
+    )
+    let formatter = DateFormatter()
+    formatter.calendar = Calendar(identifier: .iso8601)
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.timeZone = TimeZone(secondsFromGMT: 0)
+    formatter.dateFormat = "yyyy-MM-dd"
+    let to = formatter.string(from: date)
+    let from = formatter.string(from: date.addingTimeInterval(-6 * 86_400))
+    return AccountUsageSummary(
+      range: UsageDateRange(from: from, to: to),
+      totals: totals,
+      cost: cost,
+      coverage: [
+        UsageCoverageSummaryItem(
+          deviceID: studioID,
+          agent: .codex,
+          startAt: "2026-08-02T00:00:00Z",
+          endAt: "2026-08-03T00:00:00Z",
+          status: .complete
+        ),
+        UsageCoverageSummaryItem(
+          deviceID: travelID,
+          agent: .claudeCode,
+          startAt: "2026-08-02T00:00:00Z",
+          endAt: "2026-08-03T00:00:00Z",
+          status: .partial
+        ),
+      ],
+      breakdowns: []
     )
   }
 

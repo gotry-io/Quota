@@ -1,0 +1,159 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://quota.gotry.io/schema/quota-snapshot-v2.json",
+  "title": "Quota snapshot upload v2",
+  "$comment": "Device-scoped quota upload. The device token must match device_id and generation.",
+  "type": "object",
+  "properties": {
+    "protocol_version": {
+      "type": "number",
+      "const": 2
+    },
+    "device_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "generation": {
+      "minimum": 1,
+      "$ref": "#/$defs/__schema0"
+    },
+    "sequence": {
+      "$ref": "#/$defs/__schema0"
+    },
+    "captured_at": {
+      "$ref": "#/$defs/__schema1"
+    },
+    "snapshots": {
+      "maxItems": 32,
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/__schema2"
+      }
+    }
+  },
+  "required": [
+    "protocol_version",
+    "device_id",
+    "generation",
+    "sequence",
+    "captured_at",
+    "snapshots"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "__schema0": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "__schema1": {
+      "type": "string",
+      "maxLength": 64,
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+    },
+    "__schema2": {
+      "type": "object",
+      "properties": {
+        "provider": {
+          "type": "string",
+          "enum": ["codex", "claude", "grok", "openrouter", "deepseek", "kimi", "litellm"]
+        },
+        "account": {
+          "type": "object",
+          "properties": {
+            "fingerprint": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+            },
+            "fingerprint_scope": {
+              "type": "string",
+              "enum": ["global", "source"]
+            },
+            "label": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "plan": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            }
+          },
+          "required": ["fingerprint", "fingerprint_scope"],
+          "additionalProperties": false
+        },
+        "windows": {
+          "maxItems": 16,
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/__schema3"
+          }
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["available", "stale", "auth_required", "unavailable", "unsupported", "error"]
+        },
+        "observed_at": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "valid_until": {
+          "$ref": "#/$defs/__schema1"
+        }
+      },
+      "required": ["provider", "account", "windows", "source", "status", "observed_at"],
+      "additionalProperties": false
+    },
+    "__schema3": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "used_percent": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "resets_at": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "duration_seconds": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "remaining_value": {
+          "type": "number"
+        },
+        "limit_value": {
+          "type": "number",
+          "minimum": 0
+        },
+        "value_unit": {
+          "type": "string",
+          "enum": ["usd", "credits", "count"]
+        }
+      },
+      "required": ["id", "title", "used_percent"],
+      "additionalProperties": false
+    }
+  }
+}

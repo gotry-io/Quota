@@ -1,5 +1,7 @@
 # ADR 0002: Relay device-code pairing
 
+> Status: Superseded by [ADR 0006](./0006-managed-account-device-usage.md) on 2026-08-10.
+
 - Status: accepted
 - Date: 2026-08-02
 - Updated: 2026-08-09

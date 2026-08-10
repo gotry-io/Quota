@@ -14,7 +14,9 @@ enum ProviderVisibility {
     return defaults.bool(forKey: storageKey(for: provider))
   }
 
-  static func setVisible(_ provider: ProviderID, _ visible: Bool, defaults: UserDefaults = .standard) {
+  static func setVisible(
+    _ provider: ProviderID, _ visible: Bool, defaults: UserDefaults = .standard
+  ) {
     defaults.set(visible, forKey: storageKey(for: provider))
   }
 

@@ -72,12 +72,12 @@ struct ProviderQuotaView: View {
   }
 }
 
-private extension AccountQuotaPresentation {
-  var planDisplayName: String? {
+extension AccountQuotaPresentation {
+  fileprivate var planDisplayName: String? {
     PlanDisplay.planBadge(snapshot.account.plan)
   }
 
-  var accountLabelDisplay: String? {
+  fileprivate var accountLabelDisplay: String? {
     PlanDisplay.accountLabel(snapshot.account.label)
   }
 }

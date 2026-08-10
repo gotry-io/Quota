@@ -1,5 +1,7 @@
 import Foundation
 
+private let quotaJSONSafeIntegerMaximum = 9_007_199_254_740_991
+
 // ProviderID lives in ProviderID.generated.swift (from packages/provider/src/catalog.ts via
 // `pnpm generate:provider-catalog`). Do not redefine provider cases here.
 
@@ -22,18 +24,6 @@ struct QuotaAccount: Codable, Equatable, Sendable {
   let label: String?
   let plan: String?
   let fingerprintScope: FingerprintScope
-
-  init(
-    fingerprint: String,
-    label: String?,
-    plan: String?,
-    fingerprintScope: FingerprintScope
-  ) {
-    self.fingerprint = fingerprint
-    self.label = label
-    self.plan = plan
-    self.fingerprintScope = fingerprintScope
-  }
 }
 
 enum QuotaValueUnit: String, Codable, Equatable, Sendable {
@@ -84,16 +74,67 @@ struct QuotaSnapshot: Codable, Equatable, Sendable {
   let validUntil: Date?
 }
 
+extension QuotaSnapshot {
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    provider = try container.decode(ProviderID.self, forKey: .provider)
+    account = try container.decode(QuotaAccount.self, forKey: .account)
+    windows = try container.decode([QuotaWindow].self, forKey: .windows)
+    source = try container.decode(String.self, forKey: .source)
+    status = try container.decode(QuotaStatus.self, forKey: .status)
+    observedAt = try container.decode(Date.self, forKey: .observedAt)
+    validUntil = try container.decodeIfPresent(Date.self, forKey: .validUntil)
+    guard isValidWireSnapshot else {
+      throw DecodingError.dataCorruptedError(
+        forKey: .account,
+        in: container,
+        debugDescription: "Invalid quota snapshot."
+      )
+    }
+  }
+
+  var isValidWireSnapshot: Bool {
+    isQuotaOpaqueID(account.fingerprint)
+      && (account.label.map({ isQuotaTrimmedText($0, maximum: 128) }) ?? true)
+      && (account.plan.map({ isQuotaTrimmedText($0, maximum: 64) }) ?? true)
+      && isQuotaBillingDimension(source, maximum: 64)
+      && windows.count <= 16
+      && windows.allSatisfy { window in
+        isQuotaBillingDimension(window.id, maximum: 64)
+          && isQuotaTrimmedText(window.title, maximum: 128)
+          && window.usedPercent.isFinite
+          && (0...100).contains(window.usedPercent)
+          && (window.durationSeconds.map {
+            (0...quotaJSONSafeIntegerMaximum).contains($0)
+          } ?? true)
+          && (window.remainingValue?.isFinite ?? true)
+          && (window.limitValue.map { $0.isFinite && $0 >= 0 } ?? true)
+      }
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case provider
+    case account
+    case windows
+    case source
+    case status
+    case observedAt
+    case validUntil
+  }
+}
+
 struct QuotaSnapshotEnvelope: Codable, Equatable, Sendable {
-  let schemaVersion: Int
+  let protocolVersion: Int
   let deviceID: String
+  let generation: Int
   let sequence: Int
   let capturedAt: Date
   let snapshots: [QuotaSnapshot]
 
   private enum CodingKeys: String, CodingKey {
-    case schemaVersion
+    case protocolVersion
     case deviceID = "deviceId"
+    case generation
     case sequence
     case capturedAt
     case snapshots
@@ -103,19 +144,52 @@ struct QuotaSnapshotEnvelope: Codable, Equatable, Sendable {
 extension QuotaSnapshotEnvelope {
   init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
-    schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+    protocolVersion = try container.decode(Int.self, forKey: .protocolVersion)
     deviceID = try container.decode(String.self, forKey: .deviceID)
+    generation = try container.decode(Int.self, forKey: .generation)
     sequence = try container.decode(Int.self, forKey: .sequence)
     capturedAt = try container.decode(Date.self, forKey: .capturedAt)
     snapshots = try container.decode([QuotaSnapshot].self, forKey: .snapshots)
-    guard schemaVersion == 1, !deviceID.isEmpty, sequence >= 0 else {
+    guard protocolVersion == 2,
+      isQuotaOpaqueID(deviceID),
+      (1...quotaJSONSafeIntegerMaximum).contains(generation),
+      (0...quotaJSONSafeIntegerMaximum).contains(sequence),
+      snapshots.count <= 32
+    else {
       throw DecodingError.dataCorruptedError(
-        forKey: .schemaVersion,
+        forKey: .protocolVersion,
         in: container,
         debugDescription: "Invalid quota snapshot envelope."
       )
     }
   }
+}
+
+private func isQuotaOpaqueID(_ value: String) -> Bool {
+  isQuotaWireIdentifier(value, maximum: 128, includesPlus: false)
+}
+
+private func isQuotaBillingDimension(_ value: String, maximum: Int) -> Bool {
+  isQuotaWireIdentifier(value, maximum: maximum, includesPlus: true)
+}
+
+private func isQuotaWireIdentifier(_ value: String, maximum: Int, includesPlus: Bool) -> Bool {
+  guard let first = value.utf8.first, !value.isEmpty, value.count <= maximum,
+    isQuotaASCIIAlphaNumeric(first)
+  else { return false }
+  return value.utf8.allSatisfy { byte in
+    isQuotaASCIIAlphaNumeric(byte) || byte == 46 || byte == 58 || byte == 95 || byte == 45
+      || (includesPlus && byte == 43)
+  }
+}
+
+private func isQuotaASCIIAlphaNumeric(_ byte: UInt8) -> Bool {
+  (48...57).contains(byte) || (65...90).contains(byte) || (97...122).contains(byte)
+}
+
+private func isQuotaTrimmedText(_ value: String, maximum: Int) -> Bool {
+  !value.isEmpty && value.count <= maximum
+    && value == value.trimmingCharacters(in: .whitespacesAndNewlines)
 }
 
 enum QuotaWireCodec {
