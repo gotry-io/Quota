@@ -15,13 +15,13 @@ describe("local Usage", () => {
     expect(report).toMatchObject({
       protocol_version: 2,
       aggregation_timezone: "UTC",
-      range: { from: "2026-07-12", to: "2026-08-10" },
+      range: { from: "2026-08-09", to: "2026-08-10" },
       status: "partial",
       totals: { input_tokens: 20, output_tokens: 4, requests: 2 },
       cost: { status: "unavailable", unpriced_rows: 2 },
     });
     expect(report.breakdowns.map((item) => item.key)).toEqual(["codex", "claude_code"]);
-    expect(dependencies.scan).toHaveBeenCalledTimes(2);
+    expect(dependencies.scan).toHaveBeenCalledTimes(5);
   });
 
   it("reports unavailable instead of fabricating zero Usage when every scan fails", async () => {
@@ -41,13 +41,13 @@ describe("local Usage", () => {
 });
 
 function dependenciesWithEvents(
-  events: Record<BillingAgent, NormalizedUsageEvent[]>,
+  events: Partial<Record<BillingAgent, NormalizedUsageEvent[]>>,
 ): LocalUsageDependencies & { scan: ReturnType<typeof vi.fn> } {
   return {
     aggregationTimezone: () => "UTC",
     pricingCatalog: async () => null,
     scan: vi.fn(async (agent: BillingAgent, startAt: string, endAt: string) =>
-      scanResult(agent, startAt, endAt, events[agent]),
+      scanResult(agent, startAt, endAt, events[agent] ?? []),
     ),
   };
 }

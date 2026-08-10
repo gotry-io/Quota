@@ -260,6 +260,16 @@ describe("quota protocol v2", () => {
         channel_source: "explicit",
       }).success,
     ).toBe(false);
+    // Protocol v2 shipped with this sentinel. Collectors and Relay storage discard it, but the
+    // wire decoder must keep accepting pending 0.0.5 outbox entries until they drain.
+    expect(UsageHourlyFactSchema.safeParse({ ...fact, model: "unknown" }).success).toBe(true);
+    expect(
+      UsageHourlyFactSchema.safeParse({
+        ...fact,
+        agent: "grok",
+        billing_channel: "xai_direct",
+      }).success,
+    ).toBe(true);
     expect(UsageHourlyFactSchema.safeParse({ ...fact, prompt: "secret" }).success).toBe(false);
   });
 

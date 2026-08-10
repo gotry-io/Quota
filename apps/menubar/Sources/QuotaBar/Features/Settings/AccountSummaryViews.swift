@@ -364,6 +364,9 @@ enum UsageValueFormatter {
     switch agent {
     case .codex: "Codex"
     case .claudeCode: "Claude Code"
+    case .grok: "Grok"
+    case .opencode: "OpenCode"
+    case .pi: "Pi"
     }
   }
 
@@ -391,5 +394,7 @@ enum UsageValueFormatter {
 }
 
 extension BillingAgent {
-  fileprivate static let allCasesForPresentation: [BillingAgent] = [.codex, .claudeCode]
+  fileprivate static let allCasesForPresentation: [BillingAgent] = [
+    .codex, .claudeCode, .grok, .opencode, .pi,
+  ]
 }

@@ -90,7 +90,7 @@ export function buildDeepSeekSnapshot(input: {
       fingerprint: identity.fingerprint,
       fingerprint_scope: identity.scope,
       label: input.credentials.label,
-      plan: "DeepSeek",
+      plan: "Credits",
     },
     windows: input.windows,
     source: DEEPSEEK_SOURCE_API,

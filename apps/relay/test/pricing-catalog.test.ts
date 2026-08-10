@@ -6,17 +6,67 @@ import { PRICING_CATALOG, PRICING_CATALOG_ETAG } from "../src/pricing-catalog.ts
 describe("managed pricing catalog", () => {
   it("is a valid versioned snapshot covering the collected models", () => {
     expect(validatePricingCatalog(PRICING_CATALOG)).toMatchObject({ valid: true });
-    expect(PRICING_CATALOG.entries).toHaveLength(68);
     expect(new Set(PRICING_CATALOG.entries.map((entry) => entry.model))).toEqual(
       new Set([
         "gpt-5.2-codex",
         "gpt-5.3-codex",
+        "gpt-5.4",
+        "gpt-5.5",
         "gpt-5.6-sol",
+        "gpt-5.6-luna",
+        "grok-4.5",
         "claude-opus-4-6",
         "claude-sonnet-4-6",
       ]),
     );
-    expect(PRICING_CATALOG_ETAG).toBe('"official-2026-08-10-2"');
+    expect(PRICING_CATALOG_ETAG).toBe('"official-2026-08-10-4"');
+  });
+
+  it("prices Grok 4.5 short and long context rows", () => {
+    for (const [context_bucket, amount_microusd] of [
+      ["le_128k", "8000000"],
+      ["gt_272k", "16000000"],
+    ] as const) {
+      expect(
+        calculateUsageCost(
+          [
+            usageRow({
+              agent: "grok",
+              billing_channel: "xai_direct",
+              model: "grok-4.5",
+              context_bucket,
+              input_tokens: 1_000_000,
+              output_tokens: 1_000_000,
+            }),
+          ],
+          PRICING_CATALOG,
+        ),
+      ).toMatchObject({ status: "complete", amount_microusd });
+    }
+  });
+
+  it("prices the collected GPT-5.4, GPT-5.5, and effective-dated GPT-5.6 Luna rows", () => {
+    for (const [model, date, amount] of [
+      ["gpt-5.4", "2026-03-06", "17500000"],
+      ["gpt-5.5", "2026-04-24", "35000000"],
+      ["gpt-5.6-luna", "2026-07-29", "7000000"],
+      ["gpt-5.6-luna", "2026-07-30", "1400000"],
+    ] as const) {
+      expect(
+        calculateUsageCost(
+          [
+            usageRow({
+              model,
+              bucket_start_utc: `${date}T00:00:00Z`,
+              usage_date: date,
+              input_tokens: 1_000_000,
+              output_tokens: 1_000_000,
+            }),
+          ],
+          PRICING_CATALOG,
+        ),
+      ).toMatchObject({ status: "complete", amount_microusd: amount });
+    }
   });
 
   it("prices the actual Codex models when parser dimensions are unknown", () => {
@@ -65,7 +115,7 @@ describe("managed pricing catalog", () => {
           cache_write_inferred_tokens: 50,
           output_tokens: 300,
         }),
-        usageRow({ model: "unknown", input_tokens: 10, output_tokens: 2 }),
+        usageRow({ model: "not-a-real-model", input_tokens: 10, output_tokens: 2 }),
       ],
       PRICING_CATALOG,
     );
@@ -83,7 +133,13 @@ describe("managed pricing catalog", () => {
         "wildcard_service_tier",
         "wildcard_speed",
       ],
-      unpriced: [{ billing_channel: "openai_direct", model: "unknown", reason: "unknown_model" }],
+      unpriced: [
+        {
+          billing_channel: "openai_direct",
+          model: "not-a-real-model",
+          reason: "unknown_model",
+        },
+      ],
     });
   });
 

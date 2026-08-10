@@ -652,7 +652,11 @@ footer {
 }
 
 .account-menu summary {
+  max-width: min(320px, 50vw);
+  overflow: hidden;
   list-style: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .account-menu summary::-webkit-details-marker {

@@ -127,7 +127,9 @@ export class D1UsageState implements UsageState {
           submission.coverage.start_at,
           submission.coverage.end_at,
         ),
-      ...submission.rows.map((row) => this.insertRow(principal.device_id, submission, row)),
+      ...submission.rows
+        .filter((row) => row.model !== "unknown")
+        .map((row) => this.insertRow(principal.device_id, submission, row)),
       this.preserveCoverageSide(principal.device_id, submission, "left"),
       this.preserveCoverageSide(principal.device_id, submission, "right"),
       this.database
@@ -230,6 +232,13 @@ export class D1UsageState implements UsageState {
       parameters.push(query.device_id);
       conditions.push(`facts.device_id = ?${parameters.length}`);
     }
+    if (query.agents && query.agents.length > 0) {
+      const placeholders = query.agents.map((agent) => {
+        parameters.push(agent);
+        return `?${parameters.length}`;
+      });
+      conditions.push(`facts.agent IN (${placeholders.join(", ")})`);
+    }
     if (query.start_at) {
       parameters.push(query.start_at);
       conditions.push(`facts.bucket_start_utc >= ?${parameters.length}`);
@@ -274,6 +283,13 @@ export class D1UsageState implements UsageState {
     if (query.device_id) {
       coverageParameters.push(query.device_id);
       coverageConditions.push(`coverage.device_id = ?${coverageParameters.length}`);
+    }
+    if (query.agents && query.agents.length > 0) {
+      const placeholders = query.agents.map((agent) => {
+        coverageParameters.push(agent);
+        return `?${coverageParameters.length}`;
+      });
+      coverageConditions.push(`coverage.agent IN (${placeholders.join(", ")})`);
     }
     if (query.start_at) {
       coverageParameters.push(query.start_at);

@@ -36,10 +36,10 @@ provider sessions + agent logs
             └── owner-only cache/outbox
 ```
 
-QuotaCLI uses `@gotry-io/quota-provider` to collect quota and to normalize supported Codex and Claude
-Code log records. Provider credentials remain inside the collector boundary. Raw log records are not
-written to the outbox. QuotaBar may retain one last safe normalized result for immediate display,
-then replaces it after a successful helper invocation.
+QuotaCLI uses `@gotry-io/quota-provider` to collect quota and to normalize supported Codex, Claude
+Code, Grok, OpenCode, and Pi log records. Provider credentials remain inside the collector boundary.
+Raw log records are not written to the outbox. QuotaBar may retain one last safe normalized result
+for immediate display, then replaces it after a successful helper invocation.
 
 ### Managed account and sync
 
@@ -122,7 +122,7 @@ Quota Web ── quota-protocol ── managed HTTP APIs
 - Account state lives outside the installation directory in the user configuration root. Files and
   the shared lock are owner-only, symlink-resistant, and atomically replaced.
 - `login`, `logout`, `auth status`, `sync`, and `account` are the only account command surface.
-- `sync` emits local quota and a local 30-day Usage report even while signed out. While signed in it
+- `sync` emits local quota and an all-history local Usage report even while signed out. While signed in it
   refreshes authoritative Device control and the canonical pricing catalog, uploads a quota
   envelope, drains a bounded Usage outbox, and reads the account summary. A failed catalog refresh
   preserves the last valid cache.
@@ -139,14 +139,19 @@ Quota Web ── quota-protocol ── managed HTTP APIs
 
 ### QuotaRelay
 
-- Hono application mounted at `/oauth/v2` and `/api/v2`, plus health/readiness routes. Better Auth's
-  standard handler is mounted at `/api/auth/v2`.
+- Hono application mounted at `/oauth/v2` and `/api/v2`, plus health/readiness routes. Released
+  0.0.5 clients receive the original two-agent Usage/pricing subset unless a newer client opts into
+  all Usage agents; this prevents older strict enum decoders from seeing additive v2 agent/channel
+  values. Better Auth's standard handler is mounted at `/api/auth/v2`.
 - Uses D1 migrations for Better Auth identity/Web sessions, Accounts, Devices, native
   sessions/grants, quota observations, hourly facts, coverage, receipts, and rate limits.
 - Authenticates each route with an account, device, or browser principal and the minimum scope.
 - Performs Device delete, Account delete, session rotation/revocation, and Usage replacement in
   storage transactions.
-- Serves the canonical pricing catalog and account summaries; it never runs provider collectors.
+- Serves the canonical pricing catalog and account summaries. Current clients opt into all retained
+  Usage with `usage_agents=all`; protocol v2 reads without that opt-in keep their shipped two-agent,
+  366-day-bounded shape and default to 30 days. Explicit date filters remain available. Relay never
+  runs provider collectors.
 
 ### Quota Web
 
@@ -164,8 +169,9 @@ Quota Web ── quota-protocol ── managed HTTP APIs
 
 D1 is the only durable Relay store. Migration `0003_account_usage_v2.sql` intentionally removes the
 unreleased owner/pairing schema; migration `0004_better_auth.sql` replaces the unreleased custom Web
-identity/session tables with Better Auth and keeps QuotaCLI credentials separate. There is no
-compatibility copy. See [ADR 0001](decisions/0001-persistent-relay-storage.md).
+identity/session tables with Better Auth and keeps QuotaCLI credentials separate. Migration
+`0005_usage_agents.sql` adds Grok/OpenCode/Pi Usage agents and removes invalid retained rows whose
+model is the literal `unknown`. See [ADR 0001](decisions/0001-persistent-relay-storage.md).
 
 The checked-in Cloudflare workflow is the production deployment path. Local Worker builds use
 Wrangler dry-run and local D1 migration verification. Manual remote migration or deployment is not a

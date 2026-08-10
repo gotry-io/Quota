@@ -98,7 +98,10 @@ data requirements. Architecture and product behavior are defined in
 - Outbox payloads contain allowlisted aggregate fields only. Source file IDs, byte offsets, record
   hashes, paths, raw events, and parser diagnostics remain local. Token/count invariants and payload,
   row, range, model, and dimension bounds are enforced by the v2 runtime schema before upload and by
-  Relay again before persistence.
+  Relay again before persistence. Empty internal records with no tokens, billable tools, or nonzero
+  source cost do not become Usage facts. Collectors reject the literal model `unknown`; protocol v2
+  decodes it only for a shipped 0.0.5 outbox retry, and Relay discards that row before persistence.
+  Migration `0005_usage_agents.sql` removes previously retained invalid rows.
 - Delete Device is distinct from logout. It transactionally revokes sessions, advances Device
   generation, records a precise watermark, deletes quota/Usage/coverage/receipt rows, and retains a
   minimal hidden tombstone. Old tokens and old-generation outbox entries are terminally rejected.

@@ -63,8 +63,65 @@ describe("Usage sync", () => {
         end_at: "2026-08-09T12:00:00Z",
         status: "partial",
       },
+      {
+        agent: "grok",
+        start_at: "2026-08-09T10:00:00Z",
+        end_at: "2026-08-09T12:00:00Z",
+        status: "partial",
+      },
+      {
+        agent: "opencode",
+        start_at: "2026-08-09T10:00:00Z",
+        end_at: "2026-08-09T12:00:00Z",
+        status: "partial",
+      },
+      {
+        agent: "pi",
+        start_at: "2026-08-09T10:00:00Z",
+        end_at: "2026-08-09T12:00:00Z",
+        status: "partial",
+      },
     ]);
     expect(dependencies.client.uploadUsage).not.toHaveBeenCalled();
+  });
+
+  it("replaces the shipped two-agent cache when the parser revision changes", async () => {
+    const dependencies = await makeDependencies([], "partial");
+    await dependencies.store.saveArtifact("usage-cache.json", {
+      schema_version: 1,
+      contexts: [
+        {
+          account_id: "account_test",
+          device_id: "device_test",
+          generation: 3,
+          parser_revision: "quota-usage-2",
+          aggregation_timezone: "UTC",
+          event_not_before: "2026-08-09T10:05:00Z",
+          cursors: [
+            { agent: "codex", next_start_at: "2026-08-09T10:00:00Z" },
+            { agent: "claude_code", next_start_at: "2026-08-09T10:00:00Z" },
+          ],
+        },
+      ],
+    });
+
+    await syncUsage(activeSession(), new Date("2026-08-09T12:30:00Z"), dependencies);
+
+    expect(dependencies.scan).toHaveBeenCalledTimes(5);
+    expect(await dependencies.store.loadArtifact("usage-cache.json")).toMatchObject({
+      contexts: [
+        {
+          parser_revision: "quota-usage-4",
+          cursors: [
+            { agent: "codex" },
+            { agent: "claude_code" },
+            { agent: "grok" },
+            { agent: "opencode" },
+            { agent: "pi" },
+          ],
+        },
+      ],
+    });
   });
 
   it("recovers a missing local cursor from the earliest readable event", async () => {
@@ -107,6 +164,30 @@ describe("Usage sync", () => {
     const retried = vi.mocked(dependencies.client.uploadUsage).mock.calls[1]?.[1];
     expect(retried?.submission_id).toBe(first?.submission_id);
     expect(retried?.sequence).toBe(first?.sequence);
+  });
+
+  it("drains a shipped 0.0.5 outbox entry containing the unknown model sentinel", async () => {
+    const dependencies = await makeDependencies([]);
+    const entry = legacyUnknownSubmission();
+    await dependencies.store.saveArtifact("usage-outbox.json", {
+      schema_version: 1,
+      queues: [
+        {
+          account_id: "account_test",
+          device_id: "device_test",
+          generation: 3,
+          entries: [entry],
+        },
+      ],
+    });
+
+    const result = await syncUsage(activeSession(), new Date("2026-08-09T12:30:00Z"), dependencies);
+
+    expect(result).toMatchObject({ uploaded: 1, pending: 0 });
+    expect(vi.mocked(dependencies.client.uploadUsage).mock.calls[0]?.[1]).toEqual(entry);
+    expect(await dependencies.store.loadArtifact("usage-outbox.json")).toMatchObject({
+      queues: [{ entries: [] }],
+    });
   });
 
   it("keeps an acknowledged submission until its session checkpoint is durable", async () => {
@@ -255,6 +336,50 @@ function accepted(submission: UsageSubmissionV2): UsageUploadResponse {
 
 function duplicate(submission: UsageSubmissionV2): UsageUploadResponse {
   return { ...accepted(submission), outcome: "duplicate" };
+}
+
+function legacyUnknownSubmission(): UsageSubmissionV2 {
+  return {
+    protocol_version: 2,
+    submission_id: "submission_legacy_unknown",
+    device_id: "device_test",
+    generation: 3,
+    sequence: 0,
+    parser_revision: "quota-usage-2",
+    aggregation_timezone: "UTC",
+    coverage: {
+      agent: "codex",
+      start_at: "2026-08-09T10:00:00Z",
+      end_at: "2026-08-09T11:00:00Z",
+      status: "complete",
+    },
+    rows: [
+      {
+        bucket_start_utc: "2026-08-09T10:00:00Z",
+        usage_date: "2026-08-09",
+        usage_hour: 10,
+        agent: "codex",
+        billing_channel: "openai_direct",
+        channel_source: "agent_default",
+        model: "unknown",
+        context_bucket: "le_128k",
+        service_tier: "unknown",
+        speed: "unknown",
+        inference_geo: "unknown",
+        input_tokens: 10,
+        cache_read_tokens: 0,
+        cache_write_5m_tokens: 0,
+        cache_write_1h_tokens: 0,
+        cache_write_inferred_tokens: 0,
+        output_tokens: 2,
+        reasoning_tokens: 0,
+        requests: 1,
+        web_search_requests: 0,
+        web_fetch_requests: 0,
+        source_cost_covered_requests: 0,
+      },
+    ],
+  };
 }
 
 function activeSession(): ActiveAccountSessionState {

@@ -8,7 +8,6 @@ import type {
   CoverageReason,
   CoverageReasonCode,
   LocalUsageFile,
-  NormalizedUsageEvent,
   NormalizedUsageRecord,
   UsageAgent,
   UsageDirectoryEntry,
@@ -154,12 +153,13 @@ export async function discoverUsageFiles(options: {
 }
 
 interface ParsedLine {
-  event?: NormalizedUsageEvent;
+  records?: readonly NormalizedUsageRecord[];
   reason?: CoverageReasonCode;
 }
 
 export interface UsageLineParser {
   parse(value: Record<string, unknown>, cursor: UsageSourceCursor): ParsedLine;
+  finish?(): ParsedLine;
 }
 
 export async function scanUsageFiles(options: {
@@ -224,17 +224,7 @@ export async function scanUsageFiles(options: {
             return true;
           }
           const parsed = parser.parse(value as Record<string, unknown>, cursor);
-          if (parsed.reason) {
-            pushReason(reasons, {
-              code: parsed.reason,
-            });
-          }
-          if (parsed.event) {
-            const occurredAt = Date.parse(parsed.event.occurred_at);
-            if (occurredAt >= start && occurredAt < end) {
-              records.push({ event: parsed.event, cursor });
-            }
-          }
+          collectParsedLine(parsed, records, reasons, start, end);
           return true;
         },
         onOversizedLine(_byteOffset) {
@@ -243,6 +233,9 @@ export async function scanUsageFiles(options: {
           });
         },
       });
+      if (!stopped && !options.signal?.aborted) {
+        collectParsedLine(parser.finish?.() ?? {}, records, reasons, start, end);
+      }
     } catch (error) {
       pushReason(reasons, {
         code: options.signal?.aborted ? "scan_cancelled" : reasonForReadError(error),
@@ -271,6 +264,22 @@ export async function scanUsageFiles(options: {
       reasons: boundedReasons,
     },
   };
+}
+
+function collectParsedLine(
+  parsed: ParsedLine,
+  records: NormalizedUsageRecord[],
+  reasons: CoverageReason[],
+  start: number,
+  end: number,
+): void {
+  if (parsed.reason) {
+    pushReason(reasons, { code: parsed.reason });
+  }
+  for (const record of parsed.records ?? []) {
+    const occurredAt = Date.parse(record.event.occurred_at);
+    if (occurredAt >= start && occurredAt < end) records.push(record);
+  }
 }
 
 async function readMatchingFileInfo(
@@ -428,7 +437,9 @@ export function boundedDimension(value: unknown): string | undefined {
 }
 
 export function boundedModel(value: unknown): string | undefined {
-  return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,127}$/.test(value)
+  return typeof value === "string" &&
+    value !== "unknown" &&
+    /^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,127}$/.test(value)
     ? value
     : undefined;
 }

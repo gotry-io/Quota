@@ -89,9 +89,8 @@ export function mapOpenRouterWindows(
     windows.push({
       id: "credits",
       title: "Credits",
-      used_percent: clampPercent((credits.totalUsage / credits.totalCredits) * 100),
+      used_percent: 0,
       remaining_value: credits.balance,
-      limit_value: credits.totalCredits,
       value_unit: "usd",
     });
   }
@@ -114,7 +113,7 @@ export function buildOpenRouterSnapshot(input: {
       fingerprint: identity.fingerprint,
       fingerprint_scope: identity.scope,
       label: input.credentials.label,
-      plan: "OpenRouter",
+      plan: "Credits",
     },
     windows: input.windows,
     source: OPENROUTER_SOURCE_API,

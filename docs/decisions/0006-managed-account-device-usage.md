@@ -35,12 +35,20 @@ The installation ID is random user-level state. Relay stores only an account-sco
 the same installation restores the same Device within one Account without becoming a cross-account
 identifier. Snapshot and Usage upload sequences are independent and server-authoritative.
 
-QuotaCLI converts supported local Codex and Claude Code records into privacy-preserving hourly facts.
-Uploads contain no prompt, completion, path, session ID, conversation ID, raw event, or provider
-credential. Only a complete UTC-hour scan may replace a remote range; partial scans remain local.
+QuotaCLI converts supported local Codex, Claude Code, Grok, OpenCode, and Pi records into
+privacy-preserving hourly facts. Uploads contain no prompt, completion, path, session ID,
+conversation ID, raw event, or provider credential. Only a complete UTC-hour scan may replace a
+remote range; partial scans remain local.
 Each immutable outbox submission has a stable ID, generation, and sequence, so retry and
 crash-after-commit are idempotent. Pricing uses an effective-dated managed catalog and preserves
 unknown or incomplete prices as explicitly unpriced rather than zero.
+
+QuotaCLI 0.0.5 shipped protocol v2 outbox entries that could contain the literal model sentinel
+`unknown`, plus query-less two-agent Account summaries bounded to 30 days. Protocol v2 continues to
+decode those pending entries so their original idempotency digest can drain, but Relay discards the
+sentinel row before persistence. New clients reject the sentinel during collection and opt into all
+agents and retained history with `usage_agents=all`; legacy reads preserve the shipped 366-day limit
+and query-less 30-day default.
 
 Logout first disables local upload and revokes sessions, but retains the remote Device and data.
 Delete Device is a distinct authenticated Web action: it revokes sessions, advances the generation,
@@ -57,8 +65,8 @@ SQLite adapter, Relay discovery document, arbitrary Relay URL, anonymous owner, 
 - Local collection and cached display continue while signed out or offline; remote sync does not.
 - The service can aggregate quota and Usage without receiving the underlying work or provider
   credentials.
-- D1 migrations and the v2 protocol are intentional destructive cutovers for unreleased data and
-  interfaces.
+- Earlier D1 and protocol cutovers applied only to unreleased data and interfaces. Shipped protocol
+  v2 behavior remains compatible through the explicit 0.0.5 Usage paths described above.
 - Self-hosting requires a future decision. Additional identity providers can use Better Auth's
   provider boundary without creating a second session system, but still require an explicit product
   and privacy decision.

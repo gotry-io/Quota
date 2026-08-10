@@ -1,5 +1,6 @@
 import { aggregateUsageEvents, calculateUsageCost, foldUsageFacts } from "@gotry-io/quota-model";
 import {
+  BILLING_AGENTS,
   type BillingAgent,
   IanaTimezoneSchema,
   type LocalUsageReport,
@@ -9,12 +10,11 @@ import {
   type UsageBreakdown,
   type UsageHourlyFact,
 } from "@gotry-io/quota-protocol";
-import { scanClaudeUsage, scanCodexUsage, type UsageScanResult } from "@gotry-io/quota-provider";
+import { scanLocalUsage, type UsageScanResult } from "@gotry-io/quota-provider";
 import { loadPricingCatalogCache } from "./pricing-cache.ts";
 import type { AccountStateStore } from "./state.ts";
 
-const LOCAL_USAGE_DAYS = 30;
-const USAGE_AGENTS = ["codex", "claude_code"] as const;
+const ALL_USAGE_START = "1970-01-01T00:00:00Z";
 
 export interface LocalUsageDependencies {
   aggregationTimezone(): string;
@@ -31,24 +31,25 @@ export async function collectLocalUsage(
   let range: { from: string; to: string };
   try {
     timezone = IanaTimezoneSchema.parse(dependencies.aggregationTimezone());
-    range = localDateRange(now, timezone);
+    range = { from: localDate(now, timezone), to: localDate(now, timezone) };
   } catch {
-    return unavailableReport(generatedAt, utcDateRange(now));
+    const today = now.toISOString().slice(0, 10);
+    return unavailableReport(generatedAt, { from: today, to: today });
   }
 
-  const startAt = `${previousDate(range.from)}T00:00:00Z`;
+  const startAt = ALL_USAGE_START;
   const endAt = nextUtcHour(now);
   const [catalog, scans] = await Promise.all([
     dependencies.pricingCatalog().catch(() => null),
     Promise.all(
-      USAGE_AGENTS.map((agent) => dependencies.scan(agent, startAt, endAt).catch(() => null)),
+      BILLING_AGENTS.map((agent) => dependencies.scan(agent, startAt, endAt).catch(() => null)),
     ),
   ]);
   if (scans.every((scan) => scan === null)) {
     return unavailableReport(generatedAt, range);
   }
 
-  const coverage = USAGE_AGENTS.map((agent, index) => {
+  const coverage = BILLING_AGENTS.map((agent, index) => {
     const scan = scans[index]!;
     return scan === null
       ? { agent, start_at: startAt, end_at: endAt, status: "partial" as const }
@@ -63,7 +64,16 @@ export async function collectLocalUsage(
   const rows = aggregateUsageEvents(
     scans.flatMap((scan) => scan?.records.map((record) => record.event) ?? []),
     timezone,
-  ).filter((row) => row.usage_date >= range.from && row.usage_date <= range.to);
+  );
+  if (rows.length > 0) {
+    range = {
+      from: rows.reduce(
+        (earliest, row) => (row.usage_date < earliest ? row.usage_date : earliest),
+        rows[0]?.usage_date ?? range.from,
+      ),
+      to: range.to,
+    };
+  }
 
   return LocalUsageReportSchema.parse({
     protocol_version: PROTOCOL_VERSION,
@@ -82,10 +92,7 @@ export function defaultLocalUsageDependencies(store: AccountStateStore): LocalUs
   return {
     aggregationTimezone: () => Intl.DateTimeFormat().resolvedOptions().timeZone,
     pricingCatalog: async () => (await loadPricingCatalogCache(store))?.catalog ?? null,
-    scan: async (agent, startAt, endAt) =>
-      agent === "codex"
-        ? await scanCodexUsage({ startAt, endAt })
-        : await scanClaudeUsage({ startAt, endAt }),
+    scan: async (agent, startAt, endAt) => await scanLocalUsage(agent, { startAt, endAt }),
   };
 }
 
@@ -93,7 +100,7 @@ function agentBreakdowns(
   rows: readonly UsageHourlyFact[],
   catalog: PricingCatalog | null,
 ): UsageBreakdown[] {
-  return USAGE_AGENTS.flatMap((agent) => {
+  return BILLING_AGENTS.flatMap((agent) => {
     const matching = rows.filter((row) => row.agent === agent);
     return matching.length === 0
       ? []
@@ -125,24 +132,6 @@ function unavailableReport(
   });
 }
 
-function localDateRange(now: Date, timezone: string): { from: string; to: string } {
-  const to = localDate(now, timezone);
-  const anchor = Date.parse(`${to}T12:00:00Z`);
-  return {
-    from: new Date(anchor - (LOCAL_USAGE_DAYS - 1) * 86_400_000).toISOString().slice(0, 10),
-    to,
-  };
-}
-
-function utcDateRange(now: Date): { from: string; to: string } {
-  const to = now.toISOString().slice(0, 10);
-  const anchor = Date.parse(`${to}T12:00:00Z`);
-  return {
-    from: new Date(anchor - (LOCAL_USAGE_DAYS - 1) * 86_400_000).toISOString().slice(0, 10),
-    to,
-  };
-}
-
 function localDate(value: Date, timezone: string): string {
   const parts = new Intl.DateTimeFormat("en", {
     timeZone: timezone,
@@ -157,10 +146,6 @@ function localDate(value: Date, timezone: string): string {
   const day = part("day");
   if (!year || !month || !day) throw new TypeError("Could not resolve the local Usage date.");
   return `${year}-${month}-${day}`;
-}
-
-function previousDate(value: string): string {
-  return new Date(Date.parse(`${value}T00:00:00Z`) - 86_400_000).toISOString().slice(0, 10);
 }
 
 function nextUtcHour(value: Date): string {

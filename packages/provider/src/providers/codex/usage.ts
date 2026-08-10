@@ -2,7 +2,7 @@ import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import type {
   LocalUsageFile,
-  NormalizedUsageEvent,
+  NormalizedUsageRecord,
   UsageDiscoveryOptions,
   UsageFileDiscoveryResult,
   UsageScanOptions,
@@ -74,12 +74,13 @@ class CodexUsageParser implements UsageLineParser {
   private serviceTier = "unknown";
   private speed = "unknown";
   private previousTotals: TokenUsage | undefined;
+  private pendingRecords: NormalizedUsageRecord[] = [];
 
   parse(
     value: Record<string, unknown>,
     _cursor: UsageSourceCursor,
   ): {
-    event?: NormalizedUsageEvent;
+    records?: readonly NormalizedUsageRecord[];
     reason?: "unknown_record" | "invalid_timestamp" | "invalid_model" | "invalid_usage";
   } {
     const type = value.type;
@@ -90,7 +91,7 @@ class CodexUsageParser implements UsageLineParser {
         return { reason: "invalid_model" };
       }
       this.currentModel = model;
-      return {};
+      return { records: this.takePendingRecords() };
     }
     if (type !== "event_msg") {
       return hasUsageShape(value) ? { reason: "unknown_record" } : {};
@@ -127,10 +128,11 @@ class CodexUsageParser implements UsageLineParser {
     if (parsedModel.model) {
       this.currentModel = parsedModel.model;
     }
+    const pendingRecords = this.takePendingRecords();
     const totalResult = optionalTokenUsage(info.total_token_usage);
     const lastResult = optionalTokenUsage(info.last_token_usage);
     if (totalResult.invalid || lastResult.invalid) {
-      return { reason: "invalid_usage" };
+      return { records: pendingRecords, reason: "invalid_usage" };
     }
 
     const totalUsage = totalResult.usage;
@@ -139,21 +141,21 @@ class CodexUsageParser implements UsageLineParser {
     if (totalUsage) {
       if (this.previousTotals && equalUsage(totalUsage, this.previousTotals)) {
         this.previousTotals = totalUsage;
-        return {};
+        return { records: pendingRecords };
       }
       usage = lastUsage ?? subtractUsage(totalUsage, this.previousTotals);
       this.previousTotals = totalUsage;
       if (!usage) {
-        return { reason: "invalid_usage" };
+        return { records: pendingRecords, reason: "invalid_usage" };
       }
     } else {
       usage = lastUsage;
     }
     if (!usage || isEmptyUsage(usage)) {
-      return {};
+      return { records: pendingRecords };
     }
 
-    return {
+    const normalizedRecord = {
       event: {
         occurred_at: occurredAt,
         agent: "codex",
@@ -175,7 +177,28 @@ class CodexUsageParser implements UsageLineParser {
         billable_tools: {},
         source_cost_covered_requests: 0,
       },
-    };
+      cursor: _cursor,
+    } satisfies NormalizedUsageRecord;
+    if (this.currentModel === "unknown") {
+      this.pendingRecords.push(normalizedRecord);
+      return {};
+    }
+    return { records: [...pendingRecords, normalizedRecord] };
+  }
+
+  finish(): {} {
+    this.pendingRecords = [];
+    return {};
+  }
+
+  private takePendingRecords(): NormalizedUsageRecord[] {
+    if (this.currentModel === "unknown" || this.pendingRecords.length === 0) return [];
+    const records = this.pendingRecords.map((record) => ({
+      ...record,
+      event: { ...record.event, model: this.currentModel },
+    }));
+    this.pendingRecords = [];
+    return records;
   }
 
   private applyThreadSettings(payload: Record<string, unknown>): { reason?: "invalid_usage" } {

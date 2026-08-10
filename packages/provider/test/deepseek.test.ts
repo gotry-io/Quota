@@ -109,6 +109,7 @@ describe("deepseek collector", () => {
     expect(sessions).toHaveLength(1);
     const snapshot = await collector.collect(sessions[0]!);
     expect(snapshot.provider).toBe("deepseek");
+    expect(snapshot.account.plan).toBe("Credits");
     expect(snapshot.windows).toHaveLength(1);
     expect(snapshot.windows[0]).toMatchObject({
       id: "balance_cny",

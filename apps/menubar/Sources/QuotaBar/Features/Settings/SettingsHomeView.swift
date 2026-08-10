@@ -8,6 +8,7 @@ struct SettingsHomeView: View {
   let onOpenUsage: () -> Void
 
   @State private var launchAtLoginEnabled = LaunchAtLoginController.isEnabled
+  @State private var isLogoutConfirmationPresented = false
 
   var body: some View {
     ScrollView {
@@ -85,6 +86,14 @@ struct SettingsHomeView: View {
       .padding(.vertical, QuotaDesign.Layout.pageVerticalPadding)
     }
     .onAppear { launchAtLoginEnabled = LaunchAtLoginController.isEnabled }
+    .alert("Log Out?", isPresented: $isLogoutConfirmationPresented) {
+      Button("Cancel", role: .cancel) {}
+      Button("Log Out", role: .destructive) {
+        Task { await model.logout() }
+      }
+    } message: {
+      Text("This signs QuotaBar out on this Mac. Your device and synced data stay in your Quota account.")
+    }
   }
 
   @ViewBuilder
@@ -99,7 +108,7 @@ struct SettingsHomeView: View {
             height: QuotaDesign.Layout.settingsRowHeight
           ) {
             Button {
-              Task { await model.logout() }
+              isLogoutConfirmationPresented = true
             } label: {
               Group {
                 if model.isLoggingOut {

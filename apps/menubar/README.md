@@ -28,8 +28,8 @@ The footer refresh action also runs sync. There is no background daemon owned by
 The app decodes the QuotaCLI sync envelope strictly: its local quota and local Usage reports contain
 protocol v2 data, with an optional account summary when signed in. A credential-free last-known sync
 result is cached in QuotaBar's preferences so the panel can paint before the first current sync
-completes. Account tokens,
-installation identity, provider credentials, and raw logs never enter that cache.
+completes. Account tokens, installation identity, provider credentials, and raw logs never enter
+that cache.
 
 ## Menu panel
 
@@ -41,7 +41,8 @@ global account identity.
 Settings contains:
 
 - Account: **Continue with GitHub**, the signed-in display label, cancellable login, and logout.
-- Usage: a local 30-day report available without an account; signed-in users can switch to Account.
+- Usage: an all-history local report available without an account; signed-in users can switch to
+  Account.
 - Account Data: read-only Devices.
 - Local Providers: agent visibility, ordering, reporting provenance, and a copyable provider setup
   command. QuotaBar does not edit provider credential files.
@@ -49,11 +50,11 @@ Settings contains:
 - About: version, website, and feedback links.
 
 Usage defaults to the local report and shows its date range, token totals, requests, estimated cost,
-cost basis, pricing catalog revision, unpriced row count, model breakdown, and Codex/Claude Code
-coverage. Token and request counts use locale-aware decimal grouping for small values and compact
-`k`/`M`/`B` suffixes for larger values. When an account summary is available, the same page offers
-an Account source. QuotaBar formats the typed result; it does not carry a price table or recalculate
-cost.
+cost basis, pricing catalog revision, unpriced row count, model breakdown, and coverage for Codex,
+Claude Code, Grok, OpenCode, and Pi. Token and request counts use locale-aware decimal grouping for
+small values and compact `k`/`M`/`B` suffixes for larger values. When an account summary is available,
+the same page offers an Account source. QuotaBar formats the typed result; it does not carry a price
+table or recalculate cost.
 
 The visual and interaction specification is [`DESIGN.md`](DESIGN.md).
 

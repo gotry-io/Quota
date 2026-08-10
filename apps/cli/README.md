@@ -33,16 +33,17 @@ on a terminal, and JSON when redirected. Progress uses stderr so stdout stays ma
 uses the OAuth Device Authorization Grant for headless machines. QuotaCLI receives Quota account and
 current-device sessions, never a GitHub token.
 
-`sync` always returns local quota and a 30-day local Codex/Claude Code Usage report, including while
-signed out. While signed in it also obtains authoritative Device generation and independent
+`sync` always returns local quota and an all-history local Codex, Claude Code, Grok, OpenCode, and Pi
+Usage report, including while signed out. While signed in it also obtains authoritative Device
+generation and independent
 quota/Usage sequences, refreshes the canonical pricing catalog while preserving the last valid
 cache, uploads the quota snapshot, drains a bounded immutable Usage outbox, and returns the account
 summary. Complete scans replace remote UTC-hour ranges; partial scans remain local. Logout disables
 upload locally before revoking sessions and does not delete the remote Device or data.
 
 `account summary` is JSON and can filter the Usage date range, Device, and cost mode. Calculated cost
-is API-equivalent catalog pricing, not subscription spend or an invoice. Unknown prices remain
-unpriced instead of becoming zero.
+is API-equivalent catalog pricing, not subscription spend or an invoice. With no date filter it
+returns all retained Account Usage. Unknown prices remain unpriced instead of becoming zero.
 
 `doctor` reports provider and account readiness without collection or upload. Non-macOS recurring
 sync requires an external scheduler. QuotaBar invokes its bundled helper every five minutes while the

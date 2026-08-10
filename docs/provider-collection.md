@@ -88,9 +88,11 @@ tokens for this path.
 3. Preserve input, cache-read, inferred cache-write, output, reasoning, model, tier, speed, context
    bucket, and the default `openai_direct` billing channel. Codex `total_tokens` is a context counter,
    not the sum used for billing facts. Codex logs do not supply source cost.
-4. Duplicate cumulative totals do not emit another request. Subagent logs that inherit but omit the
-   model use `unknown`; explicit invalid model values, timestamps, or usage make coverage partial
-   rather than fabricating a fact.
+4. Duplicate cumulative totals do not emit another request. Leading subagent facts that inherit but
+   initially omit the model are buffered until that rollout supplies its model context. Facts from a
+   file that never supplies a valid model are discarded; `unknown` is not a legal model identifier.
+   Explicit invalid model values, timestamps, or usage make coverage partial rather than fabricating
+   a fact.
 
 ### Claude Code Usage
 
@@ -98,18 +100,51 @@ tokens for this path.
    `~/.claude`.
 2. Parse assistant usage records and retain the provider model plus input, cache-read,
    five-minute/one-hour cache-write, output, service tier, context bucket, and tool request counts
-   that are explicitly represented. Empty optional dimension strings mean unknown, and Claude's
-   provider-owned `<synthetic>` model marker normalizes to `synthetic`.
-3. Resolve only a documented billing channel. Source-reported cost is retained only with its
+   that are explicitly represented. Empty optional dimension strings mean unknown. Claude's
+   provider-owned `<synthetic>` model marker normalizes to `synthetic` only when the record contains
+   tokens, billable tools, or nonzero source cost; an empty internal marker emits no Usage fact.
+3. Resolve `anthropic_direct` only for a Claude model. Third-party models use the explicit unknown
+   channel instead of being misclassified as Anthropic. Source-reported cost is retained only with its
    request-coverage count so an incomplete amount cannot be treated as a complete total.
 4. Unknown usage-shaped records, malformed timestamps/dimensions, unreadable sources, oversized
    lines, and truncated tails make coverage partial.
 
-Both scanners use canonical `[start_at, end_at)` UTC-hour boundaries, bounded directory traversal,
-a two-million-record scan ceiling, bounded line sizes, cancellation, and before/after file identity checks. Local scan cursors
+### Grok Usage
+
+1. Discover `events.jsonl` below `$GROK_HOME/sessions` and JSONL trace exports below
+   `$GROK_HOME/trace-exports`, defaulting `GROK_HOME` to `~/.grok`.
+2. Parse only per-response `usage` events with a valid model and timestamp. Preserve uncached input,
+   cache reads/creation, output, reasoning, tools, exact source cost when supplied, and the
+   `xai_direct` channel.
+3. Current interactive Grok session transcripts record model turns but do not persist token usage;
+   scanning them therefore produces complete empty coverage rather than invented request counts.
+
+### OpenCode Usage
+
+1. Prefer the read-only SQLite message store at `$XDG_DATA_HOME/opencode/opencode.db`, defaulting
+   `XDG_DATA_HOME` to `~/.local/share`. If it is absent, read legacy message JSON below
+   `storage/message`.
+2. Parse assistant messages with nonzero tokens or source cost. Add cache-read and cache-write tokens
+   to uncached input so protocol input remains the billable total. Resolve a billing channel only
+   from an explicit recognized `providerID`; custom providers remain unknown.
+3. Node uses its built-in SQLite reader and the bundled Bun helper uses Bun's built-in reader. The
+   npm package does not add a native addon.
+
+### Pi Usage
+
+1. Discover JSONL sessions below `$PI_CODING_AGENT_DIR/sessions` when configured; otherwise scan
+   both `~/.pi/agent/sessions` and the older `~/.local/share/pi-coding-agent/sessions` location.
+2. Parse persisted assistant messages and retain their provider, model, token/cache/reasoning usage,
+   and nonzero source cost. Resolve only explicit recognized provider channels.
+
+All scanners reject the literal model `unknown`, ignore zero-token/tool/cost internal records, and
+use canonical `[start_at, end_at)` UTC-hour boundaries, bounded directory traversal,
+a two-million-record scan ceiling, bounded line sizes, cancellation, and source-change checks. Local scan cursors
 contain only an opaque file ID, byte offset, and record hash. Paths and cursors are local cache input
 and never enter a protocol submission or CLI account result. Only complete coverage is eligible for
-authoritative remote replacement; empty complete coverage is valid.
+authoritative remote replacement; empty complete coverage is valid. Discovery always covers every
+canonical local source. Local reports scan from the Unix epoch, while remote replacement remains
+split into bounded protocol ranges.
 
 ## Grok
 
@@ -164,9 +199,11 @@ Aligned with CodexBar's OpenRouter provider (credits + API-key limit meters).
      `limit - clamp(limit_remaining)`, else the spend field matching `limit_reset`
      (`usage_daily` / `usage_weekly` / `usage_monthly`), else cumulative `usage`. Emit
      `remaining_value` / `limit_value` / `value_unit: "usd"` alongside `used_percent`.
-   - **Credits**: when `total_credits > 0`, used percent is `total_usage / total_credits * 100`
-     (balance = `total_credits - total_usage` on OpenRouter's side; values may be up to ~60s stale).
-     Emit the same absolute USD fields for the credits window.
+   - **Credits**: when `total_credits > 0`, emit a balance-only window using
+     `remaining_value: total_credits - total_usage` and `value_unit: "usd"`; values may be up to ~60s
+     stale. Do not treat rechargeable credits as a fixed limit or show a percentage meter.
+   The snapshot plan badge is **Credits**; the provider header already identifies OpenRouter, so the
+   channel name is not repeated in the plan position.
 4. Absent key → `auth_required` with guidance to run
    `quotacli config set openrouter` (or set `OPENROUTER_API_KEY`). HTTP 401/403 →
    `auth_required`. Never print the API key, Authorization header, or response bodies.
@@ -192,6 +229,8 @@ scope).
    balance-only window (`remaining_value`; USD also sets `value_unit: "usd"`). Do **not** prefer a
    zero USD row over a positive CNY (or other) balance. If every currency is zero, keep one zero
    USD (or first) row so the account still appears. No lifetime spend ratio is available.
+   The snapshot plan badge is **Credits**; the provider header identifies DeepSeek, so the channel
+   name is not repeated in the plan position.
 4. Absent key → `auth_required` with guidance to run `quotacli config set deepseek` (or set
    `DEEPSEEK_API_KEY`). HTTP 401/403 → `auth_required`. Never print the API key or Authorization
    header. Platform-session detailed usage endpoints are not used.
