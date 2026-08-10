@@ -139,12 +139,16 @@ export function createWebAccountAuth(environment: BetterAuthEnvironment): WebAcc
 
   return {
     handler: (request) => auth.handler(request),
-    beginGitHubSignIn: async (headers, callbackURL) =>
-      await auth.api.signInSocial({
+    beginGitHubSignIn: async (headers, callbackURL) => {
+      const response = await auth.api.signInSocial({
         body: { provider: "github", callbackURL },
         headers,
         asResponse: true,
-      }),
+      });
+      return response.ok && response.headers.has("Location")
+        ? new Response(null, { status: 302, headers: response.headers })
+        : response;
+    },
     getSession: async (headers) => {
       const session = await auth.api.getSession({ headers });
       if (!session) return null;
