@@ -15,7 +15,8 @@ struct LaunchAtLoginControllerTests {
 
   @Test
   func recoveryMessageOnlyForBlockedStates() {
-    #expect(LaunchAtLoginController.message(for: .requiresApproval)?.contains("Login Items") == true)
+    #expect(
+      LaunchAtLoginController.message(for: .requiresApproval)?.contains("Login Items") == true)
     #expect(LaunchAtLoginController.message(for: .notFound) != nil)
     #expect(LaunchAtLoginController.message(for: .enabled) == nil)
     #expect(LaunchAtLoginController.message(for: .notRegistered) == nil)

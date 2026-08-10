@@ -45,8 +45,8 @@ console.log(`wrote ${protocolOut}`);
 
 // --- JSON Schema provider enums ---
 for (const relative of [
-  "packages/protocol/schema/quota-snapshot-v1.json",
-  "packages/protocol/schema/quota-collection-report-v1.json",
+  "packages/protocol/schema/quota-snapshot-v2.json",
+  "packages/protocol/schema/quota-collection-report-v2.json",
 ]) {
   const path = join(root, relative);
   const original = readFileSync(path, "utf8");
@@ -66,7 +66,7 @@ for (const relative of [
 
 // Runtime Zod already enforces snapshot.provider === result.provider.
 // Keep JSON Schema to a simple provider enum (no per-id allOf bloat).
-const reportPath = join(root, "packages/protocol/schema/quota-collection-report-v1.json");
+const reportPath = join(root, "packages/protocol/schema/quota-collection-report-v2.json");
 const report = JSON.parse(readFileSync(reportPath, "utf8"));
 if (report.$defs?.result?.allOf) {
   delete report.$defs.result.allOf;

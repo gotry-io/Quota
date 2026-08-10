@@ -3,6 +3,7 @@
   "name": "quota",
   "main": "src/cloudflare.ts",
   "compatibility_date": "2026-08-01",
+  "compatibility_flags": ["nodejs_compat"],
   "routes": [
     {
       "pattern": "quota.gotry.io",
@@ -11,16 +12,14 @@
   ],
   "assets": {
     "directory": "../web/dist",
-    "run_worker_first": ["/healthz", "/readyz", "/.well-known/quotabar-relay", "/api/*"]
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/healthz", "/readyz", "/oauth/*", "/api/*"]
   },
   "observability": {
     "enabled": true
   },
   "triggers": {
     "crons": ["0 * * * *"]
-  },
-  "vars": {
-    "QUOTA_RELAY_INSTANCE_ID": "gotry-managed-primary"
   },
   "d1_databases": [
     {

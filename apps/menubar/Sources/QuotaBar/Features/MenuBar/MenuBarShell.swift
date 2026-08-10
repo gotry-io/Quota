@@ -73,8 +73,8 @@ struct MenuBarFooterView: View {
         Task { await model.refresh() }
       } label: {
         Text(lastCheckedLabel)
-        .frame(minHeight: QuotaDesign.Layout.minimumInteractiveDimension)
-        .contentShape(Rectangle())
+          .frame(minHeight: QuotaDesign.Layout.minimumInteractiveDimension)
+          .contentShape(Rectangle())
       }
       .buttonStyle(.plain)
       .accessibilityLabel("Refresh all quota. \(lastCheckedLabel)")
@@ -84,7 +84,7 @@ struct MenuBarFooterView: View {
     .frame(height: QuotaDesign.Layout.footerHeight)
   }
 
-  /// Orchestration clock: last local collect and/or Relay pull — not provider data age.
+  /// Sync completion clock; provider observations keep their own timestamps.
   private var lastCheckedLabel: String {
     guard let lastCheckedAt = model.lastCheckedAt else {
       return "Not checked"

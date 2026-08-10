@@ -16,13 +16,43 @@ struct QuotaCollectionResult: Codable, Equatable, Sendable {
   let message: String?
 }
 
+extension QuotaCollectionResult {
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    provider = try container.decode(ProviderID.self, forKey: .provider)
+    outcome = try container.decode(CollectionOutcome.self, forKey: .outcome)
+    snapshots = try container.decode([QuotaSnapshot].self, forKey: .snapshots)
+    source = try container.decodeIfPresent(String.self, forKey: .source)
+    message = try container.decodeIfPresent(String.self, forKey: .message)
+    let isSuccess = outcome == .success
+    guard isSuccess == !snapshots.isEmpty,
+      snapshots.count <= 32,
+      snapshots.allSatisfy({ $0.provider == provider })
+    else {
+      throw DecodingError.dataCorruptedError(
+        forKey: .snapshots,
+        in: container,
+        debugDescription: "Invalid quota collection result."
+      )
+    }
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case provider
+    case outcome
+    case snapshots
+    case source
+    case message
+  }
+}
+
 struct QuotaCollectionReport: Codable, Equatable, Sendable {
   let schemaVersion: Int
   let capturedAt: Date
   let results: [QuotaCollectionResult]
 
   private enum CodingKeys: String, CodingKey {
-    case schemaVersion
+    case schemaVersion = "protocolVersion"
     case capturedAt
     case results
   }
@@ -34,7 +64,7 @@ extension QuotaCollectionReport {
     schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
     capturedAt = try container.decode(Date.self, forKey: .capturedAt)
     results = try container.decode([QuotaCollectionResult].self, forKey: .results)
-    guard schemaVersion == 1 else {
+    guard schemaVersion == 2, results.count <= ProviderID.allCases.count else {
       throw DecodingError.dataCorruptedError(
         forKey: .schemaVersion,
         in: container,

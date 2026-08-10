@@ -3,6 +3,7 @@ import Testing
 
 @testable import QuotaBar
 
+@MainActor
 struct AgentsSettingsViewTests {
   @Test
   func reorderTargetUsesHysteresisAroundRowBoundary() {

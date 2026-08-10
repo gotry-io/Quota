@@ -1,514 +1,920 @@
+import { validatePricingCatalog } from "@gotry-io/quota-model";
 import {
-  OwnerCreateResponseSchema,
-  OwnerSnapshotListResponseSchema,
-  DeviceListResponseSchema,
-  PairingApprovalRequestSchema,
-  PairingCreateRequestSchema,
-  type PairingCreateResponse,
-  PairingDenialRequestSchema,
-  type PairingTokenIssuedResponse,
-  type PairingTokenPendingResponse,
-  PairingTokenRequestSchema,
+  AccountDevicesResponseSchema,
+  AccountQuotaResponseSchema,
+  AccountResponseSchema,
+  AccountSummarySchema,
+  AccountUsageHourlyResponseSchema,
+  AccountUsageResponseSchema,
+  DeleteDeviceResponseSchema,
+  DeviceAuthorizationDecisionRequestSchema,
+  DeviceAuthorizationRequestSchema,
+  DeviceAuthorizationResponseSchema,
+  DeviceSyncResponseSchema,
+  LogoutResponseSchema,
+  MAXIMUM_USAGE_READ_ROWS,
+  MAXIMUM_USAGE_SUBMISSION_BYTES,
+  OAuthTokenRequestSchema,
+  OAuthTokenResponseSchema,
+  PROTOCOL_VERSION,
+  type PricingCatalog,
+  PricingCatalogSchema,
   QuotaSnapshotEnvelopeSchema,
+  QuotaSnapshotUploadResponseSchema,
   type RelayErrorCode,
   type RelayErrorEnvelope,
-  type RelayInfo,
+  SessionRefreshRequestSchema,
+  SessionRefreshResponseSchema,
+  UsageCostModeSchema,
+  UsageDateRangeSchema,
+  UsageSubmissionSchema,
+  UsageUploadResponseSchema,
+  UtcHourSchema,
 } from "@gotry-io/quota-protocol";
 import type {
-  OwnerAuthScope,
-  OwnerSessionRecord,
-  DeviceRecord,
-  RelayState,
+  AccountMaintenanceInput,
+  AccountPrincipal,
+  AccountScope,
+  AccountState,
+  DevicePrincipal,
+  DeviceScope,
+  UsageState,
 } from "@gotry-io/relay-core";
 import { type Context, Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
-import { bearerToken, randomOpaqueSecret, randomUserCode, sha256Hex } from "./security.ts";
+import type { WebAccountAuth } from "./account/better-auth.ts";
+import { AccountFlowError, type AccountService } from "./account/service.ts";
+import { managedServiceInfo } from "./config.ts";
+import { PRICING_CATALOG, PRICING_CATALOG_ETAG } from "./pricing-catalog.ts";
+import { bearerToken, type SecretHasher } from "./security.ts";
+import { buildUsageCost, buildUsageSummary, UsageSummaryLimitError } from "./usage-summary.ts";
 
-const pairingLifetimeSeconds = 10 * 60;
-const pairingSessionRetentionSeconds = 24 * 60 * 60;
-const pairingPollIntervalSeconds = 5;
-const maximumJSONBodyBytes = 64 * 1024;
-const ownerSessionExpiresAt = "9999-12-31T23:59:59.999Z";
-export const deviceInactivitySeconds = 30 * 24 * 60 * 60;
+const maximumCredentialBodyBytes = 64 * 1024;
+const maximumSnapshotBodyBytes = 256 * 1024;
+const maximumAccountDevices = 256;
+const maximumAccountSnapshots = 8_192;
+const recentAuthenticationMilliseconds = 10 * 60 * 1000;
+const activeDeviceMilliseconds = 15 * 60 * 1000;
+const expiredSessionRetentionMilliseconds = 7 * 24 * 60 * 60 * 1000;
+const maintenanceBatchLimit = 100;
 
 const rateLimits = {
-  ownerCreate: { limit: 10, windowSeconds: 60 * 60 },
-  pairingCreate: { limit: 300, windowSeconds: 10 * 60 },
-  pairingPollClient: { limit: 10_000, windowSeconds: 10 * 60 },
-  pairingPollPerCode: { limit: 130, windowSeconds: 10 * 60 },
-  pairingDecision: { limit: 30, windowSeconds: 10 * 60 },
+  nativeAuthorize: { limit: 60, windowSeconds: 10 * 60 },
+  deviceCode: { limit: 30, windowSeconds: 10 * 60 },
+  token: { limit: 180, windowSeconds: 10 * 60 },
+  sessionMutation: { limit: 60, windowSeconds: 10 * 60 },
+  destructiveMutation: { limit: 10, windowSeconds: 60 * 60 },
 } as const;
 
 interface StrictSchema<Output> {
   safeParse(value: unknown): { success: true; data: Output } | { success: false };
 }
 
-interface DevicePrincipal {
-  device: DeviceRecord;
-  tokenHash: string;
+export interface RelayAppOptions {
+  state: AccountState;
+  usageState: UsageState;
+  accountService: AccountService;
+  webAuth: WebAccountAuth;
+  hasher: SecretHasher;
+  now?: () => Date;
+  pricingCatalog?: PricingCatalog;
 }
 
-export interface RelayAppOptions {
-  state: RelayState;
-  relayInfo: RelayInfo;
-  now?: () => Date;
+export function accountMaintenanceInput(checkedAt: Date): AccountMaintenanceInput {
+  const retainedAfter = new Date(
+    checkedAt.getTime() - expiredSessionRetentionMilliseconds,
+  ).toISOString();
+  return {
+    grant_expired_before: checkedAt.toISOString(),
+    session_expired_before: retainedAfter,
+    session_revoked_before: retainedAfter,
+    limit: maintenanceBatchLimit,
+  };
 }
 
 export function createRelayApp(options: RelayAppOptions): Hono {
   const app = new Hono();
   const now = options.now ?? (() => new Date());
+  const parsedCatalog = PricingCatalogSchema.parse(options.pricingCatalog ?? PRICING_CATALOG);
+  const catalogValidation = validatePricingCatalog(parsedCatalog);
+  if (!catalogValidation.valid) {
+    throw new Error("Pricing catalog validation failed");
+  }
+  const catalog = catalogValidation.catalog;
+  const catalogETag = options.pricingCatalog
+    ? `"${options.pricingCatalog.revision}"`
+    : PRICING_CATALOG_ETAG;
 
-  app.get("/healthz", (context) =>
-    context.json({
-      status: "ok",
-      service: "QuotaRelay",
-      version: options.relayInfo.version,
-    }),
+  app.get("/healthz", (context) => context.json({ status: "ok", ...managedServiceInfo() }));
+  for (const path of [
+    "/api/auth/v2/*",
+    "/oauth/v2/*",
+    "/api/v2/account",
+    "/api/v2/account/*",
+    "/api/v2/device/*",
+  ]) {
+    app.use(path, async (context, next) => {
+      context.header("Cache-Control", "no-store");
+      await next();
+    });
+  }
+  for (const path of ["/api/auth/v2/*", "/oauth/v2/*"]) {
+    app.use(path, bodyLimit({ maxSize: maximumCredentialBodyBytes, onError: requestBodyTooLarge }));
+  }
+  app.use(
+    "/api/v2/device/snapshots",
+    bodyLimit({ maxSize: maximumSnapshotBodyBytes, onError: requestBodyTooLarge }),
+  );
+  app.use(
+    "/api/v2/device/usage",
+    bodyLimit({ maxSize: MAXIMUM_USAGE_SUBMISSION_BYTES, onError: requestBodyTooLarge }),
   );
 
   app.get("/readyz", async (context) => {
     try {
+      const checkedAt = now();
+      await options.state.performMaintenance(accountMaintenanceInput(checkedAt));
       await options.state.ping();
       return context.json({ status: "ready" });
     } catch {
       return context.json({ status: "unavailable" }, 503);
     }
   });
-
-  app.get("/.well-known/quotabar-relay", (context) => context.json(options.relayInfo));
-
-  app.use("/api/v1/*", async (context, next) => {
-    await next();
-    context.header("Cache-Control", "no-store");
+  app.get("/api/v2/info", (context) => context.json(managedServiceInfo()));
+  app.on(["GET", "POST"], "/api/auth/v2/*", async (context) => {
+    const response = await options.webAuth.handler(context.req.raw);
+    response.headers.set("Cache-Control", "no-store");
+    return response;
   });
-  app.use(
-    "/api/v1/*",
-    bodyLimit({
-      maxSize: maximumJSONBodyBytes,
-      onError: requestBodyTooLarge,
-    }),
-  );
 
-  // Anonymous owner registration is available on managed and self-hosted Relays.
-  // Each registration creates an isolated ephemeral group; the bearer is returned once.
-  app.post("/api/v1/owners", async (context) => {
+  app.get("/oauth/v2/authorize", async (context) => {
+    const allowed = [
+      "response_type",
+      "client_id",
+      "redirect_uri",
+      "state",
+      "code_challenge",
+      "code_challenge_method",
+    ];
+    if (!hasOnlyQueryKeys(context, allowed) || context.req.query("response_type") !== "code") {
+      return invalidRequest(context);
+    }
     const limited = await enforceRateLimit(
       context,
       options.state,
-      "owner_create",
-      anonymousClientSubject(context, options.relayInfo),
-      rateLimits.ownerCreate,
+      options.hasher,
+      "native-authorize",
+      anonymousClientSubject(context),
+      rateLimits.nativeAuthorize,
       now(),
     );
     if (limited) {
       return limited;
     }
-
-    const createdAt = now().toISOString();
-    const ownerToken = randomOpaqueSecret();
-    await options.state.createOwner({
-      id: `owner_${crypto.randomUUID()}`,
-      session_id: `owner_session_${crypto.randomUUID()}`,
-      token_hash: await sha256Hex(ownerToken),
-      scopes: ["quota:read", "device:manage"],
-      expires_at: ownerSessionExpiresAt,
-      created_at: createdAt,
-    });
-
-    return context.json(OwnerCreateResponseSchema.parse({ owner_token: ownerToken }), 201);
+    try {
+      const login = await options.accountService.beginBrowserLogin(
+        {
+          client_id: context.req.query("client_id") ?? "",
+          redirect_uri: context.req.query("redirect_uri") ?? "",
+          state: context.req.query("state") ?? "",
+          code_challenge: context.req.query("code_challenge") ?? "",
+          code_challenge_method: context.req.query("code_challenge_method") ?? "",
+        },
+        now(),
+      );
+      const callback = new URL("/oauth/v2/complete", context.req.url);
+      callback.searchParams.set("login_token", login.login_token);
+      return await options.webAuth.beginGitHubSignIn(context.req.raw.headers, callback.toString());
+    } catch (error) {
+      return accountFlowError(context, error);
+    }
   });
 
-  app.delete("/api/v1/owners/self", async (context) => {
-    const principal = await authorizeOwner(context, options.state, "device:manage", now());
+  app.get("/oauth/v2/complete", async (context) => {
+    if (!hasOnlyQueryKeys(context, ["login_token"])) return invalidRequest(context);
+    const loginToken = context.req.query("login_token");
+    const webSession = await options.webAuth.getSession(context.req.raw.headers);
+    if (!loginToken || loginToken.length > 4_096 || !webSession) return unauthorized(context);
+    try {
+      const completion = await options.accountService.completeBrowserLogin(
+        loginToken,
+        webSession.user.id,
+        webSession.user.name,
+        now(),
+      );
+      const redirect = new URL(completion.redirect_uri);
+      redirect.searchParams.set("code", completion.code);
+      redirect.searchParams.set("state", completion.client_state);
+      return context.redirect(redirect.toString(), 302);
+    } catch (error) {
+      return accountFlowError(context, error);
+    }
+  });
+
+  app.post("/oauth/v2/device/code", async (context) => {
+    const body = await parseJSON(context, DeviceAuthorizationRequestSchema);
+    if (body instanceof Response) {
+      return body;
+    }
+    const limited = await enforceRateLimit(
+      context,
+      options.state,
+      options.hasher,
+      "device-code",
+      anonymousClientSubject(context),
+      rateLimits.deviceCode,
+      now(),
+    );
+    if (limited) {
+      return limited;
+    }
+    try {
+      const created = await options.accountService.beginDeviceLogin(body, now());
+      return context.json(
+        DeviceAuthorizationResponseSchema.parse({
+          protocol_version: PROTOCOL_VERSION,
+          device_code: created.device_code,
+          user_code: created.user_code,
+          verification_uri: created.verification_uri,
+          verification_uri_complete: created.verification_uri_complete,
+          expires_in: 10 * 60,
+          interval: created.interval,
+        }),
+        201,
+      );
+    } catch (error) {
+      return accountFlowError(context, error);
+    }
+  });
+
+  app.post("/oauth/v2/device/authorize", async (context) => {
+    const principal = await authorizeAccount(context, options, "account:manage", now());
     if (principal instanceof Response) {
       return principal;
     }
-    await options.state.deleteOwner(principal.owner_id);
+    const limited = await enforceRateLimit(
+      context,
+      options.state,
+      options.hasher,
+      "device-authorize",
+      principal.account_id,
+      rateLimits.sessionMutation,
+      now(),
+    );
+    if (limited) {
+      return limited;
+    }
+    const unsafe = requireRecentWebMutation(context, principal, now());
+    if (unsafe) {
+      return unsafe;
+    }
+    const body = await parseJSON(context, DeviceAuthorizationDecisionRequestSchema);
+    if (body instanceof Response) {
+      return body;
+    }
+    const outcome = await options.accountService.decideDeviceGrant(
+      body.user_code,
+      principal.account_id,
+      body.decision,
+      now(),
+    );
+    switch (outcome) {
+      case "approved":
+      case "denied":
+        return context.body(null, 204);
+      case "not_found":
+        return notFound(context);
+      case "expired":
+        return relayError(context, 400, "expired_token", "The login request expired.");
+      case "already_decided":
+      case "consumed":
+        return relayError(context, 409, "conflict", "The login request is no longer pending.");
+    }
+  });
+
+  app.post("/oauth/v2/token", async (context) => {
+    const raw = await parseRawJSON(context);
+    if (raw instanceof Response) {
+      return raw;
+    }
+    const tokenRequest = OAuthTokenRequestSchema.safeParse(raw);
+    const refreshRequest = SessionRefreshRequestSchema.safeParse(raw);
+    if (!tokenRequest.success && !refreshRequest.success) {
+      return invalidRequest(context);
+    }
+    const limited = await enforceRateLimit(
+      context,
+      options.state,
+      options.hasher,
+      "oauth-token",
+      anonymousClientSubject(context),
+      rateLimits.token,
+      now(),
+    );
+    if (limited) {
+      return limited;
+    }
+    try {
+      if (refreshRequest.success) {
+        const refreshed = await options.accountService.refresh(
+          refreshRequest.data.refresh_token,
+          refreshRequest.data.token_audience,
+          now(),
+        );
+        const common = {
+          protocol_version: PROTOCOL_VERSION,
+          token_type: "Bearer" as const,
+          token_audience: refreshRequest.data.token_audience,
+          account_id: refreshed.principal.account_id,
+        };
+        return context.json(
+          SessionRefreshResponseSchema.parse(
+            refreshed.principal.kind === "account"
+              ? {
+                  ...common,
+                  token_audience: "account",
+                  account_session: sessionToken(refreshed),
+                }
+              : {
+                  ...common,
+                  token_audience: "device",
+                  device_id: refreshed.principal.device_id,
+                  device_generation: refreshed.principal.generation,
+                  device_session: sessionToken(refreshed),
+                },
+          ),
+        );
+      }
+      if (!tokenRequest.success) {
+        return invalidRequest(context);
+      }
+      const request = tokenRequest.data;
+      if (request.grant_type === "authorization_code") {
+        const issued = await options.accountService.exchangeAuthorizationCode(request, now());
+        return context.json(OAuthTokenResponseSchema.parse(oauthTokenResponse(issued)));
+      }
+      const polled = await options.accountService.pollDeviceToken(
+        request.device_code,
+        request.client_id,
+        now(),
+      );
+      if (polled.outcome === "issued") {
+        return context.json(OAuthTokenResponseSchema.parse(oauthTokenResponse(polled.response)));
+      }
+      context.header("Retry-After", String(polled.interval));
+      return relayError(
+        context,
+        400,
+        polled.outcome,
+        "The device authorization request is not ready.",
+      );
+    } catch (error) {
+      return accountFlowError(context, error);
+    }
+  });
+
+  app.post("/oauth/v2/revoke", async (context) => {
+    const token = bearerToken(context.req.header("Authorization"));
+    const tokenAudience = token ? refreshTokenAudience(token) : null;
+    if (!token || !tokenAudience) {
+      return unauthorized(context);
+    }
+    const refreshTokenHash = await options.hasher.hash(`${tokenAudience}-refresh`, token);
+    const limited = await enforceRateLimit(
+      context,
+      options.state,
+      options.hasher,
+      "session-revoke",
+      refreshTokenHash,
+      rateLimits.sessionMutation,
+      now(),
+    );
+    if (limited) {
+      return limited;
+    }
+    await options.state.revokeRefreshSession({
+      refresh_token_hash: refreshTokenHash,
+      token_audience: tokenAudience,
+      revoked_at: now().toISOString(),
+    });
     return context.body(null, 204);
   });
 
-  app.post("/api/v1/pairings", async (context) => {
+  app.get("/api/v2/account", async (context) => {
+    const principal = await accountReader(context, options, now());
+    if (principal instanceof Response) {
+      return principal;
+    }
+    const account = await options.state.getAccount(principal.account_id);
+    if (!account) {
+      return unauthorized(context);
+    }
+    return context.json(
+      AccountResponseSchema.parse({
+        protocol_version: PROTOCOL_VERSION,
+        account: publicAccount(account),
+      }),
+    );
+  });
+
+  app.get("/api/v2/account/devices", async (context) => {
+    const principal = await accountReader(context, options, now());
+    if (principal instanceof Response) {
+      return principal;
+    }
+    const devices = await options.state.listAccountDevices(principal.account_id);
+    if (devices.length > maximumAccountDevices) {
+      return resultLimit(context);
+    }
+    return context.json(
+      AccountDevicesResponseSchema.parse({
+        protocol_version: PROTOCOL_VERSION,
+        devices: devices.map((device) => publicDevice(device, now())),
+      }),
+    );
+  });
+
+  app.get("/api/v2/account/snapshots", async (context) => {
+    const principal = await accountReader(context, options, now());
+    if (principal instanceof Response) {
+      return principal;
+    }
+    const quota = await options.state.listLatestSnapshots(principal.account_id);
+    if (quota.length > maximumAccountSnapshots) {
+      return resultLimit(context);
+    }
+    return context.json(
+      AccountQuotaResponseSchema.parse({ protocol_version: PROTOCOL_VERSION, quota }),
+    );
+  });
+
+  app.get("/api/v2/account/summary", async (context) => {
+    const principal = await accountReader(context, options, now());
+    if (principal instanceof Response) {
+      return principal;
+    }
+    const selected = await accountUsageQuery(context, principal, options, catalog, now());
+    if (selected instanceof Response) {
+      return selected;
+    }
+    const account = await options.state.getAccount(principal.account_id);
+    if (!account) {
+      return unauthorized(context);
+    }
+    const [devices, quota] = await Promise.all([
+      options.state.listAccountDevices(principal.account_id),
+      options.state.listLatestSnapshots(principal.account_id),
+    ]);
+    if (devices.length > maximumAccountDevices || quota.length > maximumAccountSnapshots) {
+      return resultLimit(context);
+    }
+    return context.json(
+      AccountSummarySchema.parse({
+        protocol_version: PROTOCOL_VERSION,
+        generated_at: now().toISOString(),
+        account: publicAccount(account),
+        devices: devices.map((device) => publicDevice(device, now())),
+        quota,
+        usage: selected.summary,
+      }),
+    );
+  });
+
+  for (const path of ["/api/v2/account/usage", "/api/v2/account/usage/summary"]) {
+    app.get(path, async (context) => {
+      const principal = await accountReader(context, options, now());
+      if (principal instanceof Response) {
+        return principal;
+      }
+      const selected = await accountUsageQuery(context, principal, options, catalog, now());
+      return selected instanceof Response
+        ? selected
+        : context.json(
+            AccountUsageResponseSchema.parse({
+              protocol_version: PROTOCOL_VERSION,
+              usage: selected.summary,
+            }),
+          );
+    });
+  }
+
+  app.get("/api/v2/account/usage/hourly", async (context) => {
+    const principal = await accountReader(context, options, now());
+    if (principal instanceof Response) {
+      return principal;
+    }
+    if (!hasOnlyQueryKeys(context, ["start_at", "end_at", "device_id", "cost_mode"])) {
+      return invalidRequest(context);
+    }
+    const start = UtcHourSchema.safeParse(context.req.query("start_at"));
+    const end = UtcHourSchema.safeParse(context.req.query("end_at"));
+    const mode = UsageCostModeSchema.safeParse(context.req.query("cost_mode") ?? "calculate");
+    if (
+      !start.success ||
+      !end.success ||
+      !mode.success ||
+      Date.parse(end.data) <= Date.parse(start.data) ||
+      Date.parse(end.data) - Date.parse(start.data) > 31 * 24 * 60 * 60 * 1000
+    ) {
+      return invalidRequest(context);
+    }
+    const deviceId = context.req.query("device_id");
+    if (
+      deviceId &&
+      !(await options.state.accountOwnsVisibleDevice(principal.account_id, deviceId))
+    ) {
+      return notFound(context);
+    }
+    const result = await options.usageState.queryAccountUsage(principal.account_id, {
+      ...(deviceId ? { device_id: deviceId } : {}),
+      start_at: start.data,
+      end_at: end.data,
+      limit: MAXIMUM_USAGE_READ_ROWS,
+    });
+    if (result.truncated) {
+      return resultLimit(context);
+    }
+    try {
+      return context.json(
+        AccountUsageHourlyResponseSchema.parse({
+          protocol_version: PROTOCOL_VERSION,
+          start_at: start.data,
+          end_at: end.data,
+          facts: result.rows,
+          coverage: result.coverage.map((item) => ({
+            device_id: item.device_id,
+            agent: item.agent,
+            start_at: item.start_at,
+            end_at: item.end_at,
+            status: "complete",
+          })),
+          cost: buildUsageCost(result.rows, mode.data, catalog),
+        }),
+      );
+    } catch (error) {
+      if (error instanceof UsageSummaryLimitError) {
+        return resultLimit(context);
+      }
+      throw error;
+    }
+  });
+
+  app.delete("/api/v2/account/devices/:device_id", async (context) => {
+    const principal = await authorizeAccount(context, options, "account:manage", now());
+    if (principal instanceof Response) {
+      return principal;
+    }
     const limited = await enforceRateLimit(
       context,
       options.state,
-      "pairing_create",
-      anonymousClientSubject(context, options.relayInfo),
-      rateLimits.pairingCreate,
+      options.hasher,
+      "device-delete",
+      principal.account_id,
+      rateLimits.destructiveMutation,
       now(),
     );
     if (limited) {
       return limited;
     }
-
-    const body = await parseBody(context, PairingCreateRequestSchema);
-    if (body instanceof Response) {
-      return body;
+    const unsafe = requireRecentWebMutation(context, principal, now());
+    if (unsafe) {
+      return unsafe;
     }
-
-    const createdAt = now();
-    const expiresAt = new Date(createdAt.getTime() + pairingLifetimeSeconds * 1000);
-    const deviceCode = randomOpaqueSecret();
-    const userCode = randomUserCode();
-    await options.state.createPairingSession({
-      id: `pairing_${crypto.randomUUID()}`,
-      device_code_hash: await sha256Hex(deviceCode),
-      user_code_hash: await sha256Hex(normalizeUserCode(userCode)),
-      device_display_name: body.device_display_name,
-      expires_at: expiresAt.toISOString(),
-      created_at: createdAt.toISOString(),
-    });
-
-    const response: PairingCreateResponse = {
-      device_code: deviceCode,
-      user_code: userCode,
-      expires_at: expiresAt.toISOString(),
-      poll_interval_seconds: pairingPollIntervalSeconds,
-    };
-    return context.json(response, 201);
-  });
-
-  app.post("/api/v1/pairings/token", async (context) => {
-    const body = await parseBody(context, PairingTokenRequestSchema);
-    if (body instanceof Response) {
-      return body;
-    }
-    const deviceCodeHash = await sha256Hex(body.device_code);
-    const clientLimited = await enforceRateLimit(
-      context,
-      options.state,
-      "pairing_poll_client",
-      anonymousClientSubject(context, options.relayInfo),
-      rateLimits.pairingPollClient,
-      now(),
+    const deletedAt = now().toISOString();
+    const deleted = await options.state.deleteDeviceData(
+      principal.account_id,
+      context.req.param("device_id"),
+      deletedAt,
     );
-    if (clientLimited) {
-      return clientLimited;
+    if (!deleted) {
+      return notFound(context);
     }
-    const codeLimited = await enforceRateLimit(
-      context,
-      options.state,
-      "pairing_poll",
-      deviceCodeHash,
-      rateLimits.pairingPollPerCode,
-      now(),
+    return context.json(
+      DeleteDeviceResponseSchema.parse({
+        protocol_version: PROTOCOL_VERSION,
+        status: "deleted",
+        device_id: deleted.device_id,
+        device_generation: deleted.generation,
+        deleted_before: deleted.deleted_before,
+      }),
     );
-    if (codeLimited) {
-      return codeLimited;
-    }
-
-    const issuedAt = now();
-    const deviceID = `device_${crypto.randomUUID()}`;
-    const deviceToken = randomOpaqueSecret();
-    const outcome = await options.state.consumePairingSession({
-      device_code_hash: deviceCodeHash,
-      device_id: deviceID,
-      token_hash: await sha256Hex(deviceToken),
-      consumed_at: issuedAt.toISOString(),
-    });
-
-    switch (outcome) {
-      case "issued": {
-        const response: PairingTokenIssuedResponse = {
-          device_id: deviceID,
-          device_token: deviceToken,
-        };
-        return context.json(response);
-      }
-      case "pending": {
-        const response: PairingTokenPendingResponse = {
-          status: "pending",
-          poll_interval_seconds: pairingPollIntervalSeconds,
-        };
-        return context.json(response, 202);
-      }
-      case "denied":
-        return relayError(context, 409, "pairing_denied", "The pairing request was denied.");
-      case "expired":
-        return relayError(context, 410, "pairing_expired", "The pairing request expired.");
-      case "consumed":
-        return relayError(
-          context,
-          409,
-          "pairing_consumed",
-          "The pairing request was already consumed.",
-        );
-      case "not_found":
-        return relayError(context, 404, "not_found", "The pairing request was not found.");
-    }
   });
 
-  app.post("/api/v1/pairings/approve", async (context) => {
-    return decidePairing(context, options.state, "approve", now);
-  });
-
-  app.post("/api/v1/pairings/deny", async (context) => {
-    return decidePairing(context, options.state, "deny", now);
-  });
-
-  app.post("/api/v1/snapshots", async (context) => {
-    const principal = await authorizeDevice(context, options.state, now());
+  app.get("/api/v2/device/sync", async (context) => {
+    const principal = await deviceWriter(context, options, "sync:read:self", now());
     if (principal instanceof Response) {
       return principal;
     }
-    const envelope = await parseBody(context, QuotaSnapshotEnvelopeSchema);
+    const control = await options.state.getDeviceSyncControl(
+      principal.device_id,
+      principal.generation,
+    );
+    if (!control) {
+      return unauthorized(context);
+    }
+    return context.json(
+      DeviceSyncResponseSchema.parse({
+        protocol_version: PROTOCOL_VERSION,
+        account_id: principal.account_id,
+        device_id: principal.device_id,
+        device_generation: control.generation,
+        next_snapshot_sequence: control.next_snapshot_sequence,
+        next_usage_sequence: control.next_usage_sequence,
+        usage_deleted_before: control.usage_deleted_before,
+        usage_sync_revision: control.usage_sync_revision,
+      }),
+    );
+  });
+
+  app.post("/api/v2/device/logout", async (context) => {
+    const principal = await deviceWriter(context, options, "session:revoke:self", now());
+    if (principal instanceof Response) {
+      return principal;
+    }
+    const limited = await enforceRateLimit(
+      context,
+      options.state,
+      options.hasher,
+      "device-logout",
+      principal.device_id,
+      rateLimits.sessionMutation,
+      now(),
+    );
+    if (limited) {
+      return limited;
+    }
+    await options.state.revokePrincipalFamily(principal, now().toISOString(), true);
+    return context.json(
+      LogoutResponseSchema.parse({ protocol_version: PROTOCOL_VERSION, status: "signed_out" }),
+    );
+  });
+
+  app.put("/api/v2/device/snapshots", async (context) => {
+    const principal = await deviceWriter(context, options, "quota:write:self", now());
+    if (principal instanceof Response) {
+      return principal;
+    }
+    const envelope = await parseJSON(context, QuotaSnapshotEnvelopeSchema);
     if (envelope instanceof Response) {
       return envelope;
     }
-    if (principal.device.id !== envelope.device_id) {
-      return relayError(
-        context,
-        403,
-        "forbidden",
-        "A device token can write snapshots only for its own device.",
-      );
+    if (envelope.device_id !== principal.device_id) {
+      return forbidden(context);
     }
-
-    try {
-      await options.state.recordSnapshot(envelope, now().toISOString());
-    } catch {
-      const stillActive = await options.state.getDeviceByTokenHash(principal.tokenHash);
-      if (!stillActive || stillActive.revoked_at) {
-        return unauthorized(context);
-      }
-      throw new Error("Snapshot persistence failed");
-    }
-    return context.body(null, 204);
-  });
-
-  app.get("/api/v1/snapshots", async (context) => {
-    const checkedAt = now();
-    const principal = await authorizeOwner(context, options.state, "quota:read", checkedAt);
-    if (principal instanceof Response) {
-      return principal;
-    }
-    await revokeInactiveDevicesForOwner(options.state, principal.owner_id, checkedAt);
-    const response = OwnerSnapshotListResponseSchema.parse({
-      observations: await options.state.listLatestSnapshots(principal.owner_id),
-    });
-    return context.json(response);
-  });
-
-  app.get("/api/v1/devices", async (context) => {
-    const checkedAt = now();
-    const principal = await authorizeOwner(context, options.state, "device:manage", checkedAt);
-    if (principal instanceof Response) {
-      return principal;
-    }
-    await revokeInactiveDevicesForOwner(options.state, principal.owner_id, checkedAt);
-    const devices = await options.state.listDevices(principal.owner_id);
-    const response = DeviceListResponseSchema.parse({
-      devices: devices.map((device) => ({
-        device_id: device.id,
-        display_name: device.display_name,
-        created_at: device.created_at,
-        last_seen_at: device.last_seen_at,
-        last_sequence: device.last_sequence,
-        revoked_at: device.revoked_at,
-      })),
-    });
-    return context.json(response);
-  });
-
-  app.delete("/api/v1/devices/self", async (context) => {
-    const revokedAt = now();
-    const token = bearerToken(context.req.header("Authorization"));
-    if (!token) {
-      return unauthorized(context);
-    }
-    const device = await options.state.getDeviceByTokenHash(await sha256Hex(token));
-    if (!device) {
-      return unauthorized(context);
-    }
-    if (!device.revoked_at) {
-      await options.state.revokeDevice(device.owner_id, device.id, revokedAt.toISOString());
-    }
-    return context.body(null, 204);
-  });
-
-  app.delete("/api/v1/devices/:device_id", async (context) => {
-    const checkedAt = now();
-    const principal = await authorizeOwner(context, options.state, "device:manage", checkedAt);
-    if (principal instanceof Response) {
-      return principal;
-    }
-    await revokeInactiveDevicesForOwner(options.state, principal.owner_id, checkedAt);
-    const revoked = await options.state.revokeDevice(
-      principal.owner_id,
-      context.req.param("device_id"),
-      checkedAt.toISOString(),
-    );
-    if (!revoked) {
-      return relayError(context, 404, "not_found", "The device was not found.");
-    }
-    return context.body(null, 204);
-  });
-
-  app.notFound((context) =>
-    relayError(context, 404, "not_found", "The requested QuotaRelay endpoint does not exist."),
-  );
-
-  app.onError((_error, context) =>
-    relayError(context, 500, "internal_error", "QuotaRelay could not complete the request."),
-  );
-
-  return app;
-}
-
-async function decidePairing(
-  context: Context,
-  state: RelayState,
-  decision: "approve" | "deny",
-  now: () => Date,
-): Promise<Response> {
-  const principal = await authorizeOwner(context, state, "device:manage", now());
-  if (principal instanceof Response) {
-    return principal;
-  }
-  const limited = await enforceRateLimit(
-    context,
-    state,
-    "pairing_decision",
-    principal.owner_id,
-    rateLimits.pairingDecision,
-    now(),
-  );
-  if (limited) {
-    return limited;
-  }
-  const schema = decision === "approve" ? PairingApprovalRequestSchema : PairingDenialRequestSchema;
-  const body = await parseBody(context, schema);
-  if (body instanceof Response) {
-    return body;
-  }
-  const outcome = await state.decidePairingSession({
-    user_code_hash: await sha256Hex(normalizeUserCode(body.user_code)),
-    owner_id: principal.owner_id,
-    decision,
-    decided_at: now().toISOString(),
-  });
-
-  if (
-    (decision === "approve" && outcome === "approved") ||
-    (decision === "deny" && outcome === "denied")
-  ) {
-    return context.body(null, 204);
-  }
-  switch (outcome) {
-    case "expired":
-      return relayError(context, 410, "pairing_expired", "The pairing request expired.");
-    case "consumed":
+    const outcome = await options.state.recordSnapshot(principal, envelope, now().toISOString());
+    if (outcome === "sequence_conflict") {
       return relayError(
         context,
         409,
-        "pairing_consumed",
-        "The pairing request was already consumed.",
+        "sequence_conflict",
+        "The snapshot sequence was not accepted.",
       );
-    case "not_found":
-      return relayError(context, 404, "not_found", "The pairing request was not found.");
-    case "already_decided":
-    case "approved":
-    case "denied":
-      return relayError(context, 409, "conflict", "The pairing request was already decided.");
-  }
-}
+    }
+    if (outcome === "stale_device") {
+      return relayError(context, 409, "stale_generation", "The device generation is stale.");
+    }
+    const control = await options.state.getDeviceSyncControl(
+      principal.device_id,
+      principal.generation,
+    );
+    if (!control) {
+      return unauthorized(context);
+    }
+    return context.json(
+      QuotaSnapshotUploadResponseSchema.parse({
+        protocol_version: PROTOCOL_VERSION,
+        outcome,
+        device_id: principal.device_id,
+        device_generation: principal.generation,
+        accepted_sequence: envelope.sequence,
+        next_snapshot_sequence: control.next_snapshot_sequence,
+      }),
+    );
+  });
 
-async function authorizeOwner(
-  context: Context,
-  state: RelayState,
-  requiredScope: OwnerAuthScope,
-  checkedAt: Date,
-): Promise<OwnerSessionRecord | Response> {
-  const token = bearerToken(context.req.header("Authorization"));
-  if (!token) {
-    return unauthorized(context);
-  }
-  const session = await state.getActiveOwnerSessionByTokenHash(
-    await sha256Hex(token),
-    checkedAt.toISOString(),
+  app.put("/api/v2/device/usage", async (context) => {
+    const principal = await deviceWriter(context, options, "usage:write:self", now());
+    if (principal instanceof Response) {
+      return principal;
+    }
+    const submission = await parseJSON(context, UsageSubmissionSchema);
+    if (submission instanceof Response) {
+      return submission;
+    }
+    if (submission.device_id !== principal.device_id) {
+      return forbidden(context);
+    }
+    const outcome = await options.usageState.recordUsage(
+      principal,
+      submission,
+      now().toISOString(),
+    );
+    const control = await options.state.getDeviceSyncControl(
+      principal.device_id,
+      principal.generation,
+    );
+    if (!control) {
+      return unauthorized(context);
+    }
+    const wireOutcome =
+      outcome.outcome === "stale_device"
+        ? "stale_generation"
+        : outcome.outcome === "deleted_range"
+          ? "deleted"
+          : outcome.outcome;
+    const body = UsageUploadResponseSchema.parse({
+      protocol_version: PROTOCOL_VERSION,
+      outcome: wireOutcome,
+      device_id: principal.device_id,
+      device_generation: principal.generation,
+      accepted_sequence:
+        outcome.outcome === "accepted" || outcome.outcome === "duplicate"
+          ? submission.sequence
+          : null,
+      next_sequence:
+        "next_sequence" in outcome ? outcome.next_sequence : control.next_usage_sequence,
+      usage_sync_revision:
+        "usage_sync_revision" in outcome
+          ? outcome.usage_sync_revision
+          : control.usage_sync_revision,
+      deleted_before: outcome.outcome === "deleted_range" ? control.usage_deleted_before : null,
+    });
+    const status =
+      outcome.outcome === "sequence_conflict" ||
+      outcome.outcome === "stale_device" ||
+      outcome.outcome === "deleted_range"
+        ? 409
+        : 200;
+    return context.json(body, status);
+  });
+
+  app.get("/api/v2/pricing/catalog", (context) => {
+    context.header("ETag", catalogETag);
+    context.header("Cache-Control", "public, max-age=300, must-revalidate");
+    if (context.req.header("If-None-Match") === catalogETag) {
+      return context.body(null, 304);
+    }
+    return context.json(catalog);
+  });
+
+  app.notFound((context) => notFound(context));
+  app.onError((_error, context) =>
+    relayError(context, 500, "internal_error", "QuotaRelay could not complete the request."),
   );
-  if (!session) {
-    return unauthorized(context);
-  }
-  if (!session.scopes.includes(requiredScope)) {
-    return relayError(context, 403, "forbidden", "The bearer token lacks the required scope.");
-  }
-  return session;
+  return app;
 }
 
-async function authorizeDevice(
+async function accountUsageQuery(
   context: Context,
-  state: RelayState,
+  principal: AccountPrincipal,
+  options: RelayAppOptions,
+  catalog: PricingCatalog,
+  checkedAt: Date,
+) {
+  if (!hasOnlyQueryKeys(context, ["from", "to", "device_id", "cost_mode"])) {
+    return invalidRequest(context);
+  }
+  const defaultTo = checkedAt.toISOString().slice(0, 10);
+  const defaultFrom = new Date(checkedAt.getTime() - 29 * 24 * 60 * 60 * 1000)
+    .toISOString()
+    .slice(0, 10);
+  const range = UsageDateRangeSchema.safeParse({
+    from: context.req.query("from") ?? defaultFrom,
+    to: context.req.query("to") ?? defaultTo,
+  });
+  const mode = UsageCostModeSchema.safeParse(context.req.query("cost_mode") ?? "calculate");
+  if (!range.success || !mode.success) {
+    return invalidRequest(context);
+  }
+  const deviceId = context.req.query("device_id");
+  if (deviceId && !(await options.state.accountOwnsVisibleDevice(principal.account_id, deviceId))) {
+    return notFound(context);
+  }
+  const result = await options.usageState.queryAccountUsage(principal.account_id, {
+    ...(deviceId ? { device_id: deviceId } : {}),
+    from: range.data.from,
+    to: range.data.to,
+    ...usageDateUtcBounds(range.data),
+    limit: MAXIMUM_USAGE_READ_ROWS,
+  });
+  if (result.truncated) {
+    return resultLimit(context);
+  }
+  try {
+    return { summary: buildUsageSummary(result, range.data, mode.data, catalog) };
+  } catch (error) {
+    if (error instanceof UsageSummaryLimitError) {
+      return resultLimit(context);
+    }
+    throw error;
+  }
+}
+
+function usageDateUtcBounds(range: { from: string; to: string }): {
+  start_at: string;
+  end_at: string;
+} {
+  const maximumIanaOffsetHours = 14;
+  const start = Date.parse(`${range.from}T00:00:00Z`) - maximumIanaOffsetHours * 3_600_000;
+  const end = Date.parse(`${range.to}T00:00:00Z`) + (24 + maximumIanaOffsetHours) * 3_600_000;
+  return {
+    start_at: new Date(start).toISOString().replace(".000Z", "Z"),
+    end_at: new Date(end).toISOString().replace(".000Z", "Z"),
+  };
+}
+
+async function accountReader(
+  context: Context,
+  options: RelayAppOptions,
+  checkedAt: Date,
+): Promise<AccountPrincipal | Response> {
+  return authorizeAccount(context, options, "account:read", checkedAt);
+}
+
+async function deviceWriter(
+  context: Context,
+  options: RelayAppOptions,
+  scope: DeviceScope,
   checkedAt: Date,
 ): Promise<DevicePrincipal | Response> {
   const token = bearerToken(context.req.header("Authorization"));
   if (!token) {
     return unauthorized(context);
   }
-  const tokenHash = await sha256Hex(token);
-  const device = await state.getDeviceByTokenHash(tokenHash);
-  if (!device || device.revoked_at) {
-    return unauthorized(context);
-  }
-  if (deviceIsInactive(device, checkedAt)) {
-    const revoked = await state.revokeDeviceIfInactive(
-      tokenHash,
-      inactivityCutoff(checkedAt),
-      checkedAt.toISOString(),
-    );
-    if (revoked) {
-      return unauthorized(context);
-    }
-    const refreshed = await state.getDeviceByTokenHash(tokenHash);
-    if (!refreshed || refreshed.revoked_at || deviceIsInactive(refreshed, checkedAt)) {
-      return unauthorized(context);
-    }
-    return { device: refreshed, tokenHash };
-  }
-  return { device, tokenHash };
-}
-
-export async function performRelayMaintenance(state: RelayState, checkedAt: Date): Promise<void> {
-  await state.performMaintenance({
-    inactive_before: inactivityCutoff(checkedAt),
-    pairing_expired_before: new Date(
-      checkedAt.getTime() - pairingSessionRetentionSeconds * 1000,
-    ).toISOString(),
-    maintained_at: checkedAt.toISOString(),
-  });
-}
-
-async function revokeInactiveDevicesForOwner(
-  state: RelayState,
-  ownerId: string,
-  checkedAt: Date,
-): Promise<number> {
-  return state.revokeInactiveDevicesForOwner(
-    ownerId,
-    inactivityCutoff(checkedAt),
+  const principal = await options.state.authorizeDeviceSession(
+    await options.hasher.hash("device-access", token),
     checkedAt.toISOString(),
   );
-}
-
-function deviceIsInactive(device: DeviceRecord, checkedAt: Date): boolean {
-  return (
-    Date.parse(device.last_seen_at ?? device.created_at) <= Date.parse(inactivityCutoff(checkedAt))
-  );
-}
-
-function inactivityCutoff(checkedAt: Date): string {
-  return new Date(checkedAt.getTime() - deviceInactivitySeconds * 1000).toISOString();
-}
-
-function anonymousClientSubject(context: Context, relayInfo: RelayInfo): string {
-  if (relayInfo.mode === "managed") {
-    return context.req.header("CF-Connecting-IP") ?? "relay_global";
+  if (!principal) {
+    return unauthorized(context);
   }
-  return "relay_global";
+  return principal.scopes.includes(scope) ? principal : forbidden(context);
+}
+
+async function authorizeAccount(
+  context: Context,
+  options: RelayAppOptions,
+  scope: AccountScope,
+  checkedAt: Date,
+): Promise<AccountPrincipal | Response> {
+  const token = bearerToken(context.req.header("Authorization"));
+  if (token) {
+    const principal = await options.state.authorizeAccountSession(
+      await options.hasher.hash("account-access", token),
+      checkedAt.toISOString(),
+    );
+    if (!principal) return unauthorized(context);
+    return principal.scopes.includes(scope) ? principal : forbidden(context);
+  }
+  const webSession = await options.webAuth.getSession(context.req.raw.headers);
+  if (!webSession) return unauthorized(context);
+  const principal: AccountPrincipal = {
+    kind: "account",
+    session_id: webSession.session.id,
+    family_id: webSession.session.id,
+    account_id: webSession.user.id,
+    device_id: null,
+    client_kind: "web",
+    scopes: ["account:read", "account:manage", "session:revoke:self"],
+    authenticated_at: webSession.session.createdAt.toISOString(),
+  };
+  return principal.scopes.includes(scope) ? principal : forbidden(context);
+}
+
+function requireRecentWebMutation(
+  context: Context,
+  principal: AccountPrincipal,
+  checkedAt: Date,
+): Response | null {
+  const authenticatedAt = Date.parse(principal.authenticated_at);
+  if (
+    !Number.isFinite(authenticatedAt) ||
+    checkedAt.getTime() - authenticatedAt > recentAuthenticationMilliseconds
+  ) {
+    return forbidden(context);
+  }
+  return requireWebOrigin(context, principal);
+}
+
+function refreshTokenAudience(value: string): "account" | "device" | null {
+  if (/^qar_[A-Za-z0-9_-]{43}$/.test(value)) return "account";
+  if (/^qdr_[A-Za-z0-9_-]{43}$/.test(value)) return "device";
+  return null;
+}
+
+function requireWebOrigin(context: Context, principal: AccountPrincipal): Response | null {
+  if (principal.client_kind !== "web") return forbidden(context);
+  const origin = context.req.header("Origin");
+  const fetchSite = context.req.header("Sec-Fetch-Site");
+  return origin === new URL(context.req.url).origin && (!fetchSite || fetchSite === "same-origin")
+    ? null
+    : forbidden(context);
 }
 
 async function enforceRateLimit(
   context: Context,
-  state: RelayState,
+  state: AccountState,
+  hasher: SecretHasher,
   action: string,
   subject: string,
   policy: { limit: number; windowSeconds: number },
@@ -518,11 +924,10 @@ async function enforceRateLimit(
   const windowStartedAt = new Date(
     Math.floor(checkedAt.getTime() / windowMilliseconds) * windowMilliseconds,
   );
-  const windowExpiresAt = new Date(windowStartedAt.getTime() + windowMilliseconds);
   const result = await state.consumeRateLimit({
-    key_hash: await sha256Hex(`rate-limit:${action}:${subject}`),
+    key_hash: await hasher.hash("rate-limit", `${action}:${subject}`),
     window_started_at: windowStartedAt.toISOString(),
-    window_expires_at: windowExpiresAt.toISOString(),
+    window_expires_at: new Date(windowStartedAt.getTime() + windowMilliseconds).toISOString(),
     checked_at: checkedAt.toISOString(),
     limit: policy.limit,
   });
@@ -533,26 +938,132 @@ async function enforceRateLimit(
   return relayError(context, 429, "rate_limited", "Too many requests. Retry later.");
 }
 
-async function parseBody<Output>(
+function publicAccount(account: { id: string; display_label: string | null; created_at: string }) {
+  return {
+    account_id: account.id,
+    display_label: account.display_label,
+    created_at: account.created_at,
+  };
+}
+
+function publicDevice(
+  device: {
+    id: string;
+    display_name: string | null;
+    platform: string | null;
+    generation: number;
+    created_at: string;
+    last_login_at: string;
+    last_seen_at: string | null;
+    signed_out_at: string | null;
+  },
+  checkedAt: Date,
+) {
+  const status = device.signed_out_at
+    ? "signed_out"
+    : device.last_seen_at &&
+        checkedAt.getTime() - Date.parse(device.last_seen_at) <= activeDeviceMilliseconds
+      ? "active"
+      : "offline";
+  return {
+    device_id: device.id,
+    display_name: device.display_name ?? "QuotaCLI",
+    platform: device.platform ?? "linux",
+    device_generation: device.generation,
+    status,
+    created_at: device.created_at,
+    last_login_at: device.last_login_at,
+    last_seen_at: device.last_seen_at,
+    signed_out_at: device.signed_out_at,
+  };
+}
+
+function oauthTokenResponse(
+  issued: Awaited<ReturnType<AccountService["exchangeAuthorizationCode"]>>,
+) {
+  return {
+    protocol_version: PROTOCOL_VERSION,
+    token_type: issued.token_type,
+    account_id: issued.account_id,
+    device_id: issued.device_id,
+    device_generation: issued.device_generation,
+    next_snapshot_sequence: issued.next_snapshot_sequence,
+    next_usage_sequence: issued.next_usage_sequence,
+    usage_deleted_before: issued.usage_deleted_before,
+    usage_sync_revision: issued.usage_sync_revision,
+    account_session: {
+      access_token: issued.account_access_token,
+      access_expires_at: issued.account_access_expires_at,
+      refresh_token: issued.account_refresh_token,
+      refresh_expires_at: issued.account_refresh_expires_at,
+    },
+    device_session: {
+      access_token: issued.device_access_token,
+      access_expires_at: issued.device_access_expires_at,
+      refresh_token: issued.device_refresh_token,
+      refresh_expires_at: issued.device_refresh_expires_at,
+    },
+  };
+}
+
+function sessionToken(value: {
+  access_token: string;
+  refresh_token: string;
+  access_expires_at: string;
+  refresh_expires_at: string;
+}) {
+  return {
+    access_token: value.access_token,
+    access_expires_at: value.access_expires_at,
+    refresh_token: value.refresh_token,
+    refresh_expires_at: value.refresh_expires_at,
+  };
+}
+
+async function parseJSON<Output>(
   context: Context,
   schema: StrictSchema<Output>,
 ): Promise<Output | Response> {
-  let value: unknown;
+  const raw = await parseRawJSON(context);
+  if (raw instanceof Response) {
+    return raw;
+  }
+  const parsed = schema.safeParse(raw);
+  return parsed.success ? parsed.data : invalidRequest(context);
+}
+
+async function parseRawJSON(context: Context): Promise<unknown | Response> {
   try {
-    const text = await context.req.text();
-    value = JSON.parse(text);
+    return JSON.parse(await context.req.text());
   } catch {
-    return relayError(context, 400, "invalid_request", "The request body must be valid JSON.");
+    return invalidRequest(context);
   }
-  const parsed = schema.safeParse(value);
-  if (!parsed.success) {
-    return relayError(context, 400, "invalid_request", "The request body is invalid.");
-  }
-  return parsed.data;
+}
+
+function hasOnlyQueryKeys(context: Context, allowed: readonly string[]): boolean {
+  const keys = [...new URL(context.req.url).searchParams.keys()];
+  return new Set(keys).size === keys.length && keys.every((key) => allowed.includes(key));
+}
+
+function anonymousClientSubject(context: Context): string {
+  return context.req.header("CF-Connecting-IP") ?? "managed-global";
 }
 
 function requestBodyTooLarge(context: Context): Response {
-  return relayError(context, 413, "invalid_request", "The request body exceeds the 64 KiB limit.");
+  return relayError(context, 413, "invalid_request", "The request body exceeds the route limit.");
+}
+
+function invalidRequest(context: Context): Response {
+  return relayError(context, 400, "invalid_request", "The request is invalid.");
+}
+
+function resultLimit(context: Context): Response {
+  return relayError(
+    context,
+    413,
+    "invalid_request",
+    "The requested result exceeds the route limit.",
+  );
 }
 
 function unauthorized(context: Context): Response {
@@ -560,16 +1071,33 @@ function unauthorized(context: Context): Response {
   return relayError(context, 401, "unauthorized", "A valid bearer token is required.");
 }
 
+function forbidden(context: Context): Response {
+  return relayError(context, 403, "forbidden", "The principal lacks the required scope.");
+}
+
+function notFound(context: Context): Response {
+  return relayError(context, 404, "not_found", "The requested resource was not found.");
+}
+
+function accountFlowError(context: Context, error: unknown): Response {
+  if (error instanceof AccountFlowError) {
+    const code =
+      error.code === "invalid_client" || error.code === "invalid_request"
+        ? "invalid_request"
+        : error.code === "expired_token"
+          ? "expired_token"
+          : "invalid_grant";
+    return relayError(context, 400, code, "The account request could not be completed.");
+  }
+  return relayError(context, 502, "internal_error", "Identity verification is unavailable.");
+}
+
 function relayError(
   context: Context,
-  status: 400 | 401 | 403 | 404 | 409 | 410 | 413 | 429 | 500,
+  status: 400 | 401 | 403 | 404 | 409 | 413 | 429 | 500 | 502,
   code: RelayErrorCode,
   message: string,
 ): Response {
   const body: RelayErrorEnvelope = { error: { code, message } };
   return context.json(body, status);
-}
-
-function normalizeUserCode(value: string): string {
-  return value.trim().toUpperCase();
 }

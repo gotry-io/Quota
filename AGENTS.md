@@ -15,8 +15,7 @@ Read the relevant source before changing that area:
 | Provider registration catalog (ids, defaults, config) | `packages/provider/src/catalog.ts` |
 | Codex, Claude Code, Grok, and OpenRouter collection strategies | `docs/provider-collection.md` |
 | Persistent Relay storage decision and rationale | `docs/decisions/0001-persistent-relay-storage.md` |
-| Relay pairing, code control, and credential issuance | `docs/decisions/0002-relay-device-code-pairing.md` |
-| Anonymous Relay owner lifecycle | `docs/decisions/0004-anonymous-relay-owners.md` |
+| Managed account, device, authentication, deletion, and Usage boundary | `docs/decisions/0006-managed-account-device-usage.md` |
 | Website visual tokens and marketing UI | `apps/web/DESIGN.md` |
 | QuotaBar menu-panel visual tokens and UI behavior | `apps/menubar/DESIGN.md` |
 | App-specific usage | The corresponding `apps/*/README.md` |
@@ -30,8 +29,8 @@ Do not create a second description of a canonical rule. Update its source and li
 - Follow the dependency graph and runtime restrictions in `docs/architecture.md`.
 - Preserve documented protocol and platform interfaces that intentionally reserve future behavior.
   Confirm that scaffolding is stale before removing it.
-- Keep the website and self-hosted Relay artifacts separate even when the managed deployment serves
-  both from one hostname.
+- Keep the website source and managed Relay source as separate app boundaries even though production
+  serves both from one hostname.
 
 ## Change requirements
 
@@ -112,12 +111,13 @@ SQLite files, logs, or local credentials.
   cases.
 - Protocol change: run protocol, model, provider, Relay, and Swift decoding tests. After catalog id
   changes, run `pnpm generate:provider-catalog` before type check and Swift tests.
-- Relay change: run Vitest, Bun SQLite tests, and the Cloudflare dry-run build.
-- QuotaBar Relay owner-path change: on macOS, run `pnpm test:relay:e2e` in addition to the
-  affected Swift and Relay tests.
+- Relay change: run Vitest, local D1 migration verification, and the Cloudflare dry-run build.
+- QuotaBar account-path change: on macOS, run affected Swift and Relay tests plus the signed-helper
+  integration tests available in the app package.
 - Web change: run its type check and production build; inspect desktop and mobile rendering when
   browser tooling is available.
-- Deployment change: validate Compose and build the complete Relay image.
+- Deployment change: validate the Cloudflare workflow and the complete Worker + Static Assets
+  dry-run build.
 - Cross-cutting change: run the full root format, check, test, and build sequence.
 
 If platform-specific verification cannot run, report exactly what was skipped and why.

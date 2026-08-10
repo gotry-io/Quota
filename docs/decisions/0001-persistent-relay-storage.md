@@ -1,34 +1,39 @@
-# ADR 0001: Persistent Relay storage
+# ADR 0001: Persistent managed Relay storage
 
-- Status: accepted
-- Date: 2026-08-02
+- Status: Accepted (revised 2026-08-10)
+- Related: [ADR 0006](./0006-managed-account-device-usage.md)
+
+## Context
+
+QuotaRelay must preserve account identity, device lifecycle controls, token hashes, normalized quota
+observations, sparse hourly Usage facts, coverage, idempotency receipts, pricing metadata, and bounded
+rate-limit counters across Worker restarts. Lifecycle operations must update related rows
+transactionally. Provider credentials and raw agent logs are outside this storage boundary.
+
+The current product has one managed Cloudflare deployment. The former self-hosted SQLite runtime was
+an unreleased parallel implementation and added schema, security, test, and deployment complexity
+without serving the accepted product boundary.
 
 ## Decision
 
-QuotaRelay has no stateless production mode.
+Cloudflare D1 is QuotaRelay's only persistent store. Runtime-neutral account and Usage services
+depend on narrow state contracts; the D1 adapters implement those contracts without leaking SQL or
+Cloudflare bindings into domain code.
 
-- The gotry-managed Cloudflare deployment uses D1 as its source of truth.
-- Self-hosted deployments use an embedded SQLite database by default.
-- Durable Objects are not part of v1. They may later coordinate Cloudflare WebSocket connections if
-  polling proves insufficient, but never replace D1 business data.
-- R2 is not part of the core request path.
+Every schema change is an explicit ordered migration. The account/Usage v2 cutover is destructive
+for unreleased owner/pairing data and does not add a dual-read or migration compatibility path.
 
-## Rationale
+The checked-in pricing catalog is canonical application data. Calculated Usage cost is derived at
+read time and is not persisted as an authoritative invoice value.
 
-Owners, devices, pairing sessions, revocations, capability credentials, and current quota
-snapshots are small, structured, mutable records with relational constraints. SQL provides indexes,
-unique constraints, joins, and transactional device lifecycle operations. D1 and SQLite also allow
-the managed and self-hosted runtimes to share one logical schema. Owners are anonymous
-authorization boundaries as defined in
-[`0004-anonymous-relay-owners.md`](0004-anonymous-relay-owners.md), not user identities.
-
-R2 is object storage. Using it for core state would require application-managed indexes, relations,
-and multi-object concurrency control.
+R2 is not used. Normalized rows fit relational access patterns and current retention needs. If
+future measurements require large exports or immutable archives, that storage boundary needs a new
+decision.
 
 ## Consequences
 
-- Every production deployment must configure persistent storage.
-- A self-hosted Relay must mount its SQLite data directory to durable storage.
-- Revocation and last-known snapshots survive process restarts.
-- R2 may be added later for large exports, diagnostics, or cold historical data without changing the
-  primary state model.
+- Production persistence, local migration verification, and lifecycle transactions use one schema.
+- Relay domain tests can use in-memory state implementations, while deployment verification uses a
+  Wrangler dry run and local D1 migrations.
+- There is no SQLite dependency, container image, Compose configuration, or self-hosted executable.
+- Backups, retention, and deployment remain managed Cloudflare operational concerns.

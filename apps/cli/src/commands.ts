@@ -1,3 +1,4 @@
+import { parseArgs } from "node:util";
 import {
   PROVIDER_IDS,
   type ProviderId,
@@ -11,8 +12,17 @@ import {
   PROVIDER_CATALOG,
 } from "@gotry-io/quota-provider";
 import packageMetadata from "../package.json" with { type: "json" };
+import {
+  accountUsage,
+  runAuthCommand,
+  runLoginCommand,
+  runLogoutCommand,
+} from "./account/commands.ts";
+import { runAccountCommand } from "./account/read.ts";
+import { AccountStateStore } from "./account/state.ts";
+import { runSyncCommand } from "./account/sync.ts";
+import { cliParseError } from "./arguments.ts";
 import { configUsage, runConfigCommand } from "./config/commands.ts";
-import { runDoctorCommand, runRelayCommand } from "./relay/commands.ts";
 import { renderJson, renderText } from "./render.ts";
 
 export const QUOTA_CLI_VERSION = packageMetadata.version;
@@ -74,8 +84,20 @@ export async function runCli(
       }
       return await runDoctorCommand(output);
 
-    case "relay":
-      return await runRelayCommand(args.slice(1), output);
+    case "login":
+      return await runLoginCommand(args.slice(1), output);
+
+    case "logout":
+      return await runLogoutCommand(args.slice(1), output);
+
+    case "auth":
+      return await runAuthCommand(args.slice(1), output);
+
+    case "sync":
+      return await runSyncCommand(args.slice(1), output);
+
+    case "account":
+      return await runAccountCommand(args.slice(1), output);
 
     case "config":
       return await runConfigCommand(args.slice(1), output);
@@ -89,6 +111,35 @@ export async function runCli(
     default:
       output.stderr(`Unknown command: ${command}\n\n${usage()}`);
       return 2;
+  }
+}
+
+async function runDoctorCommand(output: CliOutput): Promise<number> {
+  try {
+    const [diagnostics, session] = await Promise.all([
+      diagnoseProviderSessions({ probeKeychain: true }),
+      new AccountStateStore().loadSession(),
+    ]);
+    output.stdout(`CLI version: ${QUOTA_CLI_VERSION}`);
+    output.stdout("Providers:");
+    if (diagnostics.length === 0) output.stdout("  none");
+    for (const diagnostic of diagnostics) {
+      output.stdout(
+        `  ${diagnostic.provider}\t${diagnostic.available ? "found" : "missing"}\t${diagnostic.credential_source}`,
+      );
+    }
+    output.stdout("Quota account:");
+    output.stdout(
+      `  Status: ${session === null ? "signed out" : session.status === "active" ? "signed in" : "logout pending"}`,
+    );
+    if (session?.status === "active") output.stdout(`  Device ID: ${session.device_id}`);
+    output.stdout(
+      `  Recurring sync: ${process.platform === "darwin" ? "QuotaBar while running" : "external scheduler required"}`,
+    );
+    return diagnostics.some((diagnostic) => diagnostic.available) ? 0 : 1;
+  } catch {
+    output.stderr("QuotaCLI could not complete local diagnostics.");
+    return 1;
   }
 }
 
@@ -178,50 +229,36 @@ function parseStatusArgs(
   args: readonly string[],
   isTty: boolean,
 ): ParsedStatusArgs | ParsedStatusArgsError {
+  let values: { provider?: string; format?: string; pretty?: boolean };
+  try {
+    values = parseArgs({
+      args: [...args],
+      options: {
+        provider: { type: "string" },
+        format: { type: "string" },
+        pretty: { type: "boolean" },
+      },
+      strict: true,
+      allowPositionals: false,
+    }).values;
+  } catch (error) {
+    return { ok: false, error: cliParseError(error) };
+  }
   let provider: "auto" | "all" | ProviderId[] = "auto";
-  let format: "text" | "json" | undefined;
-  let pretty = false;
-
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
-    if (arg === undefined) {
-      continue;
-    }
-    if (arg === "--pretty") {
-      pretty = true;
-      continue;
-    }
-    if (arg === "--provider" || arg.startsWith("--provider=")) {
-      const value = arg === "--provider" ? args[++index] : arg.slice("--provider=".length);
-      if (!value) {
-        return { ok: false, error: "Missing value for --provider." };
-      }
-      const resolved = parseProviderOption(value);
-      if (!resolved.ok) {
-        return resolved;
-      }
-      provider = resolved.providers;
-      continue;
-    }
-    if (arg === "--format" || arg.startsWith("--format=")) {
-      const value = arg === "--format" ? args[++index] : arg.slice("--format=".length);
-      if (!value) {
-        return { ok: false, error: "Missing value for --format." };
-      }
-      if (value !== "text" && value !== "json") {
-        return { ok: false, error: `Invalid --format value: ${value}` };
-      }
-      format = value;
-      continue;
-    }
-    return { ok: false, error: `Unknown option: ${arg}` };
+  if (values.provider !== undefined) {
+    const resolved = parseProviderOption(values.provider);
+    if (!resolved.ok) return resolved;
+    provider = resolved.providers;
+  }
+  if (values.format !== undefined && values.format !== "text" && values.format !== "json") {
+    return { ok: false, error: `Invalid --format value: ${values.format}` };
   }
 
   return {
     ok: true,
     providers: provider,
-    format: format ?? (isTty ? "text" : "json"),
-    pretty,
+    format: values.format ?? (isTty ? "text" : "json"),
+    pretty: values.pretty ?? false,
   };
 }
 
@@ -272,9 +309,11 @@ Usage:
   quotacli version
   quotacli status [--provider ${providerChoiceList()}] [--format text|json] [--pretty]
   quotacli doctor
-  quotacli relay pair [--relay <url>]
-  quotacli relay push
-  quotacli relay unpair
+  quotacli login [--device-auth] [--format text|json] [--pretty]
+  quotacli logout [--format text|json] [--pretty]
+  quotacli auth status [--format text|json] [--pretty]
+  quotacli sync [--format json] [--pretty]
+  quotacli account summary [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--cost-mode calculate|auto|reported]
   quotacli config set <provider> [--base-url <url>]
   quotacli config get <provider>
   quotacli config unset <provider>
@@ -285,16 +324,17 @@ Defaults:
   --provider configured providers discovered from local credentials
   --format text when attached to a terminal, otherwise json
 
-relay pair stores a device credential and uploads one snapshot immediately.
-relay push collects local quota and uploads one snapshot to the paired Relay.
 status collects and renders local provider quota.
-doctor summarizes local provider readiness and Relay pairing state without collection.
+sync collects locally and uploads only while signed in to the managed Quota account.
+doctor summarizes local provider and Quota account readiness without collection.
 config stores API-key providers (openrouter, deepseek, kimi, litellm) in ~/.config/quotacli/providers.json (owner-only).
 
 Exit codes for status:
   0  every requested provider returned at least one fresh snapshot
   1  no configured provider, or collection completed with a provider/session failure
   2  invalid CLI arguments
+
+${accountUsage()}
 
 ${configUsage()}`;
 }

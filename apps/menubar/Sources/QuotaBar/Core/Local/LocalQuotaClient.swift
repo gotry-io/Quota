@@ -1,9 +1,9 @@
 import Darwin
 import Foundation
 
-enum LocalQuotaClientError: LocalizedError {
+enum LocalQuotaClientError: LocalizedError, Equatable {
   case helperMissing
-  case launchFailed
+  case commandFailed
   case invalidOutput
   case outputTooLarge
   case timedOut
@@ -12,54 +12,54 @@ enum LocalQuotaClientError: LocalizedError {
     switch self {
     case .helperMissing:
       "The bundled QuotaCLI helper is missing. Reinstall QuotaBar."
-    case .launchFailed:
-      "QuotaCLI could not collect local provider quota."
+    case .commandFailed:
+      "QuotaCLI could not complete the request."
     case .invalidOutput:
       "QuotaCLI returned data that QuotaBar could not read."
     case .outputTooLarge:
       "QuotaCLI returned more data than QuotaBar can safely read."
     case .timedOut:
-      "QuotaCLI took too long to collect local provider quota."
+      "QuotaCLI took too long to complete the request."
     }
   }
 }
 
-protocol LocalQuotaCollecting: Sendable {
-  func collect() async throws -> QuotaCollectionReport
+protocol LocalQuotaServing: Sendable {
+  func sync() async throws -> CLIAccountSyncOutput
+  func login() async throws -> CLIAccountAuthOutput
+  func logout() async throws -> CLIAccountAuthOutput
+  func accountSummary() async throws -> AccountSummary
 }
 
-protocol RelaySnapshotPushing: Sendable {
-  var hasRelayCredential: Bool { get }
-  func push() async throws
-}
-
-struct LocalQuotaClient: LocalQuotaCollecting, RelaySnapshotPushing {
-  private static let defaultTimeout: Duration = .seconds(60)
+struct LocalQuotaClient: LocalQuotaServing {
+  private static let defaultCommandTimeout: Duration = .seconds(60)
+  private static let defaultLoginTimeout: Duration = .seconds(600)
   private static let defaultMaximumOutputBytes = 1_048_576
   private static let defaultTerminationGracePeriod: Duration = .milliseconds(250)
 
   private let executableURL: URL
-  private let relayCredentialURL: URL
-  private let timeout: Duration
+  private let commandTimeout: Duration
+  private let loginTimeout: Duration
   private let maximumOutputBytes: Int
   private let terminationGracePeriod: Duration
 
   init(
     executableURL: URL? = nil,
-    relayCredentialURL: URL? = nil,
     bundle: Bundle = .main,
-    timeout: Duration = LocalQuotaClient.defaultTimeout,
+    commandTimeout: Duration = LocalQuotaClient.defaultCommandTimeout,
+    loginTimeout: Duration = LocalQuotaClient.defaultLoginTimeout,
     maximumOutputBytes: Int = LocalQuotaClient.defaultMaximumOutputBytes,
     terminationGracePeriod: Duration = LocalQuotaClient.defaultTerminationGracePeriod
   ) throws {
-    precondition(timeout > .zero)
+    precondition(commandTimeout > .zero)
+    precondition(loginTimeout > .zero)
     precondition(maximumOutputBytes > 0)
     precondition(terminationGracePeriod >= .zero)
 
-    self.timeout = timeout
+    self.commandTimeout = commandTimeout
+    self.loginTimeout = loginTimeout
     self.maximumOutputBytes = maximumOutputBytes
     self.terminationGracePeriod = terminationGracePeriod
-    self.relayCredentialURL = relayCredentialURL ?? Self.defaultRelayCredentialURL()
 
     if let executableURL {
       self.executableURL = executableURL
@@ -76,58 +76,55 @@ struct LocalQuotaClient: LocalQuotaCollecting, RelaySnapshotPushing {
     self.executableURL = helperURL
   }
 
-  var hasRelayCredential: Bool {
-    FileManager.default.fileExists(atPath: relayCredentialURL.path)
-  }
-
-  func collect() async throws -> QuotaCollectionReport {
-    let result = try await run(
-      arguments: ["status", "--provider", "all", "--format", "json"],
+  func sync() async throws -> CLIAccountSyncOutput {
+    try await decode(
+      CLIAccountSyncOutput.self,
+      arguments: ["sync", "--format", "json"],
+      timeout: commandTimeout,
+      acceptedExitCodes: [0, 1]
     )
+  }
 
-    guard result.exitedNormally, result.status == 0 || result.status == 1 else {
-      throw LocalQuotaClientError.launchFailed
-    }
+  func login() async throws -> CLIAccountAuthOutput {
+    let output = try await decode(
+      CLIAccountAuthOutput.self,
+      arguments: ["login", "--format", "json"],
+      timeout: loginTimeout,
+      acceptedExitCodes: [0]
+    )
+    guard output.status == .signedIn else { throw LocalQuotaClientError.invalidOutput }
+    return output
+  }
 
+  func logout() async throws -> CLIAccountAuthOutput {
+    let output = try await decode(
+      CLIAccountAuthOutput.self,
+      arguments: ["logout", "--format", "json"],
+      timeout: commandTimeout,
+      acceptedExitCodes: [0]
+    )
+    guard output.status == .signedOut else { throw LocalQuotaClientError.invalidOutput }
+    return output
+  }
+
+  func accountSummary() async throws -> AccountSummary {
+    try await decode(
+      AccountSummary.self,
+      arguments: ["account", "summary", "--format", "json"],
+      timeout: commandTimeout,
+      acceptedExitCodes: [0]
+    )
+  }
+
+  private func decode<Output: Decodable>(
+    _ type: Output.Type,
+    arguments: [String],
+    timeout: Duration,
+    acceptedExitCodes: Set<Int32>
+  ) async throws -> Output {
+    let result: BoundedProcessResult
     do {
-      let report = try QuotaWireCodec.makeDecoder().decode(
-        QuotaCollectionReport.self,
-        from: result.standardOutput
-      )
-      guard report.schemaVersion == 1 else {
-        throw LocalQuotaClientError.invalidOutput
-      }
-      return report
-    } catch let error as LocalQuotaClientError {
-      throw error
-    } catch {
-      throw LocalQuotaClientError.invalidOutput
-    }
-  }
-
-  func push() async throws {
-    let result = try await run(arguments: ["relay", "push"])
-
-    guard result.exitedNormally, result.status == 0 || result.status == 1 else {
-      throw LocalQuotaClientError.launchFailed
-    }
-  }
-
-  private static func defaultRelayCredentialURL() -> URL {
-    if let xdg = ProcessInfo.processInfo.environment["XDG_CONFIG_HOME"], !xdg.isEmpty {
-      return URL(fileURLWithPath: xdg, isDirectory: true)
-        .appendingPathComponent("quotacli", isDirectory: true)
-        .appendingPathComponent("device.json", isDirectory: false)
-    }
-    return FileManager.default.homeDirectoryForCurrentUser
-      .appendingPathComponent(".config", isDirectory: true)
-      .appendingPathComponent("quotacli", isDirectory: true)
-      .appendingPathComponent("device.json", isDirectory: false)
-  }
-
-  private func run(arguments: [String]) async throws -> BoundedProcessResult {
-    do {
-      return try await BoundedProcessExecution(
+      result = try await BoundedProcessExecution(
         executableURL: executableURL,
         arguments: arguments,
         timeout: timeout,
@@ -141,7 +138,16 @@ struct LocalQuotaClient: LocalQuotaCollecting, RelaySnapshotPushing {
     } catch is CancellationError {
       throw CancellationError()
     } catch {
-      throw LocalQuotaClientError.launchFailed
+      throw LocalQuotaClientError.commandFailed
+    }
+
+    guard result.exitedNormally, acceptedExitCodes.contains(result.status) else {
+      throw LocalQuotaClientError.commandFailed
+    }
+    do {
+      return try QuotaWireCodec.makeDecoder().decode(type, from: result.standardOutput)
+    } catch {
+      throw LocalQuotaClientError.invalidOutput
     }
   }
 }

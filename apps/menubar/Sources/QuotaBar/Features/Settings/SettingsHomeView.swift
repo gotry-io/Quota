@@ -2,16 +2,28 @@ import AppKit
 import SwiftUI
 
 struct SettingsHomeView: View {
-  let model: MenuBarViewModel
+  @Bindable var model: MenuBarViewModel
   let onOpenAgents: () -> Void
-  let onOpenRemoteDevices: () -> Void
-  var deleteAllErrorMessage: String? = nil
+  let onOpenDevices: () -> Void
+  let onOpenUsage: () -> Void
 
   @State private var launchAtLoginEnabled = LaunchAtLoginController.isEnabled
 
   var body: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: QuotaDesign.Spacing.md) {
+        accountSection
+
+        SettingsSection(title: "Usage") {
+          settingsDestinationRow(
+            title: "This Mac",
+            systemImage: "chart.bar.xaxis",
+            trailing: usageSummary,
+            accessibilityLabel: "Usage",
+            action: onOpenUsage
+          )
+        }
+
         SettingsSection(title: "General") {
           settingsToggleRow(
             title: "Launch at Login",
@@ -28,23 +40,24 @@ struct SettingsHomeView: View {
           )
         }
 
-        SettingsSection(title: "Sources") {
-          VStack(alignment: .leading, spacing: 0) {
-            settingsDestinationRow(
-              title: "Agents",
-              systemImage: "cpu",
-              trailing: agentsSummary,
-              accessibilityLabel: "Agents",
-              action: onOpenAgents
-            )
-            settingsDestinationRow(
-              title: "Devices",
-              systemImage: "laptopcomputer.and.iphone",
-              trailing: deviceSummary,
-              accessibilityLabel: "Remote Devices",
-              action: onOpenRemoteDevices
-            )
-          }
+        SettingsSection(title: "Account Data") {
+          settingsDestinationRow(
+            title: "Devices",
+            systemImage: "laptopcomputer.and.iphone",
+            trailing: model.accountDeviceSummary,
+            accessibilityLabel: "Devices",
+            action: onOpenDevices
+          )
+        }
+
+        SettingsSection(title: "Local Providers") {
+          settingsDestinationRow(
+            title: "Agents",
+            systemImage: "cpu",
+            trailing: agentsSummary,
+            accessibilityLabel: "Agents",
+            action: onOpenAgents
+          )
         }
 
         SettingsSection(title: "About") {
@@ -65,37 +78,121 @@ struct SettingsHomeView: View {
               url: AppMetadata.feedbackURL
             )
           }
-
-          if let deleteAllErrorMessage {
-            Label(deleteAllErrorMessage, systemImage: "exclamationmark.circle")
-              .quotaMetaStyle()
-              .fixedSize(horizontal: false, vertical: true)
-              .padding(.top, QuotaDesign.Spacing.xs)
-              .padding(.horizontal, QuotaDesign.Layout.groupContentInset)
-              .padding(.bottom, QuotaDesign.Layout.groupContentInset)
-          }
         }
       }
       .frame(maxWidth: .infinity, alignment: .topLeading)
       .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
       .padding(.vertical, QuotaDesign.Layout.pageVerticalPadding)
     }
-    .onAppear {
-      launchAtLoginEnabled = LaunchAtLoginController.isEnabled
+    .onAppear { launchAtLoginEnabled = LaunchAtLoginController.isEnabled }
+  }
+
+  @ViewBuilder
+  private var accountSection: some View {
+    SettingsSection(title: "Account") {
+      VStack(alignment: .leading, spacing: 0) {
+        switch model.accountState {
+        case .signedIn:
+          SettingsListRow(
+            title: model.accountDisplayLabel,
+            subtitle: "Signed in with GitHub",
+            systemImage: "person.crop.circle.fill",
+            height: QuotaDesign.Layout.settingsListRowHeight
+          ) {
+            Text("Connected")
+              .quotaListSecondaryStyle()
+          }
+
+          Button {
+            Task { await model.logout() }
+          } label: {
+            SettingsListRow(title: "Log Out", systemImage: "rectangle.portrait.and.arrow.right") {
+              if model.isLoggingOut {
+                ProgressView().controlSize(.small)
+              }
+            }
+          }
+          .buttonStyle(QuotaListRowButtonStyle())
+          .disabled(model.isLoggingOut)
+          .accessibilityLabel(model.isLoggingOut ? "Logging out" : "Log Out")
+
+        case .logoutPending:
+          accountAction(
+            message: "Logout is pending and will finish when this Mac is online.",
+            title: model.isLoggingOut ? "Retrying…" : "Retry Logout",
+            isEnabled: !model.isLoggingOut
+          ) {
+            Task { await model.logout() }
+          }
+
+        case .notChecked, .signedOut:
+          if model.isLoggingIn {
+            accountAction(
+              message: "Finish signing in with GitHub in your browser.",
+              title: "Cancel",
+              action: model.cancelLogin
+            )
+          } else {
+            accountAction(
+              message: signedOutMessage,
+              title: "Continue with GitHub",
+              action: model.startLogin
+            )
+          }
+        }
+
+        if let accountErrorMessage = model.accountErrorMessage {
+          Label(accountErrorMessage, systemImage: "exclamationmark.circle")
+            .quotaMetaStyle()
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, QuotaDesign.Layout.groupContentInset)
+            .padding(.bottom, QuotaDesign.Layout.groupContentInset)
+        }
+      }
     }
   }
 
-  private var deviceSummary: String {
-    model.relayStateModel.remoteDeviceSummary
+  private var signedOutMessage: String {
+    switch model.syncReason {
+    case .deviceDeleted:
+      "This device was removed. Sign in again to reconnect it."
+    case .staleGeneration, .unauthorized:
+      "The account session ended. Sign in again to continue syncing."
+    case nil:
+      "Sync quota and Usage across your devices."
+    }
+  }
+
+  private var usageSummary: String {
+    guard let report = model.localUsage, report.status != .unavailable,
+      let totals = report.totals
+    else { return "Unavailable" }
+    return "\(UsageValueFormatter.count(totals.inputTokens + totals.outputTokens)) tokens"
   }
 
   private var agentsSummary: String {
     let visible = ProviderID.allCases.filter { ProviderVisibility.isVisible($0) }.count
     let total = ProviderID.allCases.count
-    if visible == total {
-      return "\(total)"
+    return visible == total ? "\(total)" : "\(visible)/\(total)"
+  }
+
+  private func accountAction(
+    message: String,
+    title: String,
+    isEnabled: Bool = true,
+    action: @escaping () -> Void
+  ) -> some View {
+    VStack(alignment: .leading, spacing: QuotaDesign.Spacing.sm) {
+      Text(message)
+        .quotaSecondaryStyle()
+        .fixedSize(horizontal: false, vertical: true)
+
+      Button(title, action: action)
+        .buttonStyle(QuotaPrimaryButtonStyle())
+        .disabled(!isEnabled)
     }
-    return "\(visible)/\(total)"
+    .padding(QuotaDesign.Layout.groupContentInset)
+    .frame(maxWidth: .infinity, alignment: .leading)
   }
 
   private func settingsToggleRow(

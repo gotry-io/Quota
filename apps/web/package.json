@@ -12,6 +12,7 @@
     "preview": "vite preview"
   },
   "devDependencies": {
+    "@gotry-io/quota-protocol": "workspace:*",
     "vite": "8.2.0"
   }
 }

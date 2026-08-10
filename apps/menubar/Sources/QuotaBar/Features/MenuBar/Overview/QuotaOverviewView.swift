@@ -21,7 +21,7 @@ struct QuotaOverviewView: View {
       OverviewEmptyStateView(
         systemImage: "gauge.with.dots.needle.50percent",
         title: "Reading Quota",
-        message: "Checking local and remote quota."
+        message: "Checking local and account device quota."
       )
     case .unavailable(let message):
       OverviewEmptyStateView(
@@ -40,7 +40,7 @@ struct QuotaOverviewView: View {
         OverviewEmptyStateView(
           systemImage: "eye.slash",
           title: "No Quota to Show",
-          message: "Sign in to a provider CLI, pair a remote device, or enable an agent in Settings.",
+          message: "Sign in to a provider CLI or enable an agent in Settings.",
           actionTitle: "Open Settings",
           action: onOpenSettings
         )

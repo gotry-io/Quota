@@ -19,7 +19,7 @@ const { collectQuotaReport, diagnoseProviderSessions } = vi.hoisted(() => ({
         options.onProviderProgress?.(provider, "done");
       }
       return {
-        schema_version: 1 as const,
+        protocol_version: 2 as const,
         captured_at: "2026-08-02T12:00:00Z",
         results: providers.map((provider, index) => {
           if (provider === "claude") {
@@ -130,7 +130,7 @@ describe("QuotaCLI", () => {
 
     expect(code).toBe(1);
     const payload = JSON.parse(capture.stdout.join(""));
-    expect(payload.schema_version).toBe(1);
+    expect(payload.protocol_version).toBe(2);
     expect(payload.results.map((result: { provider: string }) => result.provider)).toEqual([
       "codex",
       "claude",
@@ -258,9 +258,11 @@ describe("QuotaCLI", () => {
     const text = capture.stdout.join("\n");
     expect(text).toContain("quotacli status [--provider");
     expect(text).toContain("quotacli doctor");
-    expect(text).toContain("quotacli relay pair");
-    expect(text).toContain("quotacli relay push");
-    expect(text).toContain("quotacli relay unpair");
+    expect(text).toContain("quotacli login");
+    expect(text).toContain("quotacli logout");
+    expect(text).toContain("quotacli sync");
+    expect(text).toContain("quotacli account summary");
+    expect(text).not.toContain("quotacli relay");
     expect(text).not.toContain("quotacli edge");
     expect(text).not.toContain("quotacli quota");
     expect(text).not.toContain("quotacli providers");
@@ -286,20 +288,11 @@ describe("QuotaCLI", () => {
     expect(diagnoseProviderSessions).not.toHaveBeenCalled();
   });
 
-  it("routes relay help without starting pairing", async () => {
+  it("rejects the removed relay command", async () => {
     const capture = captureOutput();
     const code = await runCli(["relay", "--help"], capture.output);
-    expect(code).toBe(0);
-    expect(capture.stdout.join("\n")).toContain("quotacli relay pair");
-    expect(capture.stdout.join("\n")).toContain("quotacli relay push");
-    expect(capture.stderr).toHaveLength(0);
-  });
-
-  it("routes unknown relay commands to a relay usage error", async () => {
-    const capture = captureOutput();
-    const code = await runCli(["relay", "unknown"], capture.output);
     expect(code).toBe(2);
-    expect(capture.stderr.join("\n")).toContain("Unknown relay command");
+    expect(capture.stderr.join("\n")).toContain("Unknown command: relay");
   });
 
   it("rejects removed top-level commands", async () => {

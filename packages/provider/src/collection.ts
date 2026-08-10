@@ -67,7 +67,7 @@ export async function collectQuotaReport(
   // Batch assembly time (end of collection), not per-provider data age.
   const capturedAt = frozenNow ?? new Date();
   const report = {
-    schema_version: PROTOCOL_VERSION,
+    protocol_version: PROTOCOL_VERSION,
     captured_at: toIsoOffset(capturedAt),
     results,
   };

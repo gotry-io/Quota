@@ -49,6 +49,7 @@
   "devDependencies": {
     "@gotry-io/quota-model": "workspace:*",
     "@gotry-io/quota-protocol": "workspace:*",
-    "@gotry-io/quota-provider": "workspace:*"
+    "@gotry-io/quota-provider": "workspace:*",
+    "zod": "4.4.3"
   }
 }

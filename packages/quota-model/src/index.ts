@@ -1,4 +1,27 @@
-import type { QuotaSnapshot } from "@gotry-io/quota-protocol";
+import {
+  type BillingAgent,
+  type BillingChannel,
+  type ChannelSource,
+  type ContextBucket,
+  IanaTimezoneSchema,
+  PROTOCOL_VERSION,
+  type PricingCatalog,
+  type PricingCatalogEntry,
+  PricingCatalogSchema,
+  type PricingRates,
+  type QuotaSnapshot,
+  Rfc3339InstantSchema,
+  type UsageCostAssumption,
+  type UsageCostMode,
+  type UsageCostOutcome,
+  UsageCostOutcomeSchema,
+  type UsageHourlyFact,
+  UsageHourlyFactSchema,
+  type UsageTokenTotals,
+  UsageTokenTotalsSchema,
+  type UsageUnpricedItem,
+  type UsageUnpricedReason,
+} from "@gotry-io/quota-protocol";
 
 export function snapshotKey(snapshot: QuotaSnapshot): string {
   return `${snapshot.provider}:${snapshot.account.fingerprint}`;
@@ -9,13 +32,595 @@ export function remainingPercent(usedPercent: number): number {
 }
 
 export function isSnapshotStale(snapshot: QuotaSnapshot, now = new Date()): boolean {
-  if (snapshot.status === "stale") {
-    return true;
+  return (
+    snapshot.status === "stale" ||
+    (snapshot.valid_until !== undefined && Date.parse(snapshot.valid_until) <= now.getTime())
+  );
+}
+
+export interface NormalizedUsageEvent {
+  occurred_at: string;
+  agent: BillingAgent;
+  model: string;
+  billing_channel: BillingChannel;
+  channel_source: ChannelSource;
+  input_tokens: number;
+  cache_read_tokens: number;
+  cache_write_5m_tokens: number;
+  cache_write_1h_tokens: number;
+  cache_write_inferred_tokens: number;
+  output_tokens: number;
+  reasoning_tokens: number;
+  requests: number;
+  context_bucket: ContextBucket;
+  service_tier: string;
+  speed: string;
+  inference_geo: string;
+  billable_tools: Readonly<Partial<Record<"web_search" | "web_fetch", number>>>;
+  source_cost_microusd?: bigint;
+  source_cost_covered_requests: number;
+}
+
+/** Aggregate validated request facts into deterministic sparse local-hour rows. */
+export function aggregateUsageEvents(
+  events: readonly NormalizedUsageEvent[],
+  aggregationTimezone: string,
+): UsageHourlyFact[] {
+  const timezone = IanaTimezoneSchema.parse(aggregationTimezone);
+  const dateParts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    hourCycle: "h23",
+  });
+  const rows = new Map<string, MutableUsageFact>();
+
+  for (const event of events) {
+    const instant = Date.parse(Rfc3339InstantSchema.parse(event.occurred_at));
+    const bucketStart = new Date(Math.floor(instant / 3_600_000) * 3_600_000)
+      .toISOString()
+      .replace(".000Z", "Z");
+    const local = localDateAndHour(dateParts, new Date(instant));
+    const fact = UsageHourlyFactSchema.parse({
+      bucket_start_utc: bucketStart,
+      usage_date: local.date,
+      usage_hour: local.hour,
+      agent: event.agent,
+      billing_channel: event.billing_channel,
+      channel_source: event.channel_source,
+      model: event.model,
+      context_bucket: event.context_bucket,
+      service_tier: event.service_tier,
+      speed: event.speed,
+      inference_geo: event.inference_geo,
+      input_tokens: event.input_tokens,
+      cache_read_tokens: event.cache_read_tokens,
+      cache_write_5m_tokens: event.cache_write_5m_tokens,
+      cache_write_1h_tokens: event.cache_write_1h_tokens,
+      cache_write_inferred_tokens: event.cache_write_inferred_tokens,
+      output_tokens: event.output_tokens,
+      reasoning_tokens: event.reasoning_tokens,
+      requests: event.requests,
+      web_search_requests: event.billable_tools.web_search ?? 0,
+      web_fetch_requests: event.billable_tools.web_fetch ?? 0,
+      ...(event.source_cost_microusd === undefined
+        ? {}
+        : { source_cost_microusd: event.source_cost_microusd.toString() }),
+      source_cost_covered_requests: event.source_cost_covered_requests,
+    });
+    const key = JSON.stringify([
+      fact.bucket_start_utc,
+      fact.usage_date,
+      fact.usage_hour,
+      fact.agent,
+      fact.billing_channel,
+      fact.channel_source,
+      fact.model,
+      fact.context_bucket,
+      fact.service_tier,
+      fact.speed,
+      fact.inference_geo,
+    ]);
+    const existing = rows.get(key);
+    if (existing) {
+      addFact(existing, fact);
+    } else {
+      rows.set(key, mutableFact(fact));
+    }
   }
 
-  if (!snapshot.valid_until) {
+  return [...rows.values()]
+    .sort(compareUsageFacts)
+    .map((row) => UsageHourlyFactSchema.parse(serializedFact(row)));
+}
+
+/** Fold facts without losing token subsets or source-cost coverage. */
+export function foldUsageFacts(rows: readonly UsageHourlyFact[]): UsageTokenTotals {
+  const totals: MutableUsageTotals = {
+    input_tokens: 0,
+    cache_read_tokens: 0,
+    cache_write_5m_tokens: 0,
+    cache_write_1h_tokens: 0,
+    cache_write_inferred_tokens: 0,
+    output_tokens: 0,
+    reasoning_tokens: 0,
+    requests: 0,
+    web_search_requests: 0,
+    web_fetch_requests: 0,
+    source_cost_microusd: 0n,
+    source_cost_covered_requests: 0,
+  };
+  for (const input of rows) {
+    const row = UsageHourlyFactSchema.parse(input);
+    addCounts(totals, row);
+  }
+  return UsageTokenTotalsSchema.parse({
+    ...totals,
+    source_cost_microusd:
+      totals.source_cost_covered_requests === 0 ? null : totals.source_cost_microusd.toString(),
+  });
+}
+
+export type PricingCatalogValidationIssue =
+  | { code: "invalid_schema"; path: string; message: string }
+  | { code: "duplicate_entry_id"; entry_ids: readonly [string, string] }
+  | { code: "ambiguous_entries"; entry_ids: readonly [string, string] };
+
+export type PricingCatalogValidationResult =
+  | { valid: true; catalog: PricingCatalog }
+  | { valid: false; issues: readonly PricingCatalogValidationIssue[] };
+
+/** Validate catalog structure and reject any pair that could resolve the same stored row. */
+export function validatePricingCatalog(input: unknown): PricingCatalogValidationResult {
+  const parsed = PricingCatalogSchema.safeParse(input);
+  if (!parsed.success) {
+    return {
+      valid: false,
+      issues: parsed.error.issues.map((issue) => ({
+        code: "invalid_schema" as const,
+        path: issue.path.join("."),
+        message: issue.message,
+      })),
+    };
+  }
+
+  const issues: PricingCatalogValidationIssue[] = [];
+  const ids = new Set<string>();
+  for (const entry of parsed.data.entries) {
+    if (ids.has(entry.entry_id)) {
+      issues.push({
+        code: "duplicate_entry_id",
+        entry_ids: [entry.entry_id, entry.entry_id],
+      });
+    }
+    ids.add(entry.entry_id);
+  }
+  for (let leftIndex = 0; leftIndex < parsed.data.entries.length; leftIndex += 1) {
+    const left = parsed.data.entries[leftIndex];
+    if (!left) continue;
+    for (let rightIndex = leftIndex + 1; rightIndex < parsed.data.entries.length; rightIndex += 1) {
+      const right = parsed.data.entries[rightIndex];
+      if (right && pricingEntriesAreAmbiguous(left, right)) {
+        issues.push({
+          code: "ambiguous_entries",
+          entry_ids: [left.entry_id, right.entry_id],
+        });
+      }
+    }
+  }
+  return issues.length === 0 ? { valid: true, catalog: parsed.data } : { valid: false, issues };
+}
+
+export type PricingResolution =
+  | {
+      status: "priced";
+      entry: PricingCatalogEntry;
+      assumptions: readonly UsageCostAssumption[];
+    }
+  | { status: "unpriced"; reason: Exclude<UsageUnpricedReason, "invalid_catalog"> };
+
+/** Resolve only an exact channel/model/date/dimension entry or an explicit catalog wildcard. */
+export function resolvePricingEntry(
+  catalog: PricingCatalog,
+  row: UsageHourlyFact,
+): PricingResolution {
+  if (row.billing_channel === "unknown") {
+    return { status: "unpriced", reason: "unknown_channel" };
+  }
+  const byChannel = catalog.entries.filter(
+    (entry) => entry.billing_channel === row.billing_channel,
+  );
+  const byModel = byChannel.filter(
+    (entry) => entry.model === row.model || entry.aliases.includes(row.model),
+  );
+  if (byModel.length === 0) {
+    return { status: "unpriced", reason: "unknown_model" };
+  }
+  const pricingDate = row.bucket_start_utc.slice(0, 10);
+  const byDate = byModel.filter(
+    (entry) =>
+      entry.effective_from <= pricingDate &&
+      (entry.effective_to === null || pricingDate < entry.effective_to),
+  );
+  if (byDate.length === 0) {
+    return { status: "unpriced", reason: "outside_effective_range" };
+  }
+  const matches = byDate
+    .filter(
+      (entry) =>
+        dimensionMatches(entry.service_tier, row.service_tier) &&
+        dimensionMatches(entry.speed, row.speed) &&
+        dimensionMatches(entry.inference_geo, row.inference_geo) &&
+        dimensionMatches(entry.context_bucket, row.context_bucket),
+    )
+    .map((entry) => ({ entry, specificity: pricingSpecificity(entry, row.model) }))
+    .sort((left, right) => right.specificity - left.specificity);
+  if (matches.length === 0) {
+    return { status: "unpriced", reason: "unsupported_dimensions" };
+  }
+  const match = matches[0];
+  if (!match || matches[1]?.specificity === match.specificity) {
+    return { status: "unpriced", reason: "ambiguous_price" };
+  }
+  const entry = match.entry;
+  const assumptions: UsageCostAssumption[] = [];
+  if (entry.model !== row.model) assumptions.push("model_alias");
+  if (entry.service_tier === "*") assumptions.push("wildcard_service_tier");
+  if (entry.speed === "*") assumptions.push("wildcard_speed");
+  if (entry.inference_geo === "*") assumptions.push("wildcard_inference_geo");
+  if (entry.context_bucket === "*") assumptions.push("wildcard_context_bucket");
+  return { status: "priced", entry, assumptions };
+}
+
+/** Calculate each stored row exactly, half-up once per row, then add integer micro-USD. */
+export function calculateUsageCost(
+  inputRows: readonly UsageHourlyFact[],
+  catalogInput: unknown,
+  mode: UsageCostMode = "calculate",
+): UsageCostOutcome {
+  const rows = inputRows.map((row) => UsageHourlyFactSchema.parse(row));
+  const validation = mode === "reported" ? null : validatePricingCatalog(catalogInput);
+  const catalog = validation?.valid === true ? validation.catalog : null;
+  const assumptions = new Set<UsageCostAssumption>();
+  const unpricedCounts = new Map<string, UsageUnpricedItem>();
+  let amount = 0n;
+  let calculatedRows = 0;
+  let reportedRows = 0;
+
+  for (const row of rows) {
+    const calculated =
+      mode === "reported"
+        ? null
+        : catalog === null
+          ? ({ status: "unpriced", reason: "invalid_catalog" } as const)
+          : calculateRowFromCatalog(catalog, row);
+    if (calculated?.status === "priced") {
+      amount += calculated.amount_microusd;
+      calculatedRows += 1;
+      for (const assumption of calculated.assumptions) assumptions.add(assumption);
+      if (row.channel_source === "agent_default") assumptions.add("agent_default_channel");
+      continue;
+    }
+
+    const canUseReported =
+      (mode === "reported" || (mode === "auto" && calculated?.reason !== "invalid_catalog")) &&
+      row.source_cost_microusd !== undefined &&
+      row.source_cost_covered_requests === row.requests;
+    if (canUseReported) {
+      amount += BigInt(row.source_cost_microusd ?? "0");
+      reportedRows += 1;
+      assumptions.add("source_reported");
+      if (row.channel_source === "agent_default") assumptions.add("agent_default_channel");
+      continue;
+    }
+
+    const reason: UsageUnpricedReason =
+      mode === "reported" ? "incomplete_source_cost" : (calculated?.reason ?? "invalid_catalog");
+    const key = `${row.billing_channel}\u0000${row.model}\u0000${reason}`;
+    const existing = unpricedCounts.get(key);
+    if (existing) {
+      existing.rows += 1;
+    } else {
+      unpricedCounts.set(key, {
+        billing_channel: row.billing_channel,
+        model: row.model,
+        reason,
+        rows: 1,
+      });
+    }
+  }
+
+  const unpriced = [...unpricedCounts.values()].sort(compareUnpricedItems);
+  const unpricedRows = rows.length - calculatedRows - reportedRows;
+  return UsageCostOutcomeSchema.parse({
+    mode,
+    basis:
+      calculatedRows > 0 && reportedRows > 0
+        ? "mixed"
+        : calculatedRows > 0
+          ? "calculated"
+          : reportedRows > 0
+            ? "reported"
+            : "none",
+    status:
+      unpricedRows === 0
+        ? "complete"
+        : calculatedRows + reportedRows > 0
+          ? "partial"
+          : "unavailable",
+    amount_microusd: calculatedRows + reportedRows > 0 ? amount.toString() : null,
+    catalog_revision: catalog && mode !== "reported" ? catalog.revision : null,
+    calculated_rows: calculatedRows,
+    reported_rows: reportedRows,
+    unpriced_rows: unpricedRows,
+    assumptions: [...assumptions].sort(),
+    unpriced,
+  });
+}
+
+export type CalculatedUsageRowCost =
+  | {
+      status: "priced";
+      amount_microusd: bigint;
+      assumptions: readonly UsageCostAssumption[];
+      entry_id: string;
+    }
+  | { status: "unpriced"; reason: UsageUnpricedReason };
+
+export function calculateUsageRowCost(
+  catalog: PricingCatalog,
+  input: UsageHourlyFact,
+): CalculatedUsageRowCost {
+  return calculateRowFromCatalog(catalog, UsageHourlyFactSchema.parse(input));
+}
+
+interface MutableUsageTotals {
+  input_tokens: number;
+  cache_read_tokens: number;
+  cache_write_5m_tokens: number;
+  cache_write_1h_tokens: number;
+  cache_write_inferred_tokens: number;
+  output_tokens: number;
+  reasoning_tokens: number;
+  requests: number;
+  web_search_requests: number;
+  web_fetch_requests: number;
+  source_cost_microusd: bigint;
+  source_cost_covered_requests: number;
+}
+
+interface MutableUsageFact
+  extends Omit<UsageHourlyFact, "source_cost_microusd">,
+    MutableUsageTotals {}
+
+function mutableFact(fact: UsageHourlyFact): MutableUsageFact {
+  return {
+    ...fact,
+    source_cost_microusd: BigInt(fact.source_cost_microusd ?? "0"),
+  };
+}
+
+function serializedFact(fact: MutableUsageFact): UsageHourlyFact {
+  const { source_cost_microusd, ...rest } = fact;
+  return {
+    ...rest,
+    ...(fact.source_cost_covered_requests === 0
+      ? {}
+      : { source_cost_microusd: source_cost_microusd.toString() }),
+  };
+}
+
+const COUNT_KEYS = [
+  "input_tokens",
+  "cache_read_tokens",
+  "cache_write_5m_tokens",
+  "cache_write_1h_tokens",
+  "cache_write_inferred_tokens",
+  "output_tokens",
+  "reasoning_tokens",
+  "requests",
+  "web_search_requests",
+  "web_fetch_requests",
+  "source_cost_covered_requests",
+] as const;
+
+function addFact(target: MutableUsageFact, source: UsageHourlyFact): void {
+  addCounts(target, source);
+  UsageHourlyFactSchema.parse(serializedFact(target));
+}
+
+function addCounts(target: MutableUsageTotals, source: UsageHourlyFact): void {
+  for (const key of COUNT_KEYS) {
+    target[key] = addSafeIntegers(target[key], source[key]);
+  }
+  target.source_cost_microusd += BigInt(source.source_cost_microusd ?? "0");
+}
+
+function addSafeIntegers(left: number, right: number): number {
+  const result = left + right;
+  if (!Number.isSafeInteger(result)) {
+    throw new RangeError("Usage count exceeds the JSON safe-integer range.");
+  }
+  return result;
+}
+
+function localDateAndHour(
+  formatter: Intl.DateTimeFormat,
+  instant: Date,
+): { date: string; hour: number } {
+  const parts = Object.fromEntries(
+    formatter
+      .formatToParts(instant)
+      .filter((part) => part.type !== "literal")
+      .map((part) => [part.type, part.value]),
+  );
+  return {
+    date: `${parts.year}-${parts.month}-${parts.day}`,
+    hour: Number(parts.hour),
+  };
+}
+
+function compareUsageFacts(left: MutableUsageFact, right: MutableUsageFact): number {
+  return usageFactSortKey(left).localeCompare(usageFactSortKey(right));
+}
+
+function usageFactSortKey(fact: MutableUsageFact): string {
+  return JSON.stringify([
+    fact.bucket_start_utc,
+    fact.usage_date,
+    fact.usage_hour,
+    fact.agent,
+    fact.billing_channel,
+    fact.channel_source,
+    fact.model,
+    fact.context_bucket,
+    fact.service_tier,
+    fact.speed,
+    fact.inference_geo,
+  ]);
+}
+
+function pricingEntriesAreAmbiguous(
+  left: PricingCatalogEntry,
+  right: PricingCatalogEntry,
+): boolean {
+  if (
+    left.billing_channel !== right.billing_channel ||
+    !rangesOverlap(
+      left.effective_from,
+      left.effective_to,
+      right.effective_from,
+      right.effective_to,
+    ) ||
+    !dimensionsOverlap(left.service_tier, right.service_tier) ||
+    !dimensionsOverlap(left.speed, right.speed) ||
+    !dimensionsOverlap(left.inference_geo, right.inference_geo) ||
+    !dimensionsOverlap(left.context_bucket, right.context_bucket)
+  ) {
     return false;
   }
-
-  return Date.parse(snapshot.valid_until) <= now.getTime();
+  return modelNames(left).some(
+    (model) =>
+      modelNames(right).includes(model) &&
+      pricingSpecificity(left, model) === pricingSpecificity(right, model),
+  );
 }
+
+function modelNames(entry: PricingCatalogEntry): string[] {
+  return [entry.model, ...entry.aliases];
+}
+
+function rangesOverlap(
+  leftFrom: string,
+  leftTo: string | null,
+  rightFrom: string,
+  rightTo: string | null,
+): boolean {
+  return (rightTo === null || leftFrom < rightTo) && (leftTo === null || rightFrom < leftTo);
+}
+
+function dimensionsOverlap(left: string, right: string): boolean {
+  return left === "*" || right === "*" || left === right;
+}
+
+function dimensionMatches(expected: string, actual: string): boolean {
+  return expected === "*" || expected === actual;
+}
+
+function pricingSpecificity(entry: PricingCatalogEntry, model: string): number {
+  return (
+    (entry.model === model ? 16 : 0) +
+    [entry.service_tier, entry.speed, entry.inference_geo, entry.context_bucket].filter(
+      (dimension) => dimension !== "*",
+    ).length
+  );
+}
+
+function calculateRowFromCatalog(
+  catalog: PricingCatalog,
+  row: UsageHourlyFact,
+): CalculatedUsageRowCost {
+  const resolution = resolvePricingEntry(catalog, row);
+  if (resolution.status === "unpriced") return resolution;
+  const classifiedInput =
+    row.cache_read_tokens +
+    row.cache_write_5m_tokens +
+    row.cache_write_1h_tokens +
+    row.cache_write_inferred_tokens;
+  const components: Array<{ count: number; rate: string | null; perRequest?: true }> = [
+    {
+      count: row.input_tokens - classifiedInput,
+      rate: resolution.entry.rates.uncached_input_per_million,
+    },
+    { count: row.cache_read_tokens, rate: resolution.entry.rates.cache_read_per_million },
+    { count: row.cache_write_5m_tokens, rate: resolution.entry.rates.cache_write_5m_per_million },
+    { count: row.cache_write_1h_tokens, rate: resolution.entry.rates.cache_write_1h_per_million },
+    {
+      count: row.cache_write_inferred_tokens,
+      rate: resolution.entry.rates.cache_write_inferred_per_million,
+    },
+    { count: row.output_tokens, rate: resolution.entry.rates.output_per_million },
+    {
+      count: row.web_search_requests,
+      rate: resolution.entry.rates.web_search_per_request,
+      perRequest: true,
+    },
+    {
+      count: row.web_fetch_requests,
+      rate: resolution.entry.rates.web_fetch_per_request,
+      perRequest: true,
+    },
+  ];
+  if (components.some((component) => component.count > 0 && component.rate === null)) {
+    return { status: "unpriced", reason: "missing_rate" };
+  }
+  const assumptions = [...resolution.assumptions];
+  if (row.cache_write_inferred_tokens > 0) assumptions.push("cache_write_inferred_rate");
+  return {
+    status: "priced",
+    amount_microusd: roundDecimalComponents(
+      components
+        .filter(
+          (component): component is { count: number; rate: string; perRequest?: true } =>
+            component.count > 0 && component.rate !== null,
+        )
+        .map((component) => ({
+          count: BigInt(component.count) * (component.perRequest ? 1_000_000n : 1n),
+          rate: component.rate,
+        })),
+    ),
+    assumptions,
+    entry_id: resolution.entry.entry_id,
+  };
+}
+
+function roundDecimalComponents(components: readonly { count: bigint; rate: string }[]): bigint {
+  const parsed = components.map((component) => ({
+    count: component.count,
+    ...parseDecimal(component.rate),
+  }));
+  const scale = parsed.reduce((maximum, component) => Math.max(maximum, component.scale), 0);
+  const denominator = 10n ** BigInt(scale);
+  const numerator = parsed.reduce(
+    (sum, component) =>
+      sum + component.count * component.numerator * 10n ** BigInt(scale - component.scale),
+    0n,
+  );
+  return (numerator * 2n + denominator) / (denominator * 2n);
+}
+
+function parseDecimal(value: string): { numerator: bigint; scale: number } {
+  const [integer = "0", fraction = ""] = value.split(".");
+  return { numerator: BigInt(`${integer}${fraction}`), scale: fraction.length };
+}
+
+function compareUnpricedItems(left: UsageUnpricedItem, right: UsageUnpricedItem): number {
+  return `${left.billing_channel}\u0000${left.model}\u0000${left.reason}`.localeCompare(
+    `${right.billing_channel}\u0000${right.model}\u0000${right.reason}`,
+  );
+}
+
+export type { PricingCatalog, PricingCatalogEntry, PricingRates, UsageHourlyFact };
+export { PROTOCOL_VERSION };

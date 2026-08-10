@@ -21,8 +21,9 @@ To add a provider:
 5. `pnpm generate:provider-catalog` for protocol `ProviderId` and Swift `ProviderID`.
 6. Optional QuotaBar brand SVG named by `brandIconAsset`.
 
-API-key providers set `config.kind: "api_key"` so `quotacli config` and QuotaBar Settings pick them up
-automatically. Ambient session providers leave `config: null`.
+API-key providers set `config.kind: "api_key"` so `quotacli config` owns their setup and QuotaBar
+Settings can present the corresponding copyable CLI commands. Ambient session providers leave
+`config: null`.
 
 Supported order today: Codex, Claude Code, Grok, OpenRouter, DeepSeek, Kimi Code, LiteLLM.
 
@@ -71,6 +72,45 @@ executable when it is outside `PATH`; the native installer, legacy installer, Ho
 locations are also checked for GUI launches. Platforms without the bounded local PTY adapter retain
 direct usage collection and report `auth_required` if Claude rejects the cached token.
 
+## Local Usage logs
+
+Usage parsing is independent from subscription-quota authentication. It reads local agent-owned
+JSONL files and emits normalized request facts plus typed scan coverage; it never reads provider
+tokens for this path.
+
+### Codex Usage
+
+1. Discover rollout JSONL files below `$CODEX_HOME/sessions` and
+   `$CODEX_HOME/archived_sessions`, defaulting `CODEX_HOME` to `~/.codex`.
+2. Track model and service-tier settings in file order. Convert each `token_count` record to a
+   request delta, preferring a provider-supplied last-request usage and otherwise subtracting the
+   previous cumulative total.
+3. Preserve input, cache-read, inferred cache-write, output, reasoning, model, tier, speed, context
+   bucket, and the default `openai_direct` billing channel. Codex `total_tokens` is a context counter,
+   not the sum used for billing facts. Codex logs do not supply source cost.
+4. Duplicate cumulative totals do not emit another request. Subagent logs that inherit but omit the
+   model use `unknown`; explicit invalid model values, timestamps, or usage make coverage partial
+   rather than fabricating a fact.
+
+### Claude Code Usage
+
+1. Discover JSONL files below `$CLAUDE_CONFIG_DIR/projects`, defaulting `CLAUDE_CONFIG_DIR` to
+   `~/.claude`.
+2. Parse assistant usage records and retain the provider model plus input, cache-read,
+   five-minute/one-hour cache-write, output, service tier, context bucket, and tool request counts
+   that are explicitly represented. Empty optional dimension strings mean unknown, and Claude's
+   provider-owned `<synthetic>` model marker normalizes to `synthetic`.
+3. Resolve only a documented billing channel. Source-reported cost is retained only with its
+   request-coverage count so an incomplete amount cannot be treated as a complete total.
+4. Unknown usage-shaped records, malformed timestamps/dimensions, unreadable sources, oversized
+   lines, and truncated tails make coverage partial.
+
+Both scanners use canonical `[start_at, end_at)` UTC-hour boundaries, bounded directory traversal,
+a two-million-record scan ceiling, bounded line sizes, cancellation, and before/after file identity checks. Local scan cursors
+contain only an opaque file ID, byte offset, and record hash. Paths and cursors are local cache input
+and never enter a protocol submission or CLI account result. Only complete coverage is eligible for
+authoritative remote replacement; empty complete coverage is valid.
+
 ## Grok
 
 1. Discover `$GROK_HOME/auth.json` or `~/.grok/auth.json`.
@@ -109,7 +149,7 @@ Aligned with CodexBar's OpenRouter provider (credits + API-key limit meters).
 1. Resolve the API key in order:
    1. Owner-only config at `$XDG_CONFIG_HOME/quotacli/providers.json` or
       `~/.config/quotacli/providers.json` (`schema_version: 1`, `providers.openrouter.api_key`),
-      written by the hidden prompt in `quotacli config set openrouter` or QuotaBar Settings.
+      written by the interactive prompt in `quotacli config set openrouter`.
    2. Else `OPENROUTER_API_KEY` from the process environment.
    Use the fixed `https://openrouter.ai/api/v1` endpoint. Custom base URLs and URL environment
    overrides are not supported.
@@ -133,7 +173,7 @@ Aligned with CodexBar's OpenRouter provider (credits + API-key limit meters).
    `config get` / `list` and menubar UI only show a masked tip (`OpenRouter ···abcd`).
 
 Config directory is `0700` and `providers.json` is `0600`. Multi-account labeled keys are out of
-scope for v1. Dashboard cookies and browser scrapes are not strategies.
+scope. Dashboard cookies and browser scrapes are not strategies.
 
 ## DeepSeek
 
@@ -143,7 +183,7 @@ scope).
 1. Resolve the API key in order:
    1. Owner-only config at `$XDG_CONFIG_HOME/quotacli/providers.json` or
       `~/.config/quotacli/providers.json` (`providers.deepseek.api_key`), written by
-      the hidden prompt in `quotacli config set deepseek` or QuotaBar Settings.
+      the interactive prompt in `quotacli config set deepseek`.
    2. Else `DEEPSEEK_API_KEY`, then `DEEPSEEK_KEY`, from the process environment.
    Use the fixed `https://api.deepseek.com` endpoint. Custom base URLs and URL environment
    overrides are not supported.
@@ -179,21 +219,18 @@ Aligned with CodexBar's LiteLLM virtual-key budget path.
 
 1. Resolve API key (`providers.litellm.api_key` or `LITELLM_API_KEY`) **and** base URL
    (`providers.litellm.base_url` or `LITELLM_BASE_URL`). Base URL is **required** (no public default).
-   HTTPS is required except loopback / RFC1918 / `.local` HTTP for self-hosted proxies. A trailing
+   HTTPS is required except loopback / RFC1918 / `.local` HTTP for private LiteLLM proxies. A trailing
    `/v1` is stripped before management endpoints.
 2. `GET {root}/key/info` → `user_id` / `team_id`.
 3. After key discovery, request the present user and team resources concurrently:
    - `GET {root}/user/info?user_id=…` → personal spend / max_budget.
    - `GET {root}/team/info?team_id=…` → team spend / max_budget.
 4. Map budget windows with `remaining_value`, `limit_value`, and `value_unit: "usd"` when
-   `max_budget > 0`. Spend without a hard budget is not emitted as a v1 quota window; never treat
+   `max_budget > 0`. Spend without a hard budget is not emitted as a quota window; never treat
    spend as a budget or fabricate remaining quota.
 5. Missing key or base URL → `auth_required` (discovery unavailable). HTTP 401/403 → `auth_required`.
 
-QuotaCLI 0.0.2 allowed custom base URLs for OpenRouter, DeepSeek, and Kimi. Current releases ignore
-those already-persisted `base_url` fields and use each provider's official endpoint; saving the
-provider again removes the stale field. New custom URLs remain rejected for these fixed-endpoint
-providers.
+OpenRouter, DeepSeek, and Kimi always use their fixed official origins; custom base URLs are rejected.
 
 ## Identity and normalization
 
@@ -203,8 +240,7 @@ providers.
   SHA-256 of the API key under the `api_key` namespace (never the raw key).
 - Email is display enrichment only and never a global deduplication identity. If the provider does
   not expose its quota-owner identifier, collection still succeeds with a stable source-scoped
-  fingerprint. Consumers interpret an absent `fingerprint_scope` as source-scoped for version 1
-  compatibility.
+  fingerprint. Every normalized account declares its fingerprint scope.
 - Account labels use a masked email or a non-sensitive display name.
 - A collection attempt records its stable source identifier and an explicit outcome.
 - One provider failure does not discard successful results from other requested providers.

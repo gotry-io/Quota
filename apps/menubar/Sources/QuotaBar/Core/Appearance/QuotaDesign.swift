@@ -30,7 +30,7 @@ enum QuotaDesign {
     /// Navigation/action slot. Grouped content uses its own inset grid.
     static let headerAccessoryWidth: CGFloat = headerControlWidth
     static let providerRowVerticalPadding: CGFloat = 10
-    /// Vertical padding inside multi-line settings forms (API key, sign-in copy).
+    /// Vertical padding inside multi-line settings content and command rows.
     static let settingsRowVerticalPadding: CGFloat = 8
     /// Single-line Settings rows (home General / Sources / About).
     static let settingsRowHeight: CGFloat = 38
@@ -142,8 +142,6 @@ enum QuotaDesign {
       weight: .medium
     )
     static let emptyIcon = Font.system(size: Layout.emptyIconPointSize, weight: .regular)
-    static let pairingCode = Font.system(.title3, design: .monospaced, weight: .semibold)
-    static let pairingSeparator = Font.system(.body, weight: .medium)
   }
 }
 
@@ -239,8 +237,8 @@ private struct QuotaScaledFontModifier: ViewModifier {
   }
 }
 
-private extension DynamicTypeSize {
-  var quotaScale: CGFloat {
+extension DynamicTypeSize {
+  fileprivate var quotaScale: CGFloat {
     switch self {
     case .xSmall, .small, .medium, .large: 1
     case .xLarge: 1.08
@@ -272,27 +270,6 @@ struct QuotaPrimaryButtonStyle: ButtonStyle {
         isEnabled ? QuotaPalette.accent : QuotaPalette.soft
       )
       .clipShape(Capsule())
-      .scaleEffect(configuration.isPressed && isEnabled && !reduceMotion ? 0.98 : 1)
-  }
-}
-
-struct QuotaDestructiveButtonStyle: ButtonStyle {
-  @Environment(\.isEnabled) private var isEnabled
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-  func makeBody(configuration: Configuration) -> some View {
-    configuration.label
-      .quotaFont(.settingsLabel)
-      .foregroundStyle(isEnabled ? QuotaPalette.onCritical : QuotaPalette.body)
-      .padding(.horizontal, 10)
-      .frame(minHeight: QuotaDesign.Layout.fieldMinHeight)
-      .background(
-        isEnabled ? QuotaPalette.criticalAction : QuotaPalette.soft,
-        in: RoundedRectangle(
-          cornerRadius: QuotaDesign.Layout.floatingMenuRowCornerRadius,
-          style: .continuous
-        )
-      )
       .scaleEffect(configuration.isPressed && isEnabled && !reduceMotion ? 0.98 : 1)
   }
 }

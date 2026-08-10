@@ -1,5 +1,7 @@
 # ADR 0005: URL-only Relay enrollment and private QuotaBar device groups
 
+> Status: Superseded by [ADR 0006](./0006-managed-account-device-usage.md) on 2026-08-10.
+
 - Status: accepted
 - Date: 2026-08-04
 - Builds on: [ADR 0002](./0002-relay-device-code-pairing.md) and
