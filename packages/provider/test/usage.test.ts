@@ -315,6 +315,18 @@ describe("additional local Usage agents", () => {
           cost: 0,
         }),
       );
+      const outsideRange = Date.parse("2025-01-01T00:00:00.000Z");
+      insert.run(
+        "message-outside-range",
+        outsideRange,
+        outsideRange,
+        JSON.stringify({
+          role: "assistant",
+          modelID: "gpt-5.6-sol",
+          providerID: "openai",
+          time: { created: outsideRange },
+        }),
+      );
       database.close();
 
       const discovered = await discoverOpenCodeUsageFiles({ roots: [root] });

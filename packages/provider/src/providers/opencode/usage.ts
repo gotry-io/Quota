@@ -157,7 +157,7 @@ async function scanDatabases(
     try {
       const parser = new OpenCodeUsageParser();
       let index = 0;
-      for (const row of queryDatabase(file.path)) {
+      for (const row of queryDatabase(file.path, start, end)) {
         rowsSeen += 1;
         if (rowsSeen > MAXIMUM_OPENCODE_ROWS) {
           reasons.push({ code: "record_limit" });
@@ -214,10 +214,24 @@ const DATABASE_QUERY = `
     json_extract(data, '$.cost') AS cost
   FROM message
   WHERE json_extract(data, '$.role') = 'assistant'
+    AND COALESCE(
+      json_extract(data, '$.time.completed'),
+      json_extract(data, '$.time.created'),
+      time_created
+    ) >= ?1
+    AND COALESCE(
+      json_extract(data, '$.time.completed'),
+      json_extract(data, '$.time.created'),
+      time_created
+    ) < ?2
   ORDER BY time_created, id
 `;
 
-function* queryDatabase(path: string): Generator<Record<string, unknown>> {
+function* queryDatabase(
+  path: string,
+  start: number,
+  end: number,
+): Generator<Record<string, unknown>> {
   const runtimeRequire = createRequire(import.meta.url);
   if (process.versions.bun) {
     const module = runtimeRequire("bun:sqlite") as {
@@ -225,13 +239,15 @@ function* queryDatabase(path: string): Generator<Record<string, unknown>> {
         path: string,
         options: { readonly: boolean },
       ) => {
-        query(sql: string): { iterate(): IterableIterator<Record<string, unknown>> };
+        query(sql: string): {
+          iterate(...values: number[]): IterableIterator<Record<string, unknown>>;
+        };
         close(): void;
       };
     };
     const database = new module.Database(path, { readonly: true });
     try {
-      yield* database.query(DATABASE_QUERY).iterate();
+      yield* database.query(DATABASE_QUERY).iterate(start, end);
     } finally {
       database.close();
     }
@@ -242,13 +258,15 @@ function* queryDatabase(path: string): Generator<Record<string, unknown>> {
       path: string,
       options: { readOnly: boolean },
     ) => {
-      prepare(sql: string): { iterate(): IterableIterator<Record<string, unknown>> };
+      prepare(sql: string): {
+        iterate(...values: number[]): IterableIterator<Record<string, unknown>>;
+      };
       close(): void;
     };
   };
   const database = new module.DatabaseSync(path, { readOnly: true });
   try {
-    yield* database.prepare(DATABASE_QUERY).iterate();
+    yield* database.prepare(DATABASE_QUERY).iterate(start, end);
   } finally {
     database.close();
   }

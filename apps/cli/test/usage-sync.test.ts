@@ -85,6 +85,45 @@ describe("Usage sync", () => {
     expect(dependencies.client.uploadUsage).not.toHaveBeenCalled();
   });
 
+  it("replaces the shipped two-agent cache when the parser revision changes", async () => {
+    const dependencies = await makeDependencies([], "partial");
+    await dependencies.store.saveArtifact("usage-cache.json", {
+      schema_version: 1,
+      contexts: [
+        {
+          account_id: "account_test",
+          device_id: "device_test",
+          generation: 3,
+          parser_revision: "quota-usage-2",
+          aggregation_timezone: "UTC",
+          event_not_before: "2026-08-09T10:05:00Z",
+          cursors: [
+            { agent: "codex", next_start_at: "2026-08-09T10:00:00Z" },
+            { agent: "claude_code", next_start_at: "2026-08-09T10:00:00Z" },
+          ],
+        },
+      ],
+    });
+
+    await syncUsage(activeSession(), new Date("2026-08-09T12:30:00Z"), dependencies);
+
+    expect(dependencies.scan).toHaveBeenCalledTimes(5);
+    expect(await dependencies.store.loadArtifact("usage-cache.json")).toMatchObject({
+      contexts: [
+        {
+          parser_revision: "quota-usage-4",
+          cursors: [
+            { agent: "codex" },
+            { agent: "claude_code" },
+            { agent: "grok" },
+            { agent: "opencode" },
+            { agent: "pi" },
+          ],
+        },
+      ],
+    });
+  });
+
   it("recovers a missing local cursor from the earliest readable event", async () => {
     const dependencies = await makeDependencies([event("2026-08-09T10:06:00Z", 20)]);
     const session = {
