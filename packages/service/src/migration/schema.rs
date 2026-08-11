@@ -1,14 +1,11 @@
 //! Durable, append-only SQLite schema migrations.
-//!
-//! This module deliberately has no knowledge of released JSON artifacts. Compatibility import
-//! lives in `legacy_json`; removing that importer must leave the live schema and its migration
-//! history intact.
 
 use rusqlite::{Connection, Transaction, params};
+use uuid::Uuid;
 
 use crate::state::StateError;
 
-const CURRENT_SCHEMA: i64 = 2;
+const CURRENT_SCHEMA: i64 = 3;
 
 pub fn apply(conn: &mut Connection) -> Result<(), StateError> {
     conn.execute_batch(
@@ -30,6 +27,7 @@ pub fn apply(conn: &mut Connection) -> Result<(), StateError> {
         match version {
             1 => migration_v1(&tx)?,
             2 => migration_v2(&tx)?,
+            3 => migration_v3(&tx)?,
             _ => return Err(StateError::InvalidState),
         }
         tx.execute(
@@ -38,6 +36,11 @@ pub fn apply(conn: &mut Connection) -> Result<(), StateError> {
         )?;
         tx.commit()?;
     }
+    conn.execute(
+        "INSERT INTO installation(id, installation_id) VALUES (1, ?1)
+         ON CONFLICT(id) DO NOTHING",
+        params![Uuid::new_v4().to_string()],
+    )?;
     Ok(())
 }
 
@@ -155,6 +158,14 @@ fn migration_v2(tx: &Transaction<'_>) -> Result<(), StateError> {
     Ok(())
 }
 
+fn migration_v3(tx: &Transaction<'_>) -> Result<(), StateError> {
+    tx.execute_batch(
+        "DROP TABLE IF EXISTS legacy_artifacts;
+         DELETE FROM metadata WHERE key = 'legacy_import_complete';",
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -210,7 +221,23 @@ mod tests {
             .expect("v1 rows")
             .collect::<Result<Vec<_>, _>>()
             .expect("v1 values");
-        assert_eq!(fresh_versions, vec![1, 2]);
+        assert_eq!(fresh_versions, vec![1, 2, 3]);
         assert_eq!(fresh_versions, v1_versions);
+        assert!(
+            fresh
+                .query_row(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'legacy_artifacts'",
+                    [],
+                    |_| Ok(()),
+                )
+                .is_err()
+        );
+        assert_eq!(
+            fresh
+                .query_row("SELECT COUNT(*) FROM installation", [], |row| row
+                    .get::<_, i64>(0))
+                .expect("installation"),
+            1
+        );
     }
 }

@@ -324,7 +324,6 @@ describe("quota protocol v2", () => {
     expect(
       UsageSubmissionSchema.safeParse({
         ...submission,
-        parser_revision: "quota-usage-4",
         rows: [{ ...submission.rows[0], model: "unknown" }],
       }).success,
     ).toBe(true);

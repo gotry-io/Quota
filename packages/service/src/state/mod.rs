@@ -292,7 +292,7 @@ impl StateStore {
              PRAGMA busy_timeout = 5000;
              PRAGMA journal_mode = WAL;",
         )?;
-        migration::apply(&mut connection, &root)?;
+        migration::apply(&mut connection)?;
         Ok(Self {
             root,
             db: Mutex::new(connection),
@@ -466,10 +466,6 @@ impl StateStore {
                 tx.execute("DELETE FROM metadata WHERE key = 'pricing_etag'", [])?;
             }
         }
-        tx.execute(
-            "DELETE FROM legacy_artifacts WHERE name = 'pricing-catalog.json'",
-            [],
-        )?;
         let revision = bump_revision(&tx)?;
         tx.commit()?;
         Ok(revision)
@@ -839,45 +835,6 @@ impl StateStore {
             values.push(serde_json::from_str(&row?)?);
         }
         Ok(values)
-    }
-
-    pub fn legacy_artifact(&self, name: &str) -> Result<Option<Value>, StateError> {
-        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        let raw: Option<String> = conn
-            .query_row(
-                "SELECT payload_json FROM legacy_artifacts WHERE name = ?1",
-                params![name],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()?;
-        raw.map(|value| serde_json::from_str(&value).map_err(StateError::from))
-            .transpose()
-    }
-
-    /// Reads and removes a migrated artifact in one transaction.  The service calls this after it
-    /// has restored the payload into live component/index state; migration artifacts are not a
-    /// second, forever-growing source of truth.
-    pub fn consume_legacy_artifact(&self, name: &str) -> Result<Option<Value>, StateError> {
-        let mut conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        let tx = conn.transaction()?;
-        let raw: Option<String> = tx
-            .query_row(
-                "SELECT payload_json FROM legacy_artifacts WHERE name = ?1",
-                params![name],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()?;
-        let Some(raw) = raw else {
-            tx.commit()?;
-            return Ok(None);
-        };
-        tx.execute(
-            "DELETE FROM legacy_artifacts WHERE name = ?1",
-            params![name],
-        )?;
-        bump_revision(&tx)?;
-        tx.commit()?;
-        Ok(Some(serde_json::from_str(&raw)?))
     }
 
     /// Atomically reserves an immutable Usage submission and consumes the exact dirty range that
@@ -1316,13 +1273,7 @@ impl StateStore {
             tx.commit()?;
             return Ok(revision);
         }
-        crate::compatibility::retain_released_outbox(
-            &tx,
-            current.is_none(),
-            account_id,
-            device_id,
-            generation,
-        )?;
+        tx.execute("DELETE FROM usage_outbox", [])?;
         tx.execute("DELETE FROM usage_dirty_ranges", [])?;
         tx.execute(
             "INSERT INTO usage_upload_context(
@@ -2743,82 +2694,6 @@ mod tests {
                 end_at: "2026-08-10T13:00:00Z".into(),
             }]
         );
-        drop(store);
-        fs::remove_dir_all(root).expect("cleanup");
-    }
-
-    #[test]
-    fn first_context_preserves_matching_released_outbox_until_acknowledged() {
-        let root = std::env::temp_dir().join(format!("quota-legacy-outbox-{}", Uuid::new_v4()));
-        fs::create_dir_all(&root).expect("root");
-        let installation_id = Uuid::new_v4().to_string();
-        fs::write(
-            root.join("installation.json"),
-            serde_json::json!({
-                "schema_version": 1,
-                "installation_id": installation_id,
-                "account_bindings": []
-            })
-            .to_string(),
-        )
-        .expect("installation");
-        fs::set_permissions(
-            root.join("installation.json"),
-            Permissions::from_mode(0o600),
-        )
-        .expect("installation permissions");
-        let entry = serde_json::json!({
-            "protocol_version": 2,
-            "submission_id": "submission_legacy_unknown",
-            "device_id": "device_test",
-            "generation": 3,
-            "sequence": 0,
-            "parser_revision": "quota-usage-4",
-            "aggregation_timezone": "UTC",
-            "coverage": {
-                "agent": "codex",
-                "start_at": "2026-08-09T10:00:00Z",
-                "end_at": "2026-08-09T11:00:00Z",
-                "status": "complete"
-            },
-            "rows": []
-        });
-        fs::write(
-            root.join("usage-outbox.json"),
-            serde_json::json!({
-                "schema_version": 1,
-                "queues": [{
-                    "account_id": "account_test",
-                    "device_id": "device_test",
-                    "generation": 3,
-                    "entries": [entry]
-                }]
-            })
-            .to_string(),
-        )
-        .expect("outbox");
-        fs::set_permissions(
-            root.join("usage-outbox.json"),
-            Permissions::from_mode(0o600),
-        )
-        .expect("outbox permissions");
-        let store = StateStore::open(&root).expect("state");
-        store
-            .ensure_usage_context(
-                "account_test",
-                "device_test",
-                3,
-                "UTC",
-                "1970-01-01T00:00:00Z",
-            )
-            .expect("context");
-        assert_eq!(store.outbox_entries().expect("entries").len(), 1);
-        assert!(
-            store
-                .acknowledge_outbox_entry("submission_legacy_unknown")
-                .expect("ack")
-        );
-        assert!(store.outbox_entries().expect("entries").is_empty());
         drop(store);
         fs::remove_dir_all(root).expect("cleanup");
     }

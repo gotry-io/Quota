@@ -147,7 +147,7 @@ describe("managed Relay on real Workers and D1", () => {
     }
   });
 
-  it("accepts a shipped unknown-model submission while discarding its invalid row", async () => {
+  it("stores unknown as an explicit opaque model", async () => {
     await env.DB.batch([
       env.DB.prepare(
         "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_legacy', 'subject_legacy', ?1, ?1)",
@@ -167,7 +167,7 @@ describe("managed Relay on real Workers and D1", () => {
       generation: 1,
       scopes: ["usage:write:self"],
     };
-    const submission = legacyUnknownSubmission();
+    const submission = unknownModelSubmission();
     const usage = new D1UsageState(env.DB);
 
     expect(await usage.recordUsage(principal, submission, now.toISOString())).toMatchObject({
@@ -177,16 +177,6 @@ describe("managed Relay on real Workers and D1", () => {
     expect(await usage.recordUsage(principal, submission, now.toISOString())).toMatchObject({
       outcome: "duplicate",
       next_sequence: 1,
-    });
-    const explicitUnknown = {
-      ...submission,
-      submission_id: "submission_explicit_unknown",
-      sequence: 1,
-      parser_revision: "parser_new",
-    };
-    expect(await usage.recordUsage(principal, explicitUnknown, now.toISOString())).toMatchObject({
-      outcome: "accepted",
-      next_sequence: 2,
     });
     expect(
       await env.DB.prepare(
@@ -1125,14 +1115,14 @@ function usageSubmission(
   };
 }
 
-function legacyUnknownSubmission(): UsageSubmission {
+function unknownModelSubmission(): UsageSubmission {
   return {
     protocol_version: 2,
-    submission_id: "submission_legacy_unknown",
+    submission_id: "submission_unknown_model",
     device_id: "device_legacy",
     generation: 1,
     sequence: 0,
-    parser_revision: "quota-usage-4",
+    parser_revision: "parser_unknown_model",
     aggregation_timezone: "UTC",
     coverage: {
       agent: "codex",

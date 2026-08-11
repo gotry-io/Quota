@@ -1,5 +1,4 @@
 pub mod catalog;
-pub(crate) mod compatibility;
 pub mod config;
 pub mod ipc;
 pub mod migration;

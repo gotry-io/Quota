@@ -913,14 +913,6 @@ impl NativeBackend {
             .state
             .usage_events()
             .map_err(|_| BackendError::unavailable())?;
-        if agents
-            .iter()
-            .all(|agent| agent.coverage.status == CoverageStatus::Complete)
-        {
-            // The Rust file index/normalized-record tables are now the source of truth; the
-            // released cursor artifact has been observed and is no longer retained.
-            crate::compatibility::finish_released_usage_cache(&self.state);
-        }
         let rows = usage::aggregate_usage_events(&events, &timezone).map_err(|_| BackendError {
             error: IpcError::new(ErrorCode::InvalidState, RecoveryAction::Retry),
         })?;
@@ -995,22 +987,18 @@ impl NativeBackend {
         Ok(report)
     }
 
-    fn refresh_pricing(
-        &self,
-        released: crate::compatibility::ReleasedPricingCache,
-    ) -> Result<Value, BackendError> {
+    fn refresh_pricing(&self) -> Result<Value, BackendError> {
         let old = self
             .state
             .component(crate::protocol::ComponentName::Pricing)
             .ok()
             .flatten()
             .and_then(|component| component.value);
-        let local = old.or(released.catalog);
+        let local = old;
         let etag = self
             .state
             .pricing_etag()
-            .map_err(|_| BackendError::unavailable())?
-            .or(released.etag);
+            .map_err(|_| BackendError::unavailable())?;
         match self.relay.pricing_catalog(etag.as_deref()) {
             Ok((next_etag, Some(value))) if pricing::validate_pricing_catalog(&value).valid => {
                 self.state
@@ -1496,16 +1484,14 @@ impl LocalBackend for NativeBackend {
                 .unwrap_or_else(|_| Err(BackendError::unavailable()));
             (quota_result, usage_result)
         });
-        let released = crate::compatibility::released_pricing_cache(&self.state);
         let cached_catalog = self
             .state
             .component(crate::protocol::ComponentName::Pricing)
             .ok()
             .flatten()
             .and_then(|component| component.value)
-            .or(released.catalog.clone())
             .and_then(|value| serde_json::from_value(value).ok());
-        let pricing = self.refresh_pricing(released);
+        let pricing = self.refresh_pricing();
         let catalog = pricing
             .as_ref()
             .ok()

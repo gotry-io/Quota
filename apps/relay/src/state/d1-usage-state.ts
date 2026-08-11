@@ -1,8 +1,4 @@
-import {
-  isReleasedUnknownUsageModel,
-  MAXIMUM_USAGE_COVERAGE_ITEMS,
-  RELEASED_USAGE_PARSER_REVISION,
-} from "@gotry-io/quota-protocol";
+import { MAXIMUM_USAGE_COVERAGE_ITEMS } from "@gotry-io/quota-protocol";
 import type {
   DevicePrincipal,
   StoredUsageCoverage,
@@ -543,7 +539,6 @@ export class D1UsageState implements UsageState {
         `SELECT 1 AS duplicate
          FROM usage_submission_parts AS part, json_each(part.rows_json) AS item
          WHERE part.device_id = ?1 AND part.batch_id = ?2
-           AND NOT (?3 = 'quota-usage-4' AND json_extract(item.value, '$.model') = 'unknown')
          GROUP BY
            json_extract(item.value, '$.bucket_start_utc'),
            json_extract(item.value, '$.usage_date'),
@@ -559,7 +554,7 @@ export class D1UsageState implements UsageState {
          HAVING COUNT(*) > 1
          LIMIT 1`,
       )
-      .bind(principal.device_id, batchId, first.parser_revision)
+      .bind(principal.device_id, batchId)
       .first<{ duplicate: number }>();
     if (duplicate) return "conflict";
 
@@ -647,11 +642,7 @@ export class D1UsageState implements UsageState {
     if (stagedBatchId) {
       statements.push(this.insertStagedRows(deviceId, submission, stagedBatchId, partial));
     } else {
-      statements.push(
-        ...rows
-          .filter((row) => this.shouldStoreRow(submission, row.model))
-          .map((row) => this.insertRow(deviceId, submission, row, partial)),
-      );
+      statements.push(...rows.map((row) => this.insertRow(deviceId, submission, row, partial)));
     }
     if (partial) {
       statements.push(
@@ -669,13 +660,6 @@ export class D1UsageState implements UsageState {
       );
     }
     return statements;
-  }
-
-  private shouldStoreRow(submission: UsageSubmission, model: string): boolean {
-    return !(
-      isReleasedUnknownUsageModel(model) &&
-      submission.parser_revision === RELEASED_USAGE_PARSER_REVISION
-    );
   }
 
   private insertStagedRows(
@@ -741,10 +725,9 @@ export class D1UsageState implements UsageState {
                 json_extract(item.value, '$.source_cost_microusd'),
                 json_extract(item.value, '$.source_cost_covered_requests')
          FROM usage_submission_parts AS part, json_each(part.rows_json) AS item
-         WHERE part.device_id = ?1 AND part.batch_id = ?3
-           AND NOT (?4 = 'quota-usage-4' AND json_extract(item.value, '$.model') = 'unknown')${conflict}`,
+         WHERE part.device_id = ?1 AND part.batch_id = ?3${conflict}`,
       )
-      .bind(deviceId, submission.aggregation_timezone, batchId, submission.parser_revision);
+      .bind(deviceId, submission.aggregation_timezone, batchId);
   }
 
   private insertRow(

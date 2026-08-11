@@ -183,7 +183,8 @@ QuotaRelay mounts Hono routes at `/oauth/v2` and `/api/v2`, Better Auth at `/api
 routes at their documented paths. It authenticates each route with the minimum account, device, or
 browser scope and performs Device/Account deletion, rotation/revocation, and Usage replacement in
 storage transactions. Released 0.0.5 clients retain their bounded two-agent response variant only
-through the 0.0.6/0.0.7 compatibility window; current clients explicitly request all Usage agents.
+through the completed 0.0.6/0.0.7 compatibility window. Current clients explicitly request all Usage
+agents, and 0.0.8 contains no client-version response branch.
 
 Quota Web builds static Vite assets independently. `/my` reads account summaries and manages
 Devices and deletion; `/activate` approves or denies native authorization. Better Auth owns GitHub

@@ -61,13 +61,13 @@ invalidation mechanism; no watcher or byte-checkpoint dependency is used.
 
 ## Migration and compatibility
 
-The first SQLite schema transactionally imports the released installation, session, Usage cache,
-Usage outbox, and pricing cache once through `migration/legacy_json.rs`, under the released
-`state.lock`; import is idempotent and source files are removed only after the new state is readable.
-Native cutover starts at QuotaBar 0.0.6. Releases 0.0.6 and 0.0.7 retain the bounded 0.0.5 JSON/
-`state.lock` import and explicit 0.0.5 server/wire behavior. QuotaBar 0.0.8 removes the
-`compatibility` module, one-time import, old lock/path imports, and their focused tests. The shared
-`providers.json`/`ProviderConfigLock` path and OAuth `client_id=quotacli` remain current interfaces.
+QuotaBar 0.0.6 and 0.0.7 transactionally imported the released installation, session, Usage cache,
+Usage outbox, and pricing cache under the released `state.lock`. QuotaBar 0.0.8 completed the planned
+cutover by deleting the compatibility module, one-time JSON import, old lock/path handling,
+version-specific Relay behavior, and their focused tests. Local schema migration v3 removes the
+temporary imported-artifact table and marker without rewriting the already-applied v1 migration.
+The shared `providers.json`/`ProviderConfigLock` path and OAuth `client_id=quotacli` remain current
+interfaces.
 Retained managed-network protocol v2, Relay data, and already published npm artifacts remain
 compatible because they are released boundaries. There is no fallback to the deleted TypeScript/Bun
 runtime or compatibility layer for its local command surface.

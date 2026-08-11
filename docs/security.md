@@ -119,14 +119,9 @@ data requirements. Architecture and product behavior are defined in
   row, range, model, and dimension resource bounds are enforced by the v2 runtime schema before
   upload and by Relay again before persistence. Model identifiers are opaque provider text: preserve
   any non-empty bounded identifier, including punctuation and `unknown`; do not apply a naming
-  whitelist or discard an otherwise valid fact because pricing is missing. The one narrow released
-  compatibility exception is Relay's outbox-drain path for parser revision `quota-usage-4`: it
-  filters the literal `unknown` model while materializing those already-released submissions because
-  that shipped storage parser rejected the sentinel. This exception does not apply to current
-  collection or later parser revisions and is covered by the compatibility tests; it is removed with
-  the retained 0.0.8 cleanup window. Empty internal records with no tokens, billable tools, or
-  nonzero source cost do not become Usage facts. Invalid records are isolated and counted in the
-  local diagnostic report rather than rolling back a complete agent.
+  whitelist or discard an otherwise valid fact because pricing is missing. Empty internal records
+  with no tokens, billable tools, or nonzero source cost do not become Usage facts. Invalid records
+  are isolated and counted in the local diagnostic report rather than rolling back a complete agent.
 - Delete Device is distinct from logout. It transactionally revokes sessions, advances Device
   generation, records a precise watermark, deletes quota/Usage/coverage/receipt rows, and retains a
   minimal hidden tombstone. Old tokens and old-generation outbox entries are terminally rejected.
