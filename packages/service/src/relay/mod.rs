@@ -1978,9 +1978,7 @@ impl AccountManager {
         {
             return Err(session_changed_error());
         }
-        if !session_matches_usage_submission(&session, submission) {
-            return Err(session_changed_error());
-        }
+        validate_usage_submission_session(&session, submission)?;
         let token = session_access_token_from(&session, "device")?;
         if !self
             .state
@@ -2200,11 +2198,28 @@ fn snapshot_payload_from_quota_report(report: &Value) -> Result<(&str, Vec<Value
     Ok((captured_at, snapshots))
 }
 
-fn session_matches_usage_submission(session: &Value, submission: &Value) -> bool {
-    session.get("device_id").and_then(Value::as_str)
-        == submission.get("device_id").and_then(Value::as_str)
-        && session.get("device_generation").and_then(Value::as_u64)
-            == submission.get("generation").and_then(Value::as_u64)
+fn validate_usage_submission_session(
+    session: &Value,
+    submission: &Value,
+) -> Result<(), BackendError> {
+    if session.get("device_id").and_then(Value::as_str)
+        != submission.get("device_id").and_then(Value::as_str)
+        || session.get("device_generation").and_then(Value::as_u64)
+            != submission.get("generation").and_then(Value::as_u64)
+    {
+        return Err(session_changed_error());
+    }
+    if session.get("next_usage_sequence").and_then(Value::as_u64)
+        != submission.get("sequence").and_then(Value::as_u64)
+    {
+        return Err(BackendError {
+            error: crate::protocol::IpcError::new(
+                crate::protocol::ErrorCode::InvalidState,
+                crate::protocol::RecoveryAction::Reinstall,
+            ),
+        });
+    }
+    Ok(())
 }
 
 fn session_access_token_from(session: &Value, audience: &str) -> Result<String, BackendError> {
@@ -2724,19 +2739,48 @@ mod tests {
 
     #[test]
     fn usage_submission_must_match_the_current_device_session() {
-        let session = serde_json::json!({"device_id": "device_1", "device_generation": 2});
-        assert!(session_matches_usage_submission(
-            &session,
-            &serde_json::json!({"device_id": "device_1", "generation": 2})
-        ));
-        assert!(!session_matches_usage_submission(
-            &session,
-            &serde_json::json!({"device_id": "device_2", "generation": 2})
-        ));
-        assert!(!session_matches_usage_submission(
-            &session,
-            &serde_json::json!({"device_id": "device_1", "generation": 3})
-        ));
+        let session = serde_json::json!({
+            "device_id": "device_1",
+            "device_generation": 2,
+            "next_usage_sequence": 4
+        });
+        assert!(
+            validate_usage_submission_session(
+                &session,
+                &serde_json::json!({"device_id": "device_1", "generation": 2, "sequence": 4})
+            )
+            .is_ok()
+        );
+        assert_eq!(
+            validate_usage_submission_session(
+                &session,
+                &serde_json::json!({"device_id": "device_2", "generation": 2, "sequence": 4})
+            )
+            .expect_err("device mismatch")
+            .error
+            .code,
+            crate::protocol::ErrorCode::AuthenticationRequired
+        );
+        assert_eq!(
+            validate_usage_submission_session(
+                &session,
+                &serde_json::json!({"device_id": "device_1", "generation": 3, "sequence": 4})
+            )
+            .expect_err("generation mismatch")
+            .error
+            .code,
+            crate::protocol::ErrorCode::AuthenticationRequired
+        );
+        assert_eq!(
+            validate_usage_submission_session(
+                &session,
+                &serde_json::json!({"device_id": "device_1", "generation": 2, "sequence": 3})
+            )
+            .expect_err("sequence mismatch")
+            .error
+            .code,
+            crate::protocol::ErrorCode::InvalidState
+        );
     }
 
     #[test]

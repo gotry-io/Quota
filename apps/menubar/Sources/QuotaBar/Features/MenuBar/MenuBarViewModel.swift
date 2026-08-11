@@ -233,6 +233,8 @@ final class MenuBarViewModel {
       }
       do {
         _ = try await client.login()
+        // The service stores logging_in before acknowledging this request. From here onward its
+        // state/events, rather than the short-lived request task, are authoritative.
         loginTask = nil
         await reloadState()
       } catch is CancellationError {

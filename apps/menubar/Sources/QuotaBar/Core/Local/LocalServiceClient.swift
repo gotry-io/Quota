@@ -200,17 +200,21 @@ actor LocalServiceClient: LocalServiceServing {
     }
     defer { timeoutTask.cancel() }
 
+    guard let standardInput else {
+      closeConnection(terminate: true, error: LocalServiceClientError.connectionClosed)
+      throw LocalServiceClientError.connectionClosed
+    }
+    do {
+      // This actor cannot receive the helper response until the waiter is registered below and
+      // request suspends, so a failed write never creates a continuation to clean up.
+      try standardInput.write(contentsOf: data)
+    } catch {
+      closeConnection(terminate: true, error: LocalServiceClientError.connectionClosed)
+      throw LocalServiceClientError.connectionClosed
+    }
     let resultData = try await withCheckedThrowingContinuation {
       (continuation: CheckedContinuation<Data, any Error>) in
       pending[requestID] = continuation
-      do {
-        try standardInput?.write(contentsOf: data)
-      } catch {
-        // Remove this waiter before closeConnection resumes the remaining in-flight requests.
-        pending.removeValue(forKey: requestID)?.resume(
-          throwing: LocalServiceClientError.connectionClosed)
-        closeConnection(terminate: true, error: LocalServiceClientError.connectionClosed)
-      }
     }
 
     do {
