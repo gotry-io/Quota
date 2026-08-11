@@ -40,9 +40,6 @@ pub const MAX_COVERAGE_REASONS: usize = 128;
 /// Protocol v2 `UsageSubmission.rows` bound. Internal retained-history aggregation is unbounded
 /// by this submission limit; service_core chunks complete UTC hours before upload.
 pub const MAX_USAGE_ROWS: usize = 2_048;
-/// Protocol v2 model-cardinality bound per upload submission. Internal retained-history
-/// aggregation may contain more models and is chunked at the upload boundary.
-pub const MAX_USAGE_MODELS: usize = 64;
 /// Protocol v2 local/account report breakdown bound. Unlike hourly rows, this is enforced when
 /// materializing the IPC breakdown array, with an explicit error rather than truncation.
 pub const MAX_USAGE_BREAKDOWNS: usize = 1_000;
@@ -181,6 +178,18 @@ pub enum CoverageReasonCode {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CoverageReason {
     pub code: CoverageReasonCode,
+    /// Saturated aggregate count for this reason in the bounded reason list. Keeping one entry
+    /// per code makes diagnostics exact without retaining one object per malformed record.
+    #[serde(default = "one_reason", skip_serializing_if = "is_one_reason")]
+    pub count: u64,
+}
+
+fn one_reason() -> u64 {
+    1
+}
+
+fn is_one_reason(value: &u64) -> bool {
+    *value == 1
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -238,6 +247,10 @@ pub struct NormalizedUsageEvent {
 pub struct NormalizedUsageRecord {
     pub event: NormalizedUsageEvent,
     pub source_file_id: String,
+    /// Stable identity within a source file. The scanner assigns `line:<ordinal>:<subindex>`
+    /// after parsing; keeping it outside the wire event lets partial rescans replace a changed
+    /// line without deduplicating legitimate equal-valued events.
+    pub record_key: String,
 }
 
 #[derive(Clone, Debug)]
@@ -269,6 +282,7 @@ pub struct UsageScanResult {
     pub coverage: ScanCoverage,
     pub scanned_source_count: usize,
     pub skipped_source_count: usize,
+    pub ignored_empty_records: u64,
     pub unchanged_source_file_ids: Vec<String>,
     pub deleted_source_file_ids: Vec<String>,
     /// Complete replacement units for changed/new files. Each unit's records
@@ -300,6 +314,9 @@ pub struct UsageSourceScan {
     /// not serializable and must never be put in IPC or upload payloads.
     pub source: LocalUsageFile,
     pub records: Vec<NormalizedUsageEvent>,
+    /// Stable keys parallel to `records`. Older hand-built scan values may leave this empty; the
+    /// state layer then uses a deterministic legacy ordinal for that value only.
+    pub record_keys: Vec<String>,
     pub coverage: ScanCoverage,
 }
 
@@ -307,6 +324,7 @@ pub struct UsageSourceScan {
 pub struct ParsedLine {
     pub records: Vec<NormalizedUsageRecord>,
     pub reason: Option<CoverageReasonCode>,
+    pub ignored_empty_records: u64,
 }
 
 impl ParsedLine {
@@ -314,6 +332,15 @@ impl ParsedLine {
         Self {
             records: Vec::new(),
             reason: None,
+            ignored_empty_records: 0,
+        }
+    }
+
+    pub fn ignored_empty() -> Self {
+        Self {
+            records: Vec::new(),
+            reason: None,
+            ignored_empty_records: 1,
         }
     }
 
@@ -321,6 +348,7 @@ impl ParsedLine {
         Self {
             records: Vec::new(),
             reason: Some(reason),
+            ignored_empty_records: 0,
         }
     }
 }
@@ -506,6 +534,17 @@ pub fn build_usage_breakdowns(
     mode: crate::pricing::UsageCostMode,
     include_hourly: bool,
 ) -> Result<Vec<UsageBreakdown>, UsageError> {
+    build_usage_breakdowns_with_status(rows, catalog, mode, include_hourly).map(|(rows, _)| rows)
+}
+
+/// Build deterministic local breakdowns and report whether the bounded detail list omitted
+/// groups. Totals and cost are calculated over all source rows before detail is capped.
+pub fn build_usage_breakdowns_with_status(
+    rows: &[UsageHourlyFact],
+    catalog: Option<&crate::pricing::PricingCatalog>,
+    mode: crate::pricing::UsageCostMode,
+    include_hourly: bool,
+) -> Result<(Vec<UsageBreakdown>, bool), UsageError> {
     let mut groups: BTreeMap<(BreakdownDimension, String), Vec<usize>> = BTreeMap::new();
     for (index, row) in rows.iter().enumerate() {
         validate_fact(row)?;
@@ -523,14 +562,11 @@ pub fn build_usage_breakdowns(
             groups.entry((dimension, key)).or_default().push(index);
         }
     }
-    if groups.len() > MAX_USAGE_BREAKDOWNS {
-        return Err(UsageError(
-            "Usage breakdown count exceeds protocol limit".into(),
-        ));
-    }
+    let truncated = groups.len() > MAX_USAGE_BREAKDOWNS;
     let prepared = crate::pricing::prepare_usage_costs(rows, catalog, mode)?;
-    groups
+    let breakdowns = groups
         .into_iter()
+        .take(MAX_USAGE_BREAKDOWNS)
         .map(|((dimension, key), indexes)| {
             let grouped_rows: Vec<UsageHourlyFact> =
                 indexes.iter().map(|index| rows[*index].clone()).collect();
@@ -541,7 +577,8 @@ pub fn build_usage_breakdowns(
                 cost: crate::pricing::fold_prepared_usage_costs(&prepared, Some(&indexes))?,
             })
         })
-        .collect()
+        .collect::<Result<Vec<UsageBreakdown>, UsageError>>()?;
+    Ok((breakdowns, truncated))
 }
 
 pub(crate) fn parse_instant(value: &str) -> Option<DateTime<Utc>> {
@@ -609,8 +646,15 @@ pub(crate) fn bounded_dimension(value: Option<&serde_json::Value>) -> Option<Str
 }
 
 pub(crate) fn bounded_model(value: Option<&serde_json::Value>) -> Option<String> {
-    let value = bounded_string(value, 128)?;
-    (value != "unknown").then_some(value)
+    bounded_model_text(value?.as_str())
+}
+
+/// Model identifiers are provider-owned opaque text.  Keep the value exactly as supplied while
+/// rejecting only values that could not be safely persisted or displayed.
+pub(crate) fn bounded_model_text(value: Option<&str>) -> Option<String> {
+    let value = value?;
+    (!value.is_empty() && value.chars().count() <= 128 && !value.chars().any(char::is_control))
+        .then(|| value.to_owned())
 }
 
 fn bounded_string(value: Option<&serde_json::Value>, max: usize) -> Option<String> {
@@ -662,7 +706,7 @@ pub(crate) fn parse_nonnegative_decimal_integer(value: &str) -> Option<BigUint> 
 }
 
 fn validate_event(event: &NormalizedUsageEvent) -> Result<(), UsageError> {
-    if bounded_text(&event.model, 128).is_none() {
+    if bounded_model_text(Some(&event.model)).is_none() {
         return Err(UsageError("invalid Usage model".into()));
     }
     if event.billing_channel == BillingChannel::Unknown {
@@ -733,7 +777,7 @@ pub(crate) fn validate_fact(row: &UsageHourlyFact) -> Result<(), UsageError> {
     if parse_utc_hour(&row.bucket_start_utc).is_none()
         || !calendar_date(&row.usage_date)
         || row.usage_hour > 23
-        || bounded_text(&row.model, 128).is_none()
+        || bounded_model_text(Some(&row.model)).is_none()
     {
         return Err(UsageError("invalid Usage hourly fact".into()));
     }

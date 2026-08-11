@@ -231,6 +231,19 @@ private struct StubLocalService: LocalServiceServing {
   }
 
   func state() async throws -> LocalServiceState { stateValue }
+
+  func diagnose() async throws -> LocalServiceDiagnosticReport {
+    LocalServiceDiagnosticReport(
+      schemaVersion: 1,
+      status: .healthy,
+      generatedAt: Date(timeIntervalSince1970: 0),
+      client: LocalServiceDiagnosticClient(name: "test", version: "1"),
+      components: ["providers", "quota", "usage", "pricing", "account", "sync"].map {
+        LocalServiceDiagnosticComponent(name: $0, status: .ready, message: nil, metrics: [:])
+      },
+      issues: []
+    )
+  }
   func refresh() async throws -> LocalServiceRefreshResult {
     LocalServiceRefreshResult(accepted: true, pending: false, revision: stateValue.revision)
   }
@@ -256,6 +269,7 @@ private struct StubLocalService: LocalServiceServing {
   func logout() async throws -> LocalServiceLogoutResult {
     LocalServiceLogoutResult(status: .signedOut)
   }
+
   func setProviderConfig(
     _ provider: ProviderID,
     apiKey: String,

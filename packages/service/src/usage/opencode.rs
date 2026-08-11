@@ -86,8 +86,14 @@ impl UsageParser for OpenCodeParser {
             Ok(value) => value,
             Err(()) => return ParsedLine::reason(CoverageReasonCode::InvalidUsage),
         };
-        if input == 0 && output == 0 && source_cost.is_none() {
-            return ParsedLine::empty();
+        if input == 0
+            && cache_read == 0
+            && cache_write == 0
+            && output == 0
+            && reasoning == 0
+            && source_cost.as_deref().is_none_or(|value| value == "0")
+        {
+            return ParsedLine::ignored_empty();
         }
         let channel = provider_billing_channel(value.get("providerID").and_then(Value::as_str));
         ParsedLine {
@@ -119,8 +125,10 @@ impl UsageParser for OpenCodeParser {
                     source_cost_covered_requests: if source_cost.is_some() { 1 } else { 0 },
                 },
                 source_file_id: source_file_id.to_owned(),
+                record_key: String::new(),
             }],
             reason: None,
+            ignored_empty_records: 0,
         }
     }
 }
@@ -147,6 +155,7 @@ fn scan_databases(
     let mut reasons = discovery.reasons;
     let mut scanned_sources = 0usize;
     let mut skipped_sources = 0usize;
+    let mut ignored_empty_records = 0u64;
     let mut unchanged_source_file_ids = Vec::new();
     let mut sources = Vec::new();
     let mut rows_seen = 0usize;
@@ -165,11 +174,13 @@ fn scan_databases(
                 scanned_sources += 1;
                 let source_reasons = vec![CoverageReason {
                     code: CoverageReasonCode::SourceChanged,
+                    count: 1,
                 }];
                 sources.push(UsageSourceScan {
                     index: file_index(&file, &options.parser_revision),
                     source: file.clone(),
                     records: Vec::new(),
+                    record_keys: Vec::new(),
                     coverage: source_coverage(UsageAgent::OpenCode, options, source_reasons),
                 });
                 continue;
@@ -206,12 +217,13 @@ fn scan_databases(
                     push_reason(&mut source_reasons, CoverageReasonCode::SourceUnreadable);
                     let source = current.clone();
                     for reason in &source_reasons {
-                        push_reason(&mut reasons, reason.code);
+                        super::scan::push_reason_count(&mut reasons, reason.code, reason.count);
                     }
                     sources.push(UsageSourceScan {
                         index: file_index(&source, &options.parser_revision),
                         source,
                         records: Vec::new(),
+                        record_keys: Vec::new(),
                         coverage: source_coverage(UsageAgent::OpenCode, options, source_reasons),
                     });
                     continue;
@@ -222,12 +234,13 @@ fn scan_databases(
             Err(_) => {
                 push_reason(&mut source_reasons, CoverageReasonCode::SourceUnreadable);
                 for reason in &source_reasons {
-                    push_reason(&mut reasons, reason.code);
+                    super::scan::push_reason_count(&mut reasons, reason.code, reason.count);
                 }
                 sources.push(UsageSourceScan {
                     index: file_index(&current, &options.parser_revision),
                     source: current.clone(),
                     records: Vec::new(),
+                    record_keys: Vec::new(),
                     coverage: source_coverage(UsageAgent::OpenCode, options, source_reasons),
                 });
                 continue;
@@ -263,12 +276,14 @@ fn scan_databases(
                         let value = db_row.value();
                         let mut parser = OpenCodeParser;
                         let parsed = parser.parse(&value, &current.source_file_id);
-                        super::scan::collect_parsed(
-                            parsed,
-                            &mut source_records,
-                            &mut source_reasons,
-                            &range,
-                        );
+                        ignored_empty_records =
+                            ignored_empty_records.saturating_add(super::scan::collect_parsed(
+                                parsed,
+                                &mut source_records,
+                                &mut source_reasons,
+                                &range,
+                                rows_seen as u64,
+                            ));
                     }
                 }
                 Err(_) => push_reason(&mut source_reasons, CoverageReasonCode::SourceUnreadable),
@@ -289,16 +304,21 @@ fn scan_databases(
             None => current.clone(),
         };
         for reason in &source_reasons {
-            push_reason(&mut reasons, reason.code);
+            super::scan::push_reason_count(&mut reasons, reason.code, reason.count);
         }
         records.extend(source_records.iter().cloned());
+        let record_keys = source_records
+            .iter()
+            .map(|record| record.record_key.clone())
+            .collect();
         sources.push(UsageSourceScan {
             index: file_index(&source, &options.parser_revision),
             source,
             records: source_records
-                .into_iter()
-                .map(|record| record.event)
+                .iter()
+                .map(|record| record.event.clone())
                 .collect(),
+            record_keys,
             coverage: source_coverage(UsageAgent::OpenCode, options, source_reasons),
         });
     }
@@ -321,6 +341,7 @@ fn scan_databases(
             reasons,
             scanned_source_count: scanned_sources,
             skipped_source_count: skipped_sources,
+            ignored_empty_records,
             unchanged_source_file_ids,
             deleted_source_file_ids,
             sources,

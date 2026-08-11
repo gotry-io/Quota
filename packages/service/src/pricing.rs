@@ -87,6 +87,12 @@ pub struct UsageCostOutcome {
     pub unpriced_rows: u64,
     pub assumptions: Vec<UsageCostAssumption>,
     pub unpriced: Vec<UsageUnpricedItem>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub unpriced_truncated: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -499,9 +505,7 @@ pub fn fold_prepared_usage_costs(
     } else {
         UsageCostStatus::Unavailable
     };
-    if unpriced.len() > MAX_UNPRICED_ITEMS {
-        return Err(UsageError("too many unpriced Usage groups".into()));
-    }
+    let unpriced_truncated = unpriced.len() > MAX_UNPRICED_ITEMS;
     let mut assumptions = assumptions.into_iter().collect::<Vec<_>>();
     assumptions.sort_by_key(|value| assumption_key(*value));
     let mut unpriced = unpriced
@@ -548,7 +552,8 @@ pub fn fold_prepared_usage_costs(
         reported_rows,
         unpriced_rows,
         assumptions,
-        unpriced,
+        unpriced: unpriced.into_iter().take(MAX_UNPRICED_ITEMS).collect(),
+        unpriced_truncated,
     })
 }
 
@@ -835,12 +840,7 @@ fn opaque_id(value: &str) -> bool {
             .all(|value| value.is_ascii_alphanumeric() || b"._:-".contains(&value))
 }
 fn model_name(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 128
-        && value.as_bytes()[0].is_ascii_alphanumeric()
-        && value
-            .bytes()
-            .all(|value| value.is_ascii_alphanumeric() || b"._:/+-".contains(&value))
+    crate::usage::bounded_model_text(Some(value)).is_some()
 }
 fn pricing_dimension(value: &str) -> bool {
     value == "*"

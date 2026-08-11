@@ -1,9 +1,9 @@
 use super::{
     BillingChannel, ContextBucket, CoverageReasonCode, CoverageStatus, MAX_JSONL_LINE_BYTES,
-    MAX_USAGE_BREAKDOWNS, MAX_USAGE_MODELS, MAX_USAGE_ROWS, NormalizedUsageEvent, UsageAgent,
-    UsageFileIndex, UsageHourlyFact, UsageScanOptions, aggregate_usage_events,
-    build_usage_breakdowns, fold_usage_facts, scan_claude_usage, scan_codex_usage, scan_grok_usage,
-    scan_local_usage, scan_opencode_usage, scan_pi_usage,
+    MAX_USAGE_BREAKDOWNS, MAX_USAGE_ROWS, NormalizedUsageEvent, UsageAgent, UsageFileIndex,
+    UsageHourlyFact, UsageScanOptions, aggregate_usage_events, build_usage_breakdowns,
+    build_usage_breakdowns_with_status, fold_usage_facts, scan_claude_usage, scan_codex_usage,
+    scan_grok_usage, scan_local_usage, scan_opencode_usage, scan_pi_usage,
 };
 use crate::pricing::{
     CalculatedUsageRowCost, PricingCatalog, PricingCatalogEntry, PricingRates, UsageCostAssumption,
@@ -160,6 +160,82 @@ fn parser_fixtures_preserve_normalized_fields_and_coverage() {
         }
         let _ = fs::remove_dir_all(path);
     }
+}
+
+#[test]
+fn codex_preserves_opaque_provider_model_names() {
+    let path = root("codex-opaque-models");
+    let log = r#"{"type":"turn_context","payload":{"model":"GPT-5.5[1m]"}}
+{"timestamp":"2026-08-02T10:02:00Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":10,"output_tokens":2}}}}
+{"type":"turn_context","payload":{"model":"openrouter-3o[1m]"}}
+{"timestamp":"2026-08-02T10:03:00Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":20,"output_tokens":3}}}}
+"#;
+    fs::write(path.join("rollout-opaque.jsonl"), log).expect("write Codex fixture");
+    let result = scan_codex_usage(&options(&path)).expect("scan opaque Codex models");
+    assert_eq!(result.coverage.status, CoverageStatus::Complete);
+    assert_eq!(
+        result
+            .records
+            .iter()
+            .map(|record| record.event.model.as_str())
+            .collect::<Vec<_>>(),
+        ["GPT-5.5[1m]", "openrouter-3o[1m]"]
+    );
+}
+
+#[test]
+fn codex_uses_only_explicit_known_model_provider_channels() {
+    let path = root("codex-model-provider");
+    let log = r#"{"type":"turn_context","payload":{"model":"gpt-5","model_provider":"openai"}}
+{"timestamp":"2026-08-02T10:02:00Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":10,"output_tokens":2}}}}
+{"type":"turn_context","payload":{"model":"custom","model_provider":"my-gateway"}}
+{"timestamp":"2026-08-02T10:03:00Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":20,"output_tokens":3}}}}
+"#;
+    fs::write(path.join("rollout-provider.jsonl"), log).expect("write Codex provider fixture");
+    let result = scan_codex_usage(&options(&path)).expect("scan Codex providers");
+    assert_eq!(result.records.len(), 2);
+    assert_eq!(
+        result.records[0].event.billing_channel,
+        BillingChannel::OpenaiDirect
+    );
+    assert_eq!(
+        result.records[0].event.channel_source,
+        super::ChannelSource::Explicit
+    );
+    assert_eq!(
+        result.records[1].event.billing_channel,
+        BillingChannel::Unknown
+    );
+    assert_eq!(
+        result.records[1].event.channel_source,
+        super::ChannelSource::Unknown
+    );
+}
+
+#[test]
+fn codex_invalid_context_does_not_reuse_the_previous_model() {
+    let path = root("codex-stale-model");
+    let invalid_model = "m".repeat(129);
+    let log = format!(
+        "{}\n{}\n{}\n{}\n{}\n",
+        json!({"type":"turn_context","payload":{"model":"old-model"}}),
+        json!({"timestamp":"2026-08-02T10:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":10,"output_tokens":1}}}}),
+        json!({"type":"turn_context","payload":{"model":invalid_model}}),
+        json!({"timestamp":"2026-08-02T10:01:00Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":20,"output_tokens":2}}}}),
+        json!({"type":"turn_context","payload":{"model":"new-model"}}),
+    ) + &json!({"timestamp":"2026-08-02T10:02:00Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":30,"output_tokens":3}}}}).to_string();
+    fs::write(path.join("rollout-stale-model.jsonl"), log).expect("write stale model fixture");
+    let result = scan_codex_usage(&options(&path)).expect("scan stale model fixture");
+    assert_eq!(result.records.len(), 2);
+    assert_eq!(result.records[0].event.model, "old-model");
+    assert_eq!(result.records[1].event.model, "new-model");
+    assert!(
+        result
+            .records
+            .iter()
+            .all(|record| record.event.model != invalid_model)
+    );
+    let _ = fs::remove_dir_all(path);
 }
 
 #[test]
@@ -340,7 +416,6 @@ fn parser_limits_and_invalid_records_are_partial_without_payload_leakage() {
             .map(|reason| reason.code)
             .collect::<Vec<_>>(),
         vec![
-            CoverageReasonCode::InvalidUsage,
             CoverageReasonCode::InvalidUsage,
             CoverageReasonCode::UnknownRecord,
             CoverageReasonCode::TruncatedTail,
@@ -729,16 +804,16 @@ fn aggregation_rejects_invalid_ranges_subsets_timezones_and_safe_integer_overflo
 
 #[test]
 fn usage_internal_rows_models_and_breakdowns_preserve_limits_semantics() {
-    let models = (0..=MAX_USAGE_MODELS)
+    let models = (0..=64)
         .map(|index| test_event("2026-08-02T00:01:00Z", &format!("gpt-{index}"), 0))
         .collect::<Vec<_>>();
     let model_rows = aggregate_usage_events(&models, "UTC").expect("internal model aggregation");
-    assert_eq!(model_rows.len(), MAX_USAGE_MODELS + 1);
+    assert_eq!(model_rows.len(), 65);
     assert_eq!(
         fold_usage_facts(&model_rows)
             .expect("internal model totals")
             .requests,
-        (MAX_USAGE_MODELS + 1) as u64
+        65
     );
 
     let rows = (0..=MAX_USAGE_ROWS)
@@ -763,10 +838,13 @@ fn usage_internal_rows_models_and_breakdowns_preserve_limits_semantics() {
             test_fact(&bucket, "gpt-5")
         })
         .collect::<Vec<_>>();
-    let breakdown_error =
-        build_usage_breakdowns(&breakdown_rows, None, UsageCostMode::Reported, true)
-            .expect_err("breakdown limit");
-    assert!(breakdown_error.0.contains("breakdown count"));
+    let breakdowns = build_usage_breakdowns(&breakdown_rows, None, UsageCostMode::Reported, true)
+        .expect("bounded breakdown detail");
+    assert_eq!(breakdowns.len(), MAX_USAGE_BREAKDOWNS);
+    let (_, truncated) =
+        build_usage_breakdowns_with_status(&breakdown_rows, None, UsageCostMode::Reported, true)
+            .expect("bounded breakdown status");
+    assert!(truncated);
 }
 
 #[test]
@@ -1022,6 +1100,37 @@ fn pricing_keeps_large_counts_exact_and_reports_unpriced_reasons() {
 }
 
 #[test]
+fn pricing_caps_unpriced_detail_without_losing_rows_or_status() {
+    let rows = (0..101)
+        .map(|index| {
+            test_fact_with_input("2026-08-02T12:00:00Z", &format!("opaque-model-{index}"), 1)
+        })
+        .collect::<Vec<_>>();
+    let outcome = calculate_usage_cost(
+        &rows,
+        Some(&pricing_catalog(Vec::new())),
+        UsageCostMode::Calculate,
+    )
+    .expect("unpriced detail is bounded");
+    assert_eq!(outcome.unpriced_rows, 101);
+    assert_eq!(outcome.unpriced.len(), 100);
+    assert!(outcome.unpriced_truncated);
+    assert_eq!(outcome.status, UsageCostStatus::Unavailable);
+}
+
+#[test]
+fn usage_breakdowns_cap_detail_without_failing_totals() {
+    let rows = (0..1_001)
+        .map(|index| test_fact_with_input("2026-08-02T12:00:00Z", &format!("model-{index}"), 1))
+        .collect::<Vec<_>>();
+    let (breakdowns, truncated) =
+        build_usage_breakdowns_with_status(&rows, None, UsageCostMode::Calculate, false)
+            .expect("bounded breakdowns");
+    assert_eq!(breakdowns.len(), 1_000);
+    assert!(truncated);
+}
+
+#[test]
 fn protocol_amount_and_source_cost_bounds_fail_explicitly_instead_of_truncating() {
     let no_cost_wire = serde_json::to_value(test_fact("2026-08-02T12:00:00Z", "gpt-5"))
         .expect("serialize no-cost hourly fact");
@@ -1206,6 +1315,44 @@ fn malformed_and_truncated_lines_make_coverage_partial_without_exporting_payload
     )
     .expect("serialize normalized events");
     assert!(!serialized.contains("payload"));
+    let _ = fs::remove_dir_all(path);
+}
+
+#[test]
+fn invalid_reason_counts_are_saturated_and_not_limited_to_sample_capacity() {
+    let path = root("reason-counts");
+    let invalid_model = "m".repeat(129);
+    let lines = (0..200)
+        .map(|index| {
+            json!({
+                "timestamp": format!("2026-08-02T00:{:02}:00Z", index % 60),
+                "type": "event_msg",
+                "payload": {
+                    "type": "token_count",
+                    "info": {
+                        "model": invalid_model,
+                        "last_token_usage": {"input_tokens": 1, "output_tokens": 1}
+                    }
+                }
+            })
+            .to_string()
+        })
+        .collect::<Vec<_>>();
+    fs::write(
+        path.join("rollout-reason-counts.jsonl"),
+        format!("{}\n", lines.join("\n")),
+    )
+    .expect("write invalid records");
+
+    let result = scan_codex_usage(&options(&path)).expect("scan invalid records");
+    let count = result
+        .coverage
+        .reasons
+        .iter()
+        .find(|reason| reason.code == CoverageReasonCode::InvalidModel)
+        .map(|reason| reason.count);
+    assert_eq!(count, Some(200));
+    assert!(result.records.is_empty());
     let _ = fs::remove_dir_all(path);
 }
 

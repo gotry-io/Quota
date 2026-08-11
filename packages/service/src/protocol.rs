@@ -6,6 +6,7 @@
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
+use std::collections::BTreeMap;
 
 pub const IPC_VERSION: u32 = 1;
 pub const MAXIMUM_LINE_BYTES: usize = 1_048_576;
@@ -15,6 +16,7 @@ pub const MAXIMUM_REQUEST_ID_BYTES: usize = 128;
 #[serde(rename_all = "snake_case")]
 pub enum Operation {
     GetState,
+    Diagnose,
     Refresh,
     Login,
     CancelLogin,
@@ -345,6 +347,59 @@ pub struct StateSnapshot {
     pub pricing: ComponentState,
     pub providers: Vec<ProviderConfigView>,
     pub overview: Vec<QuotaOverviewItem>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiagnosticStatus {
+    Healthy,
+    Degraded,
+    Blocked,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DiagnosticClient {
+    pub name: String,
+    pub version: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DiagnosticComponent {
+    pub name: String,
+    pub status: String,
+    pub message: Option<String>,
+    pub metrics: BTreeMap<String, i64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiagnosticSeverity {
+    Info,
+    Warning,
+    Error,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DiagnosticIssue {
+    pub component: String,
+    pub code: String,
+    pub severity: DiagnosticSeverity,
+    pub count: i64,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DiagnosticReport {
+    pub schema_version: u32,
+    pub status: DiagnosticStatus,
+    pub generated_at: String,
+    pub client: DiagnosticClient,
+    pub components: Vec<DiagnosticComponent>,
+    pub issues: Vec<DiagnosticIssue>,
 }
 
 #[cfg(test)]

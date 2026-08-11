@@ -92,6 +92,7 @@ pub trait LocalBackend: Send + Sync {
     /// One refresh transaction.  Implementations may collect quota/Usage in parallel, but must
     /// order pricing/control, upload/outbox, account summary, and overview merging explicitly.
     fn refresh(&self, cancel: Arc<AtomicBool>) -> RefreshOutcome;
+    fn diagnose(&self) -> Result<DiagnosticReport, BackendError>;
     fn login(
         &self,
         installation_id: &str,
@@ -114,6 +115,9 @@ impl LocalBackend for UnavailableBackend {
             pricing: unavailable(),
             overview: None,
         }
+    }
+    fn diagnose(&self) -> Result<DiagnosticReport, BackendError> {
+        Err(BackendError::unavailable())
     }
     fn login(&self, _: &str, _: Arc<AtomicBool>) -> Result<LoginOutcome, BackendError> {
         Err(BackendError::unavailable())
@@ -221,6 +225,7 @@ impl LocalService {
         }
         let result: Result<Value, IpcError> = match request.operation {
             Operation::GetState => self.get_state(&request).map(as_json),
+            Operation::Diagnose => self.diagnose(&request).map(as_json),
             Operation::Refresh => self.refresh(&request).map(as_json),
             Operation::Login => self.login(&request).map(as_json),
             Operation::CancelLogin => self.cancel_login(&request).map(as_json),
@@ -267,6 +272,11 @@ impl LocalService {
     fn refresh(&self, request: &IpcRequest) -> Result<RefreshResult, IpcError> {
         request.decode_payload::<EmptyPayload>()?;
         Ok(self.request_refresh())
+    }
+
+    fn diagnose(&self, request: &IpcRequest) -> Result<DiagnosticReport, IpcError> {
+        request.decode_payload::<EmptyPayload>()?;
+        self.inner.backend.diagnose().map_err(|error| error.error)
     }
 
     fn login(&self, request: &IpcRequest) -> Result<LoginResult, IpcError> {

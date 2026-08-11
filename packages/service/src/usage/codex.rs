@@ -26,13 +26,37 @@ struct TokenUsage {
     total: u64,
 }
 
-#[derive(Default)]
 struct CodexParser {
     current_model: Option<String>,
+    context_invalidated: bool,
     service_tier: String,
     speed: String,
+    billing_channel: BillingChannel,
+    channel_source: ChannelSource,
     previous_totals: Option<TokenUsage>,
     pending_records: Vec<NormalizedUsageRecord>,
+}
+
+impl Default for CodexParser {
+    fn default() -> Self {
+        Self {
+            current_model: None,
+            context_invalidated: false,
+            service_tier: String::new(),
+            speed: String::new(),
+            billing_channel: BillingChannel::OpenaiDirect,
+            channel_source: ChannelSource::AgentDefault,
+            previous_totals: None,
+            pending_records: Vec::new(),
+        }
+    }
+}
+
+fn explicit_billing_channel(value: &str) -> BillingChannel {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "openai" => BillingChannel::OpenaiDirect,
+        _ => BillingChannel::Unknown,
+    }
 }
 
 impl CodexParser {
@@ -70,6 +94,7 @@ impl CodexParser {
     }
 
     fn settings(&mut self, payload: &Map<String, Value>) -> Option<super::CoverageReasonCode> {
+        self.update_provider(payload);
         let settings = object(payload.get("thread_settings"));
         let value = settings.and_then(|value| value.get("service_tier"))?;
         match value.as_str() {
@@ -95,6 +120,18 @@ impl CodexParser {
             }
         }
     }
+
+    fn update_provider(&mut self, value: &Map<String, Value>) {
+        let Some(provider) = value.get("model_provider").and_then(Value::as_str) else {
+            return;
+        };
+        self.billing_channel = explicit_billing_channel(provider);
+        self.channel_source = if self.billing_channel == BillingChannel::Unknown {
+            ChannelSource::Unknown
+        } else {
+            ChannelSource::Explicit
+        };
+    }
 }
 
 impl UsageParser for CodexParser {
@@ -102,14 +139,20 @@ impl UsageParser for CodexParser {
         match string_field(value, "type") {
             Some("turn_context") => {
                 let payload = object(value.get("payload"));
+                if let Some(payload) = payload {
+                    self.update_provider(payload);
+                }
                 let Some(model) = bounded_model(payload.and_then(|value| value.get("model")))
                 else {
+                    self.invalidate_context();
                     return ParsedLine::reason(super::CoverageReasonCode::InvalidModel);
                 };
                 self.current_model = Some(model);
+                self.context_invalidated = false;
                 ParsedLine {
                     records: self.take_pending(),
                     reason: None,
+                    ignored_empty_records: 0,
                 }
             }
             Some("event_msg") => self.event_message(value, source_file_id),
@@ -134,6 +177,13 @@ impl UsageParser for CodexParser {
 }
 
 impl CodexParser {
+    fn invalidate_context(&mut self) {
+        self.current_model = None;
+        self.context_invalidated = true;
+        self.previous_totals = None;
+        self.pending_records.clear();
+    }
+
     fn event_message(&mut self, value: &Map<String, Value>, source_file_id: &str) -> ParsedLine {
         let Some(payload) = object(value.get("payload")) else {
             return ParsedLine::reason(super::CoverageReasonCode::UnknownRecord);
@@ -145,6 +195,7 @@ impl CodexParser {
             return ParsedLine {
                 records: Vec::new(),
                 reason: self.settings(payload),
+                ignored_empty_records: 0,
             };
         }
         if payload_type != "token_count" {
@@ -166,12 +217,23 @@ impl CodexParser {
         let Some(info) = object(Some(info_value)) else {
             return ParsedLine::reason(super::CoverageReasonCode::InvalidUsage);
         };
+        self.update_provider(payload);
+        self.update_provider(info);
         let parsed_model = match self.model_from(payload, info) {
             Ok(value) => value,
-            Err(()) => return ParsedLine::reason(super::CoverageReasonCode::InvalidModel),
+            Err(()) => {
+                self.invalidate_context();
+                return ParsedLine::reason(super::CoverageReasonCode::InvalidModel);
+            }
         };
         if let Some(model) = parsed_model {
             self.current_model = Some(model);
+            self.context_invalidated = false;
+        }
+        if self.current_model.is_none() && self.context_invalidated {
+            // An invalid explicit context invalidates the previous attribution. Do not queue a
+            // token record here: a later valid context must never relabel it as that model.
+            return ParsedLine::reason(super::CoverageReasonCode::InvalidModel);
         }
         let mut records = self.take_pending();
         let total = match optional_token_usage(info.get("total_token_usage")) {
@@ -180,6 +242,7 @@ impl CodexParser {
                 return ParsedLine {
                     records,
                     reason: Some(super::CoverageReasonCode::InvalidUsage),
+                    ignored_empty_records: 0,
                 };
             }
         };
@@ -189,6 +252,7 @@ impl CodexParser {
                 return ParsedLine {
                     records,
                     reason: Some(super::CoverageReasonCode::InvalidUsage),
+                    ignored_empty_records: 0,
                 };
             }
         };
@@ -201,6 +265,7 @@ impl CodexParser {
                 return ParsedLine {
                     records,
                     reason: None,
+                    ignored_empty_records: 0,
                 };
             }
             let usage = last.or_else(|| {
@@ -213,6 +278,7 @@ impl CodexParser {
                 return ParsedLine {
                     records,
                     reason: Some(super::CoverageReasonCode::InvalidUsage),
+                    ignored_empty_records: 0,
                 };
             };
             usage
@@ -221,6 +287,7 @@ impl CodexParser {
                 return ParsedLine {
                     records,
                     reason: None,
+                    ignored_empty_records: 0,
                 };
             };
             usage
@@ -229,6 +296,7 @@ impl CodexParser {
             return ParsedLine {
                 records,
                 reason: None,
+                ignored_empty_records: 1,
             };
         }
         let event = NormalizedUsageEvent {
@@ -238,8 +306,8 @@ impl CodexParser {
                 .current_model
                 .clone()
                 .unwrap_or_else(|| "unknown".into()),
-            billing_channel: BillingChannel::OpenaiDirect,
-            channel_source: ChannelSource::AgentDefault,
+            billing_channel: self.billing_channel,
+            channel_source: self.channel_source,
             input_tokens: usage.input,
             cache_read_tokens: usage.cache_read,
             cache_write_5m_tokens: 0,
@@ -267,6 +335,7 @@ impl CodexParser {
         let record = NormalizedUsageRecord {
             event,
             source_file_id: source_file_id.to_owned(),
+            record_key: String::new(),
         };
         if self.current_model.is_none() {
             self.pending_records.push(record);
@@ -276,6 +345,7 @@ impl CodexParser {
         ParsedLine {
             records,
             reason: None,
+            ignored_empty_records: 0,
         }
     }
 }
@@ -354,5 +424,9 @@ fn equal_usage(left: TokenUsage, right: TokenUsage) -> bool {
 }
 
 fn is_empty_usage(value: TokenUsage) -> bool {
-    value.input == 0 && value.output == 0 && value.cache_write == 0
+    value.input == 0
+        && value.cache_read == 0
+        && value.cache_write == 0
+        && value.output == 0
+        && value.reasoning == 0
 }

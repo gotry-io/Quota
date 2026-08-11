@@ -59,7 +59,7 @@ pub enum Command {
     Help,
     Version,
     Status(StatusOptions),
-    Doctor,
+    Doctor(OutputOptions),
     Login { output: OutputOptions },
     Logout(OutputOptions),
     AuthStatus(OutputOptions),
@@ -100,14 +100,16 @@ where
         "help" | "--help" | "-h" => Ok(Command::Help),
         "version" | "--version" | "-v" => Ok(Command::Version),
         "status" => parse_status(&args[1..]),
-        "doctor"
+        "doctor" => {
             if args[1..]
                 .iter()
-                .any(|arg| matches!(arg.as_str(), "--help" | "-h")) =>
-        {
-            Ok(Command::Help)
+                .any(|arg| matches!(arg.as_str(), "--help" | "-h"))
+            {
+                Ok(Command::Help)
+            } else {
+                parse_output_only(&args[1..]).map(Command::Doctor)
+            }
         }
-        "doctor" => parse_no_options(&args[1..], Command::Doctor),
         "login" => parse_login(&args[1..]),
         "logout"
             if args[1..]
@@ -123,13 +125,6 @@ where
         "config" => parse_config(&args[1..]),
         _ => Err(ParseError::unknown_command()),
     }
-}
-
-fn parse_no_options<T>(args: &[String], value: T) -> Result<T, ParseError> {
-    if args.is_empty() || (args.len() == 1 && matches!(args[0].as_str(), "--help" | "-h")) {
-        return Ok(value);
-    }
-    Err(ParseError::unknown_option())
 }
 
 fn parse_status(args: &[String]) -> Result<Command, ParseError> {
@@ -359,7 +354,7 @@ fn parse_format(value: String) -> Result<OutputFormat, ParseError> {
 }
 
 pub fn usage() -> &'static str {
-    "QuotaCLI\n\nUsage:\n  quotacli version\n  quotacli status [--provider <id>|all] [--format text|json] [--pretty]\n  quotacli doctor\n  quotacli login [--format text|json] [--pretty]\n  quotacli logout [--format text|json] [--pretty]\n  quotacli auth status [--format text|json] [--pretty]\n  quotacli sync [--format json] [--pretty]\n  quotacli account summary [--format json] [--pretty]\n  quotacli config set <provider> [--base-url <url>]\n  quotacli config get <provider>\n  quotacli config unset <provider>\n  quotacli config list\n  quotacli help"
+    "QuotaCLI\n\nUsage:\n  quotacli version\n  quotacli status [--provider <id>|all] [--format text|json] [--pretty]\n  quotacli doctor [--format text|json] [--pretty]\n  quotacli login [--format text|json] [--pretty]\n  quotacli logout [--format text|json] [--pretty]\n  quotacli auth status [--format text|json] [--pretty]\n  quotacli sync [--format json] [--pretty]\n  quotacli account summary [--format json] [--pretty]\n  quotacli config set <provider> [--base-url <url>]\n  quotacli config get <provider>\n  quotacli config unset <provider>\n  quotacli config list\n  quotacli help"
 }
 
 #[cfg(test)]
@@ -373,7 +368,14 @@ mod tests {
     #[test]
     fn parses_native_command_shapes_without_a_parser_dependency() {
         assert!(matches!(parse_words("version"), Ok(Command::Version)));
-        assert!(matches!(parse_words("doctor"), Ok(Command::Doctor)));
+        assert!(matches!(parse_words("doctor"), Ok(Command::Doctor(_))));
+        assert!(matches!(
+            parse_words("doctor --format json --pretty"),
+            Ok(Command::Doctor(OutputOptions {
+                format: OutputFormat::Json,
+                pretty: true,
+            }))
+        ));
         assert!(matches!(
             parse_words("login --format json"),
             Ok(Command::Login {

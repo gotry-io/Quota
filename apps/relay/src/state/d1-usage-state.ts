@@ -1,4 +1,4 @@
-import { isReleasedUnknownUsageModel } from "@gotry-io/quota-protocol";
+import { MAXIMUM_USAGE_COVERAGE_ITEMS } from "@gotry-io/quota-protocol";
 import type {
   DevicePrincipal,
   StoredUsageCoverage,
@@ -27,6 +27,30 @@ interface UsageReceiptRow {
   agent: string;
   start_at: string;
   end_at: string;
+  write_mode: "merge_partial" | null;
+  multipart_batch_id: string | null;
+  multipart_part_index: number | null;
+  multipart_part_count: number | null;
+  rejection_reason: "duplicate_fact_identity" | null;
+}
+
+interface MultipartPartRow {
+  device_id: string;
+  batch_id: string;
+  part_index: number;
+  part_count: number;
+  submission_id: string;
+  generation: number;
+  sequence: number;
+  request_digest: string;
+  write_mode: "merge_partial" | null;
+  agent: string;
+  start_at: string;
+  end_at: string;
+  parser_revision: string;
+  aggregation_timezone: string;
+  rows_json: string;
+  accepted_at: string;
 }
 
 interface UsageRow extends Omit<StoredUsageHourlyFact, "source_cost_microusd"> {
@@ -44,15 +68,41 @@ export class D1UsageState implements UsageState {
     const requestDigest = await canonicalRequestDigest(submission);
     const receipt = await this.getReceipt(principal.device_id, submission.submission_id);
     if (receipt) {
-      return receiptMatches(receipt, submission, requestDigest)
-        ? {
-            outcome: "duplicate",
+      if (!receiptMatches(receipt, submission, requestDigest)) {
+        return { outcome: "sequence_conflict" };
+      }
+      if (receipt.rejection_reason) {
+        return {
+          outcome: "rejected",
+          rejection_reason: receipt.rejection_reason,
+          usage_sync_revision: receipt.usage_sync_revision,
+          next_sequence: receipt.sequence + 1,
+        };
+      }
+      if (receipt.multipart_batch_id) {
+        const finalized = await this.finalizeMultipart(
+          principal,
+          receipt.multipart_batch_id,
+          receivedAt,
+        );
+        if (finalized === "rejected") {
+          return {
+            outcome: "rejected",
+            rejection_reason: "duplicate_fact_identity",
             usage_sync_revision: receipt.usage_sync_revision,
             next_sequence: receipt.sequence + 1,
-          }
-        : { outcome: "sequence_conflict" };
+          };
+        }
+      }
+      return {
+        outcome: "duplicate",
+        usage_sync_revision: receipt.usage_sync_revision,
+        next_sequence: receipt.sequence + 1,
+      };
     }
-    if (submission.coverage.status === "partial") {
+    // Released clients used partial coverage as a read-only marker. Only the
+    // explicit additive write mode may merge rows into an existing range.
+    if (submission.coverage.status === "partial" && submission.write_mode !== "merge_partial") {
       return { outcome: "partial" };
     }
     const device = await this.database
@@ -81,117 +131,42 @@ export class D1UsageState implements UsageState {
     }
 
     const revision = device.usage_sync_revision + 1;
-    const statements = [
-      this.database
-        .prepare(
-          `INSERT INTO usage_submissions (
-             device_id, submission_id, generation, sequence, request_digest,
-             usage_sync_revision, agent, start_at, end_at, accepted_at
-           )
-           SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10
-           WHERE EXISTS (
-             SELECT 1 FROM devices
-             WHERE id = ?1 AND account_id = ?11 AND generation = ?3
-               AND signed_out_at IS NULL AND deleted_at IS NULL
-               AND last_usage_sequence = ?4 - 1
-               AND (deleted_before IS NULL OR
-                    strftime('%Y-%m-%dT%H:00:00.000Z', deleted_before) <= ?8)
-           )`,
-        )
-        .bind(
-          principal.device_id,
-          submission.submission_id,
-          submission.generation,
-          submission.sequence,
-          requestDigest,
-          revision,
-          submission.coverage.agent,
-          submission.coverage.start_at,
-          submission.coverage.end_at,
-          receivedAt,
-          principal.account_id,
-        ),
-      this.database
-        .prepare(
-          `DELETE FROM usage_hourly
-           WHERE device_id = ?1 AND agent = ?3
-             AND bucket_start_utc >= ?4 AND bucket_start_utc < ?5
-             AND EXISTS (
-               SELECT 1 FROM usage_submissions
-               WHERE device_id = ?1 AND submission_id = ?2
-             )`,
-        )
-        .bind(
-          principal.device_id,
-          submission.submission_id,
-          submission.coverage.agent,
-          submission.coverage.start_at,
-          submission.coverage.end_at,
-        ),
-      ...submission.rows
-        .filter((row) => !isReleasedUnknownUsageModel(row.model))
-        .map((row) => this.insertRow(principal.device_id, submission, row)),
-      this.preserveCoverageSide(principal.device_id, submission, "left"),
-      this.preserveCoverageSide(principal.device_id, submission, "right"),
-      this.database
-        .prepare(
-          `DELETE FROM usage_coverage
-           WHERE device_id = ?1 AND agent = ?3 AND start_at < ?5 AND end_at > ?4
-             AND EXISTS (
-               SELECT 1 FROM usage_submissions
-               WHERE device_id = ?1 AND submission_id = ?2
-             )`,
-        )
-        .bind(
-          principal.device_id,
-          submission.submission_id,
-          submission.coverage.agent,
-          submission.coverage.start_at,
-          submission.coverage.end_at,
-        ),
-      this.database
-        .prepare(
-          `INSERT INTO usage_coverage (
-             device_id, agent, start_at, end_at, parser_revision, submission_id, accepted_at
-           )
-           SELECT ?1, ?3, ?4, ?5, ?6, ?2, ?7
-           WHERE EXISTS (
-             SELECT 1 FROM usage_submissions
-             WHERE device_id = ?1 AND submission_id = ?2
-           )`,
-        )
-        .bind(
-          principal.device_id,
-          submission.submission_id,
-          submission.coverage.agent,
-          submission.coverage.start_at,
-          submission.coverage.end_at,
-          submission.parser_revision,
-          receivedAt,
-        ),
-      this.database
-        .prepare(
-          `UPDATE devices
-           SET last_usage_sequence = ?3, usage_sync_revision = ?4, last_seen_at = ?5
-           WHERE id = ?1 AND account_id = ?2 AND generation = ?6
-             AND last_usage_sequence = ?3 - 1
-             AND EXISTS (
-               SELECT 1 FROM usage_submissions
-               WHERE device_id = ?1 AND submission_id = ?7
-             )
-           RETURNING usage_sync_revision`,
-        )
-        .bind(
-          principal.device_id,
-          principal.account_id,
-          submission.sequence,
-          revision,
-          receivedAt,
-          submission.generation,
-          submission.submission_id,
-        ),
-    ];
+    if (submission.multipart) {
+      const staged = await this.stageMultipart(
+        principal,
+        submission,
+        requestDigest,
+        receivedAt,
+        revision,
+      );
+      if (!staged) return { outcome: "sequence_conflict" };
+      const finalized = await this.finalizeMultipart(
+        principal,
+        submission.multipart.batch_id,
+        receivedAt,
+      );
+      if (finalized === "rejected") {
+        return {
+          outcome: "rejected",
+          rejection_reason: "duplicate_fact_identity",
+          usage_sync_revision: revision,
+          next_sequence: submission.sequence + 1,
+        };
+      }
+      return {
+        outcome: "accepted",
+        usage_sync_revision: revision,
+        next_sequence: submission.sequence + 1,
+      };
+    }
 
+    const statements = this.acceptedSubmissionStatements(
+      principal,
+      submission,
+      requestDigest,
+      receivedAt,
+      revision,
+    );
     try {
       const results = await this.database.batch(statements);
       const updated = results.at(-1)?.results[0] as { usage_sync_revision?: number } | undefined;
@@ -218,9 +193,7 @@ export class D1UsageState implements UsageState {
         )
         .bind(principal.device_id, submission.generation, submission.sequence)
         .first<{ found: number }>();
-      if (conflicting) {
-        return { outcome: "sequence_conflict" };
-      }
+      if (conflicting) return { outcome: "sequence_conflict" };
       throw new Error("Usage persistence failed");
     }
     return { outcome: "sequence_conflict" };
@@ -300,11 +273,12 @@ export class D1UsageState implements UsageState {
       coverageParameters.push(query.end_at);
       coverageConditions.push(`coverage.start_at < ?${coverageParameters.length}`);
     }
-    coverageParameters.push(query.limit + 1);
+    const coverageLimit = Math.min(query.limit, MAXIMUM_USAGE_COVERAGE_ITEMS);
+    coverageParameters.push(coverageLimit + 1);
     const coverage = await this.database
       .prepare(
         `SELECT coverage.device_id, coverage.agent, coverage.start_at, coverage.end_at,
-                'complete' AS status,
+                coverage.status,
                 coverage.parser_revision, coverage.accepted_at
          FROM usage_coverage AS coverage
          INNER JOIN devices ON devices.id = coverage.device_id
@@ -316,22 +290,539 @@ export class D1UsageState implements UsageState {
       .bind(...coverageParameters)
       .all<StoredUsageCoverage>();
 
-    const truncated = rows.results.length > query.limit || coverage.results.length > query.limit;
+    const coverageTruncated = coverage.results.length > coverageLimit;
     return {
       rows: rows.results.slice(0, query.limit).map(({ source_cost_microusd, ...row }) => ({
         ...row,
         ...(source_cost_microusd === null ? {} : { source_cost_microusd }),
       })),
-      coverage: coverage.results.slice(0, query.limit),
-      truncated,
+      coverage: coverage.results.slice(0, coverageLimit),
+      truncated: rows.results.length > query.limit,
+      coverage_truncated: coverageTruncated,
     };
+  }
+
+  private acceptedSubmissionStatements(
+    principal: DevicePrincipal,
+    submission: UsageSubmission,
+    requestDigest: string,
+    receivedAt: string,
+    revision: number,
+  ): D1PreparedStatement[] {
+    const statements: D1PreparedStatement[] = [
+      this.database
+        .prepare(
+          `INSERT INTO usage_submissions (
+             device_id, submission_id, generation, sequence, request_digest,
+             usage_sync_revision, agent, start_at, end_at, accepted_at,
+             write_mode
+           )
+           SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11
+           WHERE EXISTS (
+             SELECT 1 FROM devices
+             WHERE id = ?1 AND account_id = ?12 AND generation = ?3
+               AND signed_out_at IS NULL AND deleted_at IS NULL
+               AND last_usage_sequence = ?4 - 1
+               AND (deleted_before IS NULL OR
+                    strftime('%Y-%m-%dT%H:00:00.000Z', deleted_before) <= ?8)
+           )`,
+        )
+        .bind(
+          principal.device_id,
+          submission.submission_id,
+          submission.generation,
+          submission.sequence,
+          requestDigest,
+          revision,
+          submission.coverage.agent,
+          submission.coverage.start_at,
+          submission.coverage.end_at,
+          receivedAt,
+          submission.write_mode ?? null,
+          principal.account_id,
+        ),
+    ];
+    statements.push(
+      ...this.usageMutationStatements(principal.device_id, submission, submission.rows, receivedAt),
+    );
+
+    statements.push(
+      this.database
+        .prepare(
+          `UPDATE devices
+           SET last_usage_sequence = ?3, usage_sync_revision = ?4, last_seen_at = ?5
+           WHERE id = ?1 AND account_id = ?2 AND generation = ?6
+             AND last_usage_sequence = ?3 - 1
+             AND EXISTS (
+               SELECT 1 FROM usage_submissions
+               WHERE device_id = ?1 AND submission_id = ?7
+             )
+           RETURNING usage_sync_revision`,
+        )
+        .bind(
+          principal.device_id,
+          principal.account_id,
+          submission.sequence,
+          revision,
+          receivedAt,
+          submission.generation,
+          submission.submission_id,
+        ),
+    );
+    return statements;
+  }
+
+  private async stageMultipart(
+    principal: DevicePrincipal,
+    submission: UsageSubmission,
+    requestDigest: string,
+    receivedAt: string,
+    revision: number,
+  ): Promise<boolean> {
+    const part = submission.multipart;
+    if (!part) return false;
+    const existing = await this.database
+      .prepare(
+        `SELECT part_count, agent, start_at, end_at, parser_revision,
+                aggregation_timezone, write_mode
+         FROM usage_submission_parts
+         WHERE device_id = ?1 AND batch_id = ?2
+         LIMIT 1`,
+      )
+      .bind(principal.device_id, part.batch_id)
+      .first<
+        Pick<
+          MultipartPartRow,
+          | "part_count"
+          | "agent"
+          | "start_at"
+          | "end_at"
+          | "parser_revision"
+          | "aggregation_timezone"
+          | "write_mode"
+        >
+      >();
+    if (
+      existing &&
+      (existing.part_count !== part.part_count ||
+        existing.agent !== submission.coverage.agent ||
+        existing.start_at !== submission.coverage.start_at ||
+        existing.end_at !== submission.coverage.end_at ||
+        existing.parser_revision !== submission.parser_revision ||
+        existing.aggregation_timezone !== submission.aggregation_timezone ||
+        existing.write_mode !== (submission.write_mode ?? null))
+    ) {
+      return false;
+    }
+
+    const statements = [
+      this.database
+        .prepare(
+          `INSERT INTO usage_submissions (
+             device_id, submission_id, generation, sequence, request_digest,
+             usage_sync_revision, agent, start_at, end_at, accepted_at,
+             write_mode, multipart_batch_id, multipart_part_index, multipart_part_count
+           )
+           SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14
+           WHERE EXISTS (
+             SELECT 1 FROM devices
+             WHERE id = ?1 AND account_id = ?15 AND generation = ?3
+               AND signed_out_at IS NULL AND deleted_at IS NULL
+               AND last_usage_sequence = ?4 - 1
+               AND (deleted_before IS NULL OR
+                    strftime('%Y-%m-%dT%H:00:00.000Z', deleted_before) <= ?8)
+           )`,
+        )
+        .bind(
+          principal.device_id,
+          submission.submission_id,
+          submission.generation,
+          submission.sequence,
+          requestDigest,
+          revision,
+          submission.coverage.agent,
+          submission.coverage.start_at,
+          submission.coverage.end_at,
+          receivedAt,
+          submission.write_mode ?? null,
+          part.batch_id,
+          part.part_index,
+          part.part_count,
+          principal.account_id,
+        ),
+      this.database
+        .prepare(
+          `INSERT INTO usage_submission_parts (
+             device_id, batch_id, part_index, part_count, submission_id,
+             generation, sequence, request_digest, write_mode, agent,
+             start_at, end_at, parser_revision, aggregation_timezone,
+             rows_json, accepted_at
+           )
+           SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
+                  ?13, ?14, ?15, ?16
+           WHERE EXISTS (
+             SELECT 1 FROM usage_submissions
+             WHERE device_id = ?1 AND submission_id = ?5
+           )`,
+        )
+        .bind(
+          principal.device_id,
+          part.batch_id,
+          part.part_index,
+          part.part_count,
+          submission.submission_id,
+          submission.generation,
+          submission.sequence,
+          requestDigest,
+          submission.write_mode ?? null,
+          submission.coverage.agent,
+          submission.coverage.start_at,
+          submission.coverage.end_at,
+          submission.parser_revision,
+          submission.aggregation_timezone,
+          JSON.stringify(submission.rows),
+          receivedAt,
+        ),
+      this.database
+        .prepare(
+          `UPDATE devices
+           SET last_usage_sequence = ?3, usage_sync_revision = ?4, last_seen_at = ?5
+           WHERE id = ?1 AND account_id = ?2 AND generation = ?6
+             AND last_usage_sequence = ?3 - 1
+             AND EXISTS (
+               SELECT 1 FROM usage_submissions
+               WHERE device_id = ?1 AND submission_id = ?7
+             )
+           RETURNING usage_sync_revision`,
+        )
+        .bind(
+          principal.device_id,
+          principal.account_id,
+          submission.sequence,
+          revision,
+          receivedAt,
+          submission.generation,
+          submission.submission_id,
+        ),
+    ];
+    try {
+      const results = await this.database.batch(statements);
+      return (
+        (results.at(-1)?.results[0] as { usage_sync_revision?: number } | undefined)
+          ?.usage_sync_revision === revision
+      );
+    } catch {
+      const concurrent = await this.getReceipt(principal.device_id, submission.submission_id);
+      if (concurrent && receiptMatches(concurrent, submission, requestDigest)) return true;
+      return false;
+    }
+  }
+
+  private async finalizeMultipart(
+    principal: DevicePrincipal,
+    batchId: string,
+    receivedAt: string,
+  ): Promise<"pending" | "committed" | "rejected"> {
+    const parts = await this.database
+      .prepare(
+        `SELECT device_id, batch_id, part_index, part_count, submission_id,
+                generation, sequence, request_digest, write_mode, agent,
+                start_at, end_at, parser_revision, aggregation_timezone,
+                rows_json, accepted_at
+         FROM usage_submission_parts
+         WHERE device_id = ?1 AND batch_id = ?2
+         ORDER BY part_index ASC`,
+      )
+      .bind(principal.device_id, batchId)
+      .all<MultipartPartRow>();
+    const first = parts.results[0];
+    if (!first || parts.results.length !== first.part_count) {
+      const rejection = await this.database
+        .prepare(
+          `SELECT rejection_reason
+           FROM usage_submissions
+           WHERE device_id = ?1 AND multipart_batch_id = ?2 AND rejection_reason IS NOT NULL
+           LIMIT 1`,
+        )
+        .bind(principal.device_id, batchId)
+        .first<{ rejection_reason: string }>();
+      return rejection ? "rejected" : "pending";
+    }
+    for (const [index, part] of parts.results.entries()) {
+      if (
+        part.part_index !== index ||
+        part.part_count !== first.part_count ||
+        part.agent !== first.agent ||
+        part.start_at !== first.start_at ||
+        part.end_at !== first.end_at ||
+        part.parser_revision !== first.parser_revision ||
+        part.aggregation_timezone !== first.aggregation_timezone ||
+        part.write_mode !== first.write_mode
+      ) {
+        throw new Error("Multipart Usage metadata mismatch");
+      }
+    }
+
+    // Reject duplicate fact identities without making any batch row visible. Detection, durable
+    // terminal receipts, and staging cleanup share one D1 transaction so a retry always observes
+    // either the complete staged batch or its complete rejection.
+    if (await this.rejectDuplicateMultipart(principal.device_id, batchId)) {
+      return "rejected";
+    }
+
+    const finalPart = parts.results.at(-1);
+    if (!finalPart) return "pending";
+    const submission: UsageSubmission = {
+      protocol_version: 2,
+      submission_id: finalPart.submission_id,
+      device_id: finalPart.device_id,
+      generation: finalPart.generation,
+      sequence: finalPart.sequence,
+      parser_revision: finalPart.parser_revision,
+      aggregation_timezone: finalPart.aggregation_timezone,
+      coverage: {
+        agent: finalPart.agent as UsageSubmission["coverage"]["agent"],
+        start_at: finalPart.start_at,
+        end_at: finalPart.end_at,
+        status: finalPart.write_mode === "merge_partial" ? "partial" : "complete",
+      },
+      // Rows remain private JSON staging data until the atomic JSON1 INSERT.
+      // Do not materialize the whole multipart batch in Worker memory here.
+      rows: [],
+      ...(finalPart.write_mode ? { write_mode: finalPart.write_mode } : {}),
+      multipart: {
+        batch_id: finalPart.batch_id,
+        part_index: finalPart.part_index,
+        part_count: finalPart.part_count,
+      },
+    };
+    const statements = this.usageMutationStatements(
+      principal.device_id,
+      submission,
+      [],
+      receivedAt,
+      batchId,
+    );
+    statements.push(
+      this.database
+        .prepare("DELETE FROM usage_submission_parts WHERE device_id = ?1 AND batch_id = ?2")
+        .bind(principal.device_id, batchId),
+    );
+    await this.database.batch(statements);
+    const receipt = await this.getReceipt(principal.device_id, finalPart.submission_id);
+    if (receipt?.rejection_reason) return "rejected";
+    return "committed";
+  }
+
+  private async rejectDuplicateMultipart(deviceId: string, batchId: string): Promise<boolean> {
+    const results = await this.database.batch([
+      this.database
+        .prepare(
+          `UPDATE usage_submissions
+           SET rejection_reason = 'duplicate_fact_identity'
+           WHERE device_id = ?1 AND submission_id IN (
+             SELECT submission_id FROM usage_submission_parts
+             WHERE device_id = ?1 AND batch_id = ?2
+           ) AND EXISTS (
+             SELECT 1
+             FROM usage_submission_parts AS part, json_each(part.rows_json) AS item
+             WHERE part.device_id = ?1 AND part.batch_id = ?2
+             GROUP BY
+               json_extract(item.value, '$.bucket_start_utc'),
+               json_extract(item.value, '$.usage_date'),
+               json_extract(item.value, '$.usage_hour'),
+               json_extract(item.value, '$.agent'),
+               json_extract(item.value, '$.billing_channel'),
+               json_extract(item.value, '$.channel_source'),
+               json_extract(item.value, '$.model'),
+               json_extract(item.value, '$.context_bucket'),
+               json_extract(item.value, '$.service_tier'),
+               json_extract(item.value, '$.speed'),
+               json_extract(item.value, '$.inference_geo')
+             HAVING COUNT(*) > 1
+             LIMIT 1
+           )
+           RETURNING submission_id`,
+        )
+        .bind(deviceId, batchId),
+      this.database
+        .prepare(
+          `DELETE FROM usage_submission_parts
+           WHERE device_id = ?1 AND batch_id = ?2
+             AND NOT EXISTS (
+               SELECT 1
+               FROM usage_submission_parts AS part
+               JOIN usage_submissions AS receipt
+                 ON receipt.device_id = part.device_id
+                AND receipt.submission_id = part.submission_id
+               WHERE part.device_id = ?1 AND part.batch_id = ?2
+                 AND receipt.rejection_reason IS NOT 'duplicate_fact_identity'
+             )`,
+        )
+        .bind(deviceId, batchId),
+    ]);
+    return (results[0]?.results.length ?? 0) > 0;
+  }
+
+  private usageMutationStatements(
+    deviceId: string,
+    submission: UsageSubmission,
+    rows: readonly UsageHourlyFact[],
+    receivedAt: string,
+    stagedBatchId?: string,
+  ): D1PreparedStatement[] {
+    const partial = submission.write_mode === "merge_partial";
+    const statements: D1PreparedStatement[] = [];
+    if (!partial) {
+      statements.push(
+        this.database
+          .prepare(
+            `DELETE FROM usage_hourly
+             WHERE device_id = ?1 AND agent = ?2
+               AND bucket_start_utc >= ?3 AND bucket_start_utc < ?4
+               AND EXISTS (
+                 SELECT 1 FROM usage_submissions
+                 WHERE device_id = ?1 AND submission_id = ?5
+                   AND rejection_reason IS NULL
+                   AND (?6 IS NULL OR EXISTS (
+                     SELECT 1 FROM usage_submission_parts
+                     WHERE device_id = ?1 AND batch_id = ?6
+                     GROUP BY part_count HAVING COUNT(*) = part_count
+                   ))
+               )`,
+          )
+          .bind(
+            deviceId,
+            submission.coverage.agent,
+            submission.coverage.start_at,
+            submission.coverage.end_at,
+            submission.submission_id,
+            stagedBatchId ?? null,
+          ),
+      );
+    }
+    if (stagedBatchId) {
+      statements.push(this.insertStagedRows(deviceId, submission, stagedBatchId, partial));
+    } else {
+      statements.push(...rows.map((row) => this.insertRow(deviceId, submission, row, partial)));
+    }
+    if (partial) {
+      statements.push(
+        this.preserveCoverageSide(deviceId, submission, "left", stagedBatchId),
+        this.preserveCoverageSide(deviceId, submission, "right", stagedBatchId),
+        this.deleteCoverageOverlap(deviceId, submission, stagedBatchId),
+        this.insertPartialCoverage(deviceId, submission, receivedAt, stagedBatchId),
+      );
+    } else {
+      statements.push(
+        this.preserveCoverageSide(deviceId, submission, "left", stagedBatchId),
+        this.preserveCoverageSide(deviceId, submission, "right", stagedBatchId),
+        this.deleteCoverageOverlap(deviceId, submission, stagedBatchId),
+        this.insertCompleteCoverage(deviceId, submission, receivedAt, stagedBatchId),
+      );
+    }
+    return statements;
+  }
+
+  private insertStagedRows(
+    deviceId: string,
+    submission: UsageSubmission,
+    batchId: string,
+    partial: boolean,
+  ): D1PreparedStatement {
+    const conflict = partial
+      ? `
+         ON CONFLICT (
+           device_id, bucket_start_utc, usage_date, usage_hour,
+           agent, billing_channel, channel_source, model,
+           context_bucket, service_tier, speed, inference_geo
+         ) DO UPDATE SET
+           aggregation_timezone = excluded.aggregation_timezone,
+           input_tokens = excluded.input_tokens,
+           cache_read_tokens = excluded.cache_read_tokens,
+           cache_write_5m_tokens = excluded.cache_write_5m_tokens,
+           cache_write_1h_tokens = excluded.cache_write_1h_tokens,
+           cache_write_inferred_tokens = excluded.cache_write_inferred_tokens,
+           output_tokens = excluded.output_tokens,
+           reasoning_tokens = excluded.reasoning_tokens,
+           requests = excluded.requests,
+           web_search_requests = excluded.web_search_requests,
+           web_fetch_requests = excluded.web_fetch_requests,
+           source_cost_microusd = excluded.source_cost_microusd,
+           source_cost_covered_requests = excluded.source_cost_covered_requests`
+      : "";
+    return this.database
+      .prepare(
+        `INSERT INTO usage_hourly (
+           device_id, bucket_start_utc, usage_date, usage_hour, aggregation_timezone, agent,
+           billing_channel, channel_source, model, context_bucket, service_tier, speed,
+           inference_geo, input_tokens, cache_read_tokens, cache_write_5m_tokens,
+           cache_write_1h_tokens, cache_write_inferred_tokens, output_tokens, reasoning_tokens,
+           requests, web_search_requests, web_fetch_requests, source_cost_microusd,
+           source_cost_covered_requests
+         )
+         SELECT ?1,
+                json_extract(item.value, '$.bucket_start_utc'),
+                json_extract(item.value, '$.usage_date'),
+                json_extract(item.value, '$.usage_hour'),
+                ?2,
+                json_extract(item.value, '$.agent'),
+                json_extract(item.value, '$.billing_channel'),
+                json_extract(item.value, '$.channel_source'),
+                json_extract(item.value, '$.model'),
+                json_extract(item.value, '$.context_bucket'),
+                json_extract(item.value, '$.service_tier'),
+                json_extract(item.value, '$.speed'),
+                json_extract(item.value, '$.inference_geo'),
+                json_extract(item.value, '$.input_tokens'),
+                json_extract(item.value, '$.cache_read_tokens'),
+                json_extract(item.value, '$.cache_write_5m_tokens'),
+                json_extract(item.value, '$.cache_write_1h_tokens'),
+                json_extract(item.value, '$.cache_write_inferred_tokens'),
+                json_extract(item.value, '$.output_tokens'),
+                json_extract(item.value, '$.reasoning_tokens'),
+                json_extract(item.value, '$.requests'),
+                json_extract(item.value, '$.web_search_requests'),
+                json_extract(item.value, '$.web_fetch_requests'),
+                json_extract(item.value, '$.source_cost_microusd'),
+                json_extract(item.value, '$.source_cost_covered_requests')
+         FROM usage_submission_parts AS part, json_each(part.rows_json) AS item
+         WHERE part.device_id = ?1 AND part.batch_id = ?3
+           AND EXISTS (
+             SELECT 1 FROM usage_submissions
+             WHERE device_id = ?1 AND submission_id = ?4 AND rejection_reason IS NULL
+           )${conflict}`,
+      )
+      .bind(deviceId, submission.aggregation_timezone, batchId, submission.submission_id);
   }
 
   private insertRow(
     deviceId: string,
     submission: UsageSubmission,
     row: UsageHourlyFact,
+    partial = false,
   ): D1PreparedStatement {
+    const conflict = partial
+      ? `
+         ON CONFLICT (
+           device_id, bucket_start_utc, usage_date, usage_hour,
+           agent, billing_channel, channel_source, model,
+           context_bucket, service_tier, speed, inference_geo
+         ) DO UPDATE SET
+           aggregation_timezone = excluded.aggregation_timezone,
+           input_tokens = excluded.input_tokens,
+           cache_read_tokens = excluded.cache_read_tokens,
+           cache_write_5m_tokens = excluded.cache_write_5m_tokens,
+           cache_write_1h_tokens = excluded.cache_write_1h_tokens,
+           cache_write_inferred_tokens = excluded.cache_write_inferred_tokens,
+           output_tokens = excluded.output_tokens,
+           reasoning_tokens = excluded.reasoning_tokens,
+           requests = excluded.requests,
+           web_search_requests = excluded.web_search_requests,
+           web_fetch_requests = excluded.web_fetch_requests,
+           source_cost_microusd = excluded.source_cost_microusd,
+           source_cost_covered_requests = excluded.source_cost_covered_requests`
+      : "";
     return this.database
       .prepare(
         `INSERT INTO usage_hourly (
@@ -345,8 +836,9 @@ export class D1UsageState implements UsageState {
          SELECT ?1, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
                 ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26
          WHERE EXISTS (
-           SELECT 1 FROM usage_submissions WHERE device_id = ?1 AND submission_id = ?2
-         )`,
+           SELECT 1 FROM usage_submissions
+           WHERE device_id = ?1 AND submission_id = ?2 AND rejection_reason IS NULL
+         )${conflict}`,
       )
       .bind(
         deviceId,
@@ -382,6 +874,7 @@ export class D1UsageState implements UsageState {
     deviceId: string,
     submission: UsageSubmission,
     side: "left" | "right",
+    stagedBatchId?: string,
   ): D1PreparedStatement {
     const start = side === "left" ? "coverage.start_at" : "?5";
     const end = side === "left" ? "?4" : "coverage.end_at";
@@ -389,16 +882,21 @@ export class D1UsageState implements UsageState {
     return this.database
       .prepare(
         `INSERT INTO usage_coverage (
-           device_id, agent, start_at, end_at, parser_revision, submission_id, accepted_at
+           device_id, agent, start_at, end_at, status, parser_revision, submission_id, accepted_at
          )
          SELECT coverage.device_id, coverage.agent, ${start}, ${end},
-                coverage.parser_revision, coverage.submission_id, coverage.accepted_at
+                coverage.status, coverage.parser_revision, coverage.submission_id, coverage.accepted_at
          FROM usage_coverage AS coverage
          WHERE coverage.device_id = ?1 AND coverage.agent = ?3
            AND coverage.start_at < ?5 AND coverage.end_at > ?4 AND ${retained}
            AND EXISTS (
              SELECT 1 FROM usage_submissions
-             WHERE device_id = ?1 AND submission_id = ?2
+             WHERE device_id = ?1 AND submission_id = ?2 AND rejection_reason IS NULL
+               AND (?6 IS NULL OR EXISTS (
+                 SELECT 1 FROM usage_submission_parts
+                 WHERE device_id = ?1 AND batch_id = ?6
+                 GROUP BY part_count HAVING COUNT(*) = part_count
+               ))
            )
          ON CONFLICT(device_id, agent, start_at, end_at) DO NOTHING`,
       )
@@ -408,6 +906,104 @@ export class D1UsageState implements UsageState {
         submission.coverage.agent,
         submission.coverage.start_at,
         submission.coverage.end_at,
+        stagedBatchId ?? null,
+      );
+  }
+
+  private insertPartialCoverage(
+    deviceId: string,
+    submission: UsageSubmission,
+    acceptedAt: string,
+    stagedBatchId?: string,
+  ): D1PreparedStatement {
+    return this.database
+      .prepare(
+        `INSERT INTO usage_coverage (
+           device_id, agent, start_at, end_at, status, parser_revision, submission_id, accepted_at
+         )
+         SELECT ?1, ?2, ?3, ?4, 'partial', ?5, ?6, ?7
+         WHERE EXISTS (
+           SELECT 1 FROM usage_submissions
+           WHERE device_id = ?1 AND submission_id = ?6 AND rejection_reason IS NULL
+             AND (?8 IS NULL OR EXISTS (
+               SELECT 1 FROM usage_submission_parts
+               WHERE device_id = ?1 AND batch_id = ?8
+               GROUP BY part_count HAVING COUNT(*) = part_count
+             ))
+         )`,
+      )
+      .bind(
+        deviceId,
+        submission.coverage.agent,
+        submission.coverage.start_at,
+        submission.coverage.end_at,
+        submission.parser_revision,
+        submission.submission_id,
+        acceptedAt,
+        stagedBatchId ?? null,
+      );
+  }
+
+  private deleteCoverageOverlap(
+    deviceId: string,
+    submission: UsageSubmission,
+    stagedBatchId?: string,
+  ): D1PreparedStatement {
+    return this.database
+      .prepare(
+        `DELETE FROM usage_coverage
+         WHERE device_id = ?1 AND agent = ?3 AND start_at < ?5 AND end_at > ?4
+           AND EXISTS (
+             SELECT 1 FROM usage_submissions
+             WHERE device_id = ?1 AND submission_id = ?2 AND rejection_reason IS NULL
+               AND (?6 IS NULL OR EXISTS (
+                 SELECT 1 FROM usage_submission_parts
+                 WHERE device_id = ?1 AND batch_id = ?6
+                 GROUP BY part_count HAVING COUNT(*) = part_count
+               ))
+           )`,
+      )
+      .bind(
+        deviceId,
+        submission.submission_id,
+        submission.coverage.agent,
+        submission.coverage.start_at,
+        submission.coverage.end_at,
+        stagedBatchId ?? null,
+      );
+  }
+
+  private insertCompleteCoverage(
+    deviceId: string,
+    submission: UsageSubmission,
+    acceptedAt: string,
+    stagedBatchId?: string,
+  ): D1PreparedStatement {
+    return this.database
+      .prepare(
+        `INSERT INTO usage_coverage (
+           device_id, agent, start_at, end_at, status, parser_revision, submission_id, accepted_at
+         )
+         SELECT ?1, ?3, ?4, ?5, 'complete', ?6, ?2, ?7
+         WHERE EXISTS (
+           SELECT 1 FROM usage_submissions
+           WHERE device_id = ?1 AND submission_id = ?2 AND rejection_reason IS NULL
+             AND (?8 IS NULL OR EXISTS (
+               SELECT 1 FROM usage_submission_parts
+               WHERE device_id = ?1 AND batch_id = ?8
+               GROUP BY part_count HAVING COUNT(*) = part_count
+             ))
+         )`,
+      )
+      .bind(
+        deviceId,
+        submission.submission_id,
+        submission.coverage.agent,
+        submission.coverage.start_at,
+        submission.coverage.end_at,
+        submission.parser_revision,
+        acceptedAt,
+        stagedBatchId ?? null,
       );
   }
 
@@ -417,7 +1013,9 @@ export class D1UsageState implements UsageState {
   ): Promise<UsageReceiptRow | null> {
     return this.database
       .prepare(
-        `SELECT request_digest, generation, sequence, usage_sync_revision, agent, start_at, end_at
+        `SELECT request_digest, generation, sequence, usage_sync_revision, agent, start_at, end_at,
+                write_mode, multipart_batch_id, multipart_part_index, multipart_part_count,
+                rejection_reason
          FROM usage_submissions WHERE device_id = ?1 AND submission_id = ?2`,
       )
       .bind(deviceId, submissionId)
@@ -436,7 +1034,11 @@ function receiptMatches(
     receipt.sequence === submission.sequence &&
     receipt.agent === submission.coverage.agent &&
     receipt.start_at === submission.coverage.start_at &&
-    receipt.end_at === submission.coverage.end_at
+    receipt.end_at === submission.coverage.end_at &&
+    receipt.write_mode === (submission.write_mode ?? null) &&
+    receipt.multipart_batch_id === (submission.multipart?.batch_id ?? null) &&
+    receipt.multipart_part_index === (submission.multipart?.part_index ?? null) &&
+    receipt.multipart_part_count === (submission.multipart?.part_count ?? null)
   );
 }
 

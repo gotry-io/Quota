@@ -1,5 +1,7 @@
-//! One-time import of the released JSON state into SQLite.
+//! Durable SQLite schema migrations.
 
-mod legacy_json;
+mod schema;
 
-pub use legacy_json::apply;
+pub fn apply(conn: &mut rusqlite::Connection) -> Result<(), crate::state::StateError> {
+    schema::apply(conn)
+}

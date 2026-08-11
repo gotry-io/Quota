@@ -592,7 +592,10 @@ fn validate_snapshot_envelope(value: &Value) -> Result<(), RelayError> {
         "captured_at",
         "snapshots",
     ];
-    if object.len() != keys.len() || keys.iter().any(|key| !object.contains_key(*key)) {
+    if object.len() != keys.len()
+        || keys.iter().any(|key| !object.contains_key(*key))
+        || object.keys().any(|key| !keys.contains(&key.as_str()))
+    {
         return Err(RelayError::InvalidResponse);
     }
     if object.get("protocol_version").and_then(Value::as_i64) != Some(2)
@@ -640,7 +643,12 @@ pub(crate) fn validate_usage_submission(value: &Value) -> Result<(), RelayError>
         "coverage",
         "rows",
     ];
-    if object.len() != keys.len() || keys.iter().any(|key| !object.contains_key(*key)) {
+    if object.len() < keys.len()
+        || keys.iter().any(|key| !object.contains_key(*key))
+        || object
+            .keys()
+            .any(|key| !keys.contains(&key.as_str()) && key != "write_mode" && key != "multipart")
+    {
         return Err(RelayError::InvalidResponse);
     }
     if object.get("protocol_version").and_then(Value::as_i64) != Some(2) {
@@ -655,10 +663,6 @@ pub(crate) fn validate_usage_submission(value: &Value) -> Result<(), RelayError>
             return Err(RelayError::InvalidResponse);
         }
     }
-    let parser_revision = object
-        .get("parser_revision")
-        .and_then(Value::as_str)
-        .ok_or(RelayError::InvalidResponse)?;
     if !object
         .get("device_id")
         .and_then(Value::as_str)
@@ -684,8 +688,43 @@ pub(crate) fn validate_usage_submission(value: &Value) -> Result<(), RelayError>
         || !["agent", "start_at", "end_at", "status"]
             .iter()
             .all(|key| coverage.contains_key(*key))
-        || coverage.get("status").and_then(Value::as_str) != Some("complete")
+        || !matches!(
+            coverage.get("status").and_then(Value::as_str),
+            Some("complete") | Some("partial")
+        )
     {
+        return Err(RelayError::InvalidResponse);
+    }
+    let partial = coverage.get("status").and_then(Value::as_str) == Some("partial");
+    if partial {
+        if object.get("write_mode").and_then(Value::as_str) != Some("merge_partial") {
+            return Err(RelayError::InvalidResponse);
+        }
+    } else if object.contains_key("write_mode") {
+        return Err(RelayError::InvalidResponse);
+    }
+    if let Some(multipart) = object.get("multipart").and_then(Value::as_object) {
+        if multipart.len() != 3
+            || !["batch_id", "part_index", "part_count"]
+                .iter()
+                .all(|key| multipart.contains_key(*key))
+            || !multipart
+                .get("batch_id")
+                .and_then(Value::as_str)
+                .is_some_and(is_opaque)
+            || multipart
+                .get("part_count")
+                .and_then(safe_positive_u64)
+                .is_none_or(|count| !(2..=64).contains(&count))
+            || multipart
+                .get("part_index")
+                .and_then(safe_u64)
+                .zip(multipart.get("part_count").and_then(safe_positive_u64))
+                .is_none_or(|(index, count)| index >= count)
+        {
+            return Err(RelayError::InvalidResponse);
+        }
+    } else if object.contains_key("multipart") {
         return Err(RelayError::InvalidResponse);
     }
     let agent = coverage
@@ -730,7 +769,6 @@ pub(crate) fn validate_usage_submission(value: &Value) -> Result<(), RelayError>
         "web_fetch_requests",
         "source_cost_covered_requests",
     ];
-    let mut models = std::collections::BTreeSet::new();
     let mut identities = std::collections::BTreeSet::new();
     for row in rows {
         let row_object = row.as_object().ok_or(RelayError::InvalidResponse)?;
@@ -745,10 +783,6 @@ pub(crate) fn validate_usage_submission(value: &Value) -> Result<(), RelayError>
         let row: crate::usage::UsageHourlyFact =
             serde_json::from_value(row.clone()).map_err(|_| RelayError::InvalidResponse)?;
         crate::usage::validate_fact(&row).map_err(|_| RelayError::InvalidResponse)?;
-        if !crate::compatibility::accepts_released_unknown_usage_model(parser_revision, &row.model)
-        {
-            return Err(RelayError::InvalidResponse);
-        }
         if row.agent.as_str() != agent {
             return Err(RelayError::InvalidResponse);
         }
@@ -764,12 +798,9 @@ pub(crate) fn validate_usage_submission(value: &Value) -> Result<(), RelayError>
         if row.usage_date != local.format("%Y-%m-%d").to_string()
             || row.usage_hour != local.hour() as u8
             || row.usage_hour > 23
-            || row.model.is_empty()
-            || row.model.len() > 128
         {
             return Err(RelayError::InvalidResponse);
         }
-        models.insert(row.model.clone());
         let identity = serde_json::to_string(&(
             &row.bucket_start_utc,
             &row.usage_date,
@@ -787,9 +818,6 @@ pub(crate) fn validate_usage_submission(value: &Value) -> Result<(), RelayError>
         if !identities.insert(identity) {
             return Err(RelayError::InvalidResponse);
         }
-    }
-    if models.len() > crate::usage::MAX_USAGE_MODELS {
-        return Err(RelayError::InvalidResponse);
     }
     let _ = timezone;
     Ok(())
@@ -859,27 +887,32 @@ fn validate_snapshot_response(value: &Value) -> Result<(), RelayError> {
 }
 
 fn validate_usage_response(value: &Value) -> Result<(), RelayError> {
-    validate_response_object(
-        value,
-        &[
-            "protocol_version",
-            "outcome",
-            "device_id",
-            "device_generation",
-            "accepted_sequence",
-            "next_sequence",
-            "usage_sync_revision",
-            "deleted_before",
-        ],
-    )?;
     let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
     let outcome = object.get("outcome").and_then(Value::as_str);
+    let base_keys = [
+        "protocol_version",
+        "outcome",
+        "device_id",
+        "device_generation",
+        "accepted_sequence",
+        "next_sequence",
+        "usage_sync_revision",
+        "deleted_before",
+    ];
+    if outcome == Some("rejected") {
+        let mut keys = base_keys.to_vec();
+        keys.push("rejection_reason");
+        validate_response_object(value, &keys)?;
+    } else {
+        validate_response_object(value, &base_keys)?;
+    }
     if object.get("protocol_version").and_then(Value::as_i64) != Some(2)
         || !matches!(
             outcome,
             Some(
                 "accepted"
                     | "duplicate"
+                    | "rejected"
                     | "partial"
                     | "sequence_conflict"
                     | "stale_generation"
@@ -902,6 +935,12 @@ fn validate_usage_response(value: &Value) -> Result<(), RelayError> {
         || !object
             .get("deleted_before")
             .is_some_and(|value| value.is_null() || value.as_str().is_some_and(valid_rfc3339))
+    {
+        return Err(RelayError::InvalidResponse);
+    }
+    if (outcome == Some("rejected"))
+        != (object.get("rejection_reason").and_then(Value::as_str)
+            == Some("duplicate_fact_identity"))
     {
         return Err(RelayError::InvalidResponse);
     }
@@ -1268,11 +1307,25 @@ fn validate_quota_window(value: &Value) -> Result<(), RelayError> {
 }
 
 fn validate_usage_summary(value: &Value) -> Result<(), RelayError> {
-    validate_response_object(
-        value,
-        &["range", "totals", "cost", "coverage", "breakdowns"],
-    )?;
     let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
+    let required = ["range", "totals", "cost", "coverage", "breakdowns"];
+    if object.len() < required.len()
+        || object.len() > required.len() + 2
+        || required.iter().any(|key| !object.contains_key(*key))
+        || object.keys().any(|key| {
+            !required.contains(&key.as_str())
+                && key != "breakdowns_truncated"
+                && key != "coverage_truncated"
+        })
+        || object
+            .get("breakdowns_truncated")
+            .is_some_and(|value| value != &Value::Bool(true))
+        || object
+            .get("coverage_truncated")
+            .is_some_and(|value| value != &Value::Bool(true))
+    {
+        return Err(RelayError::InvalidResponse);
+    }
     validate_usage_date_range(object.get("range").ok_or(RelayError::InvalidResponse)?)?;
     validate_usage_totals(object.get("totals").ok_or(RelayError::InvalidResponse)?)?;
     validate_usage_cost(object.get("cost").ok_or(RelayError::InvalidResponse)?)?;
@@ -1292,8 +1345,10 @@ fn validate_usage_summary(value: &Value) -> Result<(), RelayError> {
     for breakdown in breakdowns {
         validate_response_object(breakdown, &["dimension", "key", "totals", "cost"])?;
         let object = breakdown.as_object().ok_or(RelayError::InvalidResponse)?;
+        let dimension = object.get("dimension").and_then(Value::as_str);
+        let key = object.get("key").and_then(Value::as_str);
         if !matches!(
-            object.get("dimension").and_then(Value::as_str),
+            dimension,
             Some(
                 "device"
                     | "agent"
@@ -1302,11 +1357,13 @@ fn validate_usage_summary(value: &Value) -> Result<(), RelayError> {
                     | "usage_date"
                     | "bucket_start_utc"
             )
-        ) || !object
-            .get("key")
-            .and_then(Value::as_str)
-            .is_some_and(|value| valid_display(value, 128))
-        {
+        ) || !key.is_some_and(|value| {
+            if dimension == Some("model") {
+                valid_model_text(value)
+            } else {
+                valid_display(value, 128)
+            }
+        }) {
             return Err(RelayError::InvalidResponse);
         }
         validate_usage_totals(object.get("totals").ok_or(RelayError::InvalidResponse)?)?;
@@ -1366,26 +1423,81 @@ fn validate_usage_totals(value: &Value) -> Result<(), RelayError> {
     {
         return Err(RelayError::InvalidResponse);
     }
+
+    let input_tokens = object["input_tokens"]
+        .as_u64()
+        .ok_or(RelayError::InvalidResponse)?;
+    let classified_input = [
+        "cache_read_tokens",
+        "cache_write_5m_tokens",
+        "cache_write_1h_tokens",
+        "cache_write_inferred_tokens",
+    ]
+    .into_iter()
+    .try_fold(0u64, |total, key| total.checked_add(object[key].as_u64()?))
+    .filter(|total| *total <= MAXIMUM_SAFE_INTEGER)
+    .ok_or(RelayError::InvalidResponse)?;
+    if classified_input > input_tokens {
+        return Err(RelayError::InvalidResponse);
+    }
+
+    let output_tokens = object["output_tokens"]
+        .as_u64()
+        .ok_or(RelayError::InvalidResponse)?;
+    if object["reasoning_tokens"]
+        .as_u64()
+        .ok_or(RelayError::InvalidResponse)?
+        > output_tokens
+    {
+        return Err(RelayError::InvalidResponse);
+    }
+
+    let requests = object["requests"]
+        .as_u64()
+        .ok_or(RelayError::InvalidResponse)?;
+    let source_cost_covered_requests = object["source_cost_covered_requests"]
+        .as_u64()
+        .ok_or(RelayError::InvalidResponse)?;
+    if source_cost_covered_requests > requests
+        || (requests == 0
+            && (object["web_search_requests"].as_u64() != Some(0)
+                || object["web_fetch_requests"].as_u64() != Some(0)))
+    {
+        return Err(RelayError::InvalidResponse);
+    }
+    let has_source_cost = object["source_cost_microusd"].as_str().is_some();
+    if has_source_cost != (source_cost_covered_requests > 0) {
+        return Err(RelayError::InvalidResponse);
+    }
     Ok(())
 }
 
 fn validate_usage_cost(value: &Value) -> Result<(), RelayError> {
-    validate_response_object(
-        value,
-        &[
-            "mode",
-            "basis",
-            "status",
-            "amount_microusd",
-            "catalog_revision",
-            "calculated_rows",
-            "reported_rows",
-            "unpriced_rows",
-            "assumptions",
-            "unpriced",
-        ],
-    )?;
+    let required_keys = [
+        "mode",
+        "basis",
+        "status",
+        "amount_microusd",
+        "catalog_revision",
+        "calculated_rows",
+        "reported_rows",
+        "unpriced_rows",
+        "assumptions",
+        "unpriced",
+    ];
     let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
+    if object.len() < required_keys.len()
+        || object.len() > required_keys.len() + 1
+        || required_keys.iter().any(|key| !object.contains_key(*key))
+    {
+        return Err(RelayError::InvalidResponse);
+    }
+    if object
+        .keys()
+        .any(|key| key != "unpriced_truncated" && !required_keys.contains(&key.as_str()))
+    {
+        return Err(RelayError::InvalidResponse);
+    }
     if !matches!(
         object.get("mode").and_then(Value::as_str),
         Some("calculate" | "auto" | "reported")
@@ -1404,6 +1516,9 @@ fn validate_usage_cost(value: &Value) -> Result<(), RelayError> {
         || object.get("calculated_rows").and_then(safe_u64).is_none()
         || object.get("reported_rows").and_then(safe_u64).is_none()
         || object.get("unpriced_rows").and_then(safe_u64).is_none()
+        || object
+            .get("unpriced_truncated")
+            .is_some_and(|value| value != &Value::Bool(true))
     {
         return Err(RelayError::InvalidResponse);
     }
@@ -1429,6 +1544,15 @@ fn validate_usage_cost(value: &Value) -> Result<(), RelayError> {
     }) {
         return Err(RelayError::InvalidResponse);
     }
+    if assumptions
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<std::collections::BTreeSet<_>>()
+        .len()
+        != assumptions.len()
+    {
+        return Err(RelayError::InvalidResponse);
+    }
     let unpriced = object
         .get("unpriced")
         .and_then(Value::as_array)
@@ -1441,7 +1565,7 @@ fn validate_usage_cost(value: &Value) -> Result<(), RelayError> {
             || !item
                 .get("model")
                 .and_then(Value::as_str)
-                .is_some_and(|value| valid_display(value, 128))
+                .is_some_and(valid_model_text)
             || !matches!(
                 item.get("reason").and_then(Value::as_str),
                 Some(
@@ -1459,6 +1583,56 @@ fn validate_usage_cost(value: &Value) -> Result<(), RelayError> {
         {
             return Err(RelayError::InvalidResponse);
         }
+    }
+    let unpriced_truncated = object
+        .get("unpriced_truncated")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let calculated_rows = object["calculated_rows"]
+        .as_u64()
+        .ok_or(RelayError::InvalidResponse)?;
+    let reported_rows = object["reported_rows"]
+        .as_u64()
+        .ok_or(RelayError::InvalidResponse)?;
+    let unpriced_rows = object["unpriced_rows"]
+        .as_u64()
+        .ok_or(RelayError::InvalidResponse)?;
+    let priced_rows = calculated_rows
+        .checked_add(reported_rows)
+        .filter(|rows| *rows <= MAXIMUM_SAFE_INTEGER)
+        .ok_or(RelayError::InvalidResponse)?;
+    let expected_basis = match (calculated_rows > 0, reported_rows > 0) {
+        (true, true) => "mixed",
+        (true, false) => "calculated",
+        (false, true) => "reported",
+        (false, false) => "none",
+    };
+    let expected_status = if unpriced_rows == 0 {
+        "complete"
+    } else if priced_rows > 0 {
+        "partial"
+    } else {
+        "unavailable"
+    };
+    if object["basis"].as_str() != Some(expected_basis)
+        || object["status"].as_str() != Some(expected_status)
+        || (priced_rows > 0)
+            != object
+                .get("amount_microusd")
+                .is_some_and(|amount| !amount.is_null())
+    {
+        return Err(RelayError::InvalidResponse);
+    }
+    let listed_rows = object["unpriced"]
+        .as_array()
+        .and_then(|items| {
+            items.iter().try_fold(0u64, |total, item| {
+                total.checked_add(item.get("rows")?.as_u64()?)
+            })
+        })
+        .ok_or(RelayError::InvalidResponse)?;
+    if listed_rows > unpriced_rows || (!unpriced_truncated && listed_rows != unpriced_rows) {
+        return Err(RelayError::InvalidResponse);
     }
     Ok(())
 }
@@ -2008,7 +2182,7 @@ impl AccountManager {
             .get("outcome")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        if !matches!(outcome, "accepted" | "duplicate") {
+        if !matches!(outcome, "accepted" | "duplicate" | "rejected") {
             return Ok(());
         }
         let (mut session, epoch) = self
@@ -2559,6 +2733,10 @@ fn valid_display(value: &str, max: usize) -> bool {
     !value.is_empty() && value.len() <= max && value.trim() == value
 }
 
+fn valid_model_text(value: &str) -> bool {
+    !value.is_empty() && value.chars().count() <= 128 && !value.chars().any(char::is_control)
+}
+
 fn valid_dimension(value: &str, max: usize) -> bool {
     let mut bytes = value.bytes();
     bytes
@@ -2692,7 +2870,7 @@ mod tests {
         );
         assert!(validate_usage_submission(&serde_json::json!({"protocol_version": 1})).is_err());
 
-        let mut released_unknown = serde_json::json!({
+        let opaque_model = serde_json::json!({
             "protocol_version": 2,
             "submission_id": "legacy",
             "device_id": "device",
@@ -2731,10 +2909,208 @@ mod tests {
                 "source_cost_covered_requests": 0
             }]
         });
-        assert!(validate_usage_submission(&released_unknown).is_err());
-        released_unknown["parser_revision"] =
-            serde_json::json!(crate::compatibility::RELEASED_USAGE_PARSER_REVISION);
-        assert!(validate_usage_submission(&released_unknown).is_ok());
+        assert!(validate_usage_submission(&opaque_model).is_ok());
+    }
+
+    #[test]
+    fn multipart_and_report_truncation_markers_are_strict() {
+        let mut submission = serde_json::json!({
+            "protocol_version": 2,
+            "submission_id": "x",
+            "device_id": "d",
+            "generation": 1,
+            "sequence": 0,
+            "parser_revision": "rust-v1",
+            "aggregation_timezone": "UTC",
+            "coverage": {
+                "agent": "codex",
+                "start_at": "2026-08-10T00:00:00Z",
+                "end_at": "2026-08-10T01:00:00Z",
+                "status": "complete"
+            },
+            "rows": [],
+            "multipart": {"batch_id": "batch", "part_index": 63, "part_count": 64}
+        });
+        assert!(validate_usage_submission(&submission).is_ok());
+        submission["multipart"]["part_count"] = serde_json::json!(65);
+        assert!(validate_usage_submission(&submission).is_err());
+
+        let mut snapshot = valid_snapshot();
+        let mut envelope = serde_json::json!({
+            "protocol_version": 2,
+            "device_id": "device_1",
+            "generation": 1,
+            "sequence": 0,
+            "captured_at": "2026-08-10T00:00:00Z",
+            "snapshots": [snapshot.clone()]
+        });
+        envelope["multipart"] = serde_json::json!({"batch_id": "batch", "part_index": 0});
+        assert!(validate_snapshot_envelope(&envelope).is_err());
+        snapshot["status"] = serde_json::json!("available");
+
+        let item = serde_json::json!({
+            "billing_channel": "openai_direct",
+            "model": "model",
+            "reason": "missing_rate",
+            "rows": 1
+        });
+        let mut cost = serde_json::json!({
+            "mode": "reported",
+            "basis": "reported",
+            "status": "partial",
+            "amount_microusd": "1",
+            "catalog_revision": null,
+            "calculated_rows": 0,
+            "reported_rows": 1,
+            "unpriced_rows": 2,
+            "assumptions": [],
+            "unpriced": [item.clone()],
+            "unpriced_truncated": true
+        });
+        assert!(validate_usage_cost(&cost).is_ok());
+        cost["unpriced"][0]["model"] = serde_json::json!("GPT-5.5[1m]");
+        assert!(validate_usage_cost(&cost).is_ok());
+        cost["unpriced"][0]["model"] = serde_json::json!("😀".repeat(128));
+        assert!(validate_usage_cost(&cost).is_ok());
+        cost["unpriced"][0]["model"] = serde_json::json!("model\u{0001}");
+        assert!(validate_usage_cost(&cost).is_err());
+        cost["unpriced"][0]["model"] = serde_json::json!("model");
+        cost["unpriced"][0]["rows"] = serde_json::json!(3);
+        assert!(validate_usage_cost(&cost).is_err());
+        cost["unpriced"][0]["rows"] = serde_json::json!(1);
+        cost["unpriced_truncated"] = serde_json::json!(false);
+        assert!(validate_usage_cost(&cost).is_err());
+
+        let totals = serde_json::json!({
+            "input_tokens": 0,
+            "cache_read_tokens": 0,
+            "cache_write_5m_tokens": 0,
+            "cache_write_1h_tokens": 0,
+            "cache_write_inferred_tokens": 0,
+            "output_tokens": 0,
+            "reasoning_tokens": 0,
+            "requests": 0,
+            "web_search_requests": 0,
+            "web_fetch_requests": 0,
+            "source_cost_microusd": null,
+            "source_cost_covered_requests": 0
+        });
+        let mut summary = serde_json::json!({
+            "range": {"from": "2026-08-10", "to": "2026-08-10"},
+            "totals": totals,
+            "cost": cost,
+            "coverage": [],
+            "breakdowns": [],
+            "breakdowns_truncated": true,
+            "coverage_truncated": true
+        });
+        summary["cost"]["unpriced_rows"] = serde_json::json!(1);
+        summary["cost"]["unpriced_truncated"] = serde_json::json!(true);
+        summary["breakdowns"] = serde_json::json!([{
+            "dimension": "model",
+            "key": "GPT-5.5[1m]",
+            "totals": summary["totals"].clone(),
+            "cost": summary["cost"].clone()
+        }]);
+        assert!(validate_usage_summary(&summary).is_ok());
+        summary["coverage_truncated"] = serde_json::json!(false);
+        assert!(validate_usage_summary(&summary).is_err());
+    }
+
+    #[test]
+    fn rejected_usage_response_is_terminal_and_keeps_normal_response_shape() {
+        let normal = serde_json::json!({
+            "protocol_version": 2,
+            "outcome": "accepted",
+            "device_id": "device_1",
+            "device_generation": 1,
+            "accepted_sequence": 4,
+            "next_sequence": 5,
+            "usage_sync_revision": 2,
+            "deleted_before": null
+        });
+        assert!(validate_usage_response(&normal).is_ok());
+
+        let mut rejected = serde_json::json!({
+            "protocol_version": 2,
+            "outcome": "rejected",
+            "device_id": "device_1",
+            "device_generation": 1,
+            "accepted_sequence": null,
+            "next_sequence": 5,
+            "usage_sync_revision": 2,
+            "deleted_before": null,
+            "rejection_reason": "duplicate_fact_identity"
+        });
+        assert!(validate_usage_response(&rejected).is_ok());
+        rejected
+            .as_object_mut()
+            .expect("response")
+            .remove("rejection_reason");
+        assert!(validate_usage_response(&rejected).is_err());
+    }
+
+    #[test]
+    fn usage_totals_reject_inconsistent_subsets_and_source_cost() {
+        let mut totals = serde_json::json!({
+            "input_tokens": 1,
+            "cache_read_tokens": 1,
+            "cache_write_5m_tokens": 0,
+            "cache_write_1h_tokens": 0,
+            "cache_write_inferred_tokens": 0,
+            "output_tokens": 1,
+            "reasoning_tokens": 1,
+            "requests": 1,
+            "web_search_requests": 0,
+            "web_fetch_requests": 0,
+            "source_cost_microusd": null,
+            "source_cost_covered_requests": 0
+        });
+        assert!(validate_usage_totals(&totals).is_ok());
+
+        totals["input_tokens"] = serde_json::json!(0);
+        assert!(validate_usage_totals(&totals).is_err());
+        totals["input_tokens"] = serde_json::json!(1);
+        totals["reasoning_tokens"] = serde_json::json!(2);
+        assert!(validate_usage_totals(&totals).is_err());
+        totals["reasoning_tokens"] = serde_json::json!(1);
+        totals["source_cost_covered_requests"] = serde_json::json!(2);
+        assert!(validate_usage_totals(&totals).is_err());
+        totals["source_cost_covered_requests"] = serde_json::json!(1);
+        totals["source_cost_microusd"] = serde_json::json!("2");
+        assert!(validate_usage_totals(&totals).is_ok());
+        totals["source_cost_microusd"] = serde_json::Value::Null;
+        assert!(validate_usage_totals(&totals).is_err());
+    }
+
+    #[test]
+    fn usage_cost_requires_consistent_basis_status_amount_and_assumptions() {
+        let mut cost = serde_json::json!({
+            "mode": "reported",
+            "basis": "reported",
+            "status": "partial",
+            "amount_microusd": "1",
+            "catalog_revision": null,
+            "calculated_rows": 0,
+            "reported_rows": 1,
+            "unpriced_rows": 1,
+            "assumptions": [],
+            "unpriced": [{
+                "billing_channel": "openai_direct",
+                "model": "model",
+                "reason": "missing_rate",
+                "rows": 1
+            }]
+        });
+        assert!(validate_usage_cost(&cost).is_ok());
+        cost["basis"] = serde_json::json!("none");
+        assert!(validate_usage_cost(&cost).is_err());
+        cost["basis"] = serde_json::json!("reported");
+        cost["amount_microusd"] = serde_json::Value::Null;
+        assert!(validate_usage_cost(&cost).is_err());
+        cost["amount_microusd"] = serde_json::json!("1");
+        cost["assumptions"] = serde_json::json!(["source_reported", "source_reported"]);
+        assert!(validate_usage_cost(&cost).is_err());
     }
 
     #[test]

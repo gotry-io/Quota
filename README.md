@@ -14,6 +14,13 @@ Quota collection supports Codex, Claude Code, Grok, OpenRouter, DeepSeek, Kimi C
 Local Usage analytics supports Codex, Claude Code, Grok, OpenCode, and Pi logs. Provider credentials,
 prompts, completions, raw events, local paths, and conversation identifiers never upload.
 
+Both native clients expose the same service-owned diagnostics: Linux `quotacli doctor
+[--format text|json] [--pretty]` and the QuotaBar Settings **Diagnostics** action on macOS. The
+report covers provider discovery and quota collection, Usage parsing/coverage, pricing, account
+state, and synchronization. It contains bounded counters and safe recovery codes only; it never
+includes credentials, tokens, local paths, raw logs, prompts, completions, session identifiers, or
+device identifiers. A healthy report exits successfully; degraded or blocked state exits nonzero.
+
 ## Architecture
 
 QuotaBar starts a fixed signed `Contents/Helpers/quota-service` child and communicates over bounded,
@@ -29,7 +36,8 @@ Usage semantics, credentials, OAuth, Relay traffic, persistence, outbox sequenci
 account observations, and scheduling. QuotaRelay and Quota Web remain TypeScript. See the canonical
 [architecture](docs/architecture.md), [security baseline](docs/security.md),
 [provider strategies](docs/provider-collection.md), [native service decision](docs/decisions/0007-rust-native-local-service.md),
-and [managed account decision](docs/decisions/0006-managed-account-device-usage.md).
+and [managed account decision](docs/decisions/0006-managed-account-device-usage.md). The data
+integrity and diagnostic contract is [ADR 0008](docs/decisions/0008-data-integrity-and-diagnostics.md).
 
 ## Repository layout
 
@@ -108,8 +116,10 @@ The repository implements protocol v2 account/device authentication, independent
 upload sequencing, D1 persistence and deletion watermarks, seven Rust quota collectors, five Rust
 Usage parsers with file-level incremental indexing, effective-dated cost calculation, owner-only
 local SQLite state and provider configuration, persistent private IPC, QuotaBar account/provider
-configuration UI, and the Web account dashboard. Unknown prices remain visibly unpriced; partial
-scans do not replace remote facts.
+configuration UI, and the Web account dashboard. Model identifiers are opaque bounded provider text;
+valid facts remain usable when pricing is unknown. Record/file failures are isolated and complete
+uploads are partitioned losslessly, while partial scans do not replace remote facts. The service
+diagnostic report makes every capability's status and safe counters observable.
 
 Production GitHub OAuth and D1 deployment require the secrets documented by the managed Relay
 configuration. The checked-in deployment workflow is the only authorized production path.

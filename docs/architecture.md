@@ -50,10 +50,10 @@ official provider sessions       agent JSON/JSONL logs
 
 QuotaBar launches the fixed signed `Contents/Helpers/quota-service` path once. Requests, responses,
 and state-change events are newline-delimited `snake_case` JSON with a 1 MiB line limit and request
-IDs. Supported operations are state read, refresh, login/cancel, logout, provider configuration, and
-shutdown. `get_state` performs no collection or network work: it returns the current SQLite-backed
-snapshot immediately. State components carry independent status, last-good value, update time,
-error/recovery code, and refreshing flag for quota, Usage, account, and pricing.
+IDs. Supported operations are state read, diagnose, refresh, login/cancel, logout, provider
+configuration, and shutdown. `get_state` performs no collection or network work: it returns the
+current SQLite-backed snapshot immediately. State components carry independent status, last-good
+value, update time, error/recovery code, and refreshing flag for quota, Usage, account, and pricing.
 
 The service begins a background startup refresh after IPC is available, emits revisioned
 `state_changed` events, and schedules subsequent refreshes every five minutes. Manual refresh uses
@@ -61,6 +61,15 @@ the same single-flight path. stdin EOF or shutdown cancels work and terminates t
 continues after QuotaBar exits. A second installed client may acquire the same owner lock only after
 the first process releases it; there is no multi-process coordination protocol beyond serialized
 ownership.
+
+The private `diagnose` operation is the single local health boundary for both products. It returns a
+bounded, redacted report for the fixed capabilities `providers`, `quota`, `usage`, `pricing`,
+`account`, and `sync`. QuotaBar exposes it from Settings as a copyable report; Linux `quotacli doctor`
+renders the same service result as text or JSON. Neither client reads SQLite or source logs, and the
+service never includes paths, raw provider output, prompts, completions, session identifiers,
+credentials, tokens, or device identifiers. Report status is `healthy`, `degraded`, or `blocked`;
+only `healthy` is a successful CLI exit. The lossless partition and partial-merge semantics are
+canonical in [ADR 0008](decisions/0008-data-integrity-and-diagnostics.md).
 
 Rust returns the merged Overview directly. Global fingerprints merge local and account-device
 observations; source-scoped fingerprints remain separate. Selection favors a valid non-expired
@@ -84,9 +93,14 @@ outbox. SQLite migrations are explicit and append-only.
 Usage indexing is the final file-level invalidation design. Each refresh performs bounded source
 discovery, records parser revision plus file identity, size, and modification time, skips unchanged
 files, and transactionally replaces the normalized rows for changed files. Collectors return typed
-complete/partial coverage. Complete UTC-hour coverage may enter the durable outbox; partial coverage
-is visible locally and never replaces remote facts. The SQLite file index is the sole invalidation
-mechanism: no watcher or byte-checkpoint dependency is part of the product.
+complete/partial coverage. Complete coverage is partitioned losslessly at upload row/byte boundaries;
+partial coverage is visible locally and never replaces remote facts. Invalid records are isolated at
+record scope and unreadable files at file scope, so valid files and agents continue to upload. The
+SQLite file index is the sole invalidation mechanism: no watcher or byte-checkpoint dependency is part
+of the product. Model identifiers remain opaque bounded provider text, including punctuation, and
+missing pricing never discards a valid fact.
+Bounded Usage detail responses may explicitly mark truncated coverage, breakdown, or unpriced-model
+detail; exact totals remain usable and clients surface that degradation.
 
 On first launch, the one-time SQLite migration imports the released installation, session, Usage
 cache, Usage outbox, and pricing cache exactly once. The import is transactional and idempotent;
@@ -169,7 +183,8 @@ QuotaRelay mounts Hono routes at `/oauth/v2` and `/api/v2`, Better Auth at `/api
 routes at their documented paths. It authenticates each route with the minimum account, device, or
 browser scope and performs Device/Account deletion, rotation/revocation, and Usage replacement in
 storage transactions. Released 0.0.5 clients retain their bounded two-agent response variant only
-through the 0.0.6/0.0.7 compatibility window; current clients explicitly request all Usage agents.
+through the completed 0.0.6/0.0.7 compatibility window. Current clients explicitly request all Usage
+agents, and 0.0.8 contains no client-version response branch.
 
 Quota Web builds static Vite assets independently. `/my` reads account summaries and manages
 Devices and deletion; `/activate` approves or denies native authorization. Better Auth owns GitHub

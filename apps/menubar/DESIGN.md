@@ -104,6 +104,7 @@ Overview
 └── Settings
     ├── Devices
     ├── Usage
+    ├── Diagnostics
     └── Agents
         └── Provider
 ```
@@ -136,8 +137,9 @@ Settings section order is fixed:
 1. **Account**
 2. **General**
 3. **Account Data**
-4. **Local Providers**
-5. **About**
+4. **Diagnostics**
+5. **Local Providers**
+6. **About**
 
 Account states:
 
@@ -156,8 +158,11 @@ The account row is followed by a **Manage account** link to the web account surf
 
 Usage is a first-class destination showing This Mac without requiring an account. General contains
 the native mini **Launch at Login** switch. Account Data contains Devices. Local Providers contains
-Agents. About contains version, Website, and Feedback. The Usage source control is a compact native
-segmented control inside the shared Settings group surface.
+Agents. Diagnostics is a first-class destination backed by the private `diagnose` operation. It shows
+one bounded status for Providers, Quota, Usage, Pricing, Account, and Sync, plus safe issue counts,
+and offers **Copy Text** and **Copy JSON** actions using the system pasteboard. About contains version,
+Website, and Feedback. The Usage source control is a compact native segmented control inside the shared
+Settings group surface.
 
 ### Devices
 
@@ -226,6 +231,7 @@ Prefer these components over page-local replicas. Provider assets remain in
 ## Accessibility and input
 
 - Every icon-only button has an accessibility label and Help tooltip.
+- Diagnostics Copy Text and Copy JSON buttons announce their action and copied confirmation.
 - Rows combine or replace child accessibility deliberately; never announce raw opaque identifiers.
 - Disclosure rows announce their destination and current summary.
 - Login exposes a real Cancel action while the service's browser flow runs.

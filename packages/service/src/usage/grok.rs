@@ -78,12 +78,15 @@ impl GrokParser {
             return ParsedLine::reason(super::CoverageReasonCode::InvalidUsage);
         };
         if input == 0
+            && cache_read == 0
+            && cache_write == 0
             && output == 0
+            && reasoning == 0
             && tools.web_search == 0
             && tools.web_fetch == 0
-            && source_cost.is_none()
+            && source_cost.as_deref().is_none_or(|value| value == "0")
         {
-            return ParsedLine::empty();
+            return ParsedLine::ignored_empty();
         }
         ParsedLine {
             records: vec![NormalizedUsageRecord {
@@ -110,8 +113,10 @@ impl GrokParser {
                     source_cost_microusd: source_cost,
                 },
                 source_file_id: source_file_id.to_owned(),
+                record_key: String::new(),
             }],
             reason: None,
+            ignored_empty_records: 0,
         }
     }
 }

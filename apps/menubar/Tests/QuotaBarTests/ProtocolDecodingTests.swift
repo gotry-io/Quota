@@ -90,6 +90,42 @@ func decodesAccountSummaryWithUsageCost() throws {
   #expect(summary.devices.first?.deviceGeneration == 3)
   #expect(summary.usage.cost.amountMicrousd == "3138")
 
+  var expandedObject = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+  var expandedUsage = try #require(expandedObject["usage"] as? [String: Any])
+  var expandedCost = try #require(expandedUsage["cost"] as? [String: Any])
+  expandedCost["status"] = "partial"
+  expandedCost["unpriced_rows"] = 1
+  expandedCost["unpriced_truncated"] = true
+  expandedUsage["cost"] = expandedCost
+  expandedUsage["coverage_truncated"] = true
+  expandedUsage["breakdowns_truncated"] = true
+  expandedObject["usage"] = expandedUsage
+  let expandedData = try JSONSerialization.data(withJSONObject: expandedObject)
+  let expanded = try QuotaWireCodec.makeDecoder().decode(AccountSummary.self, from: expandedData)
+  #expect(expanded.usage.hasTruncatedDetails)
+  #expect(expanded.usage.cost.hasUnpricedTruncatedDetails)
+  #expect(expanded.usage.cost.unpricedRows == 1)
+
+  var falseMarkerObject = expandedObject
+  var falseMarkerUsage = try #require(falseMarkerObject["usage"] as? [String: Any])
+  falseMarkerUsage["coverage_truncated"] = false
+  falseMarkerObject["usage"] = falseMarkerUsage
+  let falseMarkerData = try JSONSerialization.data(withJSONObject: falseMarkerObject)
+  #expect(throws: DecodingError.self) {
+    _ = try QuotaWireCodec.makeDecoder().decode(AccountSummary.self, from: falseMarkerData)
+  }
+
+  var falseCostMarkerObject = expandedObject
+  var falseCostMarkerUsage = try #require(falseCostMarkerObject["usage"] as? [String: Any])
+  var falseCostMarker = try #require(falseCostMarkerUsage["cost"] as? [String: Any])
+  falseCostMarker["unpriced_truncated"] = false
+  falseCostMarkerUsage["cost"] = falseCostMarker
+  falseCostMarkerObject["usage"] = falseCostMarkerUsage
+  let falseCostMarkerData = try JSONSerialization.data(withJSONObject: falseCostMarkerObject)
+  #expect(throws: DecodingError.self) {
+    _ = try QuotaWireCodec.makeDecoder().decode(AccountSummary.self, from: falseCostMarkerData)
+  }
+
   let missingRequiredNull = Data(
     String(decoding: data, as: UTF8.self).replacingOccurrences(
       of: #""catalog_revision": "pricing_1","#,
@@ -108,6 +144,61 @@ func decodesAccountSummaryWithUsageCost() throws {
   #expect(String(decoding: nestedExtra, as: UTF8.self).contains("\"extra\""))
   #expect(throws: DecodingError.self) {
     _ = try QuotaWireCodec.makeDecoder().decode(AccountSummary.self, from: nestedExtra)
+  }
+}
+
+@Test
+func validatesUsageBreakdownKeysByDimension() throws {
+  let totals: [String: Any] = [
+    "input_tokens": 1000,
+    "cache_read_tokens": 100,
+    "cache_write_5m_tokens": 0,
+    "cache_write_1h_tokens": 0,
+    "cache_write_inferred_tokens": 0,
+    "output_tokens": 200,
+    "reasoning_tokens": 50,
+    "requests": 1,
+    "web_search_requests": 0,
+    "web_fetch_requests": 0,
+    "source_cost_microusd": NSNull(),
+    "source_cost_covered_requests": 0,
+  ]
+  let cost: [String: Any] = [
+    "mode": "calculate",
+    "basis": "calculated",
+    "status": "complete",
+    "amount_microusd": "3138",
+    "catalog_revision": "pricing_1",
+    "calculated_rows": 1,
+    "reported_rows": 0,
+    "unpriced_rows": 0,
+    "assumptions": ["agent_default_channel"],
+    "unpriced": [],
+  ]
+
+  func decode(_ dimension: String, key: String) throws -> UsageBreakdown {
+    let object: [String: Any] = [
+      "dimension": dimension,
+      "key": key,
+      "totals": totals,
+      "cost": cost,
+    ]
+    return try QuotaWireCodec.makeDecoder().decode(
+      UsageBreakdown.self,
+      from: JSONSerialization.data(withJSONObject: object)
+    )
+  }
+
+  let exactModel = try decode("model", key: "GPT-5.5[1m]")
+  #expect(exactModel.key == "GPT-5.5[1m]")
+  _ = try decode("agent", key: "codex")
+
+  _ = try decode("model", key: String(repeating: "😀", count: 128))
+  #expect(throws: DecodingError.self) {
+    _ = try decode("model", key: String(repeating: "😀", count: 129))
+  }
+  #expect(throws: DecodingError.self) {
+    _ = try decode("model", key: "GPT-5.5\n1m")
   }
 }
 
@@ -189,6 +280,112 @@ func rejectsUnknownNestedLocalServiceStateFields() throws {
 }
 
 @Test
+func decodesUnifiedDiagnosticsAndRejectsUnknownFields() throws {
+  let data = Data(
+    #"""
+    {
+      "schema_version": 1,
+      "status": "healthy",
+      "generated_at": "2026-08-11T00:00:00Z",
+      "client": {"name": "QuotaBar", "version": "0.0.7"},
+      "components": [
+        {"name": "providers", "status": "ready", "message": null, "metrics": {}},
+        {"name": "quota", "status": "ready", "message": null, "metrics": {}},
+        {"name": "usage", "status": "ready", "message": "safe source note", "metrics": {"files": 1}},
+        {"name": "pricing", "status": "ready", "message": null, "metrics": {}},
+        {"name": "account", "status": "ready", "message": null, "metrics": {}},
+        {"name": "sync", "status": "ready", "message": null, "metrics": {}}
+      ],
+      "issues": []
+    }
+    """#.utf8
+  )
+
+  let report = try QuotaWireCodec.makeDecoder().decode(
+    LocalServiceDiagnosticReport.self, from: data
+  )
+  #expect(report.status == .healthy)
+  #expect(report.components.count == 6)
+  #expect(report.components.first(where: { $0.name == "usage" })?.metrics["files"] == 1)
+  #expect(report.textReport.contains("Diagnostics: healthy"))
+  #expect(report.textReport.contains("usage\tready"))
+  #expect(report.textReport.contains("safe source note"))
+  #expect(report.textReport.contains("files=1"))
+  #expect(report.jsonReport.contains("\"schema_version\":1"))
+  #expect(!report.jsonReport.contains("/Users/"))
+
+  var issueObject = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+  issueObject["status"] = "degraded"
+  issueObject["issues"] = [[
+    "component": "usage",
+    "code": "scan_partial",
+    "severity": "warning",
+    "count": 2,
+    "message": "some sources are incomplete",
+  ]]
+  let issueData = try JSONSerialization.data(withJSONObject: issueObject)
+  let issueReport = try QuotaWireCodec.makeDecoder().decode(
+    LocalServiceDiagnosticReport.self, from: issueData
+  )
+  #expect(issueReport.textReport.contains("usage/scan_partial (2)"))
+  #expect(issueReport.textReport.contains("some sources are incomplete"))
+
+  let extra = Data(
+    String(decoding: data, as: UTF8.self).replacingOccurrences(
+      of: "\"issues\": []",
+      with: "\"issues\": [], \"future_key\": true"
+    ).utf8
+  )
+  #expect(throws: DecodingError.self) {
+    _ = try QuotaWireCodec.makeDecoder().decode(LocalServiceDiagnosticReport.self, from: extra)
+  }
+
+  var invalidStatus = issueObject
+  var invalidStatusComponents = try #require(invalidStatus["components"] as? [[String: Any]])
+  invalidStatusComponents[0]["status"] = "unknown"
+  invalidStatus["components"] = invalidStatusComponents
+  #expect(throws: DecodingError.self) {
+    _ = try QuotaWireCodec.makeDecoder().decode(
+      LocalServiceDiagnosticReport.self,
+      from: JSONSerialization.data(withJSONObject: invalidStatus)
+    )
+  }
+
+  var invalidMetric = issueObject
+  var invalidMetricComponents = try #require(invalidMetric["components"] as? [[String: Any]])
+  invalidMetricComponents[2]["metrics"] = ["files": 1_000_001]
+  invalidMetric["components"] = invalidMetricComponents
+  #expect(throws: DecodingError.self) {
+    _ = try QuotaWireCodec.makeDecoder().decode(
+      LocalServiceDiagnosticReport.self,
+      from: JSONSerialization.data(withJSONObject: invalidMetric)
+    )
+  }
+
+  var invalidCount = issueObject
+  var invalidIssues = try #require(invalidCount["issues"] as? [[String: Any]])
+  invalidIssues[0]["count"] = 0
+  invalidCount["issues"] = invalidIssues
+  #expect(throws: DecodingError.self) {
+    _ = try QuotaWireCodec.makeDecoder().decode(
+      LocalServiceDiagnosticReport.self,
+      from: JSONSerialization.data(withJSONObject: invalidCount)
+    )
+  }
+
+  var unsafeMessage = issueObject
+  var unsafeMessageComponents = try #require(unsafeMessage["components"] as? [[String: Any]])
+  unsafeMessageComponents[2]["message"] = "safe\nspoof"
+  unsafeMessage["components"] = unsafeMessageComponents
+  #expect(throws: DecodingError.self) {
+    _ = try QuotaWireCodec.makeDecoder().decode(
+      LocalServiceDiagnosticReport.self,
+      from: JSONSerialization.data(withJSONObject: unsafeMessage)
+    )
+  }
+}
+
+@Test
 func decodesAccountHourlyUsageResponse() throws {
   let data = Data(
     #"""
@@ -229,6 +426,7 @@ func decodesAccountHourlyUsageResponse() throws {
         "end_at": "2026-08-02T13:00:00Z",
         "status": "complete"
       }],
+      "coverage_truncated": true,
       "cost": {
         "mode": "calculate",
         "basis": "calculated",
@@ -255,6 +453,44 @@ func decodesAccountHourlyUsageResponse() throws {
   #expect(response.facts.first?.fact.billingChannel == .xaiDirect)
   #expect(response.facts.first?.aggregationTimezone == "Asia/Singapore")
   #expect(response.cost.calculatedRows == response.facts.count)
+  #expect(response.coverageTruncated == true)
+}
+
+@Test
+func decodesLocalUsageTruncationFields() throws {
+  let report = LocalUsageReport(
+    generatedAt: Date(timeIntervalSince1970: 1_754_080_000),
+    aggregationTimezone: nil,
+    range: UsageDateRange(from: "2026-08-01", to: "2026-08-02"),
+    status: .unavailable,
+    totals: nil,
+    cost: nil,
+    coverage: [],
+    breakdowns: [],
+    coverageTruncated: true,
+    breakdownsTruncated: true
+  )
+  let data = try QuotaWireCodec.makeEncoder().encode(report)
+  let decoded = try QuotaWireCodec.makeDecoder().decode(LocalUsageReport.self, from: data)
+  #expect(decoded.hasTruncatedDetails)
+  #expect(decoded.coverageTruncated == true)
+  #expect(decoded.breakdownsTruncated == true)
+
+  let falseMarker = LocalUsageReport(
+    generatedAt: report.generatedAt,
+    aggregationTimezone: nil,
+    range: report.range,
+    status: .unavailable,
+    totals: nil,
+    cost: nil,
+    coverage: [],
+    breakdowns: [],
+    coverageTruncated: false
+  )
+  let falseMarkerData = try QuotaWireCodec.makeEncoder().encode(falseMarker)
+  #expect(throws: DecodingError.self) {
+    _ = try QuotaWireCodec.makeDecoder().decode(LocalUsageReport.self, from: falseMarkerData)
+  }
 }
 
 @Test
@@ -489,6 +725,46 @@ func decodesUsageSubmissionAndConservesTokenSubsets() throws {
 
   #expect(submission.protocolVersion == 2)
   #expect(submission.rows.first?.inputTokens == 1000)
+
+  var multipartObject = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+  var partialCoverage = try #require(multipartObject["coverage"] as? [String: Any])
+  partialCoverage["status"] = "partial"
+  multipartObject["coverage"] = partialCoverage
+  multipartObject["write_mode"] = "merge_partial"
+  multipartObject["multipart"] = [
+    "batch_id": "batch_01",
+    "part_index": 0,
+    "part_count": 2,
+  ]
+  let multipartData = try JSONSerialization.data(withJSONObject: multipartObject)
+  let multipart = try QuotaWireCodec.makeDecoder().decode(UsageSubmissionV2.self, from: multipartData)
+  #expect(multipart.writeMode == .mergePartial)
+  #expect(multipart.multipart?.partIndex == 0)
+
+  var modelBoundaryObject = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+  var modelBoundaryRows = try #require(modelBoundaryObject["rows"] as? [[String: Any]])
+  modelBoundaryRows[0]["model"] = String(repeating: "😀", count: 128)
+  modelBoundaryObject["rows"] = modelBoundaryRows
+  let modelBoundaryData = try JSONSerialization.data(withJSONObject: modelBoundaryObject)
+  _ = try QuotaWireCodec.makeDecoder().decode(UsageSubmissionV2.self, from: modelBoundaryData)
+
+  modelBoundaryRows[0]["model"] = String(repeating: "😀", count: 129)
+  modelBoundaryObject["rows"] = modelBoundaryRows
+  let oversizedModelData = try JSONSerialization.data(withJSONObject: modelBoundaryObject)
+  #expect(throws: DecodingError.self) {
+    _ = try QuotaWireCodec.makeDecoder().decode(UsageSubmissionV2.self, from: oversizedModelData)
+  }
+
+  var invalidMultipartObject = multipartObject
+  invalidMultipartObject["multipart"] = [
+    "batch_id": "batch_01",
+    "part_index": 2,
+    "part_count": 2,
+  ]
+  let invalidMultipartData = try JSONSerialization.data(withJSONObject: invalidMultipartObject)
+  #expect(throws: DecodingError.self) {
+    _ = try QuotaWireCodec.makeDecoder().decode(UsageSubmissionV2.self, from: invalidMultipartData)
+  }
 
   let invalid = Data(
     String(decoding: data, as: UTF8.self).replacingOccurrences(

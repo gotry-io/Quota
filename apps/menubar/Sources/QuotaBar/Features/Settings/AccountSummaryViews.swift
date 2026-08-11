@@ -100,6 +100,10 @@ struct AccountUsageView: View {
           }
         }
 
+        if let usageCompletenessWarning {
+          accountIssue(usageCompletenessWarning)
+        }
+
         if let usage = presentedUsage {
           SettingsSection(title: "Period") {
             usageValueRow(
@@ -187,6 +191,13 @@ struct AccountUsageView: View {
                   value: UsageValueFormatter.count(usage.cost.unpricedRows)
                 )
               }
+              if usage.cost.hasUnpricedTruncatedDetails {
+                usageValueRow(
+                  title: "Unpriced details",
+                  systemImage: "ellipsis.circle",
+                  value: "Truncated; totals preserved"
+                )
+              }
             }
           }
 
@@ -224,6 +235,31 @@ struct AccountUsageView: View {
 
   private var effectiveScope: UsageDisplayScope {
     model.accountSummary == nil ? .local : scope
+  }
+
+  private var usageCompletenessWarning: String? {
+    let hasCoverageTruncation: Bool
+    let hasBreakdownTruncation: Bool
+    let hasUnpricedTruncation: Bool
+    switch effectiveScope {
+    case .local:
+      guard let report = model.localUsage else { return nil }
+      hasCoverageTruncation = report.coverageTruncated == true
+      hasBreakdownTruncation = report.breakdownsTruncated == true
+      hasUnpricedTruncation = report.cost?.hasUnpricedTruncatedDetails == true
+    case .account:
+      guard let usage = model.accountSummary?.usage else { return nil }
+      hasCoverageTruncation = usage.coverageTruncated == true
+      hasBreakdownTruncation = usage.breakdownsTruncated == true
+      hasUnpricedTruncation = usage.cost.hasUnpricedTruncatedDetails
+    }
+
+    var details: [String] = []
+    if hasCoverageTruncation { details.append("coverage") }
+    if hasBreakdownTruncation { details.append("breakdowns") }
+    if hasUnpricedTruncation { details.append("unpriced model details") }
+    guard !details.isEmpty else { return nil }
+    return "Some Usage \(details.joined(separator: ", ")) are truncated; totals are preserved."
   }
 
   private var presentedUsage: PresentedUsage? {

@@ -43,11 +43,11 @@ Each immutable outbox submission has a stable ID, generation, and sequence, so r
 crash-after-commit are idempotent. Pricing uses an effective-dated managed catalog and preserves
 unknown or incomplete prices as explicitly unpriced rather than zero.
 
-QuotaCLI 0.0.5 shipped bounded protocol-v2 Usage behavior. The native-cutover compatibility
-lifecycle and removal checklist are defined in
-[ADR 0007](0007-rust-native-local-service.md). Current clients reject the released `unknown` model
-sentinel during collection and request all agents and retained history with `usage_agents=all`.
-The shared `providers.json`/`ProviderConfigLock` path and OAuth `client_id=quotacli` remain current
+QuotaCLI 0.0.5 shipped bounded protocol-v2 Usage behavior. The native-cutover compatibility window
+completed with 0.0.6 and 0.0.7, and 0.0.8 removed its one-time import and version-specific Relay
+behavior as defined in [ADR 0007](0007-rust-native-local-service.md). Current clients preserve
+opaque model identifiers and request all agents and retained history with `usage_agents=all`. The
+shared `providers.json`/`ProviderConfigLock` path and OAuth `client_id=quotacli` remain current
 interfaces rather than compatibility behavior.
 
 Logout first disables local upload and revokes sessions, but retains the remote Device and data.
@@ -65,8 +65,8 @@ SQLite adapter, Relay discovery document, arbitrary Relay URL, anonymous owner, 
 - Local collection and cached display continue while signed out or offline; remote sync does not.
 - The service can aggregate quota and Usage without receiving the underlying work or provider
   credentials.
-- Earlier D1 and protocol cutovers applied only to unreleased data and interfaces. Shipped protocol
-  v2 behavior remains compatible through the explicit 0.0.5 Usage paths described above.
+- Earlier D1 and protocol cutovers applied only to unreleased data and interfaces. The bounded
+  native-cutover exception ended after its documented two-release window.
 - Self-hosting requires a future decision. Additional identity providers can use Better Auth's
   provider boundary without creating a second session system, but still require an explicit product
   and privacy decision.
