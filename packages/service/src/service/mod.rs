@@ -636,6 +636,21 @@ impl LocalService {
             }
             Err(error) => {
                 let no_session = self.inner.state.session_json().ok().flatten().is_none();
+                let retained_auth_failure = error.error.code == ErrorCode::AuthenticationRequired
+                    && component == ComponentName::Account
+                    && no_session
+                    && current.as_ref().is_some_and(|record| {
+                        record
+                            .value
+                            .as_ref()
+                            .and_then(|value| value.get("auth_status"))
+                            .and_then(Value::as_str)
+                            == Some("signed_in")
+                            || record.last_error.as_ref().is_some_and(|previous| {
+                                previous.code == ErrorCode::AuthenticationRequired
+                                    && previous.recovery_action == RecoveryAction::Login
+                            })
+                    });
                 let status = match error.error.code {
                     ErrorCode::Cancelled => current
                         .as_ref()
@@ -679,7 +694,7 @@ impl LocalService {
                         current.as_ref().and_then(|value| value.updated_at.clone()),
                     )
                 };
-                let last_error = if status == ComponentStatus::SignedOut {
+                let last_error = if status == ComponentStatus::SignedOut && !retained_auth_failure {
                     None
                 } else {
                     Some(error.error)
@@ -1190,6 +1205,57 @@ mod tests {
             thread::yield_now();
         }
         drop(service);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn signed_out_state_retains_a_lost_session_error() {
+        let root = std::env::temp_dir().join(format!("quota-auth-lost-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        state
+            .set_component(
+                ComponentName::Account,
+                ComponentStatus::Ready,
+                Some(account_value_json(&AccountComponentValue {
+                    auth_status: AuthStatus::SignedIn,
+                    account_id: Some("account_test".into()),
+                    device_id: Some("device_test".into()),
+                    device_generation: Some(1),
+                    account_summary: None,
+                })),
+                Some(now_rfc3339()),
+                None,
+                false,
+            )
+            .expect("signed in component");
+        let service = LocalService::new(
+            state.clone(),
+            Arc::new(RecordingSink::default()),
+            Arc::new(UnavailableBackend),
+        );
+
+        for _ in 0..2 {
+            service.apply_component_result(
+                ComponentName::Account,
+                Err(BackendError {
+                    error: IpcError::new(ErrorCode::AuthenticationRequired, RecoveryAction::Login),
+                }),
+            );
+            let account = state
+                .component(ComponentName::Account)
+                .expect("account")
+                .expect("account component");
+            assert_eq!(account.status, ComponentStatus::SignedOut);
+            assert_eq!(
+                account.last_error.map(|error| error.code),
+                Some(ErrorCode::AuthenticationRequired)
+            );
+        }
+
+        service.shutdown();
+        drop(service);
+        drop(state);
         fs::remove_dir_all(root).expect("cleanup");
     }
 

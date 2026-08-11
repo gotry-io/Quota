@@ -289,6 +289,8 @@ actor LocalServiceClient: LocalServiceServing {
       else {
         throw LocalServiceClientError.invalidMessage
       }
+      // Old-process replies are filtered by connectionGeneration. An unknown ID in the active
+      // generation therefore violates the private protocol; fail closed and wake every waiter.
       guard let requestID = object["request_id"] as? String, pending[requestID] != nil else {
         throw LocalServiceClientError.invalidMessage
       }

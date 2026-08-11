@@ -1634,11 +1634,23 @@ impl AccountManager {
             .map_err(|error| BackendError {
                 error: relay_error_for_backend(error),
             })?;
-        let outcome = self.finalize_login(&response)?;
+        self.finalize_device_login(&response, cancel)
+    }
+
+    fn finalize_device_login(
+        &self,
+        response: &Value,
+        cancel: &AtomicBool,
+    ) -> Result<LoginOutcome, BackendError> {
+        // Building the outcome validates the issued token families but never persists an active
+        // session. If cancellation won the issuance race, retain only a durable revoke record.
+        let outcome = self.finalize_login(response)?;
         if cancel.load(Ordering::Acquire) {
-            if let Some(pending) = pending_session_from_active(&outcome.session) {
-                let _ = self.state.write_session_json(&pending);
-            }
+            let pending = pending_session_from_active(&outcome.session)
+                .ok_or_else(BackendError::unavailable)?;
+            self.state
+                .write_session_json(&pending)
+                .map_err(|_| BackendError::unavailable())?;
             return Err(BackendError::cancelled());
         }
         Ok(outcome)
@@ -2601,6 +2613,8 @@ fn random_secret(bytes: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use uuid::Uuid;
 
     #[test]
     fn managed_origin_is_fixed() {
@@ -2745,6 +2759,50 @@ mod tests {
         assert!(parse_utc_hour_value("2026-08-10T00:00:00Z").is_ok());
         assert!(parse_utc_hour_value("2026-08-10T00:00:00+00:00").is_err());
         assert!(parse_utc_hour_value("2026-08-10T00:00:60Z").is_err());
+    }
+
+    #[test]
+    fn cancelled_issued_device_login_persists_only_a_revoke_record() {
+        let root = std::env::temp_dir().join(format!("quota-device-cancel-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        let manager = AccountManager::new(
+            Arc::new(RelayClient::for_test("http://127.0.0.1:1").expect("client")),
+            state.clone(),
+            "Linux".into(),
+        );
+        let response = serde_json::json!({
+            "protocol_version": 2,
+            "token_type": "Bearer",
+            "account_id": "account_1",
+            "device_id": "device_1",
+            "device_generation": 1,
+            "next_snapshot_sequence": 0,
+            "next_usage_sequence": 0,
+            "usage_deleted_before": null,
+            "usage_sync_revision": 0,
+            "account_session": valid_token(),
+            "device_session": valid_token()
+        });
+
+        let error = manager
+            .finalize_device_login(&response, &AtomicBool::new(true))
+            .expect_err("cancelled login");
+        assert_eq!(error.error.code, crate::protocol::ErrorCode::Cancelled);
+        let session = state
+            .session_json()
+            .expect("session")
+            .expect("revoke record");
+        assert_eq!(
+            session.get("status").and_then(Value::as_str),
+            Some("logout_pending")
+        );
+        assert!(session.get("account").is_none());
+        assert!(session.get("device").is_none());
+
+        drop(manager);
+        drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
     }
 
     #[test]

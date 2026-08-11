@@ -385,7 +385,7 @@ final class MenuBarViewModel {
       errorMessage = nil
     }
 
-    if let accountError = state.account.lastError, authStatus != .signedOut {
+    if let accountError = state.account.lastError {
       accountErrorMessage = LocalServiceClientError.remote(accountError).errorDescription
     } else if state.account.value != nil {
       accountErrorMessage = nil

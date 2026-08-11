@@ -56,7 +56,10 @@ func consumesServiceMergedOverviewWithoutReprocessingObservations() async throws
         accountSummary: nil
       ),
       updatedAt: nil,
-      lastError: nil,
+      lastError: LocalServiceRemoteError(
+        code: .authenticationRequired,
+        recoveryAction: .login
+      ),
       refreshing: false
     ),
     pricing: LocalServiceComponent<PricingCatalog>(
@@ -104,6 +107,7 @@ func consumesServiceMergedOverviewWithoutReprocessingObservations() async throws
   #expect(providers.first?.accounts.first?.snapshot == snapshot)
   #expect(model.providerConfigurations[.openrouter]?.maskedAPIKey == "OpenRouter ···test")
   #expect(model.lastCheckedAt == now)
+  #expect(model.accountErrorMessage == "Sign in to continue.")
 }
 
 private func component<Value: Decodable & Sendable>(
