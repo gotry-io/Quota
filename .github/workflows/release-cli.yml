@@ -1,0 +1,122 @@
+name: release-cli
+
+# A cli-v* tag builds one static x86_64 Linux binary and publishes a GitHub Release.
+# QuotaCLI is not published to npm or Homebrew.
+# A manual run may only republish an existing tag; it never builds an untagged main commit.
+on:
+  push:
+    tags: ["cli-v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Existing QuotaCLI semver to re-publish (e.g. 0.0.7), without cli-v prefix"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: quotacli-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('cli-v{0}', github.event.inputs.version) || github.ref }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+
+      - name: Resolve version
+        id: version
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            VERSION="$INPUT_VERSION"
+          elif [[ "$REF_NAME" == cli-v* ]]; then
+            VERSION="${REF_NAME#cli-v}"
+          else
+            echo "expected tag cli-v*, got: $REF_NAME" >&2
+            exit 1
+          fi
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.]+)?$'; then
+            echo "invalid version: $VERSION" >&2
+            exit 1
+          fi
+          if [[ "$VERSION" == *-* ]]; then
+            PRERELEASE=true
+          else
+            PRERELEASE=false
+          fi
+          {
+            echo "version=$VERSION"
+            echo "tag=cli-v$VERSION"
+            echo "prerelease=$PRERELEASE"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Validate product version
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          SOURCE_VERSION="$(cargo metadata --locked --no-deps --format-version 1 | jq -er \
+            '.packages[] | select(.name == "quotacli") | .version')"
+          if [ "$SOURCE_VERSION" != "$VERSION" ]; then
+            echo "cli-v${VERSION} does not match QuotaCLI's Cargo.toml (${SOURCE_VERSION})" >&2
+            echo "bump and commit the QuotaCLI version before creating the release tag" >&2
+            exit 1
+          fi
+
+      - name: Install musl toolchain
+        run: sudo apt-get update && sudo apt-get install --yes musl-tools
+
+      - name: Test and build
+        run: |
+          set -euo pipefail
+          cargo test --locked --package quotacli
+          cargo build --locked --release --package quotacli --target x86_64-unknown-linux-musl
+
+      - name: Package binary
+        id: artifact
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          BINARY="target/x86_64-unknown-linux-musl/release/quotacli"
+          ARCHIVE="QuotaCLI-${VERSION}-linux-x86_64.tar.gz"
+          RELEASE_DIR="dist/release"
+          test "$($BINARY version)" = "QuotaCLI ${VERSION}"
+          mkdir -p "$RELEASE_DIR"
+          tar -C "$(dirname "$BINARY")" -czf "$RELEASE_DIR/$ARCHIVE" quotacli
+          SHA256="$(sha256sum "$RELEASE_DIR/$ARCHIVE" | cut -d' ' -f1)"
+          printf '%s  %s\n' "$SHA256" "$ARCHIVE" > "$RELEASE_DIR/$ARCHIVE.sha256"
+          echo "archive=$ARCHIVE" >> "$GITHUB_OUTPUT"
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          ARCHIVE: ${{ steps.artifact.outputs.archive }}
+          PRERELEASE: ${{ steps.version.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            CREATE_ARGS=(--repo "$GITHUB_REPOSITORY" --title "$TAG" --generate-notes)
+            if [ "$PRERELEASE" = "true" ]; then
+              CREATE_ARGS+=(--prerelease)
+            fi
+            gh release create "$TAG" "${CREATE_ARGS[@]}"
+          fi
+          gh release upload "$TAG" \
+            "dist/release/$ARCHIVE" \
+            "dist/release/$ARCHIVE.sha256" \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber

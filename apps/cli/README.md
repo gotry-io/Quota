@@ -28,6 +28,9 @@ Provider API keys are read from stdin for `config set`; an API key is never acce
 This crate targets Linux. A small non-Linux entry-point guard keeps parser tests buildable on
 developers' macOS hosts; it does not provide a Windows implementation.
 
+`cli-vX.Y.Z` releases contain a static x86_64 Linux binary archive and its SHA-256 checksum. npm,
+Homebrew, source-package, macOS, and Windows distributions are not provided.
+
 `login` is headless on Linux: it requests an OAuth Device Authorization Grant, prints the
 verification URL and user code, and polls Relay until the browser account flow approves or expires.
 It never opens a browser or creates a loopback listener. Device codes and session tokens are never

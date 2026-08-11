@@ -2,13 +2,16 @@
 /**
  * Bump one product version and commit it.
  *
+ *   pnpm version:bump:cli patch|minor|major|<semver>
  *   pnpm version:bump:menubar patch|minor|major|<semver>
  *   … --no-commit
  *
+ * CLI: Cargo package version.
  * Menubar: plutil CFBundleShortVersionString.
- * Publish tags: menubar-vX.Y.Z
+ * Publish tags: cli-vX.Y.Z | menubar-vX.Y.Z
  */
 import { spawnSync } from "node:child_process";
+import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -20,15 +23,22 @@ const args = process.argv.slice(2);
 const noCommit = args.includes("--no-commit");
 const help = args.includes("-h") || args.includes("--help");
 const positional = args.filter((a) => !a.startsWith("-"));
-const bumpArg = positional[0];
+const target = positional[0];
+const bumpArg = positional[1];
 
-if (help || !bumpArg) {
-  console.log(`Usage: pnpm version:bump:menubar <patch|minor|major|semver> [--no-commit]
+if (help || !target || !bumpArg) {
+  console.log(`Usage: pnpm version:bump:<cli|menubar> <patch|minor|major|semver> [--no-commit]
 
 Examples:
+  pnpm version:bump:cli patch
   pnpm version:bump:menubar minor
   pnpm version:bump:menubar 0.1.0 --no-commit`);
   process.exit(help ? 0 : 2);
+}
+
+if (target !== "cli" && target !== "menubar") {
+  console.error(`unknown target: ${target}`);
+  process.exit(1);
 }
 
 if (!BUMP_KINDS.has(bumpArg) && !VERSION_RE.test(bumpArg)) {
@@ -36,19 +46,21 @@ if (!BUMP_KINDS.has(bumpArg) && !VERSION_RE.test(bumpArg)) {
   process.exit(1);
 }
 
-const before = readVersion();
-const touched = bumpMenubar(before, bumpArg);
-const version = readVersion();
+const before = readVersion(target);
+const touched = target === "cli" ? bumpCli(before, bumpArg) : bumpMenubar(before, bumpArg);
+const version = readVersion(target);
 
 if (version === before) {
-  console.log(`Already at QuotaBar ${version}; nothing to do.`);
+  console.log(
+    `Already at ${target === "cli" ? "QuotaCLI" : "QuotaBar"} ${version}; nothing to do.`,
+  );
   process.exit(0);
 }
-console.log(`updated QuotaBar: ${before} → ${version}`);
+console.log(`updated ${target === "cli" ? "QuotaCLI" : "QuotaBar"}: ${before} → ${version}`);
 
-const tag = `menubar-v${version}`;
-const label = "QuotaBar";
-const message = `chore(menubar): bump version to ${version}`;
+const tag = `${target === "cli" ? "cli" : "menubar"}-v${version}`;
+const label = target === "cli" ? "QuotaCLI" : "QuotaBar";
+const message = `chore(${target}): bump version to ${version}`;
 
 if (noCommit) {
   console.log("Skipped commit (--no-commit).");
@@ -75,7 +87,16 @@ if (commit.status !== 0) {
 console.log(`committed: ${message}`);
 console.log(`Publish: git tag -a ${tag} -m "${label} ${version}" && git push origin ${tag}`);
 
-function readVersion() {
+function readVersion(product) {
+  if (product === "cli") {
+    const manifest = readFileSync(join(root, "apps/cli/Cargo.toml"), "utf8");
+    const version = manifest.match(/^version = "([^"]+)"$/m)?.[1];
+    if (!version) {
+      console.error("cannot read QuotaCLI version from apps/cli/Cargo.toml");
+      process.exit(1);
+    }
+    return version;
+  }
   const out = run("plutil", [
     "-extract",
     "CFBundleShortVersionString",
@@ -89,6 +110,24 @@ function readVersion() {
   return out.stdout.trim();
 }
 
+function bumpCli(current, spec) {
+  const next = BUMP_KINDS.has(spec) ? nextSemver(current, spec) : spec;
+  const manifestPath = join(root, "apps/cli/Cargo.toml");
+  const manifest = readFileSync(manifestPath, "utf8");
+  const currentLine = `version = "${current}"`;
+  if (!manifest.includes(currentLine)) {
+    console.error(`cannot find QuotaCLI version ${current} in apps/cli/Cargo.toml`);
+    process.exit(1);
+  }
+  writeFileSync(manifestPath, manifest.replace(currentLine, `version = "${next}"`));
+  const lockfile = run("cargo", ["generate-lockfile", "--offline"]);
+  if (lockfile.status !== 0) {
+    console.error(lockfile.stderr || "cargo generate-lockfile failed");
+    process.exit(lockfile.status ?? 1);
+  }
+  return ["apps/cli/Cargo.toml", "Cargo.lock"];
+}
+
 function bumpMenubar(current, spec) {
   const next = BUMP_KINDS.has(spec) ? nextSemver(current, spec) : spec;
   const path = join(root, "apps/menubar/Support/Info.plist");
@@ -100,7 +139,7 @@ function bumpMenubar(current, spec) {
   return ["apps/menubar/Support/Info.plist"];
 }
 
-/** patch|minor|major — prerelease strip on patch matches npm. */
+/** patch|minor|major — patch removes a prerelease suffix before incrementing. */
 function nextSemver(current, kind) {
   const m = current.match(/^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/);
   if (!m) {
