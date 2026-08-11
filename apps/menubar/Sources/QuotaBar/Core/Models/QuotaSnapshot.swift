@@ -2,7 +2,7 @@ import Foundation
 
 private let quotaJSONSafeIntegerMaximum = 9_007_199_254_740_991
 
-// ProviderID lives in ProviderID.generated.swift (from packages/provider/src/catalog.ts via
+// ProviderID lives in ProviderID.generated.swift (from packages/provider/catalog.json via
 // `pnpm generate:provider-catalog`). Do not redefine provider cases here.
 
 enum QuotaStatus: String, Codable, Sendable {
@@ -24,6 +24,25 @@ struct QuotaAccount: Codable, Equatable, Sendable {
   let label: String?
   let plan: String?
   let fingerprintScope: FingerprintScope
+
+  private enum CodingKeys: String, CodingKey {
+    case fingerprint
+    case label
+    case plan
+    case fingerprintScope
+  }
+
+}
+
+extension QuotaAccount {
+  init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys(["fingerprint", "label", "plan", "fingerprintScope"])
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    fingerprint = try container.decode(String.self, forKey: .fingerprint)
+    label = try container.decodeIfPresent(String.self, forKey: .label)
+    plan = try container.decodeIfPresent(String.self, forKey: .plan)
+    fingerprintScope = try container.decode(FingerprintScope.self, forKey: .fingerprintScope)
+  }
 }
 
 enum QuotaValueUnit: String, Codable, Equatable, Sendable {
@@ -42,6 +61,17 @@ struct QuotaWindow: Codable, Equatable, Identifiable, Sendable {
   let remainingValue: Double?
   let limitValue: Double?
   let valueUnit: QuotaValueUnit?
+
+  private enum CodingKeys: String, CodingKey {
+    case id
+    case title
+    case usedPercent
+    case resetsAt
+    case durationSeconds
+    case remainingValue
+    case limitValue
+    case valueUnit
+  }
 
   init(
     id: String,
@@ -62,6 +92,22 @@ struct QuotaWindow: Codable, Equatable, Identifiable, Sendable {
     self.limitValue = limitValue
     self.valueUnit = valueUnit
   }
+
+  init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys([
+      "id", "title", "usedPercent", "resetsAt", "durationSeconds", "remainingValue", "limitValue",
+      "valueUnit",
+    ])
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    id = try container.decode(String.self, forKey: .id)
+    title = try container.decode(String.self, forKey: .title)
+    usedPercent = try container.decode(Double.self, forKey: .usedPercent)
+    resetsAt = try container.decodeIfPresent(Date.self, forKey: .resetsAt)
+    durationSeconds = try container.decodeIfPresent(Int.self, forKey: .durationSeconds)
+    remainingValue = try container.decodeIfPresent(Double.self, forKey: .remainingValue)
+    limitValue = try container.decodeIfPresent(Double.self, forKey: .limitValue)
+    valueUnit = try container.decodeIfPresent(QuotaValueUnit.self, forKey: .valueUnit)
+  }
 }
 
 struct QuotaSnapshot: Codable, Equatable, Sendable {
@@ -76,6 +122,9 @@ struct QuotaSnapshot: Codable, Equatable, Sendable {
 
 extension QuotaSnapshot {
   init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys([
+      "provider", "account", "windows", "source", "status", "observedAt", "validUntil",
+    ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     provider = try container.decode(ProviderID.self, forKey: .provider)
     account = try container.decode(QuotaAccount.self, forKey: .account)
@@ -143,6 +192,9 @@ struct QuotaSnapshotEnvelope: Codable, Equatable, Sendable {
 
 extension QuotaSnapshotEnvelope {
   init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys([
+      "protocolVersion", "deviceId", "generation", "sequence", "capturedAt", "snapshots",
+    ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     protocolVersion = try container.decode(Int.self, forKey: .protocolVersion)
     deviceID = try container.decode(String.self, forKey: .deviceID)

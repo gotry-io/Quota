@@ -12,7 +12,7 @@ Read the relevant source before changing that area:
 | Product overview, repository layout, commands, current status | `README.md` |
 | System boundaries, data paths, package dependencies, runtime split | `docs/architecture.md` |
 | Credentials, trust, redaction, transport, storage safety | `docs/security.md` |
-| Provider registration catalog (ids, defaults, config) | `packages/provider/src/catalog.ts` |
+| Provider registration catalog (ids, defaults, config) | `packages/provider/catalog.json` |
 | Codex, Claude Code, Grok, and OpenRouter collection strategies | `docs/provider-collection.md` |
 | Persistent Relay storage decision and rationale | `docs/decisions/0001-persistent-relay-storage.md` |
 | Managed account, device, authentication, deletion, and Usage boundary | `docs/decisions/0006-managed-account-device-usage.md` |
@@ -35,9 +35,9 @@ Do not create a second description of a canonical rule. Update its source and li
 ## Change requirements
 
 - Protocol changes start in `packages/protocol`. Keep runtime schemas, exported JSON Schemas, tests,
-  and Swift decoding aligned. An already released protocol version remains compatible; breaking
+  Rust production/consumption, and Swift decoding aligned. An already released protocol version remains compatible; breaking
   released behavior requires a new protocol version.
-- Provider changes must update `packages/provider/src/catalog.ts`, the collector, and
+- Provider changes must update `packages/provider/catalog.json`, the Rust collector, and
   `docs/provider-collection.md`, then run `pnpm generate:provider-catalog` so protocol ids and Swift
   `ProviderID` stay aligned. Follow `docs/security.md` for credentials and redaction.
 - Persistence changes require a new explicit migration. Do not rewrite an applied migration.
@@ -69,17 +69,19 @@ Do not create a second description of a canonical rule. Update its source and li
 - TypeScript is strict ESM. Keep explicit `.ts` extensions for local imports and use `import type`
   for type-only imports.
 - Do not weaken the shared TypeScript checks to bypass errors.
-- Format supported files with Biome using the repository configuration.
-- Use `@gotry-io/*` for workspace packages and `workspace:*` for internal dependencies. The public
-  CLI package is `@gotry-io/quotacli`; its installed command remains `quotacli`.
-- Keep dependencies pinned consistently and commit only `pnpm-lock.yaml`; do not add npm, Yarn, or
-  Bun lockfiles.
-- Avoid native Node addons in QuotaCLI.
+- Format TypeScript/JSON/Markdown with Biome and Rust with rustfmt using the repository configuration.
+- Use `@gotry-io/*` for TypeScript workspace packages and `workspace:*` for internal dependencies.
+- Keep dependencies pinned consistently. Commit `pnpm-lock.yaml` and the root workspace
+  `Cargo.lock`; do not add npm, Yarn, or Bun lockfiles.
+- Rust code targets the stable toolchain. Keep `apps/menubar/helper` private: no command parser,
+  socket listener, daemonization, or public installation surface. `apps/cli` is the Linux-only
+  native `quotacli` command and is built/tested without a Windows target or publication workflow.
 - Swift code targets macOS 14+ and Swift 6.2. Keep wire decoding and Relay access separate from views.
 - Web UI follows `apps/web/DESIGN.md` and must remain keyboard-accessible and responsive.
 - QuotaBar UI follows `apps/menubar/DESIGN.md` (system material panel), not the website design file.
 - Wire JSON uses `snake_case`. Primary quota values and meters always represent remaining quota.
-- Product names are Quota, QuotaBar, QuotaCLI, and QuotaRelay.
+- Product names are Quota, QuotaBar, QuotaCLI, and QuotaRelay. The bundled Rust service executable is
+  a private QuotaBar implementation detail, not the public `quotacli` command.
 - Prefer direct implementations over redundant wrappers, retries, fallbacks, and defensive branches.
   Add them only for a concrete boundary, failure mode, or security requirement.
 
@@ -93,26 +95,30 @@ pnpm format:check
 pnpm check
 pnpm test
 pnpm build
-pnpm version:bump:cli patch       # or minor|major|semver — apps/cli only; commits (use --no-commit to skip)
 pnpm version:bump:menubar patch   # QuotaBar CFBundleShortVersionString only
-# Publish: git tag cli-vX.Y.Z or menubar-vX.Y.Z (independent; bare v* is legacy)
+# Publish: git tag menubar-vX.Y.Z
+
+# Linux only: native QuotaCLI validation (run on Ubuntu)
+pnpm build:linux-cli
+pnpm check:linux-cli
+pnpm test:linux-cli
 ```
 
 Targeted development entry points are defined by the root `package.json` scripts and each app's
 README. Do not duplicate their command lists in new documents.
 
-Do not commit generated state such as `node_modules/`, `dist/`, `.build/`, `.swiftpm/`, `.wrangler/`,
-SQLite files, logs, or local credentials.
+Do not commit generated state such as `node_modules/`, `dist/`, `target/`, `.build/`, `.swiftpm/`,
+`.wrangler/`, SQLite files, logs, or local credentials.
 
 ## Verification
 
 - TypeScript-only change: run the affected workspace's type check and tests, plus root formatting.
-- Provider change: run quota-provider and QuotaCLI tests, including relevant failure and redaction
-  cases.
+- Provider change: run shared Rust service and entry-point tests, including relevant failure and
+  redaction cases.
 - Protocol change: run protocol, model, provider, Relay, and Swift decoding tests. After catalog id
   changes, run `pnpm generate:provider-catalog` before type check and Swift tests.
 - Relay change: run Vitest, local D1 migration verification, and the Cloudflare dry-run build.
-- QuotaBar account-path change: on macOS, run affected Swift and Relay tests plus the signed-helper
+- QuotaBar account-path change: on macOS, run affected Swift and Relay tests plus the signed-service
   integration tests available in the app package.
 - Web change: run its type check and production build; inspect desktop and mobile rendering when
   browser tooling is available.

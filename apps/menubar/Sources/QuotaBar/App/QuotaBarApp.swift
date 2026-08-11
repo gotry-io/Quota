@@ -53,7 +53,7 @@ struct QuotaBarApp: App {
 
     init() {
       let model = MenuBarViewModel()
-      model.startRefreshLoop()
+      model.start()
       _model = State(initialValue: model)
     }
 

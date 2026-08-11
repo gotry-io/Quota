@@ -6,6 +6,7 @@
       "!**/dist",
       "!**/.wrangler",
       "!**/.build",
+      "!**/target",
       "!**/node_modules",
       "!apps/menubar/.swiftpm"
     ]

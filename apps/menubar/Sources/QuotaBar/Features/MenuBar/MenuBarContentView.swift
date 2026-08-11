@@ -97,6 +97,7 @@ struct MenuBarContentView: View {
       )
     case .provider(let provider):
       ProviderSettingsView(
+        model: model,
         provider: provider,
         reportingSources: model.reportingSources(for: provider, now: now),
         now: now

@@ -1,0 +1,14 @@
+[package]
+name = "quota-menubar-helper"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Private native service bundled with QuotaBar"
+license = "MIT"
+
+[[bin]]
+name = "quota-menubar-helper"
+path = "src/main.rs"
+
+[dependencies]
+quota-service = { path = "../../../packages/service" }

@@ -92,7 +92,9 @@ struct SettingsHomeView: View {
         Task { await model.logout() }
       }
     } message: {
-      Text("This signs QuotaBar out on this Mac. Your device and synced data stay in your Quota account.")
+      Text(
+        "This signs QuotaBar out on this Mac. Your device and synced data stay in your Quota account."
+      )
     }
   }
 
@@ -162,7 +164,9 @@ struct SettingsHomeView: View {
           url: AppMetadata.accountURL
         )
 
-        if let accountErrorMessage = model.accountErrorMessage {
+        if let accountErrorMessage = model.accountErrorMessage,
+          accountErrorMessage != signedOutMessage
+        {
           Label(accountErrorMessage, systemImage: "exclamationmark.circle")
             .quotaMetaStyle()
             .fixedSize(horizontal: false, vertical: true)
@@ -174,10 +178,10 @@ struct SettingsHomeView: View {
   }
 
   private var signedOutMessage: String {
-    switch model.syncReason {
+    switch model.accountDisconnectReason {
     case .deviceDeleted:
       "This device was removed. Sign in again to reconnect it."
-    case .staleGeneration, .unauthorized:
+    case .sessionEnded:
       "The account session ended. Sign in again to continue syncing."
     case nil:
       "Sync quota and Usage across your devices."

@@ -2,16 +2,13 @@
 /**
  * Bump one product version and commit it.
  *
- *   pnpm version:bump:cli patch|minor|major|<semver>
  *   pnpm version:bump:menubar patch|minor|major|<semver>
  *   … --no-commit
  *
- * CLI: npm version (apps/cli, no git tag).
  * Menubar: plutil CFBundleShortVersionString.
- * Publish tags: cli-vX.Y.Z | menubar-vX.Y.Z
+ * Publish tags: menubar-vX.Y.Z
  */
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -23,25 +20,15 @@ const args = process.argv.slice(2);
 const noCommit = args.includes("--no-commit");
 const help = args.includes("-h") || args.includes("--help");
 const positional = args.filter((a) => !a.startsWith("-"));
-const target = positional[0];
-const bumpArg = positional[1];
+const bumpArg = positional[0];
 
-if (help || !target || !bumpArg) {
-  console.log(`Usage: pnpm version:bump <cli|menubar> <patch|minor|major|semver> [--no-commit]
-
-  cli       apps/cli/package.json     → tag cli-vX.Y.Z
-  menubar   QuotaBar short version    → tag menubar-vX.Y.Z
+if (help || !bumpArg) {
+  console.log(`Usage: pnpm version:bump:menubar <patch|minor|major|semver> [--no-commit]
 
 Examples:
-  pnpm version:bump:cli patch
   pnpm version:bump:menubar minor
-  pnpm version:bump cli 0.1.0 --no-commit`);
+  pnpm version:bump:menubar 0.1.0 --no-commit`);
   process.exit(help ? 0 : 2);
-}
-
-if (target !== "cli" && target !== "menubar") {
-  console.error(`unknown target: ${target}`);
-  process.exit(1);
 }
 
 if (!BUMP_KINDS.has(bumpArg) && !VERSION_RE.test(bumpArg)) {
@@ -49,19 +36,19 @@ if (!BUMP_KINDS.has(bumpArg) && !VERSION_RE.test(bumpArg)) {
   process.exit(1);
 }
 
-const before = readVersion(target);
-const touched = target === "cli" ? bumpCli(bumpArg) : bumpMenubar(before, bumpArg);
-const version = readVersion(target);
+const before = readVersion();
+const touched = bumpMenubar(before, bumpArg);
+const version = readVersion();
 
 if (version === before) {
-  console.log(`Already at ${target} ${version}; nothing to do.`);
+  console.log(`Already at QuotaBar ${version}; nothing to do.`);
   process.exit(0);
 }
-console.log(`updated ${target}: ${before} → ${version}`);
+console.log(`updated QuotaBar: ${before} → ${version}`);
 
-const tag = target === "cli" ? `cli-v${version}` : `menubar-v${version}`;
-const label = target === "cli" ? "QuotaCLI" : "QuotaBar";
-const message = `chore(${target}): bump version to ${version}`;
+const tag = `menubar-v${version}`;
+const label = "QuotaBar";
+const message = `chore(menubar): bump version to ${version}`;
 
 if (noCommit) {
   console.log("Skipped commit (--no-commit).");
@@ -88,10 +75,7 @@ if (commit.status !== 0) {
 console.log(`committed: ${message}`);
 console.log(`Publish: git tag -a ${tag} -m "${label} ${version}" && git push origin ${tag}`);
 
-function readVersion(product) {
-  if (product === "cli") {
-    return JSON.parse(readFileSync(join(root, "apps/cli/package.json"), "utf8")).version;
-  }
+function readVersion() {
   const out = run("plutil", [
     "-extract",
     "CFBundleShortVersionString",
@@ -103,21 +87,6 @@ function readVersion(product) {
     process.exit(1);
   }
   return out.stdout.trim();
-}
-
-function bumpCli(spec) {
-  const result = run("npm", [
-    "version",
-    spec,
-    "--prefix",
-    join(root, "apps/cli"),
-    "--no-git-tag-version",
-  ]);
-  if (result.status !== 0) {
-    console.error(result.stderr || result.stdout || "npm version failed");
-    process.exit(result.status ?? 1);
-  }
-  return ["apps/cli/package.json"];
 }
 
 function bumpMenubar(current, spec) {

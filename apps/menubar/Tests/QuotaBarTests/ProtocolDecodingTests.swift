@@ -98,28 +98,93 @@ func decodesAccountSummaryWithUsageCost() throws {
   #expect(throws: DecodingError.self) {
     _ = try QuotaWireCodec.makeDecoder().decode(AccountSummary.self, from: missingRequiredNull)
   }
+
+  let nestedExtra = Data(
+    String(decoding: data, as: UTF8.self).replacingOccurrences(
+      of: "\"usage\": {\n    \"range\"",
+      with: "\"usage\": {\n    \"extra\": true,\n    \"range\""
+    ).utf8
+  )
+  #expect(String(decoding: nestedExtra, as: UTF8.self).contains("\"extra\""))
+  #expect(throws: DecodingError.self) {
+    _ = try QuotaWireCodec.makeDecoder().decode(AccountSummary.self, from: nestedExtra)
+  }
 }
 
 @Test
-func decodesStrictCLISyncOutcomeAndRejectsMissingAccountSummary() throws {
-  let signedOut = Data(
-    #"{"schema_version":2,"status":"signed_out","local_report":{"protocol_version":2,"captured_at":"2026-08-02T01:00:00Z","results":[]},"local_usage":{"protocol_version":2,"generated_at":"2026-08-02T01:00:00Z","aggregation_timezone":null,"range":{"from":"2026-07-04","to":"2026-08-02"},"status":"unavailable","totals":null,"cost":null,"coverage":[],"breakdowns":[]},"account_summary":null}"#
-      .utf8
+func rejectsUnknownNestedLocalServiceStateFields() throws {
+  let data = Data(
+    #"""
+    {
+      "ipc_version": 1,
+      "revision": 0,
+      "quota": {
+        "status": "unavailable",
+        "value": null,
+        "updated_at": null,
+        "last_error": null,
+        "refreshing": false
+      },
+      "usage": {
+        "status": "unavailable",
+        "value": null,
+        "updated_at": null,
+        "last_error": null,
+        "refreshing": false
+      },
+      "account": {
+        "status": "signed_out",
+        "value": {
+          "auth_status": "signed_out",
+          "account_id": null,
+          "device_id": null,
+          "device_generation": null,
+          "account_summary": null
+        },
+        "updated_at": null,
+        "last_error": null,
+        "refreshing": false
+      },
+      "pricing": {
+        "status": "ready",
+        "value": {
+          "protocol_version": 2,
+          "revision": "pricing_test",
+          "published_at": "2026-08-10T00:00:00Z",
+          "entries": []
+        },
+        "updated_at": null,
+        "last_error": null,
+        "refreshing": false
+      },
+      "providers": [],
+      "overview": []
+    }
+    """#.utf8
   )
-  let output = try QuotaWireCodec.makeDecoder().decode(
-    CLIAccountSyncOutput.self,
-    from: signedOut
-  )
-  #expect(output.status == .signedOut)
-  #expect(output.localReport.schemaVersion == 2)
-  #expect(output.localUsage.status == .unavailable)
 
-  let invalid = Data(
-    #"{"schema_version":2,"status":"synced","local_report":{"protocol_version":2,"captured_at":"2026-08-02T01:00:00Z","results":[]},"local_usage":{"protocol_version":2,"generated_at":"2026-08-02T01:00:00Z","aggregation_timezone":null,"range":{"from":"2026-07-04","to":"2026-08-02"},"status":"unavailable","totals":null,"cost":null,"coverage":[],"breakdowns":[]},"account_summary":null}"#
-      .utf8
+  let state = try QuotaWireCodec.makeDecoder().decode(LocalServiceState.self, from: data)
+  #expect(state.pricing.value?.revision == "pricing_test")
+
+  let pricingExtra = Data(
+    String(decoding: data, as: UTF8.self).replacingOccurrences(
+      of: "\"entries\": []",
+      with: "\"entries\": [],\n      \"future_key\": {\"nested\": true}"
+    ).utf8
   )
   #expect(throws: DecodingError.self) {
-    _ = try QuotaWireCodec.makeDecoder().decode(CLIAccountSyncOutput.self, from: invalid)
+    _ = try QuotaWireCodec.makeDecoder().decode(LocalServiceState.self, from: pricingExtra)
+  }
+
+  let nestedExtra = Data(
+    String(decoding: data, as: UTF8.self).replacingOccurrences(
+      of: "\"quota\": {\n    \"status\"",
+      with: "\"quota\": {\n    \"extra\": true,\n    \"status\""
+    ).utf8
+  )
+  #expect(String(decoding: nestedExtra, as: UTF8.self).contains("\"extra\""))
+  #expect(throws: DecodingError.self) {
+    _ = try QuotaWireCodec.makeDecoder().decode(LocalServiceState.self, from: nestedExtra)
   }
 }
 
@@ -297,7 +362,7 @@ func decodesCollectionReportAndCalculatesRemainingQuota() throws {
 
   let report = try QuotaWireCodec.makeDecoder().decode(QuotaCollectionReport.self, from: data)
 
-  #expect(report.schemaVersion == 2)
+  #expect(report.protocolVersion == 2)
   #expect(report.results.first?.snapshots.first?.windows.first?.remainingPercent == 84)
   #expect(report.results.first?.snapshots.first?.account.fingerprintScope == .source)
   #expect(report.results.last?.outcome == .authRequired)
@@ -508,308 +573,4 @@ func decodesVersionedPricingCatalogWithoutRequiringBuiltInEntries() throws {
   let catalog = try QuotaWireCodec.makeDecoder().decode(PricingCatalog.self, from: data)
   #expect(catalog.entries.first?.rates.uncachedInputPerMillion == "1.25")
   #expect(catalog.entries.first?.sourceURL.scheme == "https")
-}
-
-@Test @MainActor
-func refreshesMenuBarModelFromCLISync() async throws {
-  let report = sampleCollectionReport()
-  let model = MenuBarViewModel(
-    client: StubLocalQuotaClient(report: report),
-    reportCache: nil
-  )
-
-  await model.refresh()
-
-  #expect(model.report == report)
-  #expect(model.result(for: .grok)?.outcome == .success)
-  guard
-    case .content(let providers, _) = model.overviewState(
-      enabledProviders: [.grok, .codex, .claude]
-    )
-  else {
-    Issue.record("Expected Grok quota content")
-    return
-  }
-  #expect(providers.map(\.provider) == [.grok, .codex, .claude])
-  #expect(providers.first { $0.provider == .codex }?.status?.kind == .needsSignIn)
-  #expect(providers.first { $0.provider == .codex }?.status?.detail == "Account setup required.")
-  #expect(providers.first { $0.provider == .claude }?.status?.kind == .unavailable)
-  #expect(
-    providers.first { $0.provider == .claude }?.status?.detail
-      == "The usage endpoint is temporarily unavailable."
-  )
-  #expect(providers.first { $0.provider == .grok }?.status == nil)
-  #expect(providers.first { $0.provider == .grok }?.accounts.isEmpty == false)
-
-  guard case .content(let codexOnly, _) = model.overviewState(enabledProviders: [.codex]) else {
-    Issue.record("Expected Codex auth-required content")
-    return
-  }
-  #expect(codexOnly.map(\.provider) == [.codex])
-  #expect(codexOnly.first?.status?.kind == .needsSignIn)
-
-  guard case .content(let claudeOnly, _) = model.overviewState(enabledProviders: [.claude]) else {
-    Issue.record("Expected Claude unavailable content")
-    return
-  }
-  #expect(claudeOnly.map(\.provider) == [.claude])
-  #expect(model.errorMessage == nil)
-  #expect(model.lastCheckedAt != nil)
-}
-
-@Test @MainActor
-func restoresTheLastNormalizedReportBeforeRefreshing() async throws {
-  let suiteName = "QuotaBarTests.\(UUID().uuidString)"
-  let defaults = try #require(UserDefaults(suiteName: suiteName))
-  defer { defaults.removePersistentDomain(forName: suiteName) }
-  let cache = LocalQuotaReportCache(defaults: defaults)
-  let report = sampleCollectionReport()
-  let client = StubLocalQuotaClient(report: report)
-  let firstModel = MenuBarViewModel(
-    client: client,
-    reportCache: cache
-  )
-
-  await firstModel.refresh()
-
-  let restoredModel = MenuBarViewModel(
-    client: client,
-    reportCache: cache
-  )
-  #expect(restoredModel.report == report)
-  #expect(restoredModel.lastCheckedAt != nil)
-}
-
-@Test @MainActor
-func overviewStateDisplaysEveryAccountAndDerivesExpiredSnapshotsAsStale() async throws {
-  let now = Date(timeIntervalSince1970: 1_754_112_000)
-  let report = QuotaCollectionReport(
-    schemaVersion: 2,
-    capturedAt: now,
-    results: [
-      QuotaCollectionResult(
-        provider: .codex,
-        outcome: .success,
-        snapshots: [
-          sampleSnapshot(
-            provider: .codex,
-            fingerprint: "account_current",
-            validUntil: now.addingTimeInterval(300)
-          ),
-          sampleSnapshot(
-            provider: .codex,
-            fingerprint: "account_expired",
-            validUntil: now.addingTimeInterval(-1)
-          ),
-        ],
-        source: "chatgpt_usage_api",
-        message: nil
-      )
-    ]
-  )
-  let model = MenuBarViewModel(
-    client: StubLocalQuotaClient(report: report),
-    reportCache: nil
-  )
-
-  await model.refresh()
-
-  guard
-    case .content(let providers, let refreshWarning) = model.overviewState(
-      enabledProviders: [.codex],
-      now: now
-    )
-  else {
-    Issue.record("Expected quota content")
-    return
-  }
-  #expect(refreshWarning == nil)
-  #expect(providers.count == 1)
-  #expect(providers.first?.accounts.count == 2)
-  #expect(providers.first?.accounts.map(\.isStale) == [false, true])
-}
-
-@Test @MainActor
-func refreshFailureKeepsCachedAuthIssueAndShowsWarning() async throws {
-  let suiteName = "QuotaBarTests.\(UUID().uuidString)"
-  let defaults = try #require(UserDefaults(suiteName: suiteName))
-  defer { defaults.removePersistentDomain(forName: suiteName) }
-  let cache = LocalQuotaReportCache(defaults: defaults)
-  cache.save(
-    output: CLIAccountSyncOutput(
-      status: .signedOut,
-      localReport: sampleCollectionReport(),
-      localUsage: sampleLocalUsageReport(),
-      accountSummary: nil
-    ),
-    refreshedAt: .distantPast
-  )
-  let model = MenuBarViewModel(
-    client: FailingLocalQuotaClient(),
-    reportCache: cache
-  )
-
-  await model.refresh()
-
-  guard
-    case .content(let providers, let refreshWarning) = model.overviewState(enabledProviders: [
-      .codex
-    ])
-  else {
-    Issue.record("Expected cached auth-required content with a refresh warning")
-    return
-  }
-  #expect(refreshWarning == "Synthetic collection failure.")
-  #expect(providers.map(\.provider) == [.codex])
-  #expect(providers.first?.status?.kind == .needsSignIn)
-  #expect(providers.first?.status?.detail == "Account setup required.")
-}
-
-@Test @MainActor
-func refreshCancellationDoesNotBecomeAUserVisibleError() async {
-  let model = MenuBarViewModel(
-    client: CancellingLocalQuotaClient(),
-    reportCache: nil
-  )
-
-  await model.refresh()
-
-  #expect(model.errorMessage == nil)
-  #expect(!model.isRefreshing)
-}
-
-private struct StubLocalQuotaClient: LocalQuotaServing {
-  let report: QuotaCollectionReport
-
-  func sync() async throws -> CLIAccountSyncOutput {
-    CLIAccountSyncOutput(
-      status: .signedOut,
-      localReport: report,
-      localUsage: sampleLocalUsageReport(),
-      accountSummary: nil
-    )
-  }
-
-  func login() async throws -> CLIAccountAuthOutput { throw SyntheticCollectionError() }
-  func logout() async throws -> CLIAccountAuthOutput { throw SyntheticCollectionError() }
-  func accountSummary() async throws -> AccountSummary { throw SyntheticCollectionError() }
-}
-
-private struct FailingLocalQuotaClient: LocalQuotaServing {
-  func sync() async throws -> CLIAccountSyncOutput {
-    throw SyntheticCollectionError()
-  }
-
-  func login() async throws -> CLIAccountAuthOutput { throw SyntheticCollectionError() }
-  func logout() async throws -> CLIAccountAuthOutput { throw SyntheticCollectionError() }
-  func accountSummary() async throws -> AccountSummary { throw SyntheticCollectionError() }
-}
-
-private struct CancellingLocalQuotaClient: LocalQuotaServing {
-  func sync() async throws -> CLIAccountSyncOutput {
-    throw CancellationError()
-  }
-
-  func login() async throws -> CLIAccountAuthOutput { throw CancellationError() }
-  func logout() async throws -> CLIAccountAuthOutput { throw CancellationError() }
-  func accountSummary() async throws -> AccountSummary { throw CancellationError() }
-}
-
-private struct SyntheticCollectionError: LocalizedError {
-  var errorDescription: String? { "Synthetic collection failure." }
-}
-
-private func sampleSnapshot(
-  provider: ProviderID,
-  fingerprint: String,
-  validUntil: Date?
-) -> QuotaSnapshot {
-  QuotaSnapshot(
-    provider: provider,
-    account: QuotaAccount(
-      fingerprint: fingerprint,
-      label: nil,
-      plan: "Pro",
-      fingerprintScope: .global
-    ),
-    windows: [
-      QuotaWindow(
-        id: "weekly",
-        title: "Weekly",
-        usedPercent: 25,
-        resetsAt: nil,
-        durationSeconds: nil
-      )
-    ],
-    source: "synthetic",
-    status: .available,
-    observedAt: Date(timeIntervalSince1970: 1_754_112_000),
-    validUntil: validUntil
-  )
-}
-
-private func sampleLocalUsageReport() -> LocalUsageReport {
-  LocalUsageReport(
-    generatedAt: Date(timeIntervalSince1970: 1_754_112_000),
-    aggregationTimezone: nil,
-    range: UsageDateRange(from: "2026-07-04", to: "2026-08-02"),
-    status: .unavailable,
-    totals: nil,
-    cost: nil,
-    coverage: [],
-    breakdowns: []
-  )
-}
-
-private func sampleCollectionReport() -> QuotaCollectionReport {
-  QuotaCollectionReport(
-    schemaVersion: 2,
-    capturedAt: Date(timeIntervalSince1970: 1_754_112_000),
-    results: [
-      QuotaCollectionResult(
-        provider: .codex,
-        outcome: .authRequired,
-        snapshots: [],
-        source: nil,
-        message: "Run `codex` to log in."
-      ),
-      QuotaCollectionResult(
-        provider: .claude,
-        outcome: .unavailable,
-        snapshots: [],
-        source: "claude_oauth_usage_api",
-        message: "The usage endpoint is temporarily unavailable."
-      ),
-      QuotaCollectionResult(
-        provider: .grok,
-        outcome: .success,
-        snapshots: [
-          QuotaSnapshot(
-            provider: .grok,
-            account: QuotaAccount(
-              fingerprint: "account_grok",
-              label: nil,
-              plan: "SuperGrok",
-              fingerprintScope: .global
-            ),
-            windows: [
-              QuotaWindow(
-                id: "monthly",
-                title: "Monthly",
-                usedPercent: 25,
-                resetsAt: Date(timeIntervalSince1970: 1_754_716_800),
-                durationSeconds: nil
-              )
-            ],
-            source: "grok_billing_api",
-            status: .available,
-            observedAt: Date(timeIntervalSince1970: 1_754_112_000),
-            validUntil: nil
-          )
-        ],
-        source: "grok_billing_api",
-        message: nil
-      ),
-    ]
-  )
 }

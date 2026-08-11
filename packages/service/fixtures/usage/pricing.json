@@ -1,0 +1,32 @@
+{
+  "protocol_version": 2,
+  "revision": "pricing_fixture_1",
+  "published_at": "2026-08-02T00:00:00Z",
+  "entries": [
+    {
+      "entry_id": "openai_gpt_5_default",
+      "billing_channel": "openai_direct",
+      "model": "gpt-5.6-sol",
+      "aliases": [],
+      "effective_from": "2026-01-01",
+      "effective_to": null,
+      "service_tier": "*",
+      "speed": "*",
+      "inference_geo": "*",
+      "context_bucket": "*",
+      "currency": "USD",
+      "rates": {
+        "uncached_input_per_million": "1",
+        "cache_read_per_million": "0.1",
+        "cache_write_5m_per_million": "1.25",
+        "cache_write_1h_per_million": "2",
+        "cache_write_inferred_per_million": "3",
+        "output_per_million": "10",
+        "web_search_per_request": null,
+        "web_fetch_per_request": null
+      },
+      "source_url": "https://example.com/pricing",
+      "verified_at": "2026-08-02T00:00:00Z"
+    }
+  ]
+}

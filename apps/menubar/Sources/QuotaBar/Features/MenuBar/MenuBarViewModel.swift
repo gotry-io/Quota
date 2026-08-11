@@ -69,27 +69,45 @@ enum AccountViewState: Equatable {
   case signedIn
 }
 
+enum AccountDisconnectReason: Equatable {
+  case deviceDeleted
+  case sessionEnded
+}
+
+#if DEBUG
+  struct MenuBarVisualState {
+    let report: QuotaCollectionReport
+    let localUsage: LocalUsageReport
+    let accountSummary: AccountSummary?
+    let authStatus: LocalServiceAuthStatus
+    let overview: [LocalServiceOverviewItem]
+  }
+#endif
+
 @MainActor
 @Observable
 final class MenuBarViewModel {
   private(set) var report: QuotaCollectionReport?
   private(set) var localUsage: LocalUsageReport?
   private(set) var accountSummary: AccountSummary?
-  private(set) var syncStatus: CLIAccountSyncStatus?
-  private(set) var syncReason: CLIAccountSyncReason?
   private(set) var errorMessage: String?
   private(set) var accountErrorMessage: String?
   private(set) var isRefreshing = false
   private(set) var isLoggingIn = false
   private(set) var isLoggingOut = false
-  private(set) var isLoadingAccountSummary = false
+  private(set) var accountDisconnectReason: AccountDisconnectReason?
   private(set) var lastCheckedAt: Date?
+  private(set) var providerConfigurations: [ProviderID: LocalServiceProviderConfig] = [:]
+
+  private var authStatus: LocalServiceAuthStatus?
+  private var overview: [LocalServiceOverviewItem] = []
+  private var revision = 0
 
   var accountState: AccountViewState {
-    switch syncStatus {
-    case .synced, .accountUnavailable: .signedIn
-    case .signedOut: .signedOut
+    switch authStatus {
+    case .signedIn: .signedIn
     case .logoutPending: .logoutPending
+    case .loggingIn, .signedOut: .signedOut
     case nil: .notChecked
     }
   }
@@ -109,255 +127,225 @@ final class MenuBarViewModel {
   }
 
   @ObservationIgnored
-  private let client: (any LocalQuotaServing)?
+  private let client: (any LocalServiceServing)?
 
   @ObservationIgnored
   private let initializationError: String?
 
   @ObservationIgnored
-  private let reportCache: LocalQuotaReportCache?
-
-  @ObservationIgnored
-  private let refreshInterval: Duration
-
-  @ObservationIgnored
-  private let refreshSleep: @Sendable (Duration) async throws -> Void
-
-  @ObservationIgnored
-  private var refreshTask: Task<Void, Never>?
+  private var eventTask: Task<Void, Never>?
 
   @ObservationIgnored
   private var loginTask: Task<Void, Never>?
 
   @ObservationIgnored
-  private var accountMutationRevision = 0
+  private var accountActionErrorMessage: String?
 
-  @ObservationIgnored
-  private var queuedRefresh = false
-
-  init(
-    client: (any LocalQuotaServing)? = nil,
-    reportCache: LocalQuotaReportCache? = .live,
-    refreshInterval: Duration = .seconds(300),
-    refreshSleep: @escaping @Sendable (Duration) async throws -> Void = { duration in
-      try await Task.sleep(for: duration)
-    }
-  ) {
-    self.reportCache = reportCache
-    self.refreshInterval = refreshInterval
-    self.refreshSleep = refreshSleep
-
+  init(client: (any LocalServiceServing)? = nil) {
     if let client {
       self.client = client
       initializationError = nil
     } else {
       do {
-        self.client = try LocalQuotaClient()
+        self.client = try LocalServiceClient()
         initializationError = nil
       } catch {
         self.client = nil
         initializationError = Self.message(for: error)
       }
     }
-
-    if let cached = reportCache?.load() {
-      apply(cached.output, refreshedAt: cached.refreshedAt)
-    }
   }
 
   #if DEBUG
     init(
-      visualTestOutput: CLIAccountSyncOutput?,
+      visualTestState: MenuBarVisualState?,
       errorMessage: String?,
       lastCheckedAt: Date?
     ) {
       client = nil
       initializationError = nil
-      reportCache = nil
-      refreshInterval = .seconds(300)
-      refreshSleep = { duration in try await Task.sleep(for: duration) }
       self.errorMessage = errorMessage
-      if let visualTestOutput {
-        apply(visualTestOutput, refreshedAt: lastCheckedAt)
-      } else {
-        self.lastCheckedAt = lastCheckedAt
-      }
+      self.lastCheckedAt = lastCheckedAt
+      guard let visualTestState else { return }
+      report = visualTestState.report
+      localUsage = visualTestState.localUsage
+      accountSummary = visualTestState.accountSummary
+      authStatus = visualTestState.authStatus
+      overview = visualTestState.overview
     }
   #endif
 
   deinit {
-    refreshTask?.cancel()
+    eventTask?.cancel()
     loginTask?.cancel()
   }
 
-  func refreshIfNeeded(now: Date = Date()) async {
-    guard lastCheckedAt.map({ now.timeIntervalSince($0) < 60 }) != true else { return }
-    await refresh()
+  func start() {
+    guard eventTask == nil, let client else {
+      if self.client == nil { errorMessage = initializationError }
+      return
+    }
+    eventTask = Task { @MainActor [weak self] in
+      await self?.reloadState()
+      for await event in client.events {
+        guard !Task.isCancelled else { return }
+        guard let self, event.revision > revision else { continue }
+        await reloadState()
+      }
+    }
   }
 
-  func refresh(forceAfterCurrent: Bool = false) async {
-    guard !isRefreshing else {
-      if forceAfterCurrent { queuedRefresh = true }
-      return
-    }
-    guard let client else {
-      errorMessage = initializationError ?? "QuotaCLI is unavailable."
-      return
-    }
+  func refreshIfNeeded() async {
+    if revision == 0 { await reloadState() }
+  }
 
+  func refresh() async {
+    guard !isRefreshing, let client else {
+      if self.client == nil { errorMessage = initializationError }
+      return
+    }
     isRefreshing = true
-    defer { isRefreshing = false }
-    repeat {
-      queuedRefresh = false
-      let revision = accountMutationRevision
-      do {
-        let output = try await client.sync()
-        guard revision == accountMutationRevision else { continue }
-        let refreshedAt = Date()
-        apply(output, refreshedAt: refreshedAt)
-        reportCache?.save(output: output, refreshedAt: refreshedAt)
-        errorMessage =
-          output.status == .accountUnavailable
-          ? "Account sync is unavailable. Local quota and Usage are still current."
-          : nil
-      } catch is CancellationError {
-        return
-      } catch {
-        if revision == accountMutationRevision {
-          errorMessage = Self.message(for: error)
-        }
-      }
-    } while queuedRefresh && !Task.isCancelled
-  }
-
-  /// The only app-lifetime scheduler: one sync at launch, then one every five minutes.
-  func startRefreshLoop() {
-    guard refreshTask == nil, client != nil else { return }
-    let interval = refreshInterval
-    let sleep = refreshSleep
-    refreshTask = Task { @MainActor [weak self] in
-      await self?.refresh()
-      while !Task.isCancelled {
-        do {
-          try await sleep(interval)
-        } catch {
-          break
-        }
-        guard !Task.isCancelled else { break }
-        await self?.refresh()
-      }
+    do {
+      _ = try await client.refresh()
+      await reloadState()
+    } catch is CancellationError {
+      isRefreshing = false
+      return
+    } catch {
+      errorMessage = Self.message(for: error)
+      isRefreshing = false
     }
   }
 
   func startLogin() {
     guard loginTask == nil, let client else {
-      if self.client == nil {
-        accountErrorMessage = initializationError ?? "QuotaCLI is unavailable."
-      }
+      if self.client == nil { accountErrorMessage = initializationError }
       return
     }
-
+    accountActionErrorMessage = nil
     accountErrorMessage = nil
     isLoggingIn = true
     loginTask = Task { @MainActor [weak self] in
       guard let self else { return }
       defer {
-        isLoggingIn = false
+        isLoggingIn = !Task.isCancelled && authStatus == .loggingIn
         loginTask = nil
       }
       do {
         _ = try await client.login()
-        try Task.checkCancellation()
-        accountMutationRevision += 1
-        syncStatus = .synced
-        syncReason = nil
-        isLoggingIn = false
-        await refresh(forceAfterCurrent: true)
+        // The service stores logging_in before acknowledging this request. From here onward its
+        // state/events, rather than the short-lived request task, are authoritative.
+        loginTask = nil
+        await reloadState()
       } catch is CancellationError {
         return
       } catch {
-        accountErrorMessage = Self.message(for: error)
+        accountActionErrorMessage = Self.message(for: error)
+        accountErrorMessage = accountActionErrorMessage
+        await reloadState()
       }
     }
   }
 
   func cancelLogin() {
+    guard let client else { return }
     loginTask?.cancel()
+    loginTask = nil
+    isLoggingIn = false
+    accountActionErrorMessage = nil
+    accountErrorMessage = nil
+    Task { @MainActor [weak self] in
+      do {
+        try await client.cancelLogin()
+      } catch {
+        let message = Self.message(for: error)
+        self?.accountActionErrorMessage = message
+        self?.accountErrorMessage = message
+        await self?.reloadState()
+      }
+    }
   }
 
   func logout() async {
     guard !isLoggingOut, let client else { return }
     isLoggingOut = true
     defer { isLoggingOut = false }
+    accountActionErrorMessage = nil
     accountErrorMessage = nil
-    accountMutationRevision += 1
     do {
       _ = try await client.logout()
-      accountSummary = nil
-      syncStatus = .signedOut
-      syncReason = nil
-      reportCache?.clear()
-      await refresh(forceAfterCurrent: true)
+      await reloadState()
     } catch is CancellationError {
       return
     } catch {
-      accountErrorMessage = Self.message(for: error)
-      // QuotaCLI may have committed a retryable logout-pending state before an offline revoke.
-      await refresh(forceAfterCurrent: true)
+      accountActionErrorMessage = Self.message(for: error)
+      accountErrorMessage = accountActionErrorMessage
+      await reloadState()
     }
   }
 
-  func refreshAccountSummary() async {
-    guard accountState == .signedIn, !isLoadingAccountSummary, let client else { return }
-    isLoadingAccountSummary = true
-    defer { isLoadingAccountSummary = false }
-    do {
-      accountSummary = try await client.accountSummary()
-      accountErrorMessage = nil
-      saveCurrentState()
-    } catch is CancellationError {
-      return
-    } catch {
-      accountErrorMessage = Self.message(for: error)
+  func setProviderConfig(
+    _ provider: ProviderID,
+    apiKey: String,
+    baseURL: String?
+  ) async throws {
+    guard let client else {
+      throw LocalServiceClientError.serviceMissing
     }
+    let config = try await client.setProviderConfig(provider, apiKey: apiKey, baseURL: baseURL)
+    providerConfigurations[provider] = config
+    await reloadState()
+  }
+
+  func removeProviderConfig(_ provider: ProviderID) async throws {
+    guard let client else {
+      throw LocalServiceClientError.serviceMissing
+    }
+    let config = try await client.removeProviderConfig(provider)
+    providerConfigurations[provider] = config
+    await reloadState()
   }
 
   func result(for provider: ProviderID) -> QuotaCollectionResult? {
     report?.results.first { $0.provider == provider }
   }
 
-  func displaySnapshots(
-    for provider: ProviderID,
-    now: Date = Date()
-  ) -> [AccountQuotaPresentation] {
-    resolvedSubscriptions(now: now)
+  func displaySnapshots(for provider: ProviderID) -> [AccountQuotaPresentation] {
+    overview
       .filter { $0.identity.provider == provider }
-      .map(presentation)
+      .compactMap(Self.presentation)
   }
 
   func reportingSources(
     for provider: ProviderID,
     now: Date
   ) -> [ProviderReportingSourcePresentation] {
-    let grouped = Dictionary(grouping: observations.filter { $0.snapshot.provider == provider }) {
-      $0.source
+    var sources: [String: ProviderReportingSourcePresentation] = [:]
+    for item in overview where item.identity.provider == provider {
+      for source in item.sources {
+        let presentation = ProviderReportingSourcePresentation(
+          id: source.sourceID,
+          displayName: source.displayName,
+          kind: source.kind == .local ? .local : .device,
+          observedAt: source.observedAt,
+          isStale: source.isStale
+        )
+        if sources[source.sourceID].map({ $0.observedAt < source.observedAt }) != false {
+          sources[source.sourceID] = presentation
+        }
+      }
     }
-    return grouped.compactMap { source, observations in
-      guard let snapshot = observations.map(\.snapshot).max(by: { $0.observedAt < $1.observedAt })
-      else { return nil }
-      return ProviderReportingSourcePresentation(
-        id: source.stableID,
-        displayName: displayName(for: source),
-        kind: source.isLocal ? .local : .device,
-        observedAt: snapshot.observedAt,
-        isStale: Self.isStale(snapshot, now: now)
-      )
+    return sources.values.sorted {
+      $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending
     }
-    .sorted { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }
   }
 
   func accountReportingProviders() -> Set<ProviderID> {
-    Set(accountSummary?.quota.map(\.snapshot.provider) ?? [])
+    Set(
+      overview.compactMap { item in
+        item.sources.contains(where: { $0.kind == .device }) ? item.identity.provider : nil
+      }
+    )
   }
 
   func overviewState(
@@ -365,7 +353,7 @@ final class MenuBarViewModel {
     now: Date = Date()
   ) -> QuotaOverviewState {
     let providers: [ProviderQuotaPresentation] = enabledProviders.compactMap { provider in
-      let accounts = displaySnapshots(for: provider, now: now)
+      let accounts = displaySnapshots(for: provider)
       let status = accounts.isEmpty ? providerStatus(for: provider) : nil
       guard !accounts.isEmpty || status != nil else { return nil }
       return ProviderQuotaPresentation(provider: provider, accounts: accounts, status: status)
@@ -379,88 +367,99 @@ final class MenuBarViewModel {
     return .content(providers: providers, refreshWarning: errorMessage)
   }
 
-  private func apply(_ output: CLIAccountSyncOutput, refreshedAt: Date?) {
-    report = output.localReport
-    localUsage = output.localUsage
-    if output.status != .accountUnavailable {
-      accountSummary = output.accountSummary
+  private func reloadState() async {
+    guard let client else {
+      errorMessage = initializationError
+      return
     }
-    syncStatus = output.status
-    syncReason = output.reason
-    lastCheckedAt = refreshedAt
+    do {
+      apply(try await client.state())
+    } catch is CancellationError {
+      return
+    } catch {
+      errorMessage = Self.message(for: error)
+    }
   }
 
-  private func saveCurrentState() {
-    guard let report, let localUsage, let accountSummary, let lastCheckedAt else { return }
-    reportCache?.save(
-      output: CLIAccountSyncOutput(
-        status: .synced,
-        localReport: report,
-        localUsage: localUsage,
-        accountSummary: accountSummary
-      ),
-      refreshedAt: lastCheckedAt
+  private func apply(_ state: LocalServiceState) {
+    revision = state.revision
+    report = state.quota.value
+    localUsage = state.usage.value
+    accountSummary = state.account.value?.accountSummary
+    authStatus =
+      state.account.value?.authStatus
+      ?? (state.account.status == .signedOut ? .signedOut : nil)
+    accountDisconnectReason =
+      if authStatus == .signedOut {
+        switch state.account.lastError?.code {
+        case .deviceDeleted: .deviceDeleted
+        case .staleGeneration, .authenticationRequired: .sessionEnded
+        default: nil
+        }
+      } else {
+        nil
+      }
+    overview = state.overview
+    providerConfigurations = Dictionary(
+      uniqueKeysWithValues: state.providers.map { ($0.provider, $0) }
     )
+    isRefreshing = state.quota.refreshing || state.usage.refreshing || state.account.refreshing
+    isLoggingIn = authStatus == .loggingIn || loginTask != nil
+    isLoggingOut = authStatus == .logoutPending
+    lastCheckedAt = [state.quota.updatedAt, state.usage.updatedAt].compactMap { $0 }.max()
+
+    let componentError = state.quota.lastError ?? state.usage.lastError
+    if let componentError {
+      errorMessage = LocalServiceClientError.remote(componentError).errorDescription
+    } else if state.quota.value != nil || state.usage.value != nil {
+      errorMessage = nil
+    }
+
+    if let accountError = state.account.lastError {
+      accountErrorMessage = LocalServiceClientError.remote(accountError).errorDescription
+    } else {
+      accountErrorMessage = accountActionErrorMessage
+    }
   }
 
   private func providerStatus(for provider: ProviderID) -> ProviderStatusCopy? {
     result(for: provider).flatMap(ProviderStatusCopy.from)
   }
 
-  private func resolvedSubscriptions(now: Date) -> [ResolvedQuotaSubscription] {
-    SubscriptionResolver().resolve(observations, now: now)
-  }
-
-  private var observations: [QuotaObservation] {
-    if let accountSummary, !accountSummary.quota.isEmpty {
-      return accountSummary.quota.compactMap { observation in
-        Self.isPresentable(observation.snapshot)
-          ? QuotaObservation(
-            snapshot: observation.snapshot,
-            source: .device(deviceID: observation.deviceID)
-          )
-          : nil
-      }
+  private static func presentation(
+    for item: LocalServiceOverviewItem
+  ) -> AccountQuotaPresentation? {
+    let sourcePairs = item.sources.compactMap { source in
+      source.observationSource.map { (source.sourceID, $0) }
     }
-    return report?.results.flatMap { result in
-      guard result.outcome == .success else { return [QuotaObservation]() }
-      return result.snapshots.compactMap { snapshot in
-        Self.isPresentable(snapshot)
-          ? QuotaObservation(snapshot: snapshot, source: .local)
-          : nil
-      }
-    } ?? []
-  }
+    guard
+      let selectedSource = sourcePairs.first(where: { $0.0 == item.selectedSourceID })?.1,
+      !sourcePairs.isEmpty
+    else { return nil }
 
-  private static func isPresentable(_ snapshot: QuotaSnapshot) -> Bool {
-    !snapshot.windows.isEmpty && (snapshot.status == .available || snapshot.status == .stale)
-  }
+    let scope: QuotaSubscriptionIdentity.Scope
+    switch item.identity.scope {
+    case .global:
+      scope = .global
+    case .source:
+      guard let sourceID = item.identity.sourceID,
+        let source = sourcePairs.first(where: { $0.0 == sourceID })?.1
+      else { return nil }
+      scope = .source(source)
+    }
 
-  private static func isStale(_ snapshot: QuotaSnapshot, now: Date) -> Bool {
-    snapshot.status == .stale || snapshot.validUntil.map { $0 <= now } == true
-  }
-
-  private func presentation(
-    for subscription: ResolvedQuotaSubscription
-  ) -> AccountQuotaPresentation {
-    AccountQuotaPresentation(
-      identity: subscription.identity,
-      snapshot: subscription.selectedSnapshot,
-      isStale: subscription.isStale,
-      sources: subscription.sources,
-      selectedSource: subscription.selectedSource,
-      selectedSourceDisplayName: displayName(for: subscription.selectedSource)
+    return AccountQuotaPresentation(
+      identity: QuotaSubscriptionIdentity(
+        provider: item.identity.provider,
+        fingerprint: item.identity.fingerprint,
+        scope: scope
+      ),
+      snapshot: item.snapshot,
+      isStale: item.isStale,
+      sources: sourcePairs.map(\.1),
+      selectedSource: selectedSource,
+      selectedSourceDisplayName: item.selectedSourceDisplayName
     )
-  }
-
-  private func displayName(for source: QuotaObservationSource) -> String {
-    switch source {
-    case .local:
-      "This Mac"
-    case .device(let deviceID):
-      accountSummary?.devices.first(where: { $0.deviceID == deviceID })?.displayName
-        ?? "Account device"
-    }
   }
 
   private static func message(for error: Error) -> String {
@@ -469,6 +468,6 @@ final class MenuBarViewModel {
     {
       return description
     }
-    return "QuotaCLI could not complete the request."
+    return "QuotaBar's local service could not complete the request."
   }
 }

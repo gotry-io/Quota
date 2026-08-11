@@ -6,17 +6,25 @@ data requirements. Architecture and product behavior are defined in
 
 ## Trust boundary
 
-- Provider credentials and raw agent logs remain on the machine running QuotaCLI. Never upload,
+- Provider credentials and raw agent logs remain inside the Rust local-collection boundary owned by
+  `packages/service` and used by QuotaBar's bundled service and Linux `quotacli`.
+  Never upload,
   persist in Relay, print, or log provider access/refresh tokens, cookies, credential files, raw
   credential payloads, prompts, completions, tool payloads, local paths, session/conversation IDs, or
   authorization headers.
 - QuotaRelay accepts only protocol-validated account/device authentication material, normalized
   quota observations, sparse hourly Usage facts, and coverage/control metadata. It never runs a
   provider collector or exposes command execution.
-- QuotaCLI's Relay traffic is outbound HTTPS to the fixed origin `https://quota.gotry.io`. Only
-  loopback HTTP overrides used by tests are allowed. Redirects are refused.
-- QuotaBar invokes only its signed bundled QuotaCLI with fixed argument arrays. It does not resolve
-  from `PATH`, run a shell, read QuotaCLI credentials/state, or implement its own account client.
+- Rust local clients' Relay traffic is outbound HTTPS to the fixed origin `https://quota.gotry.io`.
+  Only loopback HTTP overrides used by tests are allowed. Redirects are refused.
+- QuotaBar launches only the signed `Contents/Helpers/quota-service` child built from the private
+  `apps/menubar/helper` entry point and exchanges bounded stdin/stdout NDJSON. It does not resolve
+  from `PATH`, run a shell, read service files, or implement provider/account networking.
+- If the private helper cannot initialize its owner-only state, it keeps the IPC stream available and
+  returns only a fixed, allowlisted error/recovery pair. The startup path never sends
+  raw paths, filesystem errors, or diagnostic stderr to Swift. Each Swift request has a fixed
+  fifteen-second deadline; timeout closes the child and all pending continuations so a later request can
+  start a fresh helper.
 - Quota Web receives normalized account data only. It does not discover local credentials or logs.
 
 ## Local credentials and identity
@@ -27,12 +35,19 @@ data requirements. Architecture and product behavior are defined in
 - Optional API-key providers store secrets only in
   `$XDG_CONFIG_HOME/quotacli/providers.json` or `~/.config/quotacli/providers.json`: directory mode
   `0700`, file mode `0600`, no symlinks, shared owner-only lock, and same-directory atomic replace.
-  QuotaBar Settings only presents copyable QuotaCLI commands and never reads or writes provider
-  secrets. Never accept raw keys on argv; get/list output returns only a masked tip.
-- QuotaCLI account state uses the same user configuration root and contains `installation.json`,
-  `session.json`, `usage-cache.json`, `usage-outbox.json`, and `pricing-catalog.json`. It lives outside
-  app/npm installation directories and survives ordinary reinstall. Every artifact has an explicit
-  schema version; a newer version fails closed and requires a client upgrade.
+  QuotaBar Settings sends a new key only through the private child stdin; Swift never reads the file,
+  persists the secret, places it on argv, or receives more than a masked tip. The Rust service
+  validates and atomically rewrites the file.
+- Operational local state is owner-only `state.sqlite` under the same released user configuration
+  root. It lives outside the app bundle and survives ordinary reinstall. SQLite schema migrations are
+  explicit; a newer schema fails closed and requires an app upgrade. The first Rust launch imports
+  the released installation/session/cache/outbox/pricing JSON transactionally and removes source
+  files only after the imported state is readable. The bounded migration lifecycle is defined in
+  [ADR 0007](decisions/0007-rust-native-local-service.md). The shared
+  `providers.json`/`ProviderConfigLock` path and OAuth `client_id=quotacli` remain current interfaces.
+- QuotaBar's private service and Linux `quotacli` use the same owner-only configuration and state
+  boundary. The Linux command is a foreground native binary; it is built and tested only and has no
+  separate published credential or storage format.
 - The installation ID is a random UUID. Relay stores only an account-scoped HMAC derived with
   `QUOTA_INSTALLATION_KEY`; the raw installation ID must not be logged or used as a global account
   identifier. Switching to a different Account sets a new upload lower bound so earlier local
@@ -40,17 +55,18 @@ data requirements. Architecture and product behavior are defined in
 - Account and device sessions are separate credential families. Persist each token with its
   audience, authoritative Account/Device IDs, Device generation, and absolute expiry. A response
   whose principal does not match local state fails closed.
-- Account/logout state, quota sequence, Usage sequence, cache, and outbox share one user-level lock.
-  Logout atomically writes `logout_pending` before any network request so upload cannot continue if
-  revocation is offline.
-- QuotaBar may cache bounded typed CLI output for immediate display. That output may contain masked
+- SQLite has one process owner for account/logout state, quota and Usage sequences, normalized cache,
+  and outbox transactions. Logout first cancels the active refresh and atomically advances the
+  session to `logout_pending`; subsequent account operations fail their session-epoch check even if
+  token revocation must be retried offline.
+- QuotaBar does not maintain a second report cache. The service's component state may contain masked
   provider labels, normalized quota, Usage totals, account/device display metadata, and cost
-  coverage, but no access/refresh token or raw local source metadata.
+  coverage, but no provider secret or raw local source metadata. Account tokens never cross IPC.
 
 ## Account authentication
 
-- GitHub is the only external identity provider. QuotaRelay is the confidential OAuth client;
-  QuotaCLI never embeds the GitHub client secret and never receives a GitHub access token.
+- GitHub is the only external identity provider. QuotaRelay is the confidential OAuth client; Rust
+  local clients never embed the GitHub client secret and never receive a GitHub access token.
 - Better Auth owns GitHub OAuth state, PKCE, callback validation, secure browser cookies, session
   expiry, and standard auth-route origin checks. The registered callback is
   `https://quota.gotry.io/api/auth/v2/callback/github`.
@@ -62,9 +78,11 @@ data requirements. Architecture and product behavior are defined in
   `127.0.0.1` callback on a random port. The callback accepts the exact path/state and an
   authorization code only; it rejects tokens in query data and stops after success, cancellation, or
   timeout.
-- Headless login follows the OAuth Device Authorization Grant. Device/user codes are high entropy or
+- QuotaBar uses that native browser path; the Linux `quotacli` uses the OAuth Device Authorization
+  Grant and never opens a browser or loopback listener. Device/user codes are high entropy or
   human-readable as appropriate, single-use, short-lived, hashed at rest, and rate-limited. Polling
-  implements `authorization_pending`, `slow_down`, denial, and expiry without printing credentials.
+  implements `authorization_pending`, `slow_down`, denial, and expiry without printing device codes
+  or session credentials.
 - Successful native login issues an account-read token family and a current-device-write token
   family. Access tokens are short-lived; refresh tokens rotate with compare-and-swap so replay
   revokes or rejects the token family. Store only HMACs of server session and grant secrets.
@@ -93,8 +111,9 @@ data requirements. Architecture and product behavior are defined in
   cancellation, or parser uncertainty make coverage partial. Partial coverage never deletes or
   replaces remote facts. On reads, `complete` describes only that returned half-open coverage
   interval; absent intervals remain visible gaps and no item claims that the entire query range is
-  complete. QuotaCLI keeps the cursor at the start of a partial range so later hours cannot be
-  silently accepted across an unresolved gap.
+  complete. The SQLite file index is the sole file-level invalidation mechanism and keeps changed
+  files dirty after a partial parse so later hours cannot be silently accepted across an unresolved
+  gap; no watcher or byte-checkpoint dependency is used.
 - Outbox payloads contain allowlisted aggregate fields only. Source file IDs, byte offsets, record
   hashes, paths, raw events, and parser diagnostics remain local. Token/count invariants and payload,
   row, range, model, and dimension bounds are enforced by the v2 runtime schema before upload and by
@@ -105,7 +124,7 @@ data requirements. Architecture and product behavior are defined in
 - Delete Device is distinct from logout. It transactionally revokes sessions, advances Device
   generation, records a precise watermark, deletes quota/Usage/coverage/receipt rows, and retains a
   minimal hidden tombstone. Old tokens and old-generation outbox entries are terminally rejected.
-  The new generation may rebuild the watermark's UTC hour only after QuotaCLI filters raw event
+  The new generation may rebuild the watermark's UTC hour only after the local service filters raw event
   instants before the precise watermark. The account-scoped browser session remains signed in.
 - Delete Account deletes its Devices and business data transactionally. Better Auth removes every
   indexed browser session for the deleted user, and Relay additionally rejects any cached Web
@@ -124,9 +143,10 @@ data requirements. Architecture and product behavior are defined in
 - Spawn explicit executables with argument arrays. Never interpolate provider or user data into a
   shell command. Respect cancellation and terminate subprocesses on success, failure, timeout, and
   cancellation.
-- Provider HTTP requests use a 20-second timeout and 1 MiB response-body limit. JSON-RPC uses a 1 MiB
-  stdout-line limit and 64 KiB stderr-capture limit. QuotaBar bounds each helper invocation to 60
-  seconds and 1 MiB stdout, discards helper stderr, and terminates on timeout/cancellation/overflow.
+- Provider HTTP requests use a 20-second timeout and 1 MiB response-body limit. Provider JSON-RPC
+  uses a 1 MiB stdout-line limit and 64 KiB stderr-capture limit. Private IPC limits every line to
+  1 MiB, rejects malformed envelopes, exposes only stable error/recovery codes, and closes a corrupt
+  connection. stdin EOF cancels service work and ends the child.
 - Error output and logs use allowlisted codes and fixed recovery text. Never include raw HTTP bodies,
   subprocess stderr, JWTs, authorization codes, user/device secrets, installation IDs, raw GitHub
   subjects, full email addresses, or local source paths.
@@ -155,8 +175,9 @@ data requirements. Architecture and product behavior are defined in
 - Production keys (`GITHUB_CLIENT_SECRET`, `BETTER_AUTH_SECRET`, and
   subject/installation/session HMAC keys) are Cloudflare secrets and must not be tracked. Each key has
   a distinct purpose and must contain sufficient entropy; do not reuse one secret across purposes.
-- Local builds, local D1 migrations, and Wrangler dry runs are verification. Do not deploy, apply
-  remote migrations, publish packages, or change production secrets without explicit authorization.
+- Local builds, Linux `quotacli` build/tests, local D1 migrations, and Wrangler dry runs are
+  verification. Do not deploy, apply remote migrations, publish packages, or change production
+  secrets without explicit authorization.
 
 ## Failure behavior
 

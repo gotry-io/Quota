@@ -1,10 +1,10 @@
 # @gotry-io/quota-protocol
 
-The single v2 wire contract shared by QuotaCLI, managed QuotaRelay, and QuotaBar's Swift `Codable`
+The single v2 wire contract shared by QuotaBar's Rust local service, managed QuotaRelay, and Swift `Codable`
 models.
 
 - TypeScript runtime validation lives in `src`.
-- `ProviderId` / `ProviderIdSchema` are generated from `packages/provider/src/catalog.ts` into
+- `ProviderId` / `ProviderIdSchema` are generated from `packages/provider/catalog.json` into
   `src/provider-ids.generated.ts` via `pnpm generate:provider-catalog`. Do not hand-edit that file.
 - Language-neutral JSON Schemas live in `schema` and are served by Quota Web under `/schema/`.
   Run `pnpm --filter @gotry-io/quota-protocol generate:schema` after changing a runtime schema.
@@ -15,3 +15,5 @@ models.
   `value_unit`) for credits-class meters; consumers that only understand `used_percent` remain valid.
 - Pricing schemas and pure calculation code do not contain a canonical price catalog. The managed
   Relay supplies the validated catalog used by clients.
+- `fixtures/pricing-conformance.json` is the language-neutral pricing validation, resolution, and
+  cost contract read directly by the Rust service and TypeScript quota-model tests.

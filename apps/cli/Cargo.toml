@@ -1,0 +1,20 @@
+[package]
+name = "quotacli"
+version = "0.0.6"
+edition = "2024"
+publish = false
+description = "Linux-native Quota command-line client"
+license = "MIT"
+
+[lib]
+name = "quotacli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "quotacli"
+path = "src/main.rs"
+
+[dependencies]
+libc = "0.2.177"
+quota-service = { package = "quota-service", path = "../../packages/service" }
+serde_json = "1.0.145"

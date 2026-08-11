@@ -6,7 +6,7 @@
 
 ## Context
 
-Quota needs one identity and data model for QuotaCLI, QuotaBar, and the website. Anonymous Relay
+Quota needs one identity and data model for QuotaBar's local service, native UI, and the website. Anonymous Relay
 owners, arbitrary Relay URLs, and device-to-owner pairing made identity, deletion, and cross-device
 Usage ambiguous. Those interfaces had not shipped as a production compatibility boundary.
 
@@ -19,10 +19,10 @@ safe retries and deletion.
 Quota supports one managed service at `https://quota.gotry.io` and GitHub is its only account identity
 provider. Better Auth is the browser identity/session boundary and owns provider OAuth state, PKCE,
 cookies, expiry, and standard auth-route origin protection. Quota keeps only its product-specific
-Device lifecycle and QuotaCLI token families. An Account directly owns Devices. QuotaCLI is the sole
-native OAuth public client and the sole writer of installation identity, account/device sessions,
-upload sequences, Usage cache, and Usage outbox. QuotaBar invokes its signed bundled QuotaCLI with
-fixed arguments and renders typed output; it does not read credentials or QuotaCLI state files.
+Device lifecycle and native token families. An Account directly owns Devices. QuotaBar's bundled
+Rust service is the sole native OAuth public client and writer of installation identity,
+account/device sessions, upload sequences, Usage state, and Usage outbox. Swift renders typed IPC
+state; it does not read credentials or service files.
 
 Browser login uses Authorization Code with PKCE and headless login uses the OAuth Device
 Authorization Grant. Successful native login issues separate account-read and current-device-write
@@ -35,7 +35,7 @@ The installation ID is random user-level state. Relay stores only an account-sco
 the same installation restores the same Device within one Account without becoming a cross-account
 identifier. Snapshot and Usage upload sequences are independent and server-authoritative.
 
-QuotaCLI converts supported local Codex, Claude Code, Grok, OpenCode, and Pi records into
+The local service converts supported Codex, Claude Code, Grok, OpenCode, and Pi records into
 privacy-preserving hourly facts. Uploads contain no prompt, completion, path, session ID,
 conversation ID, raw event, or provider credential. Only a complete UTC-hour scan may replace a
 remote range; partial scans remain local.
@@ -43,12 +43,12 @@ Each immutable outbox submission has a stable ID, generation, and sequence, so r
 crash-after-commit are idempotent. Pricing uses an effective-dated managed catalog and preserves
 unknown or incomplete prices as explicitly unpriced rather than zero.
 
-QuotaCLI 0.0.5 shipped protocol v2 outbox entries that could contain the literal model sentinel
-`unknown`, plus query-less two-agent Account summaries bounded to 30 days. Protocol v2 continues to
-decode those pending entries so their original idempotency digest can drain, but Relay discards the
-sentinel row before persistence. New clients reject the sentinel during collection and opt into all
-agents and retained history with `usage_agents=all`; legacy reads preserve the shipped 366-day limit
-and query-less 30-day default.
+QuotaCLI 0.0.5 shipped bounded protocol-v2 Usage behavior. The native-cutover compatibility
+lifecycle and removal checklist are defined in
+[ADR 0007](0007-rust-native-local-service.md). Current clients reject the released `unknown` model
+sentinel during collection and request all agents and retained history with `usage_agents=all`.
+The shared `providers.json`/`ProviderConfigLock` path and OAuth `client_id=quotacli` remain current
+interfaces rather than compatibility behavior.
 
 Logout first disables local upload and revokes sessions, but retains the remote Device and data.
 Delete Device is a distinct authenticated Web action: it revokes sessions, advances the generation,
@@ -61,7 +61,7 @@ SQLite adapter, Relay discovery document, arbitrary Relay URL, anonymous owner, 
 
 ## Consequences
 
-- Account and Device lifecycle is consistent across CLI, QuotaBar, and Web.
+- Account and Device lifecycle is consistent across native QuotaBar and Web surfaces.
 - Local collection and cached display continue while signed out or offline; remote sync does not.
 - The service can aggregate quota and Usage without receiving the underlying work or provider
   credentials.

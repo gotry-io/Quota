@@ -17,7 +17,7 @@ pnpm --filter @gotry-io/quota-web check
 pnpm --filter @gotry-io/quota-web build
 ```
 
-`/my` is the GitHub-backed account dashboard and `/activate` approves or denies a QuotaCLI device
+`/my` is the GitHub-backed account dashboard and `/activate` approves or denies a native-client device
 authorization grant. `/app` shipped in 0.0.4, so it remains a single bookmark redirect to `/my`; new
 links and OAuth callbacks use `/my`. Better Auth owns GitHub sign-in, browser sessions, sign-out,
 OAuth state/PKCE, account deletion, and standard auth-route origin validation. Quota's authorization

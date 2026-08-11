@@ -3,9 +3,8 @@ name: release-menubar
 # A menubar-v* tag builds one Apple Silicon artifact, signs and notarizes it, and publishes a GitHub Release.
 # Stable tags also push the generated Cask to gotry-io/homebrew-tap.
 # Prerelease tags (menubar-v0.0.2-beta.1) create a GitHub prerelease only and skip Homebrew.
-# QuotaCLI releases use cli-v* and do not run this workflow.
 # A manual run may only republish an existing tag; it never builds an untagged main commit.
-# The bundled Helpers/quotacli reports apps/cli package.json (not the menubar marketing version).
+# The bundled private Rust service follows the QuotaBar release version.
 on:
   push:
     tags: ["menubar-v*"]
@@ -29,6 +28,8 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && format('menubar-v{0}', github.event.inputs.version) || github.ref }}
+
+      - uses: dtolnay/rust-toolchain@stable
 
       - name: Resolve version
         id: version
@@ -59,10 +60,12 @@ jobs:
             CHANNEL=stable
             PRERELEASE=false
           fi
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "tag=menubar-v$VERSION" >> "$GITHUB_OUTPUT"
-          echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
-          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+          {
+            echo "version=$VERSION"
+            echo "tag=menubar-v$VERSION"
+            echo "channel=$CHANNEL"
+            echo "prerelease=$PRERELEASE"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Validate product version
         env:
@@ -79,11 +82,11 @@ jobs:
       - name: Install pinned toolchain packages
         run: |
           set -euo pipefail
-          npm install --global pnpm@10.23.0 bun@1.3.10
+          npm install --global pnpm@10.23.0
           test "$(uname -m)" = arm64
           node --version
           pnpm --version
-          bun --version
+          cargo --version
           swift --version
 
       - name: Install and verify
@@ -99,10 +102,9 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
-          # App marketing version = menubar tag. Bundled helper keeps apps/cli package.json.
-          HELPER_VERSION="$(node -p "require('./apps/cli/package.json').version")"
-          echo "Packaging QuotaBar ${VERSION} with helper quotacli ${HELPER_VERSION}"
+          echo "Packaging QuotaBar ${VERSION} with its private Rust service"
           ./scripts/package-menubar.sh "$VERSION" "${{ github.run_number }}"
+          pnpm test:menubar:helper
 
       - name: Import Developer ID identity
         env:
@@ -135,9 +137,10 @@ jobs:
           set -euo pipefail
           APP="dist/menubar/QuotaBar.app"
           test "$(lipo -archs "$APP/Contents/MacOS/QuotaBar")" = arm64
-          test "$(lipo -archs "$APP/Contents/Helpers/quotacli")" = arm64
+          test "$(lipo -archs "$APP/Contents/Helpers/quota-service")" = arm64
           codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" \
-            "$APP/Contents/Helpers/quotacli"
+            "$APP/Contents/Helpers/quota-service"
+          codesign --verify --strict --verbose=2 "$APP/Contents/Helpers/quota-service"
           codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$APP"
           codesign --verify --deep --strict --verbose=2 "$APP"
           codesign -d --verbose=4 "$APP" 2>&1 | grep -q 'TeamIdentifier=86Y537ZF24'
@@ -215,7 +218,6 @@ jobs:
             "$RUNNER_TEMP/homebrew-tap"
           ./scripts/render-homebrew-cask.sh \
             "$VERSION" "$SHA256" "$URL" "$RUNNER_TEMP/homebrew-tap/Casks/quotabar.rb"
-          rm -f "$RUNNER_TEMP/homebrew-tap/Formula/quotacli.rb"
           cd "$RUNNER_TEMP/homebrew-tap"
           git add -A
           if git diff --cached --quiet; then
