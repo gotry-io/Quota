@@ -110,6 +110,42 @@ func consumesServiceMergedOverviewWithoutReprocessingObservations() async throws
   #expect(model.accountErrorMessage == "Sign in to continue.")
 }
 
+@Test @MainActor
+func successfulLoginCancellationDoesNotRestoreStaleLoggingInState() async throws {
+  let state = LocalServiceState(
+    ipcVersion: 1,
+    revision: 1,
+    quota: emptyComponent(),
+    usage: emptyComponent(),
+    account: LocalServiceComponent(
+      status: .signedOut,
+      value: LocalServiceAccountState(
+        authStatus: .loggingIn,
+        accountID: nil,
+        deviceID: nil,
+        deviceGeneration: nil,
+        accountSummary: nil
+      ),
+      updatedAt: nil,
+      lastError: nil,
+      refreshing: false
+    ),
+    pricing: emptyComponent(),
+    providers: [],
+    overview: []
+  )
+  let model = MenuBarViewModel(
+    client: StubLocalService(state: state, loginDelayNanoseconds: 30_000_000_000)
+  )
+  await model.refreshIfNeeded()
+
+  model.startLogin()
+  model.cancelLogin()
+  try await Task.sleep(nanoseconds: 20_000_000)
+
+  #expect(!model.isLoggingIn)
+}
+
 private func component<Value: Decodable & Sendable>(
   value: Value,
   updatedAt: Date
@@ -118,6 +154,16 @@ private func component<Value: Decodable & Sendable>(
     status: .ready,
     value: value,
     updatedAt: updatedAt,
+    lastError: nil,
+    refreshing: false
+  )
+}
+
+private func emptyComponent<Value: Decodable & Sendable>() -> LocalServiceComponent<Value> {
+  LocalServiceComponent(
+    status: .unavailable,
+    value: nil,
+    updatedAt: nil,
     lastError: nil,
     refreshing: false
   )
@@ -139,10 +185,12 @@ private func unavailableUsage(now: Date) -> LocalUsageReport {
 private struct StubLocalService: LocalServiceServing {
   let stateValue: LocalServiceState
   let events: AsyncStream<LocalServiceEvent>
+  let loginDelayNanoseconds: UInt64
 
-  init(state: LocalServiceState) {
+  init(state: LocalServiceState, loginDelayNanoseconds: UInt64 = 0) {
     stateValue = state
     events = AsyncStream { $0.finish() }
+    self.loginDelayNanoseconds = loginDelayNanoseconds
   }
 
   func state() async throws -> LocalServiceState { stateValue }
@@ -150,7 +198,10 @@ private struct StubLocalService: LocalServiceServing {
     LocalServiceRefreshResult(accepted: true, pending: false, revision: stateValue.revision)
   }
   func login() async throws -> LocalServiceLoginResult {
-    LocalServiceLoginResult(
+    if loginDelayNanoseconds > 0 {
+      try await Task.sleep(nanoseconds: loginDelayNanoseconds)
+    }
+    return LocalServiceLoginResult(
       status: .loggingIn,
       accountID: nil,
       deviceID: nil,

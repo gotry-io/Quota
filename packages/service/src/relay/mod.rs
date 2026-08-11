@@ -1754,16 +1754,12 @@ impl AccountManager {
         if cancel.load(Ordering::Acquire) {
             return Err(BackendError::cancelled());
         }
-        self.ensure_fresh_session(&mut session, &mut session_epoch, "account")?;
-        let account_token = session
-            .get("account")
-            .and_then(Value::as_object)
-            .and_then(|value| value.get("access_token"))
-            .and_then(Value::as_str)
-            .ok_or_else(BackendError::unavailable)?;
+        self.ensure_fresh_session(&mut session, &mut session_epoch, "device")?;
+        let account_token =
+            self.ensure_fresh_session(&mut session, &mut session_epoch, "account")?;
         let summary = self
             .client
-            .account_summary(account_token, "cost_mode=calculate")
+            .account_summary(&account_token, "cost_mode=calculate")
             .map_err(|error| BackendError {
                 error: relay_error_for_backend(error),
             })?;

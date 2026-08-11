@@ -165,6 +165,24 @@ struct LocalServiceClientTests {
   }
 
   @Test
+  func helperExitClosesConcurrentPendingRequests() async throws {
+    let service = try TemporaryService(
+      python: #"""
+        import sys
+
+        sys.stdin.readline()
+        """#
+    )
+    defer { service.remove() }
+    let client = try LocalServiceClient(executableURL: service.executableURL)
+
+    async let first = stateError(from: client)
+    async let second = stateError(from: client)
+    let errors = await [first, second]
+    #expect(errors.allSatisfy { $0 == .connectionClosed })
+  }
+
+  @Test
   func timesOutAndRestartsAfterAStalledRequest() async throws {
     let service = try TemporaryService(
       python: #"""
@@ -212,6 +230,17 @@ struct LocalServiceClientTests {
     _ = try await client.state()
     #expect(try service.launchCount() == 2)
     await client.shutdown()
+  }
+}
+
+private func stateError(from client: LocalServiceClient) async -> LocalServiceClientError? {
+  do {
+    _ = try await client.state()
+    return nil
+  } catch let error as LocalServiceClientError {
+    return error
+  } catch {
+    return .invalidMessage
   }
 }
 
