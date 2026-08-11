@@ -1,3 +1,4 @@
+import { isReleasedUnknownUsageModel } from "@gotry-io/quota-protocol";
 import type {
   DevicePrincipal,
   StoredUsageCoverage,
@@ -128,7 +129,7 @@ export class D1UsageState implements UsageState {
           submission.coverage.end_at,
         ),
       ...submission.rows
-        .filter((row) => row.model !== "unknown")
+        .filter((row) => !isReleasedUnknownUsageModel(row.model))
         .map((row) => this.insertRow(principal.device_id, submission, row)),
       this.preserveCoverageSide(principal.device_id, submission, "left"),
       this.preserveCoverageSide(principal.device_id, submission, "right"),

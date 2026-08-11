@@ -1,7 +1,7 @@
 # QuotaRelay
 
 QuotaRelay is the managed Cloudflare Worker + D1 account and usage service for
-`https://quota.gotry.io`. It serves the v2 GitHub account, QuotaCLI OAuth, device quota/Usage, account
+`https://quota.gotry.io`. It serves the v2 GitHub account, native-client OAuth, device quota/Usage, account
 read, and public pricing-catalog APIs. There is no self-hosted or SQLite runtime.
 
 Apply local D1 migrations before starting Wrangler:
@@ -22,7 +22,7 @@ The Worker requires these secrets:
 Register the GitHub OAuth App callback as
 `https://quota.gotry.io/api/auth/v2/callback/github`. Better Auth owns GitHub OAuth state, PKCE,
 browser cookies, session expiry, and standard auth-route origin checks. QuotaRelay retains the
-native QuotaCLI grants and its separate account/device token families. The checked-in Worker enables
+native grants and their separate account/device token families. The checked-in Worker enables
 Cloudflare `nodejs_compat`, which Better Auth's runtime requires.
 
 Each keyed secret is independent and must contain at least 32 random characters. OAuth and session

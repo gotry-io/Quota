@@ -14,7 +14,7 @@ open-source tool, not a hosting console or a promotional SaaS dashboard.
 - Use black type, white space, thin neutral rules, and mint only for brand or healthy state.
 - Prefer clear labels and real values over decoration.
 - Do not use gradients, drop shadows, glass effects, fake browser chrome, or ornamental charts.
-- Product names are Quota, QuotaCLI, QuotaBar, and QuotaRelay.
+- Product names are Quota, QuotaBar, and QuotaRelay.
 
 ## Information architecture
 
@@ -25,7 +25,7 @@ The site has three surfaces:
    activity, model/agent breakdowns, Devices, and explicit Device deletion. Account actions live in
    the account menu, whose trigger is the signed-in GitHub username. The shipped `/app` bookmark
    is a single redirect to `/my`.
-3. `/activate` approves or denies a QuotaCLI device authorization code.
+3. `/activate` approves or denies a released native-client device authorization code.
 
 GitHub is the only sign-in action. There is no Relay selection, pairing group, owner capability,
 provider-secret form, server administration, or self-hosted setup in the Web UI.
@@ -82,7 +82,7 @@ The explanation follows this order:
 - local collection and what never uploads;
 - one Account with Device visibility;
 - defensible, effective-dated cost;
-- the direct local agent logs → QuotaCLI → Account data path;
+- the direct local agent logs → QuotaBar local service → Account data path;
 - a final GitHub sign-in action.
 
 Do not present unavailable downloads or documentation as active destinations.
@@ -103,7 +103,8 @@ use plain explanatory text and one next action.
 
 `/activate` is a single-task form. It explains that approval issues Account-read and current-Device
 upload sessions without sharing provider credentials. The code input supports one-time-code
-autofill. Approve is primary; Deny is secondary. Success tells the user to return to QuotaCLI.
+autofill. Approve is primary; Deny is secondary. Success tells the user to return to the requesting
+Quota client.
 
 ## Responsive behavior
 

@@ -15,8 +15,9 @@ Core rules:
 2. One header, one footer, and one typed navigation stack are shared by every page.
 3. Account actions are plain user tasks: continue with GitHub, inspect devices, inspect Usage, log
    out.
-4. QuotaBar displays typed QuotaCLI results. It does not expose infrastructure configuration,
-   credentials, opaque account identifiers, or raw diagnostics.
+4. QuotaBar displays typed local-service results. Provider configuration exposes only intentional
+   API-key entry and masked saved state, never stored secrets, opaque account identifiers, or raw
+   diagnostics.
 5. Every action remains keyboard reachable, VoiceOver labelled, and usable with Reduce Motion and
    large text.
 
@@ -109,9 +110,9 @@ Overview
 
 ### Overview
 
-Render enabled providers in saved catalog order. Each provider row may contain multiple account
-observations, but global identities merge and select one freshest valid observation. Never add or
-average percentages across devices.
+Render the service-provided Overview in saved catalog order. Each provider row may contain multiple
+account observations; Rust has already merged global identities and selected one freshest valid
+observation. Swift never repeats that policy. Never add or average percentages across devices.
 
 Each quota observation shows:
 
@@ -141,15 +142,16 @@ Settings section order is fixed:
 Account states:
 
 - Signed out or not checked: short benefit copy and **Continue with GitHub**.
-- Login running: browser completion copy and **Cancel**. Cancellation terminates the helper.
+- Login running: browser completion copy and **Cancel**. Cancellation sends the typed service
+  operation and closes the browser flow.
 - Signed in: one compact account row with a local avatar, account display label, and **Log Out**.
   The first click opens a native confirmation with **Cancel** and destructive **Log Out** actions;
   it states that the remote Device and synced data remain.
 - Logout pending: explicit offline completion copy and **Retry Logout**.
 - Removed or expired device session: concise reconnect copy; never show raw reason codes or ids.
 
-The Account group is the only place for authentication actions. Buttons start fixed bundled CLI
-commands; there are no embedded web views or credential fields.
+The Account group is the only place for account authentication actions. Buttons invoke typed private
+service operations; there are no embedded web views.
 The account row is followed by a **Manage account** link to the web account surface.
 
 Usage is a first-class destination showing This Mac without requiring an account. General contains
@@ -198,9 +200,12 @@ Provider detail contains:
 - **Overview**: provider-wide visibility switch;
 - **Reporting From**: This Mac or account device display names, source kind, optional stale state,
   and compact observation age;
-- **This Mac Sign-in** or **This Mac Configuration**: the catalog-provided copyable command.
+- **This Mac Sign-in**: the catalog-provided copyable official-provider command; or
+- **This Mac Configuration**: native secure API-key entry, optional base URL when catalog-enabled,
+  masked saved state, Save, and Remove.
 
-QuotaBar never reads or edits provider credential files. Configuration remains a QuotaCLI task.
+QuotaBar never reads provider credential files. New values travel only over private child stdin and
+Swift clears the field after Save; the service owns validation, owner-only persistence, and masking.
 
 ## Shared components
 
@@ -210,7 +215,7 @@ QuotaBar never reads or edits provider credential files. Configuration remains a
 | `MenuBarHeader` | Back/title/root actions and keyboard-safe transient menu |
 | `SettingsSection` | Quiet label plus adaptive group surface |
 | `SettingsListRow` | Shared icon/title/subtitle/trailing alignment |
-| `QuotaCommandRow` | Selectable monospace command and Copy/Copied feedback |
+| `QuotaCommandRow` | Selectable official-provider sign-in command and Copy/Copied feedback |
 | `QuotaPrimaryButtonStyle` | Accent capsule for the primary task |
 | `QuotaListRowButtonStyle` | Nested hover/press feedback with full-row hit target |
 | `ProviderBrandIcon` | Catalog brand resource with stable optical sizing |
@@ -223,7 +228,7 @@ Prefer these components over page-local replicas. Provider assets remain in
 - Every icon-only button has an accessibility label and Help tooltip.
 - Rows combine or replace child accessibility deliberately; never announce raw opaque identifiers.
 - Disclosure rows announce their destination and current summary.
-- Login exposes a real Cancel action while the child process runs.
+- Login exposes a real Cancel action while the service's browser flow runs.
 - Drag reordering has Move Up and Move Down accessibility actions.
 - Focus rings use the native/accent treatment and are never suppressed on editable controls.
 - Large text may increase content height; ScrollView must retain access to every row.
@@ -232,7 +237,7 @@ Prefer these components over page-local replicas. Provider assets remain in
 ## Visual QA matrix
 
 Required fixture states are loading, signed-in content, cached content with a sync warning,
-signed-out provider issues, and helper unavailable. Required routes are Overview, Settings, Agents,
+signed-out provider issues, and service unavailable. Required routes are Overview, Settings, Agents,
 both provider setup variants, Devices, and Usage. Inspect light and dark appearances, standard and
 accessibility text sizes, keyboard traversal, VoiceOver labels, and Reduce Motion transitions.
 

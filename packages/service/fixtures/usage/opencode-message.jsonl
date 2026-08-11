@@ -1,0 +1,1 @@
+{"role":"assistant","modelID":"gpt-5.6-sol","providerID":"openai","time":{"created":1785664800000},"tokens":{"input":100,"output":20,"reasoning":5,"cache":{"read":50,"write":10}},"cost":0.01}

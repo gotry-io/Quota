@@ -6,173 +6,176 @@ the root [`README.md`](../README.md); credential and retained-data rules live in
 
 ## Product boundaries
 
-Quota has four runtime products:
+Quota has four application products and one shared Rust library boundary:
 
-- QuotaCLI owns provider collection, random installation identity, account/device sessions, upload
-  sequences, local Usage cache/outbox, pricing cache, and all managed-service HTTP calls.
-- QuotaBar owns macOS presentation and scheduling. It invokes only its signed bundled QuotaCLI with
-  fixed arguments and consumes bounded typed output.
+- QuotaBar is the macOS presentation product. Its app bundle contains one private Rust service;
+  Swift owns views, preferences, accessibility, Launch at Login, and strict decoding only.
+- QuotaCLI is a Linux-only native Rust command that uses the shared local service library. The
+  repository builds and tests it on Ubuntu, but does not publish it; Windows is not supported.
 - QuotaRelay owns GitHub-backed Accounts, Devices, scoped native sessions, normalized quota/Usage
-  storage, deletion controls, and account queries. Better Auth owns its Web identity/session boundary.
-  Relay runs only as a Cloudflare Worker backed by D1.
+  storage, deletion controls, pricing distribution, and account queries. Better Auth owns its Web
+  identity/session boundary. Relay runs only as a Cloudflare Worker backed by D1.
 - Quota Web owns the public site and browser account UI. It shares `quota.gotry.io` with the Worker
   but remains a separate Vite application and source boundary.
 
-GitHub is the only account identity provider. The service origin is fixed at
-`https://quota.gotry.io`. The accepted boundary has no anonymous owner, pairing group, arbitrary
-Relay URL, discovery document, self-hosted process, SQLite adapter, or protocol v1 route. The durable
-decision is [ADR 0006](decisions/0006-managed-account-device-usage.md).
+The bundled Rust executable is not a separate product: it has no command parser, terminal output,
+socket, daemon mode, LaunchAgent, PATH lookup, or standalone distribution. QuotaBar is its parent,
+transport peer, scheduler lifetime, and release boundary. `packages/service` contains the shared
+provider, Usage, pricing, persistence, and Relay logic used by both Rust application entry points;
+`apps/menubar/helper` supplies the private macOS stdio binary and `apps/cli` supplies the Linux-only
+`quotacli` command.
 
-## Data paths
+GitHub is the only account identity provider. The managed origin is fixed at
+`https://quota.gotry.io`. There is no anonymous owner, pairing group, arbitrary Relay URL, discovery
+document, self-hosted process, SQLite Relay adapter, or protocol v1 route. The durable managed
+boundary is [ADR 0006](decisions/0006-managed-account-device-usage.md); the local runtime decision is
+[ADR 0007](decisions/0007-rust-native-local-service.md).
 
-### Local collection
+## Local runtime and IPC
 
 ```text
-provider sessions + agent logs
-            │ local reads only
-            ▼
-        QuotaCLI ───────── typed local report ─────────► terminal
-            │                                           QuotaBar
-            └── owner-only cache/outbox
+official provider sessions       agent JSON/JSONL logs
+            │                            │
+            └──────────────┬─────────────┘
+                           ▼
+                shared Rust service library
+                 │        │            │
+        providers.json  SQLite     managed HTTPS
+                 │        │            │
+                 └────────┴──────┬─────┘
+                                 │ stdin/stdout NDJSON v1
+                                 ▼
+                          QuotaBar Swift UI
 ```
 
-QuotaCLI uses `@gotry-io/quota-provider` to collect quota and to normalize supported Codex, Claude
-Code, Grok, OpenCode, and Pi log records. Provider credentials remain inside the collector boundary.
-Raw log records are not written to the outbox. QuotaBar may retain one last safe normalized result
-for immediate display, then replaces it after a successful helper invocation.
+QuotaBar launches the fixed signed `Contents/Helpers/quota-service` path once. Requests, responses,
+and state-change events are newline-delimited `snake_case` JSON with a 1 MiB line limit and request
+IDs. Supported operations are state read, refresh, login/cancel, logout, provider configuration, and
+shutdown. `get_state` performs no collection or network work: it returns the current SQLite-backed
+snapshot immediately. State components carry independent status, last-good value, update time,
+error/recovery code, and refreshing flag for quota, Usage, account, and pricing.
 
-### Managed account and sync
+The service begins a background startup refresh after IPC is available, emits revisioned
+`state_changed` events, and schedules subsequent refreshes every five minutes. Manual refresh uses
+the same single-flight path. stdin EOF or shutdown cancels work and terminates the service; no sync
+continues after QuotaBar exits. A second installed client may acquire the same owner lock only after
+the first process releases it; there is no multi-process coordination protocol beyond serialized
+ownership.
+
+Rust returns the merged Overview directly. Global fingerprints merge local and account-device
+observations; source-scoped fingerprints remain separate. Selection favors a valid non-expired
+observation, then newest observation time, then local source, then stable source ID. Swift never
+reimplements this policy.
+
+## Local collection and persistence
+
+The provider catalog is the language-neutral `packages/provider/catalog.json`, validated by its JSON
+Schema. Generation produces TypeScript protocol IDs, Rust catalog metadata under
+`packages/service/src/catalog.rs`, and Swift `ProviderID`. The shared Rust crate implements all
+seven quota collectors and all five Usage parsers; the macOS and Linux entry points call that crate.
+
+Provider credentials remain provider-owned when available. Optional API-key provider overrides use
+the released shared owner-only configuration root and `providers.json`; QuotaBar sends secrets only
+over the child process's stdin, never argv or preferences. Environment variables remain supported
+inputs. Operational state has one owner: `state.sqlite` stores installation/account state, component
+last-good values, file index, normalized Usage facts, pricing state, sequences, and the durable
+outbox. SQLite migrations are explicit and append-only.
+
+Usage indexing is the final file-level invalidation design. Each refresh performs bounded source
+discovery, records parser revision plus file identity, size, and modification time, skips unchanged
+files, and transactionally replaces the normalized rows for changed files. Collectors return typed
+complete/partial coverage. Complete UTC-hour coverage may enter the durable outbox; partial coverage
+is visible locally and never replaces remote facts. The SQLite file index is the sole invalidation
+mechanism: no watcher or byte-checkpoint dependency is part of the product.
+
+On first launch, the one-time SQLite migration imports the released installation, session, Usage
+cache, Usage outbox, and pricing cache exactly once. The import is transactional and idempotent;
+source files are removed only after the new state is readable. The bounded released-client window
+and removal checklist are defined in [ADR 0007](decisions/0007-rust-native-local-service.md). The
+current shared `providers.json`/`ProviderConfigLock` path and OAuth `client_id=quotacli` are live
+interfaces. The removed TypeScript/Bun runtime has no dual-read/write path or fallback.
+
+## Managed account and sync
 
 ```text
 GitHub ── Better Auth web OAuth ──► QuotaRelay ──► browser account session
                                           │
-browser PKCE / device authorization grant │ account + device token families
+browser PKCE authorization                │ account + device token families
                                           ▼
-QuotaCLI ── quota snapshots + hourly facts ──► D1
-    ▲                                          │
-    └──────── account summary / catalog ───────┘
-                         │
-                         ├──► QuotaBar
-                         └──► Quota Web
+Rust service ─ quota snapshots + hourly facts ─► D1
+        ▲                                           │
+        └──────── account summary / pricing ───────┘
+                             │
+                             ├──► QuotaBar
+                             └──► Quota Web
 ```
 
-QuotaCLI is the only native OAuth public client. Loopback browser login uses Authorization Code with
-PKCE; headless login uses the OAuth Device Authorization Grant and a browser approval page. The
-service returns separate account-read and current-device-write sessions. Access and refresh expiry
-are explicit; refresh rotates atomically.
+The shared Rust service is the native OAuth public client used by QuotaBar and Linux `quotacli`.
+QuotaBar uses Authorization Code with PKCE and a temporary loopback callback; Linux `quotacli` uses
+the OAuth Device Authorization Grant and never opens a browser or loopback listener. Relay returns
+separate account-read and current-device-write sessions; access and refresh expiry are explicit and
+refresh rotates atomically. The network `client_id` value `quotacli` remains unchanged because it is
+part of released protocol v2.
 
-The random user-level installation ID is HMACed with an account-scoped server key before storage.
-The same installation restores its Device within the same Account without enabling cross-account
-correlation. Quota snapshot and Usage sequences are independent and are always recovered from
-server control before upload.
+The random installation ID is HMACed with an account-scoped server key before storage. Quota and
+Usage upload sequences are independent and recovered from authoritative Device control before
+upload. Outbox retry reuses submission ID and sequence, making crash-after-commit a duplicate rather
+than double counting. A deletion watermark rebuilds only permitted facts under the new Device
+generation.
 
-### Usage replacement
+Pricing is versioned and effective-dated with ETag caching. Rust calculates local cost; Relay keeps
+the equivalent server-side TypeScript calculation for account summaries. Exact
+channel/model/date/dimension matching is required. Missing prices stay unpriced/partial; cost is not
+an invoice or subscription spend.
 
-Collectors return events plus a typed complete/partial coverage result for a UTC-hour range.
-QuotaCLI aggregates only allowlisted billing dimensions into sparse hourly rows using a pinned
-device IANA timezone. Complete coverage becomes an immutable outbox submission; partial coverage is
-reported locally and never replaces remote rows. An accepted submission atomically replaces its
-Device, agent, and UTC range. Empty complete coverage is a valid deletion of old facts in that
-range.
-
-Outbox retry reuses the same submission ID and sequence. The server records receipts so
-crash-after-commit is a duplicate rather than double counting. Parser/timezone changes rebuild from
-raw logs. A deletion watermark that cuts an hour causes the client to filter raw event instants and
-rebuild only the post-watermark portion of that hour under the new Device generation.
-
-Pricing is a versioned, effective-dated catalog served by QuotaRelay with ETag caching. The
-runtime-neutral calculator in `@gotry-io/quota-model` resolves exact channel/model/date/dimension
-matches. Missing or incomplete prices remain unpriced/partial; cost is not an invoice or subscription
-spend.
-
-## Package dependency rules
+## Source and dependency rules
 
 ```text
-                    quota-protocol
-                 ┌──────┼──────────┐
-                 ▼      ▼          ▼
-           quota-model provider relay-core
-                 ▲      │          │
-                 └──────┴──► QuotaCLI
+packages/provider/catalog.json
+        ├──generated──► packages/service Rust crate
+        ├──generated──► Swift QuotaBar
+        └──generated──► protocol TypeScript IDs
 
-                            relay-core + protocol
-                                      │
-                                      ▼
-                                Relay Worker ──► D1
+apps/menubar/helper ──private IPC──► Swift QuotaBar
+apps/cli ──native CLI──► packages/service
 
-QuotaBar ── bundled QuotaCLI output + Swift v2 models
-Quota Web ── quota-protocol ── managed HTTP APIs
+protocol + quota-model + relay-core
+                │
+                ├──► Relay Worker ──► D1
+                └──► Quota Web
 ```
 
-- `quota-protocol`, `quota-model`, and `relay-core` are runtime-neutral.
-- `quota-provider` owns provider registration, local I/O, parser contracts, and collector
-  implementations. It may use Node/Bun APIs and is imported only by QuotaCLI.
-- `quota-model` owns quota transforms, Usage aggregation, and catalog/cost calculation; it does not
-  perform I/O.
-- `relay-core` exposes narrow Account and Usage state contracts; it does not import D1 or Hono.
+- `packages/service` owns shared local I/O, provider collection, Usage parsing/aggregation/pricing,
+  OAuth, managed HTTP, scheduling, merging, and SQLite state.
+- `apps/menubar/helper` is the macOS private stdio entry point and owns only process startup and IPC
+  lifetime around `packages/service`.
+- `apps/cli` is the Linux-only `quotacli` entry point and owns command parsing/terminal output around
+  `packages/service`; it is built and tested but not published.
+- `apps/menubar` keeps private IPC/network-wire decoding separate from SwiftUI views and never reads
+  local service files or provider-owned credentials.
+- `packages/protocol` defines released managed-network contracts and exported JSON Schemas.
+- `packages/protocol/fixtures/pricing-conformance.json` is the language-neutral pricing input and
+  expected-output fixture consumed by both Rust service and TypeScript quota-model tests.
+- `packages/quota-model` and `packages/relay-core` remain TypeScript runtime-neutral code used by
+  Relay/Web; they are not imported by the local Rust service.
 - `apps/relay` is the only Cloudflare/D1 adapter and must not import filesystem, subprocess, TCP, or
   native-addon APIs.
-- `apps/menubar` keeps Swift wire decoding and bundled-CLI invocation separate from SwiftUI views.
+- `apps/web` remains a separate Vite source boundary even though production serves it and Relay from
+  one hostname.
 
-## Runtime responsibilities
+## Relay, Web, and deployment
 
-### QuotaCLI
+QuotaRelay mounts Hono routes at `/oauth/v2` and `/api/v2`, Better Auth at `/api/auth/v2`, and health
+routes at their documented paths. It authenticates each route with the minimum account, device, or
+browser scope and performs Device/Account deletion, rotation/revocation, and Usage replacement in
+storage transactions. Released 0.0.5 clients retain their bounded two-agent response variant only
+through the 0.0.6/0.0.7 compatibility window; current clients explicitly request all Usage agents.
 
-- `status` and provider configuration remain local-only.
-- Account state lives outside the installation directory in the user configuration root. Files and
-  the shared lock are owner-only, symlink-resistant, and atomically replaced.
-- `login`, `logout`, `auth status`, `sync`, and `account` are the only account command surface.
-- `sync` emits local quota and an all-history local Usage report even while signed out. While signed in it
-  refreshes authoritative Device control and the canonical pricing catalog, uploads a quota
-  envelope, drains a bounded Usage outbox, and reads the account summary. A failed catalog refresh
-  preserves the last valid cache.
-- It has no daemon. QuotaBar schedules it on macOS; other platforms use an external scheduler.
+Quota Web builds static Vite assets independently. `/my` reads account summaries and manages
+Devices and deletion; `/activate` approves or denies native authorization. Better Auth owns GitHub
+login and browser sessions. Production Web and Worker deploy together only through
+`.github/workflows/deploy-cloudflare.yml`.
 
-### QuotaBar
-
-- Ships its exact compatible QuotaCLI helper and never resolves a helper from `PATH`.
-- Owns launch-at-login and the five-minute in-process refresh lifecycle; quitting stops recurring
-  work.
-- Presents local quota and Usage independently of account state, plus account status, Devices,
-  optional account Usage, and login/logout actions from typed CLI JSON.
-- Does not own OAuth, tokens, installation identity, upload sequence, cache, or outbox state.
-
-### QuotaRelay
-
-- Hono application mounted at `/oauth/v2` and `/api/v2`, plus health/readiness routes. Released
-  0.0.5 clients receive the original two-agent Usage/pricing subset unless a newer client opts into
-  all Usage agents; this prevents older strict enum decoders from seeing additive v2 agent/channel
-  values. Better Auth's standard handler is mounted at `/api/auth/v2`.
-- Uses D1 migrations for Better Auth identity/Web sessions, Accounts, Devices, native
-  sessions/grants, quota observations, hourly facts, coverage, receipts, and rate limits.
-- Authenticates each route with an account, device, or browser principal and the minimum scope.
-- Performs Device delete, Account delete, session rotation/revocation, and Usage replacement in
-  storage transactions.
-- Serves the canonical pricing catalog and account summaries. Current clients opt into all retained
-  Usage with `usage_agents=all`; protocol v2 reads without that opt-in keep their shipped two-agent,
-  366-day-bounded shape and default to 30 days. Explicit date filters remain available. Relay never
-  runs provider collectors.
-
-### Quota Web
-
-- Static Vite assets are built independently under `apps/web/dist` and served by the managed Worker.
-- `/my` reads the account summary and manages quota, Usage, Devices, and Account deletion;
-  `/activate` approves or denies a native device grant. The `/app` path shipped in 0.0.4 and is a
-  single bookmark redirect to `/my`. Better Auth owns GitHub login, browser sign-out, and Account
-  deletion. A deletion hook removes the corresponding Quota domain Account. Product-specific
-  authorization and Device deletion require a recent browser session and an exact same-origin
-  request.
-- Production Web and Worker deploy together through `deploy-cloudflare.yml`; there is no separate
-  website deployment or self-hosted bundle.
-
-## Persistence and deployment
-
-D1 is the only durable Relay store. Migration `0003_account_usage_v2.sql` intentionally removes the
-unreleased owner/pairing schema; migration `0004_better_auth.sql` replaces the unreleased custom Web
-identity/session tables with Better Auth and keeps QuotaCLI credentials separate. Migration
-`0005_usage_agents.sql` adds Grok/OpenCode/Pi Usage agents and removes invalid retained rows whose
-model is the literal `unknown`. See [ADR 0001](decisions/0001-persistent-relay-storage.md).
-
-The checked-in Cloudflare workflow is the production deployment path. Local Worker builds use
-Wrangler dry-run and local D1 migration verification. Manual remote migration or deployment is not a
-development command.
+D1 is the only durable Relay store and applied migrations are never rewritten. Local Worker builds
+use Wrangler dry-run and local D1 migration verification. Manual remote migration or deployment is
+not a development command.

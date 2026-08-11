@@ -1,0 +1,181 @@
+import Foundation
+import Testing
+
+@testable import QuotaBar
+
+@Test @MainActor
+func consumesServiceMergedOverviewWithoutReprocessingObservations() async throws {
+  let now = Date(timeIntervalSince1970: 1_786_300_000)
+  let snapshot = QuotaSnapshot(
+    provider: .codex,
+    account: QuotaAccount(
+      fingerprint: "account_test",
+      label: nil,
+      plan: "Plus",
+      fingerprintScope: .global
+    ),
+    windows: [QuotaWindow(id: "weekly", title: "Weekly", usedPercent: 20)],
+    source: "test",
+    status: .available,
+    observedAt: now,
+    validUntil: now.addingTimeInterval(300)
+  )
+  let report = QuotaCollectionReport(
+    protocolVersion: 2,
+    capturedAt: now,
+    results: [
+      QuotaCollectionResult(
+        provider: .codex,
+        outcome: .success,
+        snapshots: [snapshot],
+        source: "test",
+        message: nil
+      )
+    ]
+  )
+  let source = LocalServiceOverviewSource(
+    sourceID: "local",
+    kind: .local,
+    deviceID: nil,
+    displayName: "This Mac",
+    observedAt: now,
+    isStale: false
+  )
+  let state = LocalServiceState(
+    ipcVersion: 1,
+    revision: 7,
+    quota: component(value: report, updatedAt: now),
+    usage: component(value: unavailableUsage(now: now), updatedAt: now),
+    account: LocalServiceComponent(
+      status: .signedOut,
+      value: LocalServiceAccountState(
+        authStatus: .signedOut,
+        accountID: nil,
+        deviceID: nil,
+        deviceGeneration: nil,
+        accountSummary: nil
+      ),
+      updatedAt: nil,
+      lastError: nil,
+      refreshing: false
+    ),
+    pricing: LocalServiceComponent<PricingCatalog>(
+      status: .unavailable,
+      value: nil,
+      updatedAt: nil,
+      lastError: nil,
+      refreshing: false
+    ),
+    providers: [
+      LocalServiceProviderConfig(
+        provider: .openrouter,
+        configured: true,
+        maskedAPIKey: "OpenRouter ···test",
+        baseURL: nil
+      )
+    ],
+    overview: [
+      LocalServiceOverviewItem(
+        identity: LocalServiceOverviewIdentity(
+          provider: .codex,
+          fingerprint: "account_test",
+          scope: .global,
+          sourceID: nil
+        ),
+        snapshot: snapshot,
+        sources: [source],
+        selectedSourceID: source.sourceID,
+        selectedSourceDisplayName: source.displayName,
+        isStale: false
+      )
+    ]
+  )
+  let model = MenuBarViewModel(client: StubLocalService(state: state))
+
+  await model.refreshIfNeeded()
+
+  guard case .content(let providers, let warning) = model.overviewState(enabledProviders: [.codex])
+  else {
+    Issue.record("Expected service-provided quota content")
+    return
+  }
+  #expect(warning == nil)
+  #expect(providers.first?.accounts.first?.sourceSummary == "Local")
+  #expect(providers.first?.accounts.first?.snapshot == snapshot)
+  #expect(model.providerConfigurations[.openrouter]?.maskedAPIKey == "OpenRouter ···test")
+  #expect(model.lastCheckedAt == now)
+}
+
+private func component<Value: Decodable & Sendable>(
+  value: Value,
+  updatedAt: Date
+) -> LocalServiceComponent<Value> {
+  LocalServiceComponent(
+    status: .ready,
+    value: value,
+    updatedAt: updatedAt,
+    lastError: nil,
+    refreshing: false
+  )
+}
+
+private func unavailableUsage(now: Date) -> LocalUsageReport {
+  LocalUsageReport(
+    generatedAt: now,
+    aggregationTimezone: nil,
+    range: UsageDateRange(from: "2026-08-01", to: "2026-08-10"),
+    status: .unavailable,
+    totals: nil,
+    cost: nil,
+    coverage: [],
+    breakdowns: []
+  )
+}
+
+private struct StubLocalService: LocalServiceServing {
+  let stateValue: LocalServiceState
+  let events: AsyncStream<LocalServiceEvent>
+
+  init(state: LocalServiceState) {
+    stateValue = state
+    events = AsyncStream { $0.finish() }
+  }
+
+  func state() async throws -> LocalServiceState { stateValue }
+  func refresh() async throws -> LocalServiceRefreshResult {
+    LocalServiceRefreshResult(accepted: true, pending: false, revision: stateValue.revision)
+  }
+  func login() async throws -> LocalServiceLoginResult {
+    LocalServiceLoginResult(
+      status: .loggingIn,
+      accountID: nil,
+      deviceID: nil,
+      deviceGeneration: nil
+    )
+  }
+  func cancelLogin() async throws {}
+  func logout() async throws -> LocalServiceLogoutResult {
+    LocalServiceLogoutResult(status: .signedOut)
+  }
+  func setProviderConfig(
+    _ provider: ProviderID,
+    apiKey: String,
+    baseURL: String?
+  ) async throws -> LocalServiceProviderConfig {
+    LocalServiceProviderConfig(
+      provider: provider,
+      configured: true,
+      maskedAPIKey: "API ···test",
+      baseURL: baseURL
+    )
+  }
+  func removeProviderConfig(_ provider: ProviderID) async throws -> LocalServiceProviderConfig {
+    LocalServiceProviderConfig(
+      provider: provider,
+      configured: false,
+      maskedAPIKey: nil,
+      baseURL: nil
+    )
+  }
+  func shutdown() async {}
+}

@@ -260,9 +260,7 @@ describe("quota protocol v2", () => {
         channel_source: "explicit",
       }).success,
     ).toBe(false);
-    // Protocol v2 shipped with this sentinel. Collectors and Relay storage discard it, but the
-    // wire decoder must keep accepting pending 0.0.5 outbox entries until they drain.
-    expect(UsageHourlyFactSchema.safeParse({ ...fact, model: "unknown" }).success).toBe(true);
+    expect(UsageHourlyFactSchema.safeParse({ ...fact, model: "unknown" }).success).toBe(false);
     expect(
       UsageHourlyFactSchema.safeParse({
         ...fact,
@@ -276,6 +274,19 @@ describe("quota protocol v2", () => {
   it("requires canonical bounded UTC coverage and contained same-agent rows", () => {
     const submission = usageSubmission();
     expect(UsageSubmissionSchema.safeParse(submission).success).toBe(true);
+    expect(
+      UsageSubmissionSchema.safeParse({
+        ...submission,
+        parser_revision: "quota-usage-4",
+        rows: [{ ...submission.rows[0], model: "unknown" }],
+      }).success,
+    ).toBe(true);
+    expect(
+      UsageSubmissionSchema.safeParse({
+        ...submission,
+        rows: [{ ...submission.rows[0], model: "unknown" }],
+      }).success,
+    ).toBe(false);
     expect(
       UsageSubmissionSchema.safeParse({
         ...submission,

@@ -18,13 +18,13 @@
       switch self {
       case .loading:
         MenuBarViewModel(
-          visualTestOutput: nil,
+          visualTestState: nil,
           errorMessage: nil,
           lastCheckedAt: nil
         )
       case .content, .cachedRefreshError:
         MenuBarViewModel(
-          visualTestOutput: contentSyncOutput(at: referenceDate),
+          visualTestState: contentVisualState(at: referenceDate),
           errorMessage: self == .cachedRefreshError
             ? "Sync failed. Showing the last known result."
             : nil,
@@ -34,14 +34,14 @@
         )
       case .empty:
         MenuBarViewModel(
-          visualTestOutput: signedOutSyncOutput(at: referenceDate),
+          visualTestState: signedOutVisualState(at: referenceDate),
           errorMessage: nil,
           lastCheckedAt: referenceDate.addingTimeInterval(-30)
         )
       case .unavailable:
         MenuBarViewModel(
-          visualTestOutput: nil,
-          errorMessage: "The bundled QuotaCLI helper could not be started.",
+          visualTestState: nil,
+          errorMessage: "The bundled local service could not be started.",
           lastCheckedAt: nil
         )
       }
@@ -155,7 +155,7 @@
     func makeModel() -> MenuBarViewModel {
       switch dataSource {
       case .fixture: fixture.makeModel(referenceDate: referenceDate)
-      case .live: MenuBarViewModel(reportCache: nil)
+      case .live: MenuBarViewModel()
       }
     }
 
@@ -179,22 +179,22 @@
 
   }
 
-  private func contentSyncOutput(at date: Date) -> CLIAccountSyncOutput {
+  private func contentVisualState(at date: Date) -> MenuBarVisualState {
     let report = contentReport(at: date)
     let accountSummary = contentAccountSummary(at: date, report: report)
-    return CLIAccountSyncOutput(
-      status: .synced,
-      localReport: report,
+    return MenuBarVisualState(
+      report: report,
       localUsage: localUsageReport(at: date, summary: accountSummary.usage),
-      accountSummary: accountSummary
+      accountSummary: accountSummary,
+      authStatus: .signedIn,
+      overview: overviewItems(summary: accountSummary, now: date)
     )
   }
 
-  private func signedOutSyncOutput(at date: Date) -> CLIAccountSyncOutput {
-    CLIAccountSyncOutput(
-      status: .signedOut,
-      localReport: QuotaCollectionReport(
-        schemaVersion: 2,
+  private func signedOutVisualState(at date: Date) -> MenuBarVisualState {
+    MenuBarVisualState(
+      report: QuotaCollectionReport(
+        protocolVersion: 2,
         capturedAt: date,
         results: [
           failureResult(
@@ -215,8 +215,45 @@
         ]
       ),
       localUsage: unavailableLocalUsage(at: date),
-      accountSummary: nil
+      accountSummary: nil,
+      authStatus: .signedOut,
+      overview: []
     )
+  }
+
+  private func overviewItems(
+    summary: AccountSummary,
+    now: Date
+  ) -> [LocalServiceOverviewItem] {
+    summary.quota.map { observation in
+      let snapshot = observation.snapshot
+      let deviceID = observation.deviceID
+      let sourceID = "device:\(deviceID.utf8.count):\(deviceID)"
+      let displayName =
+        summary.devices.first { $0.deviceID == deviceID }?.displayName
+        ?? "Account device"
+      let source = LocalServiceOverviewSource(
+        sourceID: sourceID,
+        kind: .device,
+        deviceID: deviceID,
+        displayName: displayName,
+        observedAt: snapshot.observedAt,
+        isStale: snapshot.status == .stale || snapshot.validUntil.map { $0 <= now } == true
+      )
+      return LocalServiceOverviewItem(
+        identity: LocalServiceOverviewIdentity(
+          provider: snapshot.provider,
+          fingerprint: snapshot.account.fingerprint,
+          scope: snapshot.account.fingerprintScope == .global ? .global : .source,
+          sourceID: snapshot.account.fingerprintScope == .source ? sourceID : nil
+        ),
+        snapshot: snapshot,
+        sources: [source],
+        selectedSourceID: sourceID,
+        selectedSourceDisplayName: displayName,
+        isStale: source.isStale
+      )
+    }
   }
 
   private func localUsageReport(
@@ -258,7 +295,7 @@
 
   private func contentReport(at date: Date) -> QuotaCollectionReport {
     QuotaCollectionReport(
-      schemaVersion: 2,
+      protocolVersion: 2,
       capturedAt: date,
       results: [
         successResult(

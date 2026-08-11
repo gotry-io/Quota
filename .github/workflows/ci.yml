@@ -14,13 +14,15 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - uses: dtolnay/rust-toolchain@stable
+
       - name: Install pinned toolchain packages
         run: |
           set -euo pipefail
-          npm install --global pnpm@10.23.0 bun@1.3.10
+          npm install --global pnpm@10.23.0
           node --version
           pnpm --version
-          bun --version
+          cargo --version
           swift --version
 
       - name: Install dependencies
@@ -35,3 +37,22 @@ jobs:
 
       - name: Package unsigned arm64 app
         run: ./scripts/package-menubar.sh 0.0.1 "${{ github.run_number }}"
+
+      - name: Test packaged helper with isolated local state
+        run: pnpm test:menubar:helper
+
+  verify-linux-cli:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build and test Linux QuotaCLI
+        run: |
+          cargo check --locked --package quotacli --all-targets
+          cargo build --locked --release --package quotacli
+          CLI_VERSION="$(cargo metadata --locked --no-deps --format-version 1 | jq -er \
+            '.packages[] | select(.name == "quotacli") | .version')"
+          test "$(target/release/quotacli version)" = "QuotaCLI ${CLI_VERSION}"
+          cargo test --locked --package quotacli

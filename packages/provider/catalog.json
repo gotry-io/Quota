@@ -1,0 +1,113 @@
+{
+  "schema_version": 1,
+  "providers": [
+    {
+      "id": "codex",
+      "display_name": "Codex",
+      "order": 0,
+      "default_visible": true,
+      "setup_action": "codex login",
+      "brand_icon_asset": "openai",
+      "environment_keys": ["CODEX_HOME"],
+      "credential_config": null,
+      "default_base_url": null,
+      "base_url_environment_key": null
+    },
+    {
+      "id": "claude",
+      "display_name": "Claude Code",
+      "order": 1,
+      "default_visible": true,
+      "setup_action": "claude auth login",
+      "brand_icon_asset": "claude",
+      "environment_keys": ["CLAUDE_CONFIG_DIR"],
+      "credential_config": null,
+      "default_base_url": null,
+      "base_url_environment_key": null
+    },
+    {
+      "id": "grok",
+      "display_name": "Grok",
+      "order": 2,
+      "default_visible": true,
+      "setup_action": "grok login",
+      "brand_icon_asset": "grok",
+      "environment_keys": ["GROK_HOME"],
+      "credential_config": null,
+      "default_base_url": null,
+      "base_url_environment_key": null
+    },
+    {
+      "id": "openrouter",
+      "display_name": "OpenRouter",
+      "order": 3,
+      "default_visible": false,
+      "setup_action": "Configure in QuotaBar",
+      "brand_icon_asset": "openrouter",
+      "environment_keys": ["OPENROUTER_API_KEY"],
+      "credential_config": {
+        "kind": "api_key",
+        "supports_base_url": false,
+        "requires_base_url": false,
+        "allow_private_http": false,
+        "mask_label": "OpenRouter"
+      },
+      "default_base_url": "https://openrouter.ai/api/v1",
+      "base_url_environment_key": null
+    },
+    {
+      "id": "deepseek",
+      "display_name": "DeepSeek",
+      "order": 4,
+      "default_visible": false,
+      "setup_action": "Configure in QuotaBar",
+      "brand_icon_asset": "deepseek",
+      "environment_keys": ["DEEPSEEK_API_KEY", "DEEPSEEK_KEY"],
+      "credential_config": {
+        "kind": "api_key",
+        "supports_base_url": false,
+        "requires_base_url": false,
+        "allow_private_http": false,
+        "mask_label": "DeepSeek"
+      },
+      "default_base_url": "https://api.deepseek.com",
+      "base_url_environment_key": null
+    },
+    {
+      "id": "kimi",
+      "display_name": "Kimi Code",
+      "order": 5,
+      "default_visible": false,
+      "setup_action": "Configure in QuotaBar",
+      "brand_icon_asset": "kimi",
+      "environment_keys": ["KIMI_CODE_API_KEY", "KIMI_API_KEY"],
+      "credential_config": {
+        "kind": "api_key",
+        "supports_base_url": false,
+        "requires_base_url": false,
+        "allow_private_http": false,
+        "mask_label": "Kimi"
+      },
+      "default_base_url": "https://api.kimi.com",
+      "base_url_environment_key": null
+    },
+    {
+      "id": "litellm",
+      "display_name": "LiteLLM",
+      "order": 6,
+      "default_visible": false,
+      "setup_action": "Configure in QuotaBar",
+      "brand_icon_asset": "litellm",
+      "environment_keys": ["LITELLM_API_KEY", "LITELLM_BASE_URL"],
+      "credential_config": {
+        "kind": "api_key",
+        "supports_base_url": true,
+        "requires_base_url": true,
+        "allow_private_http": true,
+        "mask_label": "LiteLLM"
+      },
+      "default_base_url": null,
+      "base_url_environment_key": "LITELLM_BASE_URL"
+    }
+  ]
+}

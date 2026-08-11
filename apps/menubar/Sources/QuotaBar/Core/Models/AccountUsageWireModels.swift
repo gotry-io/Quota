@@ -46,8 +46,17 @@ struct UsageCoverage: Codable, Equatable, Sendable {
   let endAt: String
   let status: CoverageStatus
 
+  private enum CodingKeys: String, CodingKey {
+    case agent
+    case startAt
+    case endAt
+    case status
+  }
+
   var isValid: Bool {
-    guard let start = Self.utcHour(startAt), let end = Self.utcHour(endAt), end > start else { return false }
+    guard let start = Self.utcHour(startAt), let end = Self.utcHour(endAt), end > start else {
+      return false
+    }
     return end.timeIntervalSince(start) <= 744 * 3_600
   }
 
@@ -63,6 +72,17 @@ struct UsageCoverage: Codable, Equatable, Sendable {
       return nil
     }
     return instant
+  }
+}
+
+extension UsageCoverage {
+  init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys(["agent", "startAt", "endAt", "status"])
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    agent = try container.decode(BillingAgent.self, forKey: .agent)
+    startAt = try container.decode(String.self, forKey: .startAt)
+    endAt = try container.decode(String.self, forKey: .endAt)
+    status = try container.decode(CoverageStatus.self, forKey: .status)
   }
 }
 
@@ -150,6 +170,49 @@ struct UsageHourlyFact: Codable, Equatable, Sendable {
   }
 }
 
+extension UsageHourlyFact {
+  init(from decoder: Decoder) throws {
+    try self.init(from: decoder, allowingUnknownKeys: [])
+  }
+
+  init(from decoder: Decoder, allowingUnknownKeys allowedKeys: Set<String>) throws {
+    try decoder.rejectUnknownWireKeys(
+      Set([
+        "bucketStartUtc", "usageDate", "usageHour", "agent", "billingChannel", "channelSource",
+        "model",
+        "contextBucket", "serviceTier", "speed", "inferenceGeo", "inputTokens", "cacheReadTokens",
+        "cacheWrite5MTokens", "cacheWrite1HTokens", "cacheWriteInferredTokens", "outputTokens",
+        "reasoningTokens", "requests", "webSearchRequests", "webFetchRequests",
+        "sourceCostMicrousd",
+        "sourceCostCoveredRequests",
+      ]).union(allowedKeys))
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    bucketStartUTC = try container.decode(String.self, forKey: .bucketStartUTC)
+    usageDate = try container.decode(String.self, forKey: .usageDate)
+    usageHour = try container.decode(Int.self, forKey: .usageHour)
+    agent = try container.decode(BillingAgent.self, forKey: .agent)
+    billingChannel = try container.decode(BillingChannel.self, forKey: .billingChannel)
+    channelSource = try container.decode(ChannelSource.self, forKey: .channelSource)
+    model = try container.decode(String.self, forKey: .model)
+    contextBucket = try container.decode(ContextBucket.self, forKey: .contextBucket)
+    serviceTier = try container.decode(String.self, forKey: .serviceTier)
+    speed = try container.decode(String.self, forKey: .speed)
+    inferenceGeo = try container.decode(String.self, forKey: .inferenceGeo)
+    inputTokens = try container.decode(Int.self, forKey: .inputTokens)
+    cacheReadTokens = try container.decode(Int.self, forKey: .cacheReadTokens)
+    cacheWrite5mTokens = try container.decode(Int.self, forKey: .cacheWrite5mTokens)
+    cacheWrite1hTokens = try container.decode(Int.self, forKey: .cacheWrite1hTokens)
+    cacheWriteInferredTokens = try container.decode(Int.self, forKey: .cacheWriteInferredTokens)
+    outputTokens = try container.decode(Int.self, forKey: .outputTokens)
+    reasoningTokens = try container.decode(Int.self, forKey: .reasoningTokens)
+    requests = try container.decode(Int.self, forKey: .requests)
+    webSearchRequests = try container.decode(Int.self, forKey: .webSearchRequests)
+    webFetchRequests = try container.decode(Int.self, forKey: .webFetchRequests)
+    sourceCostMicrousd = try container.decodeIfPresent(String.self, forKey: .sourceCostMicrousd)
+    sourceCostCoveredRequests = try container.decode(Int.self, forKey: .sourceCostCoveredRequests)
+  }
+}
+
 struct UsageSubmissionV2: Decodable, Equatable, Sendable {
   let protocolVersion: Int
   let submissionID: String
@@ -174,6 +237,10 @@ struct UsageSubmissionV2: Decodable, Equatable, Sendable {
   }
 
   init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys([
+      "protocolVersion", "submissionId", "deviceId", "generation", "sequence", "parserRevision",
+      "aggregationTimezone", "coverage", "rows",
+    ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     protocolVersion = try container.decode(Int.self, forKey: .protocolVersion)
     submissionID = try container.decode(String.self, forKey: .submissionID)
@@ -265,9 +332,27 @@ struct UsageUnpricedItem: Codable, Equatable, Sendable {
   let reason: UsageUnpricedReason
   let rows: Int
 
+  private enum CodingKeys: String, CodingKey {
+    case billingChannel
+    case model
+    case reason
+    case rows
+  }
+
   var isValid: Bool {
     isUsageModel(model)
       && (1...jsonSafeIntegerMaximum).contains(rows)
+  }
+}
+
+extension UsageUnpricedItem {
+  init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys(["billingChannel", "model", "reason", "rows"])
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    billingChannel = try container.decode(BillingChannel.self, forKey: .billingChannel)
+    model = try container.decode(String.self, forKey: .model)
+    reason = try container.decode(UsageUnpricedReason.self, forKey: .reason)
+    rows = try container.decode(Int.self, forKey: .rows)
   }
 }
 
@@ -336,6 +421,11 @@ struct UsageCostOutcome: Codable, Equatable, Sendable {
 
 extension UsageCostOutcome {
   init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys([
+      "mode", "basis", "status", "amountMicrousd", "catalogRevision", "calculatedRows",
+      "reportedRows",
+      "unpricedRows", "assumptions", "unpriced",
+    ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     mode = try container.decode(UsageCostMode.self, forKey: .mode)
     basis = try container.decode(UsageCostBasis.self, forKey: .basis)
@@ -415,6 +505,12 @@ struct UsageTokenTotals: Codable, Equatable, Sendable {
 
 extension UsageTokenTotals {
   init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys([
+      "inputTokens", "cacheReadTokens", "cacheWrite5MTokens", "cacheWrite1HTokens",
+      "cacheWriteInferredTokens", "outputTokens", "reasoningTokens", "requests",
+      "webSearchRequests",
+      "webFetchRequests", "sourceCostMicrousd", "sourceCostCoveredRequests",
+    ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     inputTokens = try container.decode(Int.self, forKey: .inputTokens)
     cacheReadTokens = try container.decode(Int.self, forKey: .cacheReadTokens)
@@ -453,8 +549,26 @@ struct UsageBreakdown: Codable, Equatable, Sendable {
   let totals: UsageTokenTotals
   let cost: UsageCostOutcome
 
+  private enum CodingKeys: String, CodingKey {
+    case dimension
+    case key
+    case totals
+    case cost
+  }
+
   var isValid: Bool {
     !key.isEmpty && key.count <= 128 && totals.isValid && cost.isValid
+  }
+}
+
+extension UsageBreakdown {
+  init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys(["dimension", "key", "totals", "cost"])
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    dimension = try container.decode(UsageBreakdownDimension.self, forKey: .dimension)
+    key = try container.decode(String.self, forKey: .key)
+    totals = try container.decode(UsageTokenTotals.self, forKey: .totals)
+    cost = try container.decode(UsageCostOutcome.self, forKey: .cost)
   }
 }
 
@@ -479,12 +593,38 @@ struct UsageCoverageSummaryItem: Codable, Equatable, Sendable {
   }
 }
 
+extension UsageCoverageSummaryItem {
+  init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys(["deviceId", "agent", "startAt", "endAt", "status"])
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    deviceID = try container.decode(String.self, forKey: .deviceID)
+    agent = try container.decode(BillingAgent.self, forKey: .agent)
+    startAt = try container.decode(String.self, forKey: .startAt)
+    endAt = try container.decode(String.self, forKey: .endAt)
+    status = try container.decode(CoverageStatus.self, forKey: .status)
+  }
+}
+
 struct UsageDateRange: Codable, Equatable, Sendable {
   let from: String
   let to: String
 
+  private enum CodingKeys: String, CodingKey {
+    case from
+    case to
+  }
+
   var isValid: Bool {
     isUsageDate(from) && isUsageDate(to) && from <= to
+  }
+}
+
+extension UsageDateRange {
+  init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys(["from", "to"])
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    from = try container.decode(String.self, forKey: .from)
+    to = try container.decode(String.self, forKey: .to)
   }
 }
 
@@ -495,6 +635,14 @@ struct AccountUsageSummary: Codable, Equatable, Sendable {
   let coverage: [UsageCoverageSummaryItem]
   let breakdowns: [UsageBreakdown]
 
+  private enum CodingKeys: String, CodingKey {
+    case range
+    case totals
+    case cost
+    case coverage
+    case breakdowns
+  }
+
   var isValid: Bool {
     range.isValid
       && totals.isValid
@@ -503,6 +651,18 @@ struct AccountUsageSummary: Codable, Equatable, Sendable {
       && coverage.allSatisfy(\.isValid)
       && breakdowns.count <= 1_000
       && breakdowns.allSatisfy(\.isValid)
+  }
+}
+
+extension AccountUsageSummary {
+  init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys(["range", "totals", "cost", "coverage", "breakdowns"])
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    range = try container.decode(UsageDateRange.self, forKey: .range)
+    totals = try container.decode(UsageTokenTotals.self, forKey: .totals)
+    cost = try container.decode(UsageCostOutcome.self, forKey: .cost)
+    coverage = try container.decode([UsageCoverageSummaryItem].self, forKey: .coverage)
+    breakdowns = try container.decode([UsageBreakdown].self, forKey: .breakdowns)
   }
 }
 
@@ -546,6 +706,10 @@ struct LocalUsageReport: Codable, Equatable, Sendable {
   }
 
   init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys([
+      "protocolVersion", "generatedAt", "aggregationTimezone", "range", "status", "totals", "cost",
+      "coverage", "breakdowns",
+    ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     protocolVersion = try container.decode(Int.self, forKey: .protocolVersion)
     generatedAt = try container.decode(Date.self, forKey: .generatedAt)
@@ -620,6 +784,7 @@ struct AccountUsageResponse: Decodable, Equatable, Sendable {
   let usage: AccountUsageSummary
 
   init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys(["protocolVersion", "usage"])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     protocolVersion = try container.decode(Int.self, forKey: .protocolVersion)
     usage = try container.decode(AccountUsageSummary.self, forKey: .usage)
@@ -660,6 +825,7 @@ struct QuotaUserAccount: Codable, Equatable, Sendable {
 
 extension QuotaUserAccount {
   init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys(["accountId", "displayLabel", "createdAt"])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     accountID = try container.decode(String.self, forKey: .accountID)
     displayLabel = try container.decode(String?.self, forKey: .displayLabel)
@@ -722,6 +888,11 @@ struct AccountDevice: Codable, Equatable, Identifiable, Sendable {
 
 extension AccountDevice {
   init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys([
+      "deviceId", "displayName", "platform", "deviceGeneration", "status", "createdAt",
+      "lastLoginAt",
+      "lastSeenAt", "signedOutAt",
+    ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     deviceID = try container.decode(String.self, forKey: .deviceID)
     displayName = try container.decode(String.self, forKey: .displayName)
@@ -760,6 +931,21 @@ struct AccountQuotaObservation: Codable, Equatable, Sendable {
   var isValid: Bool {
     isUsageOpaqueID(deviceID) && (0...jsonSafeIntegerMaximum).contains(sequence)
   }
+
+}
+
+extension AccountQuotaObservation {
+  init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys([
+      "deviceId", "sequence", "capturedAt", "snapshot", "updatedAt",
+    ])
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    deviceID = try container.decode(String.self, forKey: .deviceID)
+    sequence = try container.decode(Int.self, forKey: .sequence)
+    capturedAt = try container.decode(Date.self, forKey: .capturedAt)
+    snapshot = try container.decode(QuotaSnapshot.self, forKey: .snapshot)
+    updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+  }
 }
 
 struct AccountQuotaResponse: Decodable, Equatable, Sendable {
@@ -767,6 +953,7 @@ struct AccountQuotaResponse: Decodable, Equatable, Sendable {
   let quota: [AccountQuotaObservation]
 
   init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys(["protocolVersion", "quota"])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     protocolVersion = try container.decode(Int.self, forKey: .protocolVersion)
     quota = try container.decode([AccountQuotaObservation].self, forKey: .quota)
@@ -791,10 +978,23 @@ struct AccountUsageHourlyFact: Decodable, Equatable, Sendable {
   let fact: UsageHourlyFact
 
   init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys([
+      "deviceId", "aggregationTimezone", "bucketStartUtc", "usageDate", "usageHour", "agent",
+      "billingChannel",
+      "channelSource", "model", "contextBucket", "serviceTier", "speed", "inferenceGeo",
+      "inputTokens",
+      "cacheReadTokens", "cacheWrite5MTokens", "cacheWrite1HTokens", "cacheWriteInferredTokens",
+      "outputTokens",
+      "reasoningTokens", "requests", "webSearchRequests", "webFetchRequests", "sourceCostMicrousd",
+      "sourceCostCoveredRequests",
+    ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     deviceID = try container.decode(String.self, forKey: .deviceID)
     aggregationTimezone = try container.decode(String.self, forKey: .aggregationTimezone)
-    fact = try UsageHourlyFact(from: decoder)
+    fact = try UsageHourlyFact(
+      from: decoder,
+      allowingUnknownKeys: ["deviceId", "aggregationTimezone"]
+    )
     let bucket = UsageCoverage.utcHour(fact.bucketStartUTC)
     guard isUsageOpaqueID(deviceID), isUsageTimezone(aggregationTimezone),
       TimeZone(identifier: aggregationTimezone) != nil,
@@ -831,6 +1031,9 @@ struct AccountUsageHourlyResponse: Decodable, Equatable, Sendable {
   let cost: UsageCostOutcome
 
   init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys([
+      "protocolVersion", "startAt", "endAt", "facts", "coverage", "cost",
+    ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     protocolVersion = try container.decode(Int.self, forKey: .protocolVersion)
     startAt = try container.decode(String.self, forKey: .startAt)
@@ -906,6 +1109,9 @@ struct AccountSummary: Codable, Equatable, Sendable {
   }
 
   init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys([
+      "protocolVersion", "generatedAt", "account", "devices", "quota", "usage",
+    ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     protocolVersion = try container.decode(Int.self, forKey: .protocolVersion)
     generatedAt = try container.decode(Date.self, forKey: .generatedAt)
@@ -953,6 +1159,10 @@ struct QuotaSnapshotUploadResponse: Codable, Equatable, Sendable {
   }
 
   init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys([
+      "protocolVersion", "outcome", "deviceId", "deviceGeneration", "acceptedSequence",
+      "nextSnapshotSequence",
+    ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     protocolVersion = try container.decode(Int.self, forKey: .protocolVersion)
     outcome = try container.decode(QuotaSnapshotUploadOutcome.self, forKey: .outcome)
@@ -997,6 +1207,10 @@ struct DeviceSyncResponse: Codable, Equatable, Sendable {
   }
 
   init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys([
+      "protocolVersion", "accountId", "deviceId", "deviceGeneration", "nextSnapshotSequence",
+      "nextUsageSequence", "usageDeletedBefore", "usageSyncRevision",
+    ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     protocolVersion = try container.decode(Int.self, forKey: .protocolVersion)
     accountID = try container.decode(String.self, forKey: .accountID)
@@ -1056,6 +1270,12 @@ struct PricingRates: Codable, Equatable, Sendable {
 
 extension PricingRates {
   init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys([
+      "uncachedInputPerMillion", "cacheReadPerMillion", "cacheWrite5MPerMillion",
+      "cacheWrite1HPerMillion", "cacheWriteInferredPerMillion", "outputPerMillion",
+      "webSearchPerRequest",
+      "webFetchPerRequest",
+    ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     uncachedInputPerMillion = try container.decode(String?.self, forKey: .uncachedInputPerMillion)
     cacheReadPerMillion = try container.decode(String?.self, forKey: .cacheReadPerMillion)
@@ -1133,6 +1353,11 @@ struct PricingCatalogEntry: Codable, Equatable, Sendable {
 
 extension PricingCatalogEntry {
   init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys([
+      "entryId", "billingChannel", "model", "aliases", "effectiveFrom", "effectiveTo",
+      "serviceTier", "speed",
+      "inferenceGeo", "contextBucket", "currency", "rates", "sourceUrl", "verifiedAt",
+    ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     entryID = try container.decode(String.self, forKey: .entryID)
     billingChannel = try container.decode(BillingChannel.self, forKey: .billingChannel)
@@ -1172,6 +1397,7 @@ struct PricingCatalog: Decodable, Equatable, Sendable {
   }
 
   init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys(["protocolVersion", "revision", "publishedAt", "entries"])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     protocolVersion = try container.decode(Int.self, forKey: .protocolVersion)
     revision = try container.decode(String.self, forKey: .revision)

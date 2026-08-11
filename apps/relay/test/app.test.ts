@@ -1,6 +1,7 @@
 import { applyD1Migrations, env } from "cloudflare:test";
 import type { D1Migration } from "@cloudflare/vitest-pool-workers";
 import {
+  type DeviceAuthorizationResponse,
   MAXIMUM_USAGE_COVERAGE_HOURS,
   type OAuthTokenResponse,
   UsageCoverageSummaryItemSchema,
@@ -585,6 +586,100 @@ describe("managed Relay on real Workers and D1", () => {
         .first("count"),
     ).toBe(0);
   });
+
+  it("completes the headless device authorization grant", async () => {
+    const state = new D1AccountState(env.DB);
+    const hasher = new SecretHasher(secret);
+    let checkedAt = now;
+    await env.DB.prepare(
+      `INSERT INTO accounts (id, identity_subject, display_label, created_at, updated_at)
+       VALUES ('device_account', 'device_account', 'Device Tester', ?1, ?1)`,
+    )
+      .bind(now.toISOString())
+      .run();
+    const webAuth: WebAccountAuth = {
+      handler: async () => new Response(null, { status: 404 }),
+      beginGitHubSignIn: async () => new Response(null, { status: 302 }),
+      getSession: async () => ({
+        user: { id: "device_account", name: "Device Tester" },
+        session: {
+          id: "device_web_session",
+          createdAt: now,
+          expiresAt: new Date(now.getTime() + 60_000),
+        },
+      }),
+    };
+    const app = createRelayApp({
+      state,
+      usageState: new D1UsageState(env.DB),
+      accountService: new AccountService(state, hasher, secret),
+      webAuth,
+      hasher,
+      now: () => checkedAt,
+    });
+
+    const started = await app.request("https://quota.gotry.io/oauth/v2/device/code", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        protocol_version: 2,
+        client_id: "quotacli",
+        installation_id: "dd4e60c6-fd44-4ac4-ad1f-28f2eeb52ca1",
+        device_display_name: "Headless Linux",
+        platform: "linux",
+      }),
+    });
+    expect(started.status).toBe(201);
+    const grant = (await started.json()) as DeviceAuthorizationResponse;
+    expect(grant.verification_uri).toBe("https://quota.gotry.io/activate");
+    expect(grant.verification_uri_complete).toContain(encodeURIComponent(grant.user_code));
+
+    const tokenBody = JSON.stringify({
+      protocol_version: 2,
+      grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+      client_id: "quotacli",
+      device_code: grant.device_code,
+    });
+    const pending = await app.request("https://quota.gotry.io/oauth/v2/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: tokenBody,
+    });
+    expect(pending.status).toBe(400);
+    expect(pending.headers.get("Retry-After")).toBe(String(grant.interval));
+    expect(await pending.json()).toMatchObject({ error: { code: "authorization_pending" } });
+
+    const approved = await app.request("https://quota.gotry.io/oauth/v2/device/authorize", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Origin: "https://quota.gotry.io",
+        "Sec-Fetch-Site": "same-origin",
+      },
+      body: JSON.stringify({
+        protocol_version: 2,
+        user_code: grant.user_code,
+        decision: "approve",
+      }),
+    });
+    expect(approved.status).toBe(204);
+
+    checkedAt = new Date(now.getTime() + grant.interval * 1_000);
+    const exchanged = await app.request("https://quota.gotry.io/oauth/v2/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: tokenBody,
+    });
+    expect(exchanged.status).toBe(200);
+    const tokens = (await exchanged.json()) as OAuthTokenResponse;
+    expect(tokens.account_id).toBe("device_account");
+    expect(tokens.device_generation).toBe(1);
+    expect(
+      await env.DB.prepare("SELECT COUNT(*) AS count FROM devices WHERE id = ?1")
+        .bind(tokens.device_id)
+        .first("count"),
+    ).toBe(1);
+  });
 });
 
 function usageFactInsert(agent: string, channel: string, model: string): D1PreparedStatement {
@@ -633,7 +728,7 @@ function legacyUnknownSubmission(): UsageSubmission {
     device_id: "device_legacy",
     generation: 1,
     sequence: 0,
-    parser_revision: "quota-usage-2",
+    parser_revision: "quota-usage-4",
     aggregation_timezone: "UTC",
     coverage: {
       agent: "codex",

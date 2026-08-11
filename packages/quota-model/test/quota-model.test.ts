@@ -1,3 +1,6 @@
+import pricingConformanceJson from "../../protocol/fixtures/pricing-conformance.json" with {
+  type: "json",
+};
 import type {
   BillingChannel,
   PricingCatalog,
@@ -17,6 +20,73 @@ import {
   resolvePricingEntry,
   validatePricingCatalog,
 } from "../src/index.ts";
+
+type PricingConformanceFixture = {
+  catalogs: Record<string, PricingCatalog>;
+  rows: Record<string, UsageHourlyFact>;
+  validation: Array<{
+    name: string;
+    catalog: string;
+    expected: { valid: boolean; issue_codes: string[] };
+  }>;
+  resolution: Array<{
+    name: string;
+    catalog: string;
+    row: string;
+    expected: Record<string, unknown>;
+  }>;
+  cost: Array<{
+    name: string;
+    catalog: string;
+    mode: "calculate" | "auto" | "reported";
+    rows: string[];
+    expected: Record<string, unknown>;
+  }>;
+};
+
+const pricingConformance = pricingConformanceJson as PricingConformanceFixture;
+
+describe("pricing conformance", () => {
+  it("keeps catalog validation outcomes shared with the native service", () => {
+    for (const testCase of pricingConformance.validation) {
+      const result = validatePricingCatalog(pricingConformance.catalogs[testCase.catalog]!);
+      const actual = result.valid
+        ? { valid: true, issue_codes: [] }
+        : { valid: false, issue_codes: result.issues.map((issue) => issue.code) };
+      expect(actual, testCase.name).toEqual(testCase.expected);
+    }
+  });
+
+  it("keeps resolution outcomes shared with the native service", () => {
+    for (const testCase of pricingConformance.resolution) {
+      const result = resolvePricingEntry(
+        pricingConformance.catalogs[testCase.catalog]!,
+        pricingConformance.rows[testCase.row]!,
+      );
+      const actual =
+        result.status === "priced"
+          ? {
+              status: result.status,
+              entry_id: result.entry.entry_id,
+              assumptions: [...result.assumptions],
+            }
+          : result;
+      expect(actual, testCase.name).toEqual(testCase.expected);
+    }
+  });
+
+  it("keeps cost outcomes shared with the native service", () => {
+    for (const testCase of pricingConformance.cost) {
+      const rows = testCase.rows.map((name) => pricingConformance.rows[name]!);
+      const actual = calculateUsageCost(
+        rows,
+        pricingConformance.catalogs[testCase.catalog]!,
+        testCase.mode,
+      );
+      expect(actual, testCase.name).toEqual(testCase.expected);
+    }
+  });
+});
 
 describe("quota calculations", () => {
   it("converts and clamps provider usage", () => {
@@ -137,32 +207,8 @@ describe("Usage aggregation", () => {
 });
 
 describe("pricing catalog", () => {
-  it("accepts an empty catalog and rejects duplicate or ambiguous entries", () => {
+  it("accepts an empty catalog", () => {
     expect(validatePricingCatalog(catalog([]))).toMatchObject({ valid: true });
-    const entry = priceEntry();
-    expect(validatePricingCatalog(catalog([entry, { ...entry }]))).toMatchObject({
-      valid: false,
-      issues: expect.arrayContaining([expect.objectContaining({ code: "duplicate_entry_id" })]),
-    });
-    expect(
-      validatePricingCatalog(
-        catalog([
-          {
-            ...entry,
-            entry_id: "tier_exact",
-            speed: "*",
-          },
-          {
-            ...entry,
-            entry_id: "speed_exact",
-            service_tier: "*",
-          },
-        ]),
-      ),
-    ).toMatchObject({
-      valid: false,
-      issues: expect.arrayContaining([expect.objectContaining({ code: "ambiguous_entries" })]),
-    });
   });
 
   it("allows an explicit wildcard fallback and selects the more specific entry", () => {
@@ -184,36 +230,6 @@ describe("pricing catalog", () => {
     expect(calculateUsageCost([usageRow({ input_tokens: 1 })], priceCatalog)).toMatchObject({
       amount_microusd: "2",
       assumptions: ["agent_default_channel"],
-    });
-  });
-
-  it("resolves exact channel, effective date, dimensions, and reviewed aliases only", () => {
-    const entries = [
-      priceEntry({ effective_from: "2026-01-01", effective_to: "2026-08-02" }),
-      priceEntry({
-        entry_id: "current",
-        aliases: ["gpt-5-latest"],
-        effective_from: "2026-08-02",
-        effective_to: null,
-      }),
-    ];
-    const priceCatalog = catalog(entries);
-    expect(validatePricingCatalog(priceCatalog)).toMatchObject({ valid: true });
-    expect(resolvePricingEntry(priceCatalog, usageRow({ model: "gpt-5-latest" }))).toMatchObject({
-      status: "priced",
-      entry: { entry_id: "current" },
-      assumptions: ["model_alias"],
-    });
-    expect(resolvePricingEntry(priceCatalog, usageRow({ model: "gpt-5-unknown" }))).toEqual({
-      status: "unpriced",
-      reason: "unknown_model",
-    });
-    expect(
-      resolvePricingEntry(priceCatalog, usageRow({ bucket_start_utc: "2025-12-31T23:00:00Z" })),
-    ).toEqual({ status: "unpriced", reason: "outside_effective_range" });
-    expect(resolvePricingEntry(priceCatalog, usageRow({ speed: "fast" }))).toEqual({
-      status: "unpriced",
-      reason: "unsupported_dimensions",
     });
   });
 
@@ -312,15 +328,8 @@ describe("Usage cost", () => {
     expect(cost.amount_microusd).toBe("9007199254740991");
   });
 
-  it("marks unknown and missing prices as unpriced instead of zero", () => {
+  it("marks missing prices as unpriced instead of zero", () => {
     const priceCatalog = catalog([priceEntry()]);
-    expect(calculateUsageCost([usageRow({ model: "unknown-model" })], priceCatalog)).toMatchObject({
-      status: "unavailable",
-      basis: "none",
-      amount_microusd: null,
-      unpriced_rows: 1,
-      unpriced: [{ reason: "unknown_model", rows: 1 }],
-    });
     expect(
       calculateUsageCost(
         [usageRow({ cache_write_inferred_tokens: 1, input_tokens: 1 })],

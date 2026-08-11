@@ -6,8 +6,6 @@ import {
   AccountSummarySchema,
   AccountUsageHourlyResponseSchema,
   AccountUsageResponseSchema,
-  BILLING_AGENTS,
-  type BillingAgent,
   DeleteDeviceResponseSchema,
   DeviceAuthorizationDecisionRequestSchema,
   DeviceAuthorizationRequestSchema,
@@ -46,6 +44,12 @@ import { type Context, Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import type { WebAccountAuth } from "./account/better-auth.ts";
 import { AccountFlowError, type AccountService, isLoopbackRedirect } from "./account/service.ts";
+import {
+  pricingCatalogForRequest,
+  pricingCatalogVariants,
+  releasedUsageRangeExceeded,
+  usageAgentsForRequest,
+} from "./compatibility.ts";
 import { managedServiceInfo } from "./config.ts";
 import { PRICING_CATALOG, PRICING_CATALOG_ETAG } from "./pricing-catalog.ts";
 import { bearerToken, type SecretHasher } from "./security.ts";
@@ -60,7 +64,6 @@ const recentAuthenticationMilliseconds = 10 * 60 * 1000;
 const activeDeviceMilliseconds = 15 * 60 * 1000;
 const expiredSessionRetentionMilliseconds = 7 * 24 * 60 * 60 * 1000;
 const maintenanceBatchLimit = 100;
-const legacyUsageAgents = ["codex", "claude_code"] as const satisfies readonly BillingAgent[];
 
 const rateLimits = {
   nativeAuthorize: { limit: 60, windowSeconds: 10 * 60 },
@@ -108,12 +111,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
   const catalogETag = options.pricingCatalog
     ? `"${options.pricingCatalog.revision}"`
     : PRICING_CATALOG_ETAG;
-  const legacyCatalog = PricingCatalogSchema.parse({
-    ...catalog,
-    revision: `${catalog.revision}-legacy`,
-    entries: catalog.entries.filter((entry) => entry.billing_channel !== "xai_direct"),
-  });
-  const legacyCatalogETag = `"${legacyCatalog.revision}"`;
+  const catalogVariants = pricingCatalogVariants(catalog, catalogETag);
 
   app.get("/healthz", (context) => context.json({ status: "ok", ...managedServiceInfo() }));
   for (const path of [
@@ -525,7 +523,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     ) {
       return invalidRequest(context);
     }
-    const agents = usageAgents(context);
+    const agents = usageAgentsForRequest(context.req.query("usage_agents"));
     if (!agents) return invalidRequest(context);
     const start = UtcHourSchema.safeParse(context.req.query("start_at"));
     const end = UtcHourSchema.safeParse(context.req.query("end_at"));
@@ -772,11 +770,12 @@ export function createRelayApp(options: RelayAppOptions): Hono {
 
   app.get("/api/v2/pricing/catalog", (context) => {
     if (!hasOnlyQueryKeys(context, ["usage_agents"])) return invalidRequest(context);
-    const agents = usageAgents(context);
+    const requestedAgents = context.req.query("usage_agents");
+    const agents = usageAgentsForRequest(requestedAgents);
     if (!agents) return invalidRequest(context);
-    const expanded = agents === BILLING_AGENTS;
-    const selectedCatalog = expanded ? catalog : legacyCatalog;
-    const selectedETag = expanded ? catalogETag : legacyCatalogETag;
+    const selected = pricingCatalogForRequest(catalogVariants, requestedAgents);
+    const selectedCatalog = selected.catalog;
+    const selectedETag = selected.etag;
     context.header("ETag", selectedETag);
     context.header("Cache-Control", "public, max-age=300, must-revalidate");
     if (context.req.header("If-None-Match") === selectedETag) {
@@ -806,7 +805,8 @@ async function accountUsageQuery(
   if (!hasOnlyQueryKeys(context, ["from", "to", "device_id", "cost_mode", "usage_agents"])) {
     return invalidRequest(context);
   }
-  const agents = usageAgents(context);
+  const requestedAgents = context.req.query("usage_agents");
+  const agents = usageAgentsForRequest(requestedAgents);
   if (!agents) return invalidRequest(context);
   const defaultTo = checkedAt.toISOString().slice(0, 10);
   const defaultFrom = new Date(checkedAt.getTime() - 29 * 24 * 60 * 60 * 1000)
@@ -826,13 +826,10 @@ async function accountUsageQuery(
         to: requestedTo ?? defaultTo,
       });
   const mode = UsageCostModeSchema.safeParse(context.req.query("cost_mode") ?? "calculate");
-  const exceedsLegacyRange =
-    context.req.query("usage_agents") === undefined &&
+  const exceedsReleasedRange =
     range?.success === true &&
-    (Date.parse(`${range.data.to}T00:00:00Z`) - Date.parse(`${range.data.from}T00:00:00Z`)) /
-      86_400_000 >=
-      366;
-  if (range?.success === false || exceedsLegacyRange || !mode.success) {
+    releasedUsageRangeExceeded(requestedAgents, range.data.from, range.data.to);
+  if (range?.success === false || exceedsReleasedRange || !mode.success) {
     return invalidRequest(context);
   }
   const deviceId = context.req.query("device_id");
@@ -872,15 +869,6 @@ async function accountUsageQuery(
     }
     throw error;
   }
-}
-
-function usageAgents(context: Context): readonly BillingAgent[] | undefined {
-  const requested = context.req.query("usage_agents");
-  return requested === undefined
-    ? legacyUsageAgents
-    : requested === "all"
-      ? BILLING_AGENTS
-      : undefined;
 }
 
 function retainedUsageRange(
@@ -1050,7 +1038,7 @@ function publicDevice(
       : "offline";
   return {
     device_id: device.id,
-    display_name: device.display_name ?? "QuotaCLI",
+    display_name: device.display_name ?? "Quota client",
     platform: device.platform ?? "linux",
     device_generation: device.generation,
     status,

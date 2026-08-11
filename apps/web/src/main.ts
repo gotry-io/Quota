@@ -88,15 +88,13 @@ function renderDashboard(summary: AccountSummary): void {
     ),
   );
   if (summary.quota.length === 0) {
-    quotas.append(
-      emptyState("No quota snapshots yet. Sign in from QuotaCLI to add this installation."),
-    );
+    quotas.append(emptyState("No quota snapshots yet. Sign in from QuotaBar to add this Mac."));
   }
 
   const devices = requiredElement("device-list");
   devices.replaceChildren(...summary.devices.map(renderDevice));
   if (summary.devices.length === 0) {
-    devices.append(emptyState("No devices yet. Sign in from QuotaCLI to add this installation."));
+    devices.append(emptyState("No devices yet. Sign in from QuotaBar to add this Mac."));
   }
 
   const breakdowns = summary.usage.breakdowns.filter((item) => item.dimension === "agent");
@@ -424,7 +422,7 @@ async function decideActivation(decision: "approve" | "deny"): Promise<void> {
     decision,
   });
   if (!request.success) {
-    showActivationStatus("Enter the exact code shown by QuotaCLI.");
+    showActivationStatus("Enter the exact code shown by your Quota client.");
     return;
   }
   const returnTo = `/activate?user_code=${encodeURIComponent(request.data.user_code)}`;
@@ -447,7 +445,7 @@ async function decideActivation(decision: "approve" | "deny"): Promise<void> {
     input.disabled = true;
     showActivationStatus(
       decision === "approve"
-        ? "Installation authorized. Return to QuotaCLI."
+        ? "Installation authorized. Return to your Quota client."
         : "Authorization denied. You can close this page.",
     );
   } catch {

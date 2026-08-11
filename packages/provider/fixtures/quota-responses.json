@@ -1,0 +1,78 @@
+{
+  "openrouter": {
+    "credits": { "data": { "total_credits": 100, "total_usage": 40 } },
+    "key": { "data": { "limit": 50, "limit_remaining": 30, "usage": 20, "limit_reset": "daily" } }
+  },
+  "deepseek": {
+    "balance": {
+      "is_available": true,
+      "balance_infos": [
+        { "currency": "CNY", "total_balance": "3.96" },
+        { "currency": "USD", "total_balance": "0.00" }
+      ]
+    }
+  },
+  "kimi": {
+    "usages": {
+      "usage": {
+        "limit": "2048",
+        "used": "214",
+        "remaining": "1834",
+        "resetTime": "2026-01-09T15:23:13Z"
+      },
+      "limits": [
+        {
+          "window": { "duration": 300, "timeUnit": "TIME_UNIT_MINUTE" },
+          "detail": {
+            "limit": "200",
+            "used": "139",
+            "remaining": "61",
+            "resetTime": "2026-01-06T13:33:02Z"
+          }
+        }
+      ]
+    }
+  },
+  "litellm": {
+    "key_info": {
+      "info": { "user_id": "fixture-user", "team_id": "fixture-team", "key_name": "fixture-key" }
+    },
+    "user_info": { "user_info": { "spend": 25, "max_budget": 100 } },
+    "team_info": { "team_info": { "spend": 40, "max_budget": 200, "team_alias": "Fixture" } }
+  },
+  "codex": {
+    "usage": {
+      "plan_type": "pro",
+      "rate_limit": {
+        "primary_window": {
+          "used_percent": 12,
+          "reset_at": 1754140800,
+          "limit_window_seconds": 18000
+        },
+        "secondary_window": {
+          "used_percent": 33,
+          "reset_at": 1754572800,
+          "limit_window_seconds": 604800
+        }
+      }
+    }
+  },
+  "claude": {
+    "usage": {
+      "five_hour": { "utilization": 8, "resets_at": "2026-08-02T17:00:00Z" },
+      "seven_day": { "utilization": 22, "resets_at": "2026-08-09T12:00:00Z" }
+    }
+  },
+  "grok": {
+    "billing": {
+      "config": {
+        "creditUsagePercent": 8,
+        "currentPeriod": {
+          "type": "USAGE_PERIOD_TYPE_WEEKLY",
+          "start": "2026-07-30T07:33:06Z",
+          "end": "2026-08-06T07:33:06Z"
+        }
+      }
+    }
+  }
+}

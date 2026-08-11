@@ -1,17 +1,25 @@
 import SwiftUI
 
-/// Settings → Agents → <Provider>: visibility, reporting provenance, and local setup.
+/// Settings → Agents → <Provider>: visibility, reporting provenance, and local configuration.
 struct ProviderSettingsView: View {
+  @Bindable var model: MenuBarViewModel
   let provider: ProviderID
   let reportingSources: [ProviderReportingSourcePresentation]
   let now: Date
+
   @State private var isVisible: Bool
+  @State private var apiKey = ""
+  @State private var baseURL = ""
+  @State private var isSaving = false
+  @State private var configurationError: String?
 
   init(
+    model: MenuBarViewModel,
     provider: ProviderID,
     reportingSources: [ProviderReportingSourcePresentation] = [],
     now: Date
   ) {
+    self.model = model
     self.provider = provider
     self.reportingSources = reportingSources
     self.now = now
@@ -43,49 +51,106 @@ struct ProviderSettingsView: View {
         }
 
         SettingsSection(title: "Reporting From") {
-          if reportingSources.isEmpty {
-            Text("No reports yet")
-              .quotaSecondaryStyle()
-              .padding(.horizontal, QuotaDesign.Layout.groupContentInset)
-              .frame(
-                maxWidth: .infinity,
-                minHeight: QuotaDesign.Layout.settingsRowHeight,
-                alignment: .leading
-              )
-          } else {
-            VStack(alignment: .leading, spacing: 0) {
-              ForEach(reportingSources) { source in
-                SettingsListRow(
-                  title: source.displayName,
-                  systemImage: source.symbolName
-                ) {
-                  Text(source.detailLabel(now: now))
-                    .quotaListSecondaryStyle()
-                    .lineLimit(1)
-                }
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel(source.displayName)
-                .accessibilityValue(source.detailLabel(now: now))
-              }
-            }
-          }
+          reportingSourcesContent
         }
 
         SettingsSection(
           title: provider.isConfigurable ? "This Mac Configuration" : "This Mac Sign-in"
         ) {
-          QuotaCommandRow(
-            command: provider.loginCommand,
-            copyLabel: provider.isConfigurable
-              ? "Copy configuration command"
-              : "Copy sign-in command"
-          )
+          if provider.isConfigurable {
+            providerConfiguration
+          } else {
+            QuotaCommandRow(command: provider.setupAction, copyLabel: "Copy sign-in command")
+          }
         }
       }
       .frame(maxWidth: .infinity, alignment: .topLeading)
       .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
       .padding(.vertical, QuotaDesign.Layout.pageVerticalPadding)
     }
+    .onAppear(perform: loadConfigurationPresentation)
+    .onChange(of: model.providerConfigurations[provider]) {
+      loadConfigurationPresentation()
+    }
+  }
+
+  @ViewBuilder
+  private var reportingSourcesContent: some View {
+    if reportingSources.isEmpty {
+      Text("No reports yet")
+        .quotaSecondaryStyle()
+        .padding(.horizontal, QuotaDesign.Layout.groupContentInset)
+        .frame(
+          maxWidth: .infinity,
+          minHeight: QuotaDesign.Layout.settingsRowHeight,
+          alignment: .leading
+        )
+    } else {
+      VStack(alignment: .leading, spacing: 0) {
+        ForEach(reportingSources) { source in
+          SettingsListRow(title: source.displayName, systemImage: source.symbolName) {
+            Text(source.detailLabel(now: now))
+              .quotaListSecondaryStyle()
+              .lineLimit(1)
+          }
+          .accessibilityElement(children: .ignore)
+          .accessibilityLabel(source.displayName)
+          .accessibilityValue(source.detailLabel(now: now))
+        }
+      }
+    }
+  }
+
+  private var providerConfiguration: some View {
+    VStack(alignment: .leading, spacing: QuotaDesign.Spacing.sm) {
+      if let config = model.providerConfigurations[provider], config.configured {
+        Text("Configured as \(config.maskedAPIKey ?? "saved credential")")
+          .quotaSecondaryStyle()
+      }
+
+      SecureField(
+        model.providerConfigurations[provider]?.configured == true
+          ? "Enter a new API key to replace it"
+          : "API key",
+        text: $apiKey
+      )
+      .textFieldStyle(.roundedBorder)
+      .accessibilityLabel("\(provider.displayName) API key")
+
+      if provider.supportsBaseURL {
+        TextField("Base URL", text: $baseURL)
+          .textFieldStyle(.roundedBorder)
+          .accessibilityLabel("\(provider.displayName) base URL")
+      }
+
+      HStack(spacing: QuotaDesign.Spacing.sm) {
+        Button(isSaving ? "Saving…" : "Save") {
+          saveConfiguration()
+        }
+        .buttonStyle(QuotaPrimaryButtonStyle(isCompact: true))
+        .disabled(
+          isSaving
+            || apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || (provider.requiresBaseURL
+              && baseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        )
+
+        if model.providerConfigurations[provider]?.configured == true {
+          Button("Remove") {
+            removeConfiguration()
+          }
+          .disabled(isSaving)
+        }
+      }
+
+      if let configurationError {
+        Label(configurationError, systemImage: "exclamationmark.circle")
+          .quotaMetaStyle()
+          .fixedSize(horizontal: false, vertical: true)
+      }
+    }
+    .padding(QuotaDesign.Layout.groupContentInset)
+    .frame(maxWidth: .infinity, alignment: .leading)
   }
 
   private var visibilityBinding: Binding<Bool> {
@@ -96,5 +161,45 @@ struct ProviderSettingsView: View {
         isVisible = newValue
       }
     )
+  }
+
+  private func loadConfigurationPresentation() {
+    guard baseURL.isEmpty else { return }
+    baseURL = model.providerConfigurations[provider]?.baseURL ?? ""
+  }
+
+  private func saveConfiguration() {
+    let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+    let url = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+    isSaving = true
+    configurationError = nil
+    Task { @MainActor in
+      defer { isSaving = false }
+      do {
+        try await model.setProviderConfig(provider, apiKey: key, baseURL: url.isEmpty ? nil : url)
+        apiKey = ""
+      } catch {
+        configurationError = Self.message(for: error)
+      }
+    }
+  }
+
+  private func removeConfiguration() {
+    isSaving = true
+    configurationError = nil
+    Task { @MainActor in
+      defer { isSaving = false }
+      do {
+        try await model.removeProviderConfig(provider)
+        apiKey = ""
+        baseURL = ""
+      } catch {
+        configurationError = Self.message(for: error)
+      }
+    }
+  }
+
+  private static func message(for error: Error) -> String {
+    (error as? LocalizedError)?.errorDescription ?? "Could not update this provider."
   }
 }

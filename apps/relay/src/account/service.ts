@@ -281,7 +281,7 @@ export class AccountService {
             grant,
             codeHash,
             installationHash,
-            grant.device_display_name ?? "QuotaCLI",
+            grant.device_display_name ?? "Quota client",
             grant.platform ?? "unknown",
             now,
           ),

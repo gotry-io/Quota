@@ -1,0 +1,1 @@
+{"type":"message","timestamp":"2026-08-02T11:00:00Z","message":{"role":"assistant","provider":"anthropic","model":"claude-sonnet-4-6","timestamp":1785668400000,"usage":{"input":100,"output":40,"cacheRead":20,"cacheWrite":10,"reasoning":5,"cost":{"total":0.02}}}}

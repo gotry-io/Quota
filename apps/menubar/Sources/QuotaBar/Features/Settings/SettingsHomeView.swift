@@ -92,7 +92,9 @@ struct SettingsHomeView: View {
         Task { await model.logout() }
       }
     } message: {
-      Text("This signs QuotaBar out on this Mac. Your device and synced data stay in your Quota account.")
+      Text(
+        "This signs QuotaBar out on this Mac. Your device and synced data stay in your Quota account."
+      )
     }
   }
 
@@ -174,14 +176,7 @@ struct SettingsHomeView: View {
   }
 
   private var signedOutMessage: String {
-    switch model.syncReason {
-    case .deviceDeleted:
-      "This device was removed. Sign in again to reconnect it."
-    case .staleGeneration, .unauthorized:
-      "The account session ended. Sign in again to continue syncing."
-    case nil:
-      "Sync quota and Usage across your devices."
-    }
+    "Sync quota and Usage across your devices."
   }
 
   private var usageSummary: String {

@@ -18,6 +18,7 @@ struct QuotaCollectionResult: Codable, Equatable, Sendable {
 
 extension QuotaCollectionResult {
   init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys(["provider", "outcome", "snapshots", "source", "message"])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     provider = try container.decode(ProviderID.self, forKey: .provider)
     outcome = try container.decode(CollectionOutcome.self, forKey: .outcome)
@@ -47,12 +48,12 @@ extension QuotaCollectionResult {
 }
 
 struct QuotaCollectionReport: Codable, Equatable, Sendable {
-  let schemaVersion: Int
+  let protocolVersion: Int
   let capturedAt: Date
   let results: [QuotaCollectionResult]
 
   private enum CodingKeys: String, CodingKey {
-    case schemaVersion = "protocolVersion"
+    case protocolVersion
     case capturedAt
     case results
   }
@@ -60,13 +61,14 @@ struct QuotaCollectionReport: Codable, Equatable, Sendable {
 
 extension QuotaCollectionReport {
   init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys(["protocolVersion", "capturedAt", "results"])
     let container = try decoder.container(keyedBy: CodingKeys.self)
-    schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+    protocolVersion = try container.decode(Int.self, forKey: .protocolVersion)
     capturedAt = try container.decode(Date.self, forKey: .capturedAt)
     results = try container.decode([QuotaCollectionResult].self, forKey: .results)
-    guard schemaVersion == 2, results.count <= ProviderID.allCases.count else {
+    guard protocolVersion == 2, results.count <= ProviderID.allCases.count else {
       throw DecodingError.dataCorruptedError(
-        forKey: .schemaVersion,
+        forKey: .protocolVersion,
         in: container,
         debugDescription: "Unsupported quota report schema version."
       )

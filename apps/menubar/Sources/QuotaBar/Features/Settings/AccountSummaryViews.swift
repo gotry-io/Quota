@@ -42,13 +42,12 @@ struct AccountDevicesView: View {
       .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
       .padding(.vertical, QuotaDesign.Layout.pageVerticalPadding)
     }
-    .task { await model.refreshAccountSummary() }
   }
 
   private var accountUnavailableCopy: some View {
     settingsEmptyCopy(
       model.accountState == .logoutPending
-        ? "Logout is pending. QuotaCLI will finish when this Mac is online."
+        ? "Logout is pending. QuotaBar will finish when this Mac is online."
         : "Continue with GitHub in Settings to view account devices."
     )
   }
@@ -221,7 +220,6 @@ struct AccountUsageView: View {
       .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
       .padding(.vertical, QuotaDesign.Layout.pageVerticalPadding)
     }
-    .task { await model.refreshAccountSummary() }
   }
 
   private var effectiveScope: UsageDisplayScope {

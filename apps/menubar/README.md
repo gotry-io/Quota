@@ -1,91 +1,53 @@
 # QuotaBar
 
-QuotaBar is the native macOS menu-bar UI for Quota. It shows local provider quota, account devices,
-and normalized Usage totals without implementing provider or account access itself.
+QuotaBar is the native macOS 14+ menu-bar UI. It ships as one app containing the SwiftUI executable
+and a private Rust child at `Contents/Helpers/quota-service`.
 
 ## Runtime boundary
 
-The app invokes the signed `Contents/Helpers/quotacli` executable at a fixed bundle path. It never
-searches `PATH`, starts a shell, opens account HTTP connections, reads provider credentials, or
-reads QuotaCLI account and Usage state files.
+QuotaBar launches the fixed signed service path and keeps a persistent stdin/stdout NDJSON IPC v1
+connection. Every request has a fixed fifteen-second deadline; a timed-out request closes the child and
+the next request starts a clean helper. If the helper cannot initialize its owner-only state, it
+stays on the IPC boundary and returns only a fixed, allowlisted error/recovery pair. It never
+resolves an executable from `PATH`, invokes a shell, reads provider/service files, receives
+account/provider tokens, or contacts Relay directly. Requests and responses are bounded to 1 MiB and
+use typed `snake_case` models; revisioned events tell Swift when to reload state.
 
-QuotaBar exposes four fixed helper operations:
+The Rust service returns persisted component state immediately, then performs startup collection in
+the background. It owns the five-minute schedule, providers, Usage, pricing, OAuth/account sync,
+SQLite, outbox, and local/account observation merge. QuotaBar owns presentation, provider visibility
+and ordering preferences, native provider configuration fields, account actions, accessibility, and
+Launch at Login. Quitting the app closes stdin and stops the service and all synchronization.
 
-```text
-quotacli sync --format json
-quotacli login --format json
-quotacli logout --format json
-quotacli account summary --format json
-```
+Provider API keys entered in Settings go directly over child stdin. Swift does not put them in argv,
+UserDefaults, logs, or response models; subsequent state exposes only a masked tip.
 
-Sync, logout, and account-summary processes have a 60-second timeout and a 1 MiB stdout limit.
-Interactive login has a 10-minute timeout and is cancellable from Settings. Helper stderr is
-discarded. Timeout, cancellation, and output overflow terminate the child process before returning.
-
-App launch starts one sync immediately and repeats it every five minutes while QuotaBar is running.
-The footer refresh action also runs sync. There is no background daemon owned by QuotaBar.
-
-The app decodes the QuotaCLI sync envelope strictly: its local quota and local Usage reports contain
-protocol v2 data, with an optional account summary when signed in. A credential-free last-known sync
-result is cached in QuotaBar's preferences so the panel can paint before the first current sync
-completes. Account tokens, installation identity, provider credentials, and raw logs never enter
-that cache.
-
-## Menu panel
-
-Overview presents remaining provider quota. When signed in, observations come from the account
-summary and retain their device display names. When signed out, local collection remains available.
-Quota percentages are never accumulated across sources; the freshest valid observation wins for a
-global account identity.
-
-Settings contains:
-
-- Account: **Continue with GitHub**, the signed-in display label, cancellable login, and logout.
-- Usage: an all-history local report available without an account; signed-in users can switch to
-  Account.
-- Account Data: read-only Devices.
-- Local Providers: agent visibility, ordering, reporting provenance, and a copyable provider setup
-  command. QuotaBar does not edit provider credential files.
-- General: Launch at Login.
-- About: version, website, and feedback links.
-
-Usage defaults to the local report and shows its date range, token totals, requests, estimated cost,
-cost basis, pricing catalog revision, unpriced row count, model breakdown, and coverage for Codex,
-Claude Code, Grok, OpenCode, and Pi. Token and request counts use locale-aware decimal grouping for
-small values and compact `k`/`M`/`B` suffixes for larger values. When an account summary is available,
-the same page offers an Account source. QuotaBar formats the typed result; it does not carry a price
-table or recalculate cost.
-
-The visual and interaction specification is [`DESIGN.md`](DESIGN.md).
+The detailed system boundary is in [`docs/architecture.md`](../../docs/architecture.md), security
+requirements are in [`docs/security.md`](../../docs/security.md), and UI behavior is canonical in
+[`DESIGN.md`](DESIGN.md).
 
 ## Development
 
-Run Swift commands from the repository root:
+From the repository root:
 
 ```bash
-swift build --package-path apps/menubar
 swift test --package-path apps/menubar
-```
-
-Build the distributable app, including the bundled arm64 helper:
-
-```bash
+cargo test --locked --package quota-menubar-helper
 pnpm build:menubar:app
+pnpm test:menubar:helper
+open dist/menubar/QuotaBar.app
 ```
 
-The packaging script builds QuotaCLI and QuotaBar, installs the helper at the fixed bundle path,
-signs nested code before the app, and verifies the complete signature. Local packages use ad-hoc
-signing; the release workflow replaces it with Developer ID signing and notarization.
+`swift run` does not assemble an app bundle and therefore does not provide the private service at its
+production path. Use the packaging script for live integration. It builds arm64 Rust and Swift
+binaries, copies resources, installs the service, and applies local ad-hoc signatures. The release
+workflow replaces them with Developer ID signatures before notarization.
+`pnpm test:menubar:helper` runs the packaged helper through the Swift IPC tests with an isolated
+`HOME`, `XDG_CONFIG_HOME`, and provider data roots; it does not read the invoking user's local state.
 
 ## Visual QA
 
-Build the visual app:
-
-```bash
-pnpm build:menubar:visual
-```
-
-The visual binary accepts deterministic fixture arguments:
+Build the deterministic visual app with `pnpm build:menubar:visual`. It accepts:
 
 ```text
 --data-source fixture|live
@@ -95,8 +57,7 @@ The visual binary accepts deterministic fixture arguments:
 --text-size standard|extra-large|accessibility
 ```
 
-Fixture mode performs no helper work and contains synthetic account, device, quota, cost, and
-coverage data. Live mode uses the packaged helper through the same production process boundary.
-
-Generated `.build/`, packaged apps, and local preferences are development state and must not be
+Fixture mode starts no service and contains synthetic account, device, quota, cost, and coverage
+data. Live mode uses the packaged service through the production IPC boundary. Generated `.build/`,
+Rust `target/`, packaged apps, databases, and local preferences are development state and must not be
 committed.

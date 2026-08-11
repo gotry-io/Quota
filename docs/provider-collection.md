@@ -4,32 +4,32 @@ This document is the source of truth for current provider discovery and collecti
 All implementations must also satisfy the credential, network, process, redaction, and fixture rules
 in [`security.md`](security.md).
 
-QuotaCLI owns provider access and emits normalized protocol models. QuotaRelay never handles the
-provider-specific inputs described here.
+The shared Rust service owns provider access and emits normalized protocol models for QuotaBar and
+Linux `quotacli`. QuotaRelay never handles the provider-specific inputs described here.
+Provider collection does not initiate account authentication; Linux account login uses the separate
+headless Device Authorization Grant described in [`security.md`](security.md).
 
 ## Registration (monorepo)
 
-Product metadata and wiring live in `packages/provider/src/catalog.ts` (not in this file). Collection
+Product metadata lives in `packages/provider/catalog.json` (not in this file). Collection
 **strategy** for each provider is documented in the sections below.
 
 To add a provider:
 
-1. Catalog row in `packages/provider/src/catalog.ts`.
+1. Catalog row in `packages/provider/catalog.json`, validated by `catalog.schema.json`.
 2. Strategy section in this document.
-3. Collector implementation under `packages/provider/src/providers/<id>/`.
-4. Factory entry in `packages/provider/src/registry.ts` (`COLLECTOR_FACTORIES`).
-5. `pnpm generate:provider-catalog` for protocol `ProviderId` and Swift `ProviderID`.
-6. Optional QuotaBar brand SVG named by `brandIconAsset`.
+3. Collector implementation under `packages/service/src/providers/`.
+4. Registry entry in `packages/service/src/providers/mod.rs`.
+5. `pnpm generate:provider-catalog` for protocol, Rust, and Swift provider IDs.
+6. Optional QuotaBar brand SVG named by `brand_icon_asset`.
 
-API-key providers set `config.kind: "api_key"` so `quotacli config` owns their setup and QuotaBar
-Settings can present the corresponding copyable CLI commands. Ambient session providers leave
-`config: null`.
+API-key providers declare credential and base-URL capabilities so QuotaBar Settings can render the
+correct native fields. Ambient-session providers omit credential configuration.
 
 Supported order today: Codex, Claude Code, Grok, OpenRouter, DeepSeek, Kimi Code, LiteLLM.
 
-API-key HTTPS providers share `packages/provider/src/api-key/` (`ApiKeyHttpCollector` +
-`resolveApiKeyCredentials` + `fetchBearerJson`). Add a map + `*Spec` in
-`providers/<id>/` and register it in `api-key/specs.ts`.
+API-key HTTPS providers share the bounded request, credential resolution, URL validation, and
+snapshot helpers in `packages/service/src/providers/common.rs`.
 
 ## Codex
 
@@ -43,8 +43,8 @@ API-key HTTPS providers share `packages/provider/src/api-key/` (`ApiKeyHttpColle
    access token. Codex owns any access-token renewal performed while its app-server starts.
 5. Do not fall back after a successful but malformed response; report the parser failure instead.
 
-QuotaCLI never submits the Codex refresh token or writes `auth.json`. `CODEX_CLI_PATH` can identify
-the executable when it is outside `PATH`; QuotaCLI also checks common user-local and Homebrew paths
+The local service never submits the Codex refresh token or writes `auth.json`. `CODEX_CLI_PATH` can identify
+the executable when it is outside `PATH`; the service also checks common user-local and Homebrew paths
 plus the signed CLI embedded in Codex and ChatGPT desktop apps for GUI launches. Dashboard-cookie
 import and reset-credit redemption are not fallback strategies.
 
@@ -66,7 +66,7 @@ import and reset-credit redemption are not fallback strategies.
 
 An absent, stale, or unreadable session is `auth_required`. A Claude Code installation configured
 only for a third-party API gateway does not provide Anthropic subscription OAuth quota. Browser
-cookies and interactive PTY login are not fallback strategies. QuotaCLI never submits the Claude
+cookies and interactive PTY login are not fallback strategies. The local service never submits the Claude
 refresh token or writes its credential file or Keychain entry. `CLAUDE_CLI_PATH` can identify the
 executable when it is outside `PATH`; the native installer, legacy installer, Homebrew, and cmux
 locations are also checked for GUI launches. Platforms without the bounded local PTY adapter retain
@@ -127,8 +127,7 @@ tokens for this path.
 2. Parse assistant messages with nonzero tokens or source cost. Add cache-read and cache-write tokens
    to uncached input so protocol input remains the billable total. Resolve a billing channel only
    from an explicit recognized `providerID`; custom providers remain unknown.
-3. Node uses its built-in SQLite reader and the bundled Bun helper uses Bun's built-in reader. The
-   npm package does not add a native addon.
+3. Rust opens the SQLite database read-only and never mutates the agent-owned store.
 
 ### Pi Usage
 
@@ -138,13 +137,14 @@ tokens for this path.
    and nonzero source cost. Resolve only explicit recognized provider channels.
 
 All scanners reject the literal model `unknown`, ignore zero-token/tool/cost internal records, and
-use canonical `[start_at, end_at)` UTC-hour boundaries, bounded directory traversal,
-a two-million-record scan ceiling, bounded line sizes, cancellation, and source-change checks. Local scan cursors
-contain only an opaque file ID, byte offset, and record hash. Paths and cursors are local cache input
-and never enter a protocol submission or CLI account result. Only complete coverage is eligible for
-authoritative remote replacement; empty complete coverage is valid. Discovery always covers every
-canonical local source. Local reports scan from the Unix epoch, while remote replacement remains
-split into bounded protocol ranges.
+use canonical `[start_at, end_at)` UTC-hour boundaries, bounded directory traversal, a two-million-
+record scan ceiling, bounded line sizes, cancellation, and source-change checks. SQLite records an
+opaque file identity, size, modification time, and parser revision. Unchanged files are skipped; a
+changed file's normalized rows are replaced transactionally. Paths and file-index metadata never
+enter a protocol submission or IPC state. Only complete coverage is eligible for authoritative
+remote replacement; empty complete coverage is valid. Discovery always covers every canonical local
+source. Local reports cover indexed history, while remote replacement remains split into bounded
+protocol ranges.
 
 ## Grok
 
@@ -168,10 +168,10 @@ split into bounded protocol ranges.
 7. If the provider-owned refresh is unavailable or the retried request is unauthorized, report
    `auth_required` and require `grok login`.
 
-QuotaCLI never submits the refresh token itself and never starts Grok's interactive browser login.
+The local service never submits the refresh token itself and never starts Grok's interactive browser login.
 The provider-owned CLI is solely responsible for refresh-token rotation and credential-file writes;
-QuotaCLI only restores a pre-refresh snapshot when that CLI leaves credentials unreadable.
-`GROK_CLI_PATH` can identify the executable when it is outside `PATH`; QuotaCLI also checks Grok's
+The service only restores a pre-refresh snapshot when that CLI leaves credentials unreadable.
+`GROK_CLI_PATH` can identify the executable when it is outside `PATH`; it also checks Grok's
 installer directory, common user-local paths, and Homebrew paths for GUI launches.
 
 Local context-token or session totals are not subscription quota. Browser-cookie and browser billing
@@ -184,7 +184,7 @@ Aligned with CodexBar's OpenRouter provider (credits + API-key limit meters).
 1. Resolve the API key in order:
    1. Owner-only config at `$XDG_CONFIG_HOME/quotacli/providers.json` or
       `~/.config/quotacli/providers.json` (`schema_version: 1`, `providers.openrouter.api_key`),
-      written by the interactive prompt in `quotacli config set openrouter`.
+      written by QuotaBar Settings through the private service.
    2. Else `OPENROUTER_API_KEY` from the process environment.
    Use the fixed `https://openrouter.ai/api/v1` endpoint. Custom base URLs and URL environment
    overrides are not supported.
@@ -204,10 +204,10 @@ Aligned with CodexBar's OpenRouter provider (credits + API-key limit meters).
      stale. Do not treat rechargeable credits as a fixed limit or show a percentage meter.
    The snapshot plan badge is **Credits**; the provider header already identifies OpenRouter, so the
    channel name is not repeated in the plan position.
-4. Absent key → `auth_required` with guidance to run
-   `quotacli config set openrouter` (or set `OPENROUTER_API_KEY`). HTTP 401/403 →
+4. Absent key → `auth_required` with guidance to configure QuotaBar (or set
+   `OPENROUTER_API_KEY`). HTTP 401/403 →
    `auth_required`. Never print the API key, Authorization header, or response bodies.
-   `config get` / `list` and menubar UI only show a masked tip (`OpenRouter ···abcd`).
+   IPC state and menubar UI only show a masked tip (`OpenRouter ···abcd`).
 
 Config directory is `0700` and `providers.json` is `0600`. Multi-account labeled keys are out of
 scope. Dashboard cookies and browser scrapes are not strategies.
@@ -219,8 +219,8 @@ scope).
 
 1. Resolve the API key in order:
    1. Owner-only config at `$XDG_CONFIG_HOME/quotacli/providers.json` or
-      `~/.config/quotacli/providers.json` (`providers.deepseek.api_key`), written by
-      the interactive prompt in `quotacli config set deepseek`.
+      `~/.config/quotacli/providers.json` (`providers.deepseek.api_key`), written by QuotaBar
+      Settings through the private service.
    2. Else `DEEPSEEK_API_KEY`, then `DEEPSEEK_KEY`, from the process environment.
    Use the fixed `https://api.deepseek.com` endpoint. Custom base URLs and URL environment
    overrides are not supported.
@@ -231,7 +231,7 @@ scope).
    USD (or first) row so the account still appears. No lifetime spend ratio is available.
    The snapshot plan badge is **Credits**; the provider header identifies DeepSeek, so the channel
    name is not repeated in the plan position.
-4. Absent key → `auth_required` with guidance to run `quotacli config set deepseek` (or set
+4. Absent key → `auth_required` with guidance to configure QuotaBar (or set
    `DEEPSEEK_API_KEY`). HTTP 401/403 → `auth_required`. Never print the API key or Authorization
    header. Platform-session detailed usage endpoints are not used.
 
@@ -286,5 +286,5 @@ OpenRouter, DeepSeek, and Kimi always use their fixed official origins; custom b
 - Requested providers collect concurrently while the report preserves catalog order
   (`PROVIDER_ORDER`): Codex, Claude Code, Grok, OpenRouter, DeepSeek, Kimi Code, then LiteLLM.
   Multiple sessions within one provider remain sequential so provider-owned credential refreshes do
-  not race. A provider result with both successful and failed sessions is partial and makes
-  `quotacli status` exit `1`.
+  not race. A provider result with both successful and failed sessions remains explicitly partial in
+  component state.

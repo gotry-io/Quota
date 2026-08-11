@@ -146,7 +146,7 @@
     #expect(
       try configuration(fixture: .unavailable, referenceDate: referenceDate).makeModel()
         .overviewState(enabledProviders: ProviderID.allCases, now: referenceDate)
-        == .unavailable(message: "The bundled QuotaCLI helper could not be started.")
+        == .unavailable(message: "The bundled local service could not be started.")
     )
   }
 
