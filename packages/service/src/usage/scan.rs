@@ -15,7 +15,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-pub const DEFAULT_PARSER_REVISION: &str = "usage-rust-v3";
+pub const DEFAULT_PARSER_REVISION: &str = "usage-rust-v4";
 
 #[derive(Clone, Debug)]
 pub struct UsageScanOptions {
@@ -70,6 +70,7 @@ pub(crate) struct ScanParts {
     pub reasons: Vec<CoverageReason>,
     pub scanned_source_count: usize,
     pub skipped_source_count: usize,
+    pub ignored_empty_records: u64,
     pub unchanged_source_file_ids: Vec<String>,
     pub deleted_source_file_ids: Vec<String>,
     pub sources: Vec<UsageSourceScan>,
@@ -300,6 +301,7 @@ where
     let mut reasons = discovery.reasons;
     let mut scanned_source_count = 0usize;
     let mut skipped_source_count = 0usize;
+    let mut ignored_empty_records = 0u64;
     let mut unchanged_source_file_ids = Vec::new();
     let mut sources = Vec::new();
     let mut records_seen = 0usize;
@@ -319,11 +321,13 @@ where
                 scanned_source_count += 1;
                 let source_reasons = vec![CoverageReason {
                     code: CoverageReasonCode::SourceChanged,
+                    count: 1,
                 }];
                 sources.push(UsageSourceScan {
                     index: file_index(&file, &options.parser_revision),
                     source: file.clone(),
                     records: Vec::new(),
+                    record_keys: Vec::new(),
                     coverage: source_coverage(agent, options, source_reasons),
                 });
                 continue;
@@ -354,6 +358,7 @@ where
         let mut parser = parser_factory();
         let mut source_records = Vec::new();
         let source_reasons = RefCell::new(Vec::new());
+        let mut source_line_ordinal = 0u64;
         match File::open(&file.path) {
             Ok(input) => {
                 let mut reader = BufReader::new(input);
@@ -368,6 +373,8 @@ where
                             stopped = true;
                             return false;
                         }
+                        let record_ordinal = source_line_ordinal;
+                        source_line_ordinal = source_line_ordinal.saturating_add(1);
                         records_seen += 1;
                         if records_seen > MAX_JSONL_RECORDS {
                             push_reason(
@@ -403,7 +410,14 @@ where
                         };
                         let parsed = parser.parse(&object, &current.source_file_id);
                         let mut reasons = source_reasons.borrow_mut();
-                        collect_parsed(parsed, &mut source_records, &mut reasons, &range);
+                        ignored_empty_records =
+                            ignored_empty_records.saturating_add(collect_parsed(
+                                parsed,
+                                &mut source_records,
+                                &mut reasons,
+                                &range,
+                                record_ordinal,
+                            ));
                         true
                     },
                     |reason| push_reason(&mut source_reasons.borrow_mut(), reason),
@@ -415,7 +429,14 @@ where
                 }
                 if !stopped && !is_cancelled(options) {
                     let mut reasons = source_reasons.borrow_mut();
-                    collect_parsed(parser.finish(), &mut source_records, &mut reasons, &range);
+                    ignored_empty_records =
+                        ignored_empty_records.saturating_add(collect_parsed_with_prefix(
+                            parser.finish(),
+                            &mut source_records,
+                            &mut reasons,
+                            &range,
+                            "finish",
+                        ));
                 }
             }
             Err(error) => push_reason(&mut source_reasons.borrow_mut(), reason_for_io(&error)),
@@ -434,16 +455,21 @@ where
             None => current.clone(),
         };
         for reason in &source_reasons {
-            push_reason(&mut reasons, reason.code);
+            push_reason_count(&mut reasons, reason.code, reason.count);
         }
         records.extend(source_records.iter().cloned());
+        let record_keys = source_records
+            .iter()
+            .map(|record| record.record_key.clone())
+            .collect();
         sources.push(UsageSourceScan {
             index: file_index(&source, &options.parser_revision),
             source,
             records: source_records
-                .into_iter()
-                .map(|record| record.event)
+                .iter()
+                .map(|record| record.event.clone())
                 .collect(),
+            record_keys,
             coverage: source_coverage(agent, options, source_reasons),
         });
     }
@@ -466,6 +492,7 @@ where
             reasons,
             scanned_source_count,
             skipped_source_count,
+            ignored_empty_records,
             unchanged_source_file_ids,
             deleted_source_file_ids,
             sources,
@@ -478,11 +505,27 @@ pub(crate) fn collect_parsed(
     records: &mut Vec<NormalizedUsageRecord>,
     reasons: &mut Vec<CoverageReason>,
     range: &ScanRange,
-) {
+    line_ordinal: u64,
+) -> u64 {
+    let prefix = format!("line:{line_ordinal}");
+    collect_parsed_with_prefix(parsed, records, reasons, range, &prefix)
+}
+
+pub(crate) fn collect_parsed_with_prefix(
+    parsed: ParsedLine,
+    records: &mut Vec<NormalizedUsageRecord>,
+    reasons: &mut Vec<CoverageReason>,
+    range: &ScanRange,
+    key_prefix: &str,
+) -> u64 {
+    let ignored_empty_records = parsed.ignored_empty_records;
     if let Some(reason) = parsed.reason {
         push_reason(reasons, reason);
     }
-    for record in parsed.records {
+    for (subindex, mut record) in parsed.records.into_iter().enumerate() {
+        if record.record_key.is_empty() {
+            record.record_key = format!("{key_prefix}:{subindex}");
+        }
         let Some(instant) = super::parse_instant(&record.event.occurred_at) else {
             continue;
         };
@@ -491,6 +534,7 @@ pub(crate) fn collect_parsed(
             records.push(record);
         }
     }
+    ignored_empty_records
 }
 
 pub(crate) fn finish_scan(
@@ -518,6 +562,7 @@ pub(crate) fn finish_scan(
         },
         scanned_source_count: parts.scanned_source_count,
         skipped_source_count: parts.skipped_source_count,
+        ignored_empty_records: parts.ignored_empty_records,
         unchanged_source_file_ids: parts.unchanged_source_file_ids,
         deleted_source_file_ids: parts.deleted_source_file_ids,
         sources: parts.sources,
@@ -656,8 +701,21 @@ fn trim_cr(value: &[u8]) -> &[u8] {
 }
 
 pub(crate) fn push_reason(reasons: &mut Vec<CoverageReason>, code: CoverageReasonCode) {
-    if reasons.len() < MAX_COVERAGE_REASONS {
-        reasons.push(CoverageReason { code });
+    push_reason_count(reasons, code, 1);
+}
+
+pub(crate) fn push_reason_count(
+    reasons: &mut Vec<CoverageReason>,
+    code: CoverageReasonCode,
+    count: u64,
+) {
+    if count == 0 {
+        return;
+    }
+    if let Some(reason) = reasons.iter_mut().find(|reason| reason.code == code) {
+        reason.count = reason.count.saturating_add(count);
+    } else if reasons.len() < MAX_COVERAGE_REASONS {
+        reasons.push(CoverageReason { code, count });
     }
 }
 

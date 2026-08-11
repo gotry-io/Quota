@@ -217,6 +217,13 @@ final class MenuBarViewModel {
     }
   }
 
+  func diagnose() async throws -> LocalServiceDiagnosticReport {
+    guard let client else {
+      throw LocalServiceClientError.serviceMissing
+    }
+    return try await client.diagnose()
+  }
+
   func startLogin() {
     guard loginTask == nil, let client else {
       if self.client == nil { accountErrorMessage = initializationError }

@@ -47,6 +47,7 @@ protocol LocalServiceServing: Sendable {
   var events: AsyncStream<LocalServiceEvent> { get }
 
   func state() async throws -> LocalServiceState
+  func diagnose() async throws -> LocalServiceDiagnosticReport
   func refresh() async throws -> LocalServiceRefreshResult
   func login() async throws -> LocalServiceLoginResult
   func cancelLogin() async throws
@@ -119,6 +120,15 @@ actor LocalServiceClient: LocalServiceServing {
       throw LocalServiceClientError.invalidMessage
     }
     return state
+  }
+
+  func diagnose() async throws -> LocalServiceDiagnosticReport {
+    let report: LocalServiceDiagnosticReport = try await request(
+      operation: "diagnose", payload: EmptyPayload())
+    guard report.isValid else {
+      throw LocalServiceClientError.invalidMessage
+    }
+    return report
   }
 
   func refresh() async throws -> LocalServiceRefreshResult {

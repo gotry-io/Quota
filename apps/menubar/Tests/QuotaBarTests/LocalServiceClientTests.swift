@@ -92,6 +92,44 @@ struct LocalServiceClientTests {
   }
 
   @Test
+  func decodesBoundedUnifiedDiagnosticReport() async throws {
+    let service = try TemporaryService(
+      python: #"""
+        import json
+        import sys
+
+        request = json.loads(sys.stdin.readline())
+        if request["operation"] == "diagnose":
+            components = [
+                {"name": name, "status": "ready", "message": None, "metrics": {}}
+                for name in ["providers", "quota", "usage", "pricing", "account", "sync"]
+            ]
+            result = {
+                "schema_version": 1,
+                "status": "healthy",
+                "generated_at": "2026-08-11T00:00:00Z",
+                "client": {"name": "QuotaBar", "version": "0.0.7"},
+                "components": components,
+                "issues": [],
+            }
+        else:
+            result = {}
+        print(json.dumps({
+            "type": "response",
+            "request_id": request["request_id"],
+            "result": result,
+        }), flush=True)
+        """#
+    )
+    defer { service.remove() }
+    let client = try LocalServiceClient(executableURL: service.executableURL)
+    let report = try await client.diagnose()
+    #expect(report.status == .healthy)
+    #expect(report.components.count == 6)
+    await client.shutdown()
+  }
+
+  @Test
   func mapsStableRemoteErrorsWithoutAcceptingPartialResults() async throws {
     let service = try TemporaryService(
       python: #"""

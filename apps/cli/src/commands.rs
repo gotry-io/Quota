@@ -4,7 +4,7 @@ use std::sync::atomic::AtomicBool;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use quota_service::catalog::{PROVIDER_CATALOG, ProviderId};
+use quota_service::catalog::ProviderId;
 use quota_service::config::default_state_root;
 use quota_service::protocol::{
     ComponentName, ComponentStatus, IpcEvent, IpcRequest, Operation, RequestMessageType,
@@ -97,7 +97,7 @@ where
             0
         }
         Command::Status(options) => run_status(options, output),
-        Command::Doctor => run_doctor(output),
+        Command::Doctor(options) => run_doctor(options, output),
         Command::Login { output: options } => run_login(options, output, cancel),
         Command::Logout(options) => run_logout(options, output),
         Command::AuthStatus(options) => run_auth_status(options, output),
@@ -255,7 +255,7 @@ fn report_exit_code(value: &Value) -> i32 {
     }
 }
 
-fn run_doctor(output: &mut dyn CliOutput) -> i32 {
+fn run_doctor(options: OutputOptions, output: &mut dyn CliOutput) -> i32 {
     let context = match open_context() {
         Ok(context) => context,
         Err(failure) => {
@@ -266,8 +266,8 @@ fn run_doctor(output: &mut dyn CliOutput) -> i32 {
             );
         }
     };
-    let snapshot = match context.state.snapshot() {
-        Ok(snapshot) => snapshot,
+    let report = match invoke(&context, Operation::Diagnose, json!({})) {
+        Ok(report) => report,
         Err(_) => {
             return report_failure(
                 Failure,
@@ -276,26 +276,125 @@ fn run_doctor(output: &mut dyn CliOutput) -> i32 {
             );
         }
     };
-    output.stdout(&format!("CLI version: {QUOTA_CLI_VERSION}"));
-    output.stdout("Providers:");
-    let configured = context.backend.configured_providers();
-    for entry in PROVIDER_CATALOG {
-        let found = configured.contains(&entry.id);
-        output.stdout(&format!(
-            "  {}\t{}\t{}",
-            entry.id.as_str(),
-            if found { "found" } else { "missing" },
-            entry.setup_action
-        ));
+    if options.format == OutputFormat::Json {
+        write_json(output, &report, options.pretty);
+    } else {
+        render_diagnostics_text(&report, output);
     }
-    let auth = auth_result(&snapshot);
-    output.stdout("Quota account:");
-    output.stdout(&format!("  Status: {}", auth_status_text(&auth)));
-    if let Some(device_id) = auth.get("device_id").and_then(Value::as_str) {
-        output.stdout(&format!("  Device ID: {device_id}"));
+    diagnostics_exit_code(&report)
+}
+
+fn render_diagnostics_text(report: &Value, output: &mut dyn CliOutput) {
+    output.stdout(&format!(
+        "Diagnostics: {}",
+        report
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+    ));
+    if let Some(schema_version) = report.get("schema_version").and_then(Value::as_u64) {
+        output.stdout(&format!("Schema version: {schema_version}"));
     }
-    output.stdout("  Recurring sync: external scheduler required");
-    if configured.is_empty() { 1 } else { 0 }
+    if let Some(generated_at) = report.get("generated_at").and_then(Value::as_str) {
+        output.stdout(&format!("Generated at: {generated_at}"));
+    }
+    if let Some(client) = report.get("client").and_then(Value::as_object) {
+        let name = client
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        let version = client
+            .get("version")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        output.stdout(&format!("Client: {name} {version}"));
+    }
+    output.stdout("Components:");
+    render_diagnostic_components(report.get("components"), output);
+    if let Some(issues) = report.get("issues").and_then(Value::as_array) {
+        if issues.is_empty() {
+            output.stdout("Issues: none");
+        } else {
+            output.stdout("Issues:");
+            for issue in issues {
+                let component = issue
+                    .get("component")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown");
+                let code = issue
+                    .get("code")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown");
+                let severity = issue
+                    .get("severity")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown");
+                let count = issue.get("count").and_then(Value::as_u64);
+                let message = issue.get("message").and_then(Value::as_str).unwrap_or("");
+                let suffix = count.map(|count| format!(" ({count})")).unwrap_or_default();
+                output.stdout(&format!(
+                    "  [{severity}] {component}/{code}{suffix}\t{message}"
+                ));
+            }
+        }
+    }
+}
+
+fn render_diagnostic_components(value: Option<&Value>, output: &mut dyn CliOutput) {
+    let Some(Value::Array(components)) = value else {
+        output.stdout("  unavailable");
+        return;
+    };
+    for component in components {
+        let name = component
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        render_diagnostic_component(name, component, output);
+    }
+}
+
+fn render_diagnostic_component(name: &str, component: &Value, output: &mut dyn CliOutput) {
+    let status = component
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let message = component
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let mut metrics = component
+        .get("metrics")
+        .and_then(Value::as_object)
+        .map(|metrics| {
+            let mut values = metrics
+                .iter()
+                .filter_map(|(key, value)| value.as_i64().map(|value| (key, value)))
+                .collect::<Vec<_>>();
+            values.sort_by(|left, right| left.0.cmp(right.0));
+            values
+                .into_iter()
+                .map(|(key, value)| format!("{key}={value}"))
+                .collect::<Vec<_>>()
+                .join(",")
+        })
+        .unwrap_or_default();
+    if !metrics.is_empty() {
+        metrics.insert(0, '\t');
+    }
+    output.stdout(&format!(
+        "  {name}\t{status}{message_suffix}{metrics}",
+        message_suffix = if message.is_empty() {
+            String::new()
+        } else {
+            format!("\t{message}")
+        }
+    ));
+}
+
+fn diagnostics_exit_code(report: &Value) -> i32 {
+    let status = report.get("status").and_then(Value::as_str);
+    if status == Some("healthy") { 0 } else { 1 }
 }
 
 fn run_login(options: OutputOptions, output: &mut dyn CliOutput, cancel: &AtomicBool) -> i32 {
@@ -718,23 +817,6 @@ fn wait_for_refresh(
     }
 }
 
-fn auth_result(snapshot: &quota_service::protocol::StateSnapshot) -> Value {
-    let Some(value) = snapshot.account.value.as_ref() else {
-        return json!({ "schema_version": 1, "status": "signed_out" });
-    };
-    json!({
-        "schema_version": 1,
-        "status": match value.get("auth_status").and_then(Value::as_str) {
-            Some("signed_in") => "signed_in",
-            Some("logout_pending") => "logout_pending",
-            _ => "signed_out",
-        },
-        "account_id": value.get("account_id").cloned().unwrap_or(Value::Null),
-        "device_id": value.get("device_id").cloned().unwrap_or(Value::Null),
-        "device_generation": value.get("device_generation").cloned().unwrap_or(Value::Null),
-    })
-}
-
 fn auth_result_from_session(session: &Value) -> Value {
     json!({
         "schema_version": 1,
@@ -743,14 +825,6 @@ fn auth_result_from_session(session: &Value) -> Value {
         "device_id": session.get("device_id").cloned().unwrap_or(Value::Null),
         "device_generation": session.get("device_generation").cloned().unwrap_or(Value::Null),
     })
-}
-
-fn auth_status_text(value: &Value) -> &'static str {
-    match value.get("status").and_then(Value::as_str) {
-        Some("signed_in") => "signed in",
-        Some("logout_pending") => "logout pending",
-        _ => "signed out",
-    }
 }
 
 fn emit_auth_result(value: &Value, options: OutputOptions, output: &mut dyn CliOutput) {
@@ -855,5 +929,52 @@ mod tests {
             output.stdout,
             vec!["codex\tWork\tavailable", "  Weekly\t75% remaining"]
         );
+    }
+
+    #[test]
+    fn diagnostics_render_all_components_and_fail_when_degraded() {
+        let report = json!({
+            "schema_version": 1,
+            "status": "degraded",
+            "generated_at": "2026-08-11T00:00:00Z",
+            "client": {"name": "QuotaCLI", "version": "0.0.7"},
+            "components": [
+                {"name": "providers", "status": "ready", "message": null, "metrics": {}},
+                {"name": "quota", "status": "ready", "message": null, "metrics": {}},
+                {"name": "usage", "status": "degraded", "message": "55 records skipped", "metrics": {"records": 55}},
+                {"name": "pricing", "status": "ready", "message": null, "metrics": {}},
+                {"name": "account", "status": "ready", "message": null, "metrics": {}},
+                {"name": "sync", "status": "ready", "message": null, "metrics": {}}
+            ],
+            "issues": [{
+                "component": "usage",
+                "code": "invalid_record",
+                "severity": "warning",
+                "count": 55,
+                "message": "Invalid records were isolated."
+            }]
+        });
+        let mut output = BufferOutput::default();
+        render_diagnostics_text(&report, &mut output);
+        assert_eq!(diagnostics_exit_code(&report), 1);
+        let text = output.stdout.join("\n");
+        assert!(text.contains("usage\tdegraded\t55 records skipped"));
+        assert!(text.contains("records=55"));
+        assert!(text.contains("usage/invalid_record (55)"));
+        assert!(!text.contains("/Users/"));
+        assert!(!text.contains("token"));
+    }
+
+    #[test]
+    fn healthy_diagnostics_are_successful_and_json_is_pretty_when_requested() {
+        let report = json!({
+            "schema_version": 1,
+            "status": "healthy",
+            "components": []
+        });
+        let mut output = BufferOutput::default();
+        assert_eq!(diagnostics_exit_code(&report), 0);
+        write_json(&mut output, &report, true);
+        assert!(output.stdout[0].contains("\n  \"schema_version\""));
     }
 }

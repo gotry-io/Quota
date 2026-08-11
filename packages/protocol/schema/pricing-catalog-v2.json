@@ -117,8 +117,7 @@
     "__schema4": {
       "type": "string",
       "minLength": 1,
-      "maxLength": 128,
-      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+-]*$"
+      "pattern": "^(?=[\\s\\S]{1,128}$)(?![\\s\\S]*\\p{Cc})[\\s\\S]+$"
     },
     "__schema5": {
       "maxItems": 16,

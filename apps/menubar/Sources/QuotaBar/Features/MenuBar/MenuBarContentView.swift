@@ -88,7 +88,8 @@ struct MenuBarContentView: View {
         model: model,
         onOpenAgents: { navigate(to: .agents) },
         onOpenDevices: { navigate(to: .devices) },
-        onOpenUsage: { navigate(to: .usage) }
+        onOpenUsage: { navigate(to: .usage) },
+        onOpenDiagnostics: { navigate(to: .diagnostics) }
       )
     case .agents:
       AgentsSettingsView(
@@ -106,6 +107,8 @@ struct MenuBarContentView: View {
       AccountDevicesView(model: model)
     case .usage:
       AccountUsageView(model: model)
+    case .diagnostics:
+      SettingsDiagnosticsView(model: model)
     }
   }
 
@@ -148,6 +151,7 @@ enum MenuBarRoute: Hashable {
   case provider(ProviderID)
   case devices
   case usage
+  case diagnostics
 
   var title: String {
     switch self {
@@ -156,6 +160,7 @@ enum MenuBarRoute: Hashable {
     case .provider(let provider): provider.displayName
     case .devices: "Devices"
     case .usage: "Usage"
+    case .diagnostics: "Diagnostics"
     }
   }
 }

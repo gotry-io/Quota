@@ -41,7 +41,7 @@ export interface StoredUsageCoverage {
   agent: UsageAgent;
   start_at: string;
   end_at: string;
-  status: "complete";
+  status: UsageCoverageStatus;
   parser_revision: string;
   accepted_at: string;
 }
@@ -55,6 +55,7 @@ export interface UsageQueryResult {
   rows: StoredUsageHourlyFact[];
   coverage: StoredUsageCoverage[];
   truncated: boolean;
+  coverage_truncated?: boolean;
 }
 
 export interface UsageState {

@@ -75,12 +75,17 @@ impl UsageParser for ClaudeParser {
             Err(()) => return ParsedLine::reason(super::CoverageReasonCode::InvalidUsage),
         };
         if tokens.input == 0
+            && tokens.cache_read == 0
+            && tokens.cache_write_5m == 0
+            && tokens.cache_write_1h == 0
+            && tokens.cache_write_inferred == 0
             && tokens.output == 0
+            && tokens.reasoning == 0
             && tools.web_search == 0
             && tools.web_fetch == 0
             && source_cost.as_deref().is_none_or(|value| value == "0")
         {
-            return ParsedLine::empty();
+            return ParsedLine::ignored_empty();
         }
         let (billing_channel, channel_source) = if model.starts_with("claude-") {
             (BillingChannel::AnthropicDirect, ChannelSource::AgentDefault)
@@ -119,8 +124,10 @@ impl UsageParser for ClaudeParser {
                     },
                 },
                 source_file_id: source_file_id.to_owned(),
+                record_key: String::new(),
             }],
             reason: None,
+            ignored_empty_records: 0,
         }
     }
 }

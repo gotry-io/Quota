@@ -85,14 +85,18 @@ tokens for this path.
 2. Track model and service-tier settings in file order. Convert each `token_count` record to a
    request delta, preferring a provider-supplied last-request usage and otherwise subtracting the
    previous cumulative total.
-3. Preserve input, cache-read, inferred cache-write, output, reasoning, model, tier, speed, context
-   bucket, and the default `openai_direct` billing channel. Codex `total_tokens` is a context counter,
-   not the sum used for billing facts. Codex logs do not supply source cost.
+3. Preserve input, cache-read, inferred cache-write, output, reasoning, model, tier, speed, and
+   context bucket. Without an explicit provider value, use the Codex default `openai_direct` channel;
+   when `payload.model_provider` is present, only `openai` maps to `openai_direct` with an explicit
+   source. Observed values such as `custom` or `rightcode` remain the unknown channel; the collector
+   never infers a billing channel from model text. Codex `total_tokens` is a context counter, not the
+   sum used for billing facts. Codex logs do not supply source cost.
 4. Duplicate cumulative totals do not emit another request. Leading subagent facts that inherit but
-   initially omit the model are buffered until that rollout supplies its model context. Facts from a
-   file that never supplies a valid model are discarded; `unknown` is not a legal model identifier.
-   Explicit invalid model values, timestamps, or usage make coverage partial rather than fabricating
-   a fact.
+   initially omit the model are buffered until that rollout supplies its model context. Model
+   identifiers are opaque provider text and are preserved as received, including punctuation such as
+   `GPT-5.5[1m]`; only empty/control-text identifiers and malformed numeric or timestamp data are
+   isolated. An isolated record or file makes only its own coverage partial and never suppresses
+   valid facts from other files.
 
 ### Claude Code Usage
 
@@ -136,15 +140,16 @@ tokens for this path.
 2. Parse persisted assistant messages and retain their provider, model, token/cache/reasoning usage,
    and nonzero source cost. Resolve only explicit recognized provider channels.
 
-All scanners reject the literal model `unknown`, ignore zero-token/tool/cost internal records, and
-use canonical `[start_at, end_at)` UTC-hour boundaries, bounded directory traversal, a two-million-
-record scan ceiling, bounded line sizes, cancellation, and source-change checks. SQLite records an
-opaque file identity, size, modification time, and parser revision. Unchanged files are skipped; a
-changed file's normalized rows are replaced transactionally. Paths and file-index metadata never
-enter a protocol submission or IPC state. Only complete coverage is eligible for authoritative
-remote replacement; empty complete coverage is valid. Discovery always covers every canonical local
-source. Local reports cover indexed history, while remote replacement remains split into bounded
-protocol ranges.
+All scanners preserve non-empty bounded model identifiers as opaque provider text, ignore zero-
+token/tool/cost internal records, and use canonical `[start_at, end_at)` UTC-hour boundaries,
+bounded directory traversal, a two-million-record scan ceiling, bounded line sizes, cancellation,
+and source-change checks. SQLite records an opaque file identity, size, modification time, and
+parser revision. Unchanged files are skipped; a changed file's normalized rows are replaced
+transactionally. Paths and file-index metadata never enter a protocol submission or IPC state. Only
+complete coverage is eligible for authoritative remote replacement; empty complete coverage is valid.
+Discovery always covers every canonical local source. Local reports cover indexed history, while
+remote replacement remains split losslessly into bounded protocol ranges. Record/file skips and
+upload partitions are summarized by the unified `quotacli doctor`/QuotaBar diagnostics report.
 
 ## Grok
 

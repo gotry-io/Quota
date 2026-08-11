@@ -2,6 +2,21 @@ import Foundation
 
 private let jsonSafeIntegerMaximum = 9_007_199_254_740_991
 
+private func decodeTrueMarker<Key: CodingKey>(
+  _ key: Key,
+  from container: KeyedDecodingContainer<Key>
+) throws -> Bool? {
+  guard container.contains(key) else { return nil }
+  guard try container.decode(Bool.self, forKey: key) else {
+    throw DecodingError.dataCorruptedError(
+      forKey: key,
+      in: container,
+      debugDescription: "Truncation markers must be true."
+    )
+  }
+  return true
+}
+
 enum BillingAgent: String, Codable, Sendable {
   case codex
   case claudeCode = "claude_code"
@@ -223,6 +238,8 @@ struct UsageSubmissionV2: Decodable, Equatable, Sendable {
   let aggregationTimezone: String
   let coverage: UsageCoverage
   let rows: [UsageHourlyFact]
+  let writeMode: UsageSubmissionWriteMode?
+  let multipart: UsageSubmissionMultipart?
 
   private enum CodingKeys: String, CodingKey {
     case protocolVersion
@@ -234,12 +251,14 @@ struct UsageSubmissionV2: Decodable, Equatable, Sendable {
     case aggregationTimezone
     case coverage
     case rows
+    case writeMode
+    case multipart
   }
 
   init(from decoder: Decoder) throws {
     try decoder.rejectUnknownWireKeys([
       "protocolVersion", "submissionId", "deviceId", "generation", "sequence", "parserRevision",
-      "aggregationTimezone", "coverage", "rows",
+      "aggregationTimezone", "coverage", "rows", "writeMode", "multipart",
     ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     protocolVersion = try container.decode(Int.self, forKey: .protocolVersion)
@@ -251,6 +270,12 @@ struct UsageSubmissionV2: Decodable, Equatable, Sendable {
     aggregationTimezone = try container.decode(String.self, forKey: .aggregationTimezone)
     coverage = try container.decode(UsageCoverage.self, forKey: .coverage)
     rows = try container.decode([UsageHourlyFact].self, forKey: .rows)
+    writeMode = container.contains(.writeMode)
+      ? try container.decode(UsageSubmissionWriteMode.self, forKey: .writeMode)
+      : nil
+    multipart = container.contains(.multipart)
+      ? try container.decode(UsageSubmissionMultipart.self, forKey: .multipart)
+      : nil
 
     let start = UsageCoverage.utcHour(coverage.startAt)
     let end = UsageCoverage.utcHour(coverage.endAt)
@@ -260,6 +285,7 @@ struct UsageSubmissionV2: Decodable, Equatable, Sendable {
       (0...jsonSafeIntegerMaximum).contains(sequence),
       isUsageTimezone(aggregationTimezone), TimeZone(identifier: aggregationTimezone) != nil,
       coverage.isValid,
+      writeMode == nil || coverage.status == .partial,
       rows.count <= 2_048,
       rows.allSatisfy({ row in
         guard let bucket = UsageCoverage.utcHour(row.bucketStartUTC) else { return false }
@@ -273,13 +299,45 @@ struct UsageSubmissionV2: Decodable, Equatable, Sendable {
             usageHour: row.usageHour
           )
       }),
-      Set(rows.map(usageHourlyFactIdentity)).count == rows.count,
-      Set(rows.map(\.model)).count <= 64
+      Set(rows.map(usageHourlyFactIdentity)).count == rows.count
     else {
       throw DecodingError.dataCorruptedError(
         forKey: .rows,
         in: container,
         debugDescription: "Invalid Usage v2 submission."
+      )
+    }
+  }
+}
+
+enum UsageSubmissionWriteMode: String, Decodable, Equatable, Sendable {
+  case mergePartial = "merge_partial"
+}
+
+struct UsageSubmissionMultipart: Decodable, Equatable, Sendable {
+  let batchID: String
+  let partIndex: Int
+  let partCount: Int
+
+  private enum CodingKeys: String, CodingKey {
+    case batchID = "batchId"
+    case partIndex
+    case partCount
+  }
+
+  init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys(["batchId", "partIndex", "partCount"])
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    batchID = try container.decode(String.self, forKey: .batchID)
+    partIndex = try container.decode(Int.self, forKey: .partIndex)
+    partCount = try container.decode(Int.self, forKey: .partCount)
+    guard isUsageOpaqueID(batchID), (2...64).contains(partCount),
+      (0..<partCount).contains(partIndex)
+    else {
+      throw DecodingError.dataCorruptedError(
+        forKey: .partCount,
+        in: container,
+        debugDescription: "Invalid Usage multipart metadata."
       )
     }
   }
@@ -367,6 +425,7 @@ struct UsageCostOutcome: Codable, Equatable, Sendable {
   let unpricedRows: Int
   let assumptions: [UsageCostAssumption]
   let unpriced: [UsageUnpricedItem]
+  let unpricedTruncated: Bool?
 
   private enum CodingKeys: String, CodingKey {
     case mode
@@ -379,6 +438,33 @@ struct UsageCostOutcome: Codable, Equatable, Sendable {
     case unpricedRows
     case assumptions
     case unpriced
+    case unpricedTruncated
+  }
+
+  init(
+    mode: UsageCostMode,
+    basis: UsageCostBasis,
+    status: UsageCostStatus,
+    amountMicrousd: String?,
+    catalogRevision: String?,
+    calculatedRows: Int,
+    reportedRows: Int,
+    unpricedRows: Int,
+    assumptions: [UsageCostAssumption],
+    unpriced: [UsageUnpricedItem],
+    unpricedTruncated: Bool? = nil
+  ) {
+    self.mode = mode
+    self.basis = basis
+    self.status = status
+    self.amountMicrousd = amountMicrousd
+    self.catalogRevision = catalogRevision
+    self.calculatedRows = calculatedRows
+    self.reportedRows = reportedRows
+    self.unpricedRows = unpricedRows
+    self.assumptions = assumptions
+    self.unpriced = unpriced
+    self.unpricedTruncated = unpricedTruncated
   }
 
   var isValid: Bool {
@@ -391,7 +477,10 @@ struct UsageCostOutcome: Codable, Equatable, Sendable {
       amountMicrousd.map(isNonnegativeInteger) ?? true,
       catalogRevision.map(isUsageOpaqueID) ?? true,
       let pricedRows = safeSum([calculatedRows, reportedRows]),
-      let itemRows = safeSum(unpriced.map(\.rows))
+      let itemRows = safeSum(unpriced.map(\.rows)),
+      unpricedTruncated != false,
+      itemRows <= unpricedRows,
+      unpricedTruncated == true || itemRows == unpricedRows
     else { return false }
 
     let expectedBasis: UsageCostBasis =
@@ -415,8 +504,10 @@ struct UsageCostOutcome: Codable, Equatable, Sendable {
     return basis == expectedBasis
       && status == expectedStatus
       && (amountMicrousd != nil) == (pricedRows > 0)
-      && itemRows == unpricedRows
+      && (unpricedTruncated == true || itemRows == unpricedRows)
   }
+
+  var hasUnpricedTruncatedDetails: Bool { unpricedTruncated == true }
 }
 
 extension UsageCostOutcome {
@@ -424,7 +515,7 @@ extension UsageCostOutcome {
     try decoder.rejectUnknownWireKeys([
       "mode", "basis", "status", "amountMicrousd", "catalogRevision", "calculatedRows",
       "reportedRows",
-      "unpricedRows", "assumptions", "unpriced",
+      "unpricedRows", "assumptions", "unpriced", "unpricedTruncated",
     ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     mode = try container.decode(UsageCostMode.self, forKey: .mode)
@@ -437,6 +528,7 @@ extension UsageCostOutcome {
     unpricedRows = try container.decode(Int.self, forKey: .unpricedRows)
     assumptions = try container.decode([UsageCostAssumption].self, forKey: .assumptions)
     unpriced = try container.decode([UsageUnpricedItem].self, forKey: .unpriced)
+    unpricedTruncated = try decodeTrueMarker(.unpricedTruncated, from: container)
     guard isValid else {
       throw DecodingError.dataCorruptedError(
         forKey: .status,
@@ -557,7 +649,7 @@ struct UsageBreakdown: Codable, Equatable, Sendable {
   }
 
   var isValid: Bool {
-    !key.isEmpty && key.count <= 128 && totals.isValid && cost.isValid
+    isUsageBreakdownKey(dimension, key) && totals.isValid && cost.isValid
   }
 }
 
@@ -569,6 +661,13 @@ extension UsageBreakdown {
     key = try container.decode(String.self, forKey: .key)
     totals = try container.decode(UsageTokenTotals.self, forKey: .totals)
     cost = try container.decode(UsageCostOutcome.self, forKey: .cost)
+    guard isValid else {
+      throw DecodingError.dataCorruptedError(
+        forKey: .key,
+        in: container,
+        debugDescription: "Invalid Usage breakdown key or totals."
+      )
+    }
   }
 }
 
@@ -634,6 +733,8 @@ struct AccountUsageSummary: Codable, Equatable, Sendable {
   let cost: UsageCostOutcome
   let coverage: [UsageCoverageSummaryItem]
   let breakdowns: [UsageBreakdown]
+  let coverageTruncated: Bool?
+  let breakdownsTruncated: Bool?
 
   private enum CodingKeys: String, CodingKey {
     case range
@@ -641,6 +742,30 @@ struct AccountUsageSummary: Codable, Equatable, Sendable {
     case cost
     case coverage
     case breakdowns
+    case coverageTruncated
+    case breakdownsTruncated
+  }
+
+  init(
+    range: UsageDateRange,
+    totals: UsageTokenTotals,
+    cost: UsageCostOutcome,
+    coverage: [UsageCoverageSummaryItem],
+    breakdowns: [UsageBreakdown],
+    coverageTruncated: Bool? = nil,
+    breakdownsTruncated: Bool? = nil
+  ) {
+    self.range = range
+    self.totals = totals
+    self.cost = cost
+    self.coverage = coverage
+    self.breakdowns = breakdowns
+    self.coverageTruncated = coverageTruncated
+    self.breakdownsTruncated = breakdownsTruncated
+  }
+
+  var hasTruncatedDetails: Bool {
+    coverageTruncated == true || breakdownsTruncated == true || cost.hasUnpricedTruncatedDetails
   }
 
   var isValid: Bool {
@@ -656,13 +781,18 @@ struct AccountUsageSummary: Codable, Equatable, Sendable {
 
 extension AccountUsageSummary {
   init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys(["range", "totals", "cost", "coverage", "breakdowns"])
+    try decoder.rejectUnknownWireKeys([
+      "range", "totals", "cost", "coverage", "breakdowns", "coverageTruncated",
+      "breakdownsTruncated",
+    ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     range = try container.decode(UsageDateRange.self, forKey: .range)
     totals = try container.decode(UsageTokenTotals.self, forKey: .totals)
     cost = try container.decode(UsageCostOutcome.self, forKey: .cost)
     coverage = try container.decode([UsageCoverageSummaryItem].self, forKey: .coverage)
     breakdowns = try container.decode([UsageBreakdown].self, forKey: .breakdowns)
+    coverageTruncated = try decodeTrueMarker(.coverageTruncated, from: container)
+    breakdownsTruncated = try decodeTrueMarker(.breakdownsTruncated, from: container)
   }
 }
 
@@ -682,6 +812,12 @@ struct LocalUsageReport: Codable, Equatable, Sendable {
   let cost: UsageCostOutcome?
   let coverage: [UsageCoverage]
   let breakdowns: [UsageBreakdown]
+  let coverageTruncated: Bool?
+  let breakdownsTruncated: Bool?
+
+  var hasTruncatedDetails: Bool {
+    coverageTruncated == true || breakdownsTruncated == true || cost?.hasUnpricedTruncatedDetails == true
+  }
 
   init(
     protocolVersion: Int = 2,
@@ -692,7 +828,9 @@ struct LocalUsageReport: Codable, Equatable, Sendable {
     totals: UsageTokenTotals?,
     cost: UsageCostOutcome?,
     coverage: [UsageCoverage],
-    breakdowns: [UsageBreakdown]
+    breakdowns: [UsageBreakdown],
+    coverageTruncated: Bool? = nil,
+    breakdownsTruncated: Bool? = nil
   ) {
     self.protocolVersion = protocolVersion
     self.generatedAt = generatedAt
@@ -703,12 +841,14 @@ struct LocalUsageReport: Codable, Equatable, Sendable {
     self.cost = cost
     self.coverage = coverage
     self.breakdowns = breakdowns
+    self.coverageTruncated = coverageTruncated
+    self.breakdownsTruncated = breakdownsTruncated
   }
 
   init(from decoder: Decoder) throws {
     try decoder.rejectUnknownWireKeys([
       "protocolVersion", "generatedAt", "aggregationTimezone", "range", "status", "totals", "cost",
-      "coverage", "breakdowns",
+      "coverage", "breakdowns", "coverageTruncated", "breakdownsTruncated",
     ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     protocolVersion = try container.decode(Int.self, forKey: .protocolVersion)
@@ -720,6 +860,8 @@ struct LocalUsageReport: Codable, Equatable, Sendable {
     cost = try container.decode(UsageCostOutcome?.self, forKey: .cost)
     coverage = try container.decode([UsageCoverage].self, forKey: .coverage)
     breakdowns = try container.decode([UsageBreakdown].self, forKey: .breakdowns)
+    coverageTruncated = try decodeTrueMarker(.coverageTruncated, from: container)
+    breakdownsTruncated = try decodeTrueMarker(.breakdownsTruncated, from: container)
 
     let unavailable = status == .unavailable
     let expectedStatus: LocalUsageReportStatus =
@@ -764,6 +906,8 @@ struct LocalUsageReport: Codable, Equatable, Sendable {
     try container.encode(cost, forKey: .cost)
     try container.encode(coverage, forKey: .coverage)
     try container.encode(breakdowns, forKey: .breakdowns)
+    try container.encodeIfPresent(coverageTruncated, forKey: .coverageTruncated)
+    try container.encodeIfPresent(breakdownsTruncated, forKey: .breakdownsTruncated)
   }
 
   private enum CodingKeys: String, CodingKey {
@@ -776,6 +920,8 @@ struct LocalUsageReport: Codable, Equatable, Sendable {
     case cost
     case coverage
     case breakdowns
+    case coverageTruncated
+    case breakdownsTruncated
   }
 }
 
@@ -1029,10 +1175,11 @@ struct AccountUsageHourlyResponse: Decodable, Equatable, Sendable {
   let facts: [AccountUsageHourlyFact]
   let coverage: [UsageCoverageSummaryItem]
   let cost: UsageCostOutcome
+  let coverageTruncated: Bool?
 
   init(from decoder: Decoder) throws {
     try decoder.rejectUnknownWireKeys([
-      "protocolVersion", "startAt", "endAt", "facts", "coverage", "cost",
+      "protocolVersion", "startAt", "endAt", "facts", "coverage", "cost", "coverageTruncated",
     ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     protocolVersion = try container.decode(Int.self, forKey: .protocolVersion)
@@ -1041,6 +1188,7 @@ struct AccountUsageHourlyResponse: Decodable, Equatable, Sendable {
     facts = try container.decode([AccountUsageHourlyFact].self, forKey: .facts)
     coverage = try container.decode([UsageCoverageSummaryItem].self, forKey: .coverage)
     cost = try container.decode(UsageCostOutcome.self, forKey: .cost)
+    coverageTruncated = try decodeTrueMarker(.coverageTruncated, from: container)
     let decodedStart = UsageCoverage.utcHour(startAt)
     let decodedEnd = UsageCoverage.utcHour(endAt)
     let costRows = safeSum([cost.calculatedRows, cost.reportedRows, cost.unpricedRows])
@@ -1072,6 +1220,7 @@ struct AccountUsageHourlyResponse: Decodable, Equatable, Sendable {
     case facts
     case coverage
     case cost
+    case coverageTruncated
   }
 }
 
@@ -1518,13 +1667,19 @@ private func isUsagePricingDimension(_ value: String) -> Bool {
 }
 
 private func isUsageModel(_ value: String) -> Bool {
-  guard let first = value.utf8.first, !value.isEmpty, value.count <= 128,
-    isUsageASCIIAlphaNumeric(first)
-  else { return false }
-  return value.utf8.allSatisfy { byte in
-    isUsageASCIIAlphaNumeric(byte) || byte == 46 || byte == 58 || byte == 95 || byte == 47
-      || byte == 43 || byte == 45
+  guard !value.isEmpty, value.unicodeScalars.count <= 128 else { return false }
+  return value.unicodeScalars.allSatisfy { scalar in
+    !((0 ... 31).contains(scalar.value) || (127 ... 159).contains(scalar.value))
   }
+}
+
+private func isUsageBreakdownKey(_ dimension: UsageBreakdownDimension, _ value: String) -> Bool {
+  if dimension == .model {
+    return isUsageModel(value)
+  }
+  return !value.isEmpty
+    && value.utf8.count <= 128
+    && value.trimmingCharacters(in: .whitespacesAndNewlines) == value
 }
 
 private func isUsageTimezone(_ value: String) -> Bool {

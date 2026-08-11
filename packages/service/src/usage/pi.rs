@@ -55,8 +55,14 @@ impl UsageParser for PiParser {
             Ok(value) => value,
             Err(()) => return ParsedLine::reason(super::CoverageReasonCode::InvalidUsage),
         };
-        if input == 0 && output == 0 && source_cost.is_none() {
-            return ParsedLine::empty();
+        if input == 0
+            && cache_read == 0
+            && cache_write == 0
+            && output == 0
+            && reasoning == 0
+            && source_cost.as_deref().is_none_or(|value| value == "0")
+        {
+            return ParsedLine::ignored_empty();
         }
         let channel = billing_channel(message.get("provider").and_then(Value::as_str));
         ParsedLine {
@@ -88,8 +94,10 @@ impl UsageParser for PiParser {
                     source_cost_covered_requests: if source_cost.is_some() { 1 } else { 0 },
                 },
                 source_file_id: source_file_id.to_owned(),
+                record_key: String::new(),
             }],
             reason: None,
+            ignored_empty_records: 0,
         }
     }
 }

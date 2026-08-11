@@ -19,6 +19,13 @@ SQLite, outbox, and local/account observation merge. QuotaBar owns presentation,
 and ordering preferences, native provider configuration fields, account actions, accessibility, and
 Launch at Login. Quitting the app closes stdin and stops the service and all synchronization.
 
+Settings includes a **Diagnostics** action backed by the private `diagnose` IPC operation. It copies
+the same bounded, redacted report consumed by Linux `quotacli doctor`, covering provider/quota
+collection, Usage, pricing, account state, and synchronization. Swift strictly decodes the fixed
+report shape and only renders safe status, counters, and recovery messages; it never reads SQLite or
+source logs. Raw paths, filenames, model lists, prompts, completions, session identifiers, device
+IDs, credentials, and tokens are excluded.
+
 Provider API keys entered in Settings go directly over child stdin. Swift does not put them in argv,
 UserDefaults, logs, or response models; subsequent state exposes only a masked tip.
 

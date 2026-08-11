@@ -1,6 +1,7 @@
 import { applyD1Migrations, env } from "cloudflare:test";
 import type { D1Migration } from "@cloudflare/vitest-pool-workers";
 import {
+  AccountUsageSummarySchema,
   type DeviceAuthorizationResponse,
   MAXIMUM_USAGE_COVERAGE_HOURS,
   type OAuthTokenResponse,
@@ -177,9 +178,284 @@ describe("managed Relay on real Workers and D1", () => {
       outcome: "duplicate",
       next_sequence: 1,
     });
-    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM usage_hourly").first("count")).toBe(
+    const explicitUnknown = {
+      ...submission,
+      submission_id: "submission_explicit_unknown",
+      sequence: 1,
+      parser_revision: "parser_new",
+    };
+    expect(await usage.recordUsage(principal, explicitUnknown, now.toISOString())).toMatchObject({
+      outcome: "accepted",
+      next_sequence: 2,
+    });
+    expect(
+      await env.DB.prepare(
+        "SELECT model FROM usage_hourly WHERE device_id = 'device_legacy'",
+      ).first("model"),
+    ).toBe("unknown");
+  });
+
+  it("merges explicit partial Usage without deleting facts and replaces it later", async () => {
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_partial', 'subject_partial', ?1, ?1)",
+      ).bind(now.toISOString()),
+      env.DB.prepare(
+        `INSERT INTO devices (
+           id, account_id, installation_id_hash, generation, created_at, last_login_at
+         ) VALUES ('device_partial', 'account_partial', 'installation_partial', 1, ?1, ?1)`,
+      ).bind(now.toISOString()),
+    ]);
+    const principal: DevicePrincipal = {
+      kind: "device",
+      session_id: "session_partial",
+      family_id: "family_partial",
+      account_id: "account_partial",
+      device_id: "device_partial",
+      generation: 1,
+      scopes: ["usage:write:self"],
+    };
+    const usage = new D1UsageState(env.DB);
+    const first = usageSubmission(
+      "partial_first",
       0,
+      "2026-08-10T10:00:00Z",
+      "2026-08-10T14:00:00Z",
+      [usageFact("gpt-5.5[1m]", "2026-08-10T10:00:00Z")],
     );
+    expect(await usage.recordUsage(principal, first, now.toISOString())).toMatchObject({
+      outcome: "accepted",
+      next_sequence: 1,
+    });
+    const partial = {
+      ...usageSubmission("partial_merge", 1, "2026-08-10T11:00:00Z", "2026-08-10T13:00:00Z", [
+        usageFact("openrouter-3o[1m]", "2026-08-10T11:00:00Z"),
+      ]),
+      write_mode: "merge_partial" as const,
+      coverage: {
+        ...usageSubmission("partial_merge", 1, "2026-08-10T11:00:00Z", "2026-08-10T13:00:00Z", [])
+          .coverage,
+        status: "partial" as const,
+      },
+    };
+    expect(await usage.recordUsage(principal, partial, now.toISOString())).toMatchObject({
+      outcome: "accepted",
+      next_sequence: 2,
+    });
+    let result = await usage.queryAccountUsage("account_partial", {
+      device_id: "device_partial",
+      limit: 100,
+    });
+    expect(result.rows.map((row) => row.model)).toEqual(["gpt-5.5[1m]", "openrouter-3o[1m]"]);
+    expect(result.coverage.map((item) => item.status)).toEqual(["complete", "partial", "complete"]);
+
+    const complete = {
+      ...partial,
+      submission_id: "partial_complete",
+      sequence: 2,
+      write_mode: undefined,
+      coverage: { ...partial.coverage, status: "complete" as const },
+      rows: [],
+    };
+    expect(await usage.recordUsage(principal, complete, now.toISOString())).toMatchObject({
+      outcome: "accepted",
+      next_sequence: 3,
+    });
+    result = await usage.queryAccountUsage("account_partial", {
+      device_id: "device_partial",
+      limit: 100,
+    });
+    expect(result.rows.map((row) => row.model)).toEqual(["gpt-5.5[1m]"]);
+    expect(result.coverage.map((item) => item.status)).toEqual([
+      "complete",
+      "complete",
+      "complete",
+    ]);
+
+    const exactPartial = {
+      ...partial,
+      submission_id: "partial_exact",
+      sequence: 3,
+      rows: [usageFact("exact-partial", "2026-08-10T11:00:00Z")],
+    };
+    expect(await usage.recordUsage(principal, exactPartial, now.toISOString())).toMatchObject({
+      outcome: "accepted",
+      next_sequence: 4,
+    });
+    result = await usage.queryAccountUsage("account_partial", {
+      device_id: "device_partial",
+      limit: 100,
+    });
+    expect(result.coverage.map((item) => item.status)).toEqual(["complete", "partial", "complete"]);
+  });
+
+  it("keeps multipart Usage invisible until all parts commit", async () => {
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_multipart', 'subject_multipart', ?1, ?1)",
+      ).bind(now.toISOString()),
+      env.DB.prepare(
+        `INSERT INTO devices (
+           id, account_id, installation_id_hash, generation, created_at, last_login_at
+         ) VALUES ('device_multipart', 'account_multipart', 'installation_multipart', 1, ?1, ?1)`,
+      ).bind(now.toISOString()),
+    ]);
+    const principal: DevicePrincipal = {
+      kind: "device",
+      session_id: "session_multipart",
+      family_id: "family_multipart",
+      account_id: "account_multipart",
+      device_id: "device_multipart",
+      generation: 1,
+      scopes: ["usage:write:self"],
+    };
+    const usage = new D1UsageState(env.DB);
+    const common = {
+      protocol_version: 2 as const,
+      device_id: "device_multipart",
+      generation: 1,
+      parser_revision: "parser_multipart",
+      aggregation_timezone: "UTC",
+      coverage: {
+        agent: "codex" as const,
+        start_at: "2026-08-10T12:00:00Z",
+        end_at: "2026-08-10T13:00:00Z",
+        status: "complete" as const,
+      },
+    };
+    const partRows = Array.from({ length: 256 }, (_, index) =>
+      usageFact(`model-${index}`, "2026-08-10T12:00:00Z"),
+    );
+    const part0: UsageSubmission = {
+      ...common,
+      submission_id: "multipart_0",
+      sequence: 0,
+      rows: partRows.slice(0, 128),
+      multipart: { batch_id: "multipart_batch", part_index: 0, part_count: 2 },
+    };
+    const part1: UsageSubmission = {
+      ...common,
+      submission_id: "multipart_1",
+      sequence: 1,
+      rows: partRows.slice(128),
+      multipart: { batch_id: "multipart_batch", part_index: 1, part_count: 2 },
+    };
+    expect(await usage.recordUsage(principal, part0, now.toISOString())).toMatchObject({
+      outcome: "accepted",
+      next_sequence: 1,
+    });
+    expect(
+      await env.DB.prepare(
+        "SELECT COUNT(*) AS count FROM usage_hourly WHERE device_id = 'device_multipart'",
+      ).first("count"),
+    ).toBe(0);
+    expect(await usage.recordUsage(principal, part1, now.toISOString())).toMatchObject({
+      outcome: "accepted",
+      next_sequence: 2,
+    });
+    expect(
+      await env.DB.prepare(
+        "SELECT COUNT(*) AS count FROM usage_hourly WHERE device_id = 'device_multipart'",
+      ).first("count"),
+    ).toBe(256);
+    expect(
+      await env.DB.prepare("SELECT COUNT(*) AS count FROM usage_submission_parts").first("count"),
+    ).toBe(0);
+    expect(await usage.recordUsage(principal, part1, now.toISOString())).toMatchObject({
+      outcome: "duplicate",
+    });
+
+    const conflictPart0: UsageSubmission = {
+      ...part0,
+      submission_id: "multipart_conflict_0",
+      sequence: 2,
+      rows: [usageFact("duplicate-model", "2026-08-10T12:00:00Z")],
+      multipart: { batch_id: "multipart_conflict", part_index: 0, part_count: 2 },
+    };
+    const conflictPart1: UsageSubmission = {
+      ...part1,
+      submission_id: "multipart_conflict_1",
+      sequence: 3,
+      rows: [usageFact("duplicate-model", "2026-08-10T12:00:00Z")],
+      multipart: { batch_id: "multipart_conflict", part_index: 1, part_count: 2 },
+    };
+    expect(await usage.recordUsage(principal, conflictPart0, now.toISOString())).toMatchObject({
+      outcome: "accepted",
+      next_sequence: 3,
+    });
+    expect(await usage.recordUsage(principal, conflictPart1, now.toISOString())).toMatchObject({
+      outcome: "sequence_conflict",
+    });
+    expect(
+      await env.DB.prepare(
+        "SELECT COUNT(*) AS count FROM usage_hourly WHERE device_id = 'device_multipart'",
+      ).first("count"),
+    ).toBe(256);
+    expect(
+      await env.DB.prepare(
+        "SELECT COUNT(*) AS count FROM usage_submission_parts WHERE device_id = 'device_multipart' AND batch_id = 'multipart_conflict'",
+      ).first("count"),
+    ).toBe(2);
+    expect(await usage.recordUsage(principal, conflictPart1, now.toISOString())).toMatchObject({
+      outcome: "sequence_conflict",
+    });
+
+    const partialCommon = {
+      ...common,
+      write_mode: "merge_partial" as const,
+      coverage: {
+        ...common.coverage,
+        status: "partial" as const,
+      },
+    };
+    const partialConflictPart0: UsageSubmission = {
+      ...partialCommon,
+      submission_id: "multipart_partial_conflict_0",
+      sequence: 4,
+      rows: [usageFact("partial-duplicate-model", "2026-08-10T12:00:00Z")],
+      multipart: {
+        batch_id: "multipart_partial_conflict",
+        part_index: 0,
+        part_count: 2,
+      },
+    };
+    const partialConflictPart1: UsageSubmission = {
+      ...partialCommon,
+      submission_id: "multipart_partial_conflict_1",
+      sequence: 5,
+      rows: [usageFact("partial-duplicate-model", "2026-08-10T12:00:00Z")],
+      multipart: {
+        batch_id: "multipart_partial_conflict",
+        part_index: 1,
+        part_count: 2,
+      },
+    };
+    expect(
+      await usage.recordUsage(principal, partialConflictPart0, now.toISOString()),
+    ).toMatchObject({
+      outcome: "accepted",
+      next_sequence: 5,
+    });
+    expect(
+      await usage.recordUsage(principal, partialConflictPart1, now.toISOString()),
+    ).toMatchObject({
+      outcome: "sequence_conflict",
+    });
+    expect(
+      await env.DB.prepare(
+        "SELECT COUNT(*) AS count FROM usage_hourly WHERE device_id = 'device_multipart'",
+      ).first("count"),
+    ).toBe(256);
+    expect(
+      await env.DB.prepare(
+        "SELECT COUNT(*) AS count FROM usage_submission_parts WHERE device_id = 'device_multipart' AND batch_id = 'multipart_partial_conflict'",
+      ).first("count"),
+    ).toBe(2);
+    expect(
+      await usage.recordUsage(principal, partialConflictPart1, now.toISOString()),
+    ).toMatchObject({
+      outcome: "sequence_conflict",
+    });
   });
 
   it("filters additive Usage agents for released v2 clients", async () => {
@@ -322,6 +598,78 @@ describe("managed Relay on real Workers and D1", () => {
         )
       ).status,
     ).toBe(200);
+  });
+
+  it("keeps high-cardinality legacy summaries on the released response shape", async () => {
+    const models = JSON.stringify(Array.from({ length: 1_001 }, (_, index) => index));
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_cardinality', 'subject_cardinality', ?1, ?1)",
+      ).bind(now.toISOString()),
+      env.DB.prepare(
+        `INSERT INTO devices (
+           id, account_id, installation_id_hash, generation, created_at, last_login_at
+         ) VALUES ('device_cardinality', 'account_cardinality', 'installation_cardinality', 1, ?1, ?1)`,
+      ).bind(now.toISOString()),
+      env.DB.prepare(
+        `INSERT INTO usage_hourly (
+           device_id, bucket_start_utc, usage_date, usage_hour, aggregation_timezone,
+           agent, billing_channel, channel_source, model, context_bucket,
+           service_tier, speed, inference_geo, input_tokens, cache_read_tokens,
+           cache_write_5m_tokens, cache_write_1h_tokens, cache_write_inferred_tokens,
+           output_tokens, reasoning_tokens, requests, web_search_requests, web_fetch_requests,
+           source_cost_microusd, source_cost_covered_requests
+         )
+         SELECT 'device_cardinality', '2026-08-09T00:00:00Z', '2026-08-09', 0, 'UTC',
+                'codex', 'openai_direct', 'agent_default', 'model-' || value, 'le_128k',
+                'unknown', 'unknown', 'unknown', 10, 0, 0, 0, 0, 2, 0, 1, 0, 0, '1', 1
+         FROM json_each(?1)`,
+      ).bind(models),
+    ]);
+    const state = new D1AccountState(env.DB);
+    const usageState = new D1UsageState(env.DB);
+    const hasher = new SecretHasher(secret);
+    const webAuth: WebAccountAuth = {
+      handler: async () => new Response(null, { status: 404 }),
+      beginGitHubSignIn: async () => new Response(null, { status: 302 }),
+      getSession: async () => ({
+        user: { id: "account_cardinality", name: "Quota Tester" },
+        session: {
+          id: "web_cardinality",
+          createdAt: now,
+          expiresAt: new Date(now.getTime() + 60_000),
+        },
+      }),
+    };
+    const app = createRelayApp({
+      state,
+      usageState,
+      accountService: new AccountService(state, hasher, secret),
+      webAuth,
+      hasher,
+      now: () => now,
+    });
+
+    const legacyResponse = await app.request(
+      "https://quota.gotry.io/api/v2/account/summary?cost_mode=reported",
+    );
+    const legacy = (await legacyResponse.json()) as { usage: Record<string, unknown> };
+    expect(legacyResponse.status).toBe(200);
+    const legacySchema = AccountUsageSummarySchema.omit({
+      coverage_truncated: true,
+      breakdowns_truncated: true,
+    });
+    expect(legacySchema.safeParse(legacy.usage).success).toBe(true);
+    expect("coverage_truncated" in legacy.usage).toBe(false);
+    expect("breakdowns_truncated" in legacy.usage).toBe(false);
+
+    const expanded = (await (
+      await app.request("https://quota.gotry.io/api/v2/account/summary?usage_agents=all")
+    ).json()) as {
+      usage: { breakdowns_truncated?: boolean; cost: { unpriced_truncated?: boolean } };
+    };
+    expect(expanded.usage.breakdowns_truncated).toBe(true);
+    expect(expanded.usage.cost.unpriced_truncated).toBe(true);
   });
 
   it("stores Better Auth sessions encrypted behind hashed keys", async () => {
@@ -723,6 +1071,58 @@ function usageFactInsertAt(
        0, 0, 0, 2, 0, 1, 0, 0, NULL, 0
      )`,
   ).bind(deviceID, bucketStart, usageDate);
+}
+
+function usageFact(model: string, bucket: string) {
+  return {
+    bucket_start_utc: bucket,
+    usage_date: bucket.slice(0, 10),
+    usage_hour: Number(bucket.slice(11, 13)),
+    agent: "codex" as const,
+    billing_channel: "openai_direct" as const,
+    channel_source: "agent_default" as const,
+    model,
+    context_bucket: "le_128k" as const,
+    service_tier: "unknown",
+    speed: "unknown",
+    inference_geo: "unknown",
+    input_tokens: 10,
+    cache_read_tokens: 0,
+    cache_write_5m_tokens: 0,
+    cache_write_1h_tokens: 0,
+    cache_write_inferred_tokens: 0,
+    output_tokens: 2,
+    reasoning_tokens: 0,
+    requests: 1,
+    web_search_requests: 0,
+    web_fetch_requests: 0,
+    source_cost_covered_requests: 0,
+  };
+}
+
+function usageSubmission(
+  submissionID: string,
+  sequence: number,
+  startAt: string,
+  endAt: string,
+  rows: ReturnType<typeof usageFact>[],
+): UsageSubmission {
+  return {
+    protocol_version: 2,
+    submission_id: submissionID,
+    device_id: "device_partial",
+    generation: 1,
+    sequence,
+    parser_revision: "parser_partial",
+    aggregation_timezone: "UTC",
+    coverage: {
+      agent: "codex",
+      start_at: startAt,
+      end_at: endAt,
+      status: "complete",
+    },
+    rows,
+  };
 }
 
 function legacyUnknownSubmission(): UsageSubmission {

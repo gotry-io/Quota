@@ -794,6 +794,13 @@ export class D1AccountState implements AccountState {
         )
         .bind(accountId, deviceId),
       this.database
+        .prepare(
+          `DELETE FROM usage_submission_parts WHERE device_id = ?2 AND EXISTS (
+             SELECT 1 FROM devices WHERE id = ?2 AND account_id = ?1
+           )`,
+        )
+        .bind(accountId, deviceId),
+      this.database
         .prepare(`DELETE FROM login_grants WHERE device_id = ?2 AND account_id = ?1`)
         .bind(accountId, deviceId),
     ]);

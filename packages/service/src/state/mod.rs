@@ -1,6 +1,6 @@
 //! The sole local persistence owner.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, File, OpenOptions, Permissions};
 use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
@@ -347,6 +347,85 @@ impl StateStore {
     pub fn component(&self, name: ComponentName) -> Result<Option<ComponentRecord>, StateError> {
         let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
         read_component(&conn, name)
+    }
+
+    pub fn write_usage_scan_diagnostics(
+        &self,
+        agent: UsageAgent,
+        value: &Value,
+    ) -> Result<(), StateError> {
+        let raw = serde_json::to_string(value)?;
+        if raw.len() > 64 * 1024 {
+            return Err(StateError::InvalidState);
+        }
+        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        conn.execute(
+            "INSERT INTO usage_scan_diagnostics(agent, payload_json, updated_at)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(agent) DO UPDATE SET payload_json = excluded.payload_json,
+             updated_at = excluded.updated_at",
+            params![agent.as_str(), raw, now_rfc3339()],
+        )?;
+        Ok(())
+    }
+
+    pub fn usage_scan_diagnostics(&self) -> Result<Vec<(UsageAgent, Value)>, StateError> {
+        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        let mut statement =
+            conn.prepare("SELECT agent, payload_json FROM usage_scan_diagnostics ORDER BY agent")?;
+        let rows = statement.query_map([], |row| {
+            let agent: String = row.get(0)?;
+            let agent = parse_usage_agent(&agent).ok_or_else(|| {
+                rusqlite::Error::InvalidColumnType(
+                    0,
+                    "agent".to_owned(),
+                    rusqlite::types::Type::Text,
+                )
+            })?;
+            let value: String = row.get(1)?;
+            let value = serde_json::from_str(&value).map_err(|_| {
+                rusqlite::Error::InvalidColumnType(
+                    1,
+                    "payload_json".to_owned(),
+                    rusqlite::types::Type::Text,
+                )
+            })?;
+            Ok((agent, value))
+        })?;
+        let mut diagnostics = Vec::new();
+        for row in rows {
+            diagnostics.push(row?);
+        }
+        Ok(diagnostics)
+    }
+
+    pub fn write_sync_diagnostic(&self, value: &Value) -> Result<(), StateError> {
+        let raw = serde_json::to_string(value)?;
+        if raw.len() > 64 * 1024 {
+            return Err(StateError::InvalidState);
+        }
+        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        conn.execute(
+            "INSERT INTO sync_diagnostics(id, payload_json, updated_at)
+             VALUES (1, ?1, ?2)
+             ON CONFLICT(id) DO UPDATE SET payload_json = excluded.payload_json,
+             updated_at = excluded.updated_at",
+            params![raw, now_rfc3339()],
+        )?;
+        Ok(())
+    }
+
+    pub fn sync_diagnostic(&self) -> Result<Option<Value>, StateError> {
+        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        let raw: Option<String> = conn
+            .query_row(
+                "SELECT payload_json FROM sync_diagnostics WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        raw.map(|value| serde_json::from_str(&value).map_err(StateError::from))
+            .transpose()
     }
 
     pub fn pricing_etag(&self) -> Result<Option<String>, StateError> {
@@ -727,7 +806,6 @@ impl StateStore {
         self.current_revision()
     }
 
-    #[cfg(test)]
     pub fn outbox_entries(&self) -> Result<Vec<Value>, StateError> {
         let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
         let mut statement = conn.prepare(
@@ -896,29 +974,197 @@ impl StateStore {
     }
 
     /// Acknowledges a successful/duplicate Relay response and removes the immutable request in one
-    /// SQLite transaction.  Relay deduplicates retries by the immutable submission id.
+    /// SQLite transaction. Relay deduplicates retries by the immutable submission id. Multipart
+    /// requests have already consumed their dirty range when all parts are staged, so an ACK never
+    /// changes dirty state.
     pub fn acknowledge_outbox_entry(&self, submission_id: &str) -> Result<bool, StateError> {
         let mut conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
         let tx = conn.transaction()?;
-        let row: Option<String> = tx
+        let exists: Option<i64> = tx
             .query_row(
-                "SELECT submission_id
+                "SELECT 1
                  FROM usage_outbox WHERE submission_id = ?1",
                 params![submission_id],
                 |row| row.get(0),
             )
             .optional()?;
-        let Some(_) = row else {
+        let Some(_) = exists else {
             tx.commit()?;
             return Ok(false);
         };
-        tx.execute(
+        let changed = tx.execute(
             "DELETE FROM usage_outbox WHERE submission_id = ?1",
             params![submission_id],
         )?;
-        bump_revision(&tx)?;
+        if changed > 0 {
+            bump_revision(&tx)?;
+        }
         tx.commit()?;
-        Ok(true)
+        Ok(changed > 0)
+    }
+
+    /// Stage every part of one atomic UTC-hour batch in one SQLite transaction. The complete set
+    /// of immutable outbox entries and consumption of the source dirty range commit together, so
+    /// a crash can recover solely from the durable entries. ACKs only remove those entries.
+    pub fn stage_multipart_outbox_entries(
+        &self,
+        account_id: &str,
+        device_id: &str,
+        generation: u64,
+        batch_id: &str,
+        consumed: &UsageDirtyRange,
+        submissions: &[Value],
+    ) -> Result<bool, StateError> {
+        if account_id.is_empty()
+            || device_id.is_empty()
+            || generation == 0
+            || batch_id.is_empty()
+            || submissions.len() < 2
+        {
+            return Err(StateError::InvalidState);
+        }
+        let first = submissions.first().ok_or(StateError::InvalidState)?;
+        let first_info = multipart_info(first).ok_or(StateError::InvalidState)?;
+        if first_info.0 != batch_id || first_info.2 != submissions.len() as u64 {
+            return Err(StateError::InvalidState);
+        }
+        let first_coverage = first
+            .get("coverage")
+            .and_then(Value::as_object)
+            .ok_or(StateError::InvalidState)?;
+        if first_coverage.get("agent").and_then(Value::as_str) != Some(consumed.agent.as_str())
+            || first_coverage.get("start_at").and_then(Value::as_str)
+                != Some(consumed.start_at.as_str())
+            || first_coverage.get("end_at").and_then(Value::as_str)
+                != Some(consumed.end_at.as_str())
+        {
+            return Err(StateError::InvalidState);
+        }
+        for (index, submission) in submissions.iter().enumerate() {
+            let Some((part_batch, part_index, part_count)) = multipart_info(submission) else {
+                return Err(StateError::InvalidState);
+            };
+            if part_batch != batch_id
+                || part_index != index as u64
+                || part_count != submissions.len() as u64
+                || submission.get("device_id").and_then(Value::as_str) != Some(device_id)
+                || submission.get("generation").and_then(Value::as_u64) != Some(generation)
+                || submission
+                    .get("coverage")
+                    .and_then(Value::as_object)
+                    .and_then(|coverage| coverage.get("agent"))
+                    .and_then(Value::as_str)
+                    != Some(consumed.agent.as_str())
+                || submission
+                    .get("coverage")
+                    .and_then(Value::as_object)
+                    .and_then(|coverage| coverage.get("start_at"))
+                    .and_then(Value::as_str)
+                    != Some(consumed.start_at.as_str())
+                || submission
+                    .get("coverage")
+                    .and_then(Value::as_object)
+                    .and_then(|coverage| coverage.get("end_at"))
+                    .and_then(Value::as_str)
+                    != Some(consumed.end_at.as_str())
+            {
+                return Err(StateError::InvalidState);
+            }
+            if serde_json::to_string(submission)?.len() > crate::relay::MAXIMUM_REQUEST_BYTES {
+                return Err(StateError::InvalidState);
+            }
+        }
+        let mut conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        let tx = conn.transaction()?;
+        let existing_count: i64 =
+            tx.query_row("SELECT COUNT(*) FROM usage_outbox", [], |row| row.get(0))?;
+        let mut missing = 0i64;
+        let mut pending = Vec::with_capacity(submissions.len());
+        let mut submission_ids = HashSet::with_capacity(submissions.len());
+        for submission in submissions {
+            let submission_id = submission
+                .get("submission_id")
+                .and_then(Value::as_str)
+                .ok_or(StateError::InvalidState)?;
+            if !submission_ids.insert(submission_id.to_owned()) {
+                return Err(StateError::InvalidState);
+            }
+            let raw = serde_json::to_string(submission)?;
+            let existing: Option<(String, String, i64, i64, String)> = tx
+                .query_row(
+                    "SELECT account_id, device_id, generation, sequence, payload_json
+                     FROM usage_outbox WHERE submission_id = ?1",
+                    params![submission_id],
+                    |row| {
+                        Ok((
+                            row.get(0)?,
+                            row.get(1)?,
+                            row.get(2)?,
+                            row.get(3)?,
+                            row.get(4)?,
+                        ))
+                    },
+                )
+                .optional()?;
+            if let Some((
+                stored_account,
+                stored_device,
+                stored_generation,
+                stored_sequence,
+                stored_raw,
+            )) = existing
+            {
+                if stored_account != account_id
+                    || stored_device != device_id
+                    || stored_generation != generation as i64
+                    || stored_sequence
+                        != submission
+                            .get("sequence")
+                            .and_then(Value::as_i64)
+                            .unwrap_or(-1)
+                    || stored_raw != raw
+                {
+                    return Err(StateError::InvalidState);
+                }
+                continue;
+            }
+            missing = missing.saturating_add(1);
+            pending.push((
+                submission_id.to_owned(),
+                submission
+                    .get("sequence")
+                    .and_then(Value::as_i64)
+                    .ok_or(StateError::InvalidState)?,
+                raw,
+            ));
+        }
+        if existing_count.saturating_add(missing) > MAX_USAGE_OUTBOX_ENTRIES {
+            return Err(StateError::Unavailable);
+        }
+        for (submission_id, sequence, raw) in pending {
+            tx.execute(
+                "INSERT INTO usage_outbox(submission_id, account_id, device_id, generation,
+                    sequence, payload_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    submission_id,
+                    account_id,
+                    device_id,
+                    generation as i64,
+                    sequence,
+                    raw,
+                ],
+            )?;
+        }
+        // A rescan may dirty an interval while an earlier batch is still in the outbox. In that
+        // case all parts can already exist, but this call must still consume the new dirty range
+        // atomically with the idempotent staging transaction.
+        let consumed_dirty = consume_dirty_usage_range_tx(&tx, consumed)?;
+        let changed = missing > 0 || consumed_dirty > 0;
+        if changed {
+            bump_revision(&tx)?;
+        }
+        tx.commit()?;
+        Ok(changed)
     }
 
     pub fn usage_file_index(
@@ -997,6 +1243,31 @@ impl StateStore {
             ranges.push(row?);
         }
         Ok(ranges)
+    }
+
+    /// Returns UTC hours whose indexed source is known to be partial. These markers prevent a
+    /// complete upload from replacing remote facts that may be absent from an incomplete source.
+    pub fn partial_usage_hours(&self) -> Result<HashSet<(UsageAgent, String)>, StateError> {
+        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        let mut statement = conn.prepare(
+            "SELECT agent, start_at FROM usage_partial_sources ORDER BY agent, start_at",
+        )?;
+        let rows = statement.query_map([], |row| {
+            let agent: String = row.get(0)?;
+            let agent = parse_usage_agent(&agent).ok_or_else(|| {
+                rusqlite::Error::InvalidColumnType(
+                    0,
+                    "agent".to_owned(),
+                    rusqlite::types::Type::Text,
+                )
+            })?;
+            Ok((agent, row.get::<_, String>(1)?))
+        })?;
+        let mut hours = HashSet::new();
+        for row in rows {
+            hours.insert(row?);
+        }
+        Ok(hours)
     }
 
     /// Switches the upload identity atomically.  A new account/device generation gets a fresh
@@ -1130,7 +1401,81 @@ impl StateStore {
         let tx = conn.transaction()?;
         let mut changed = 0usize;
         for source in &scan.sources {
+            if source.coverage.status != crate::usage::CoverageStatus::Complete {
+                // Preserve the last successful rows and merge newly valid records. This keeps
+                // data useful without allowing an incomplete scan to delete facts. The old file
+                // index remains untouched so the source is retried on the next refresh.
+                let old_events = record_events(&tx, agent, &source.source.source_file_id)?;
+                let mut merged = BTreeMap::<String, NormalizedUsageEvent>::new();
+                for stored in &old_events {
+                    let event: NormalizedUsageEvent = serde_json::from_str(&stored.event_json)?;
+                    merged.insert(stored.record_key.clone(), event);
+                }
+                for (record_index, event) in source.records.iter().enumerate() {
+                    merged.insert(source_record_key(source, record_index), event.clone());
+                }
+                let merged_events = merged.into_iter().collect::<Vec<_>>();
+                tx.execute(
+                    "DELETE FROM usage_file_records WHERE agent = ?1 AND source_file_id = ?2",
+                    params![agent.as_str(), source.source.source_file_id],
+                )?;
+                for (record_index, (record_key, event)) in merged_events.iter().enumerate() {
+                    let event_json = serde_json::to_string(event)?;
+                    if event_json.len() > crate::relay::MAXIMUM_REQUEST_BYTES {
+                        return Err(StateError::InvalidState);
+                    }
+                    tx.execute(
+                        "INSERT INTO usage_file_records(
+                            agent, source_file_id, record_index, record_key, occurred_at, event_json
+                         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                        params![
+                            agent.as_str(),
+                            source.source.source_file_id,
+                            record_index as i64,
+                            record_key,
+                            event.occurred_at,
+                            event_json,
+                        ],
+                    )?;
+                }
+                let hours = merged_events
+                    .iter()
+                    .filter_map(|(_, event)| event_hour(&event.occurred_at).ok())
+                    .collect::<Vec<_>>();
+                let mut hours = hours;
+                if source
+                    .coverage
+                    .reasons
+                    .iter()
+                    .any(|reason| reason.code == crate::usage::CoverageReasonCode::InvalidTimestamp)
+                    && let Ok(start) = event_hour(&source.coverage.start_at)
+                {
+                    // A malformed record without a usable timestamp cannot be assigned to its
+                    // true hour. Keep one bounded conservative partial marker rather than
+                    // falsely declaring the whole source complete.
+                    hours.push(start);
+                }
+                mark_partial_source_hours_tx(
+                    &tx,
+                    agent,
+                    &source.source.source_file_id,
+                    hours.clone(),
+                )?;
+                mark_dirty_hours(&tx, agent, hours)?;
+                changed += 1;
+                continue;
+            }
             let old_events = record_events(&tx, agent, &source.source.source_file_id)?;
+            // A complete rescan also restores the remote replace semantics for every hour that
+            // was previously merged as partial. Even if the repaired rows are byte-identical,
+            // the interval must be uploaded once with `coverage.status=complete` so Relay can
+            // retire its partial marker.
+            let prior_partial_hours =
+                partial_source_hours_tx(&tx, agent, &source.source.source_file_id)?;
+            tx.execute(
+                "DELETE FROM usage_partial_sources WHERE agent = ?1 AND source_file_id = ?2",
+                params![agent.as_str(), source.source.source_file_id],
+            )?;
             tx.execute(
                 "DELETE FROM usage_file_records WHERE agent = ?1 AND source_file_id = ?2",
                 params![agent.as_str(), source.source.source_file_id],
@@ -1142,12 +1487,13 @@ impl StateStore {
                 }
                 tx.execute(
                     "INSERT INTO usage_file_records(
-                        agent, source_file_id, record_index, occurred_at, event_json
-                     ) VALUES (?1, ?2, ?3, ?4, ?5)",
+                        agent, source_file_id, record_index, record_key, occurred_at, event_json
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                     params![
                         agent.as_str(),
                         source.source.source_file_id,
                         record_index as i64,
+                        source_record_key(source, record_index),
                         event.occurred_at,
                         event_json,
                     ],
@@ -1171,14 +1517,18 @@ impl StateStore {
                     source.index.parser_revision,
                 ],
             )?;
-            mark_dirty_hours(
-                &tx,
-                agent,
-                changed_event_hours(&old_events, &source.records)?,
-            )?;
+            let mut dirty_hours = changed_event_hours(&old_events, &source.records)?;
+            dirty_hours.extend(prior_partial_hours);
+            dirty_hours.sort_unstable();
+            dirty_hours.dedup();
+            mark_dirty_hours(&tx, agent, dirty_hours)?;
         }
         for source_file_id in &scan.deleted_source_file_ids {
             let old_events = record_events(&tx, agent, source_file_id)?;
+            tx.execute(
+                "DELETE FROM usage_partial_sources WHERE agent = ?1 AND source_file_id = ?2",
+                params![agent.as_str(), source_file_id],
+            )?;
             tx.execute(
                 "DELETE FROM usage_file_records WHERE agent = ?1 AND source_file_id = ?2",
                 params![agent.as_str(), source_file_id],
@@ -1205,6 +1555,13 @@ pub struct UsageDirtyRange {
     pub agent: UsageAgent,
     pub start_at: String,
     pub end_at: String,
+}
+
+#[derive(Debug, Clone)]
+struct StoredUsageEvent {
+    record_key: String,
+    occurred_at: String,
+    event_json: String,
 }
 
 fn consume_dirty_usage_range_tx(
@@ -1279,17 +1636,42 @@ fn parse_usage_agent(value: &str) -> Option<UsageAgent> {
     })
 }
 
+fn multipart_info(value: &Value) -> Option<(String, u64, u64)> {
+    let multipart = value.get("multipart")?.as_object()?;
+    if multipart.len() != 3 {
+        return None;
+    }
+    let batch_id = multipart.get("batch_id")?.as_str()?.to_owned();
+    if batch_id.is_empty() {
+        return None;
+    }
+    let part_index = multipart.get("part_index")?.as_u64()?;
+    let part_count = multipart.get("part_count")?.as_u64()?;
+    ((2..=64).contains(&part_count) && part_index < part_count)
+        .then_some((batch_id, part_index, part_count))
+}
+
 fn record_events(
     tx: &rusqlite::Transaction<'_>,
     agent: UsageAgent,
     source_file_id: &str,
-) -> Result<Vec<(String, String)>, StateError> {
+) -> Result<Vec<StoredUsageEvent>, StateError> {
     let mut statement = tx.prepare(
-        "SELECT occurred_at, event_json FROM usage_file_records
+        "SELECT record_index, record_key, occurred_at, event_json FROM usage_file_records
          WHERE agent = ?1 AND source_file_id = ?2",
     )?;
     let rows = statement.query_map(params![agent.as_str(), source_file_id], |row| {
-        Ok((row.get(0)?, row.get(1)?))
+        let record_index: i64 = row.get(0)?;
+        let record_key: String = row.get(1)?;
+        Ok(StoredUsageEvent {
+            record_key: if record_key.is_empty() {
+                format!("legacy:{record_index}")
+            } else {
+                record_key
+            },
+            occurred_at: row.get(2)?,
+            event_json: row.get(3)?,
+        })
     })?;
     let mut events = Vec::new();
     for row in rows {
@@ -1299,17 +1681,17 @@ fn record_events(
 }
 
 fn changed_event_hours(
-    old_events: &[(String, String)],
+    old_events: &[StoredUsageEvent],
     new_events: &[NormalizedUsageEvent],
 ) -> Result<Vec<String>, StateError> {
     let mut old_by_hour: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut new_by_hour: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for (occurred_at, event_json) in old_events {
-        let hour = event_hour(occurred_at)?;
+    for stored in old_events {
+        let hour = event_hour(&stored.occurred_at)?;
         old_by_hour
             .entry(hour)
             .or_default()
-            .push(event_json.clone());
+            .push(stored.event_json.clone());
     }
     for event in new_events {
         let event_json = serde_json::to_string(event)?;
@@ -1335,6 +1717,15 @@ fn changed_event_hours(
         .collect())
 }
 
+fn source_record_key(source: &crate::usage::UsageSourceScan, record_index: usize) -> String {
+    source
+        .record_keys
+        .get(record_index)
+        .filter(|key| !key.is_empty())
+        .cloned()
+        .unwrap_or_else(|| format!("legacy:{record_index}"))
+}
+
 fn event_hour(value: &str) -> Result<String, StateError> {
     let instant = DateTime::parse_from_rfc3339(value).map_err(|_| StateError::InvalidState)?;
     Ok(floor_hour(instant).to_rfc3339_opts(SecondsFormat::Secs, true))
@@ -1350,6 +1741,47 @@ fn mark_dirty_hours(
         merge_dirty_range(tx, agent, start, start + Duration::hours(1))?;
     }
     Ok(())
+}
+
+fn mark_partial_source_hours_tx(
+    tx: &rusqlite::Transaction<'_>,
+    agent: UsageAgent,
+    source_file_id: &str,
+    hours: Vec<String>,
+) -> Result<(), StateError> {
+    let mut hours = hours;
+    hours.sort_unstable();
+    hours.dedup();
+    for hour in hours {
+        let start = DateTime::parse_from_rfc3339(&hour).map_err(|_| StateError::InvalidState)?;
+        let end = start + Duration::hours(1);
+        tx.execute(
+            "INSERT OR IGNORE INTO usage_partial_sources(
+                agent, source_file_id, start_at, end_at
+             ) VALUES (?1, ?2, ?3, ?4)",
+            params![
+                agent.as_str(),
+                source_file_id,
+                start.to_rfc3339_opts(SecondsFormat::Secs, true),
+                end.to_rfc3339_opts(SecondsFormat::Secs, true),
+            ],
+        )?;
+    }
+    Ok(())
+}
+
+fn partial_source_hours_tx(
+    tx: &rusqlite::Transaction<'_>,
+    agent: UsageAgent,
+    source_file_id: &str,
+) -> Result<Vec<String>, StateError> {
+    let mut statement = tx.prepare(
+        "SELECT start_at FROM usage_partial_sources
+         WHERE agent = ?1 AND source_file_id = ?2 ORDER BY start_at",
+    )?;
+    let rows = statement.query_map(params![agent.as_str(), source_file_id], |row| row.get(0))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(StateError::from)
 }
 
 fn merge_dirty_range(
@@ -1982,6 +2414,92 @@ mod tests {
     }
 
     #[test]
+    fn multipart_staging_consumes_dirty_atomically_and_ack_never_deletes_new_dirty() {
+        let root = std::env::temp_dir().join(format!("quota-multipart-state-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let store = StateStore::open(&root).expect("state");
+        let event = usage_event("2026-08-10T12:15:00Z", 1);
+        store
+            .apply_usage_scan(UsageAgent::Codex, &usage_scan(vec![event.clone()], 1))
+            .expect("initial scan");
+        let consumed = UsageDirtyRange {
+            agent: UsageAgent::Codex,
+            start_at: "2026-08-10T12:00:00Z".into(),
+            end_at: "2026-08-10T13:00:00Z".into(),
+        };
+        let submission = |index: u64, sequence: u64| {
+            serde_json::json!({
+                "submission_id": format!("multipart-{index}"),
+                "device_id": "device_test",
+                "generation": 1,
+                "sequence": sequence,
+                "coverage": {
+                    "agent": "codex",
+                    "start_at": "2026-08-10T12:00:00Z",
+                    "end_at": "2026-08-10T13:00:00Z"
+                },
+                "multipart": {
+                    "batch_id": "batch-test",
+                    "part_index": index,
+                    "part_count": 2
+                }
+            })
+        };
+        let parts = vec![submission(0, 0), submission(1, 1)];
+        assert!(
+            store
+                .stage_multipart_outbox_entries(
+                    "account_test",
+                    "device_test",
+                    1,
+                    "batch-test",
+                    &consumed,
+                    &parts,
+                )
+                .expect("stage multipart")
+        );
+        assert!(store.dirty_usage_ranges().expect("dirty").is_empty());
+        assert_eq!(store.outbox_entries().expect("outbox").len(), 2);
+        assert!(
+            !store
+                .stage_multipart_outbox_entries(
+                    "account_test",
+                    "device_test",
+                    1,
+                    "batch-test",
+                    &consumed,
+                    &parts,
+                )
+                .expect("idempotent stage")
+        );
+        assert!(
+            store
+                .acknowledge_outbox_entry("multipart-0")
+                .expect("ack first")
+        );
+
+        let changed = usage_event("2026-08-10T12:15:00Z", 9);
+        store
+            .apply_usage_scan(UsageAgent::Codex, &usage_scan(vec![changed], 2))
+            .expect("new scan");
+        assert_eq!(store.dirty_usage_ranges().expect("new dirty").len(), 1);
+        assert!(
+            store
+                .acknowledge_outbox_entry("multipart-1")
+                .expect("ack final")
+        );
+        assert_eq!(
+            store
+                .dirty_usage_ranges()
+                .expect("new dirty survives")
+                .len(),
+            1
+        );
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
     fn usage_dirty_hours_compare_canonical_old_and_new_file_rows() {
         let root = std::env::temp_dir().join(format!("quota-usage-state-{}", Uuid::new_v4()));
         fs::create_dir_all(&root).expect("root");
@@ -2062,6 +2580,128 @@ mod tests {
                 end_at: "2026-08-10T13:00:00Z".into(),
             }]
         );
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn partial_source_keeps_last_good_rows_and_marks_partial_hours() {
+        let root = std::env::temp_dir().join(format!("quota-partial-source-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let store = StateStore::open(&root).expect("state");
+        let first = usage_event("2026-08-10T12:15:00Z", 1);
+        store
+            .apply_usage_scan(UsageAgent::Codex, &usage_scan(vec![first.clone()], 1))
+            .expect("initial scan");
+        store
+            .consume_dirty_usage_range(&UsageDirtyRange {
+                agent: UsageAgent::Codex,
+                start_at: "2026-08-10T12:00:00Z".into(),
+                end_at: "2026-08-10T13:00:00Z".into(),
+            })
+            .expect("clear initial");
+
+        let second = usage_event("2026-08-10T13:15:00Z", 2);
+        let mut partial = usage_scan(vec![first.clone(), second], 2);
+        partial.coverage.status = CoverageStatus::Partial;
+        partial.sources[0].coverage.status = CoverageStatus::Partial;
+        partial.sources[0].coverage.reasons = vec![crate::usage::CoverageReason {
+            code: crate::usage::CoverageReasonCode::MalformedJson,
+            count: 1,
+        }];
+        store
+            .apply_usage_scan(UsageAgent::Codex, &partial)
+            .expect("partial scan");
+        assert_eq!(store.usage_events().expect("events").len(), 2);
+        assert!(
+            store
+                .partial_usage_hours()
+                .expect("partial hours")
+                .contains(&(UsageAgent::Codex, "2026-08-10T12:00:00Z".into()))
+        );
+        assert!(
+            store
+                .dirty_usage_ranges()
+                .expect("dirty")
+                .iter()
+                .any(|range| {
+                    range.start_at == "2026-08-10T12:00:00Z"
+                        && range.end_at == "2026-08-10T14:00:00Z"
+                })
+        );
+        store
+            .consume_dirty_usage_range(&UsageDirtyRange {
+                agent: UsageAgent::Codex,
+                start_at: "2026-08-10T12:00:00Z".into(),
+                end_at: "2026-08-10T14:00:00Z".into(),
+            })
+            .expect("clear partial upload");
+        store
+            .apply_usage_scan(
+                UsageAgent::Codex,
+                &usage_scan(vec![first, usage_event("2026-08-10T13:15:00Z", 2)], 3),
+            )
+            .expect("complete repair");
+        assert!(
+            store
+                .partial_usage_hours()
+                .expect("partial hours")
+                .is_empty()
+        );
+        assert_eq!(
+            store.dirty_usage_ranges().expect("dirty"),
+            vec![UsageDirtyRange {
+                agent: UsageAgent::Codex,
+                start_at: "2026-08-10T12:00:00Z".into(),
+                end_at: "2026-08-10T14:00:00Z".into(),
+            }]
+        );
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn partial_source_replaces_by_line_identity_without_deduplicating_or_dropping_rows() {
+        let root = std::env::temp_dir().join(format!("quota-partial-identity-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let store = StateStore::open(&root).expect("state");
+        let first = usage_event("2026-08-10T12:15:00Z", 1);
+        let second = usage_event("2026-08-10T12:30:00Z", 2);
+        store
+            .apply_usage_scan(UsageAgent::Codex, &usage_scan(vec![first, second], 1))
+            .expect("initial scan");
+        store
+            .consume_dirty_usage_range(&UsageDirtyRange {
+                agent: UsageAgent::Codex,
+                start_at: "2026-08-10T12:00:00Z".into(),
+                end_at: "2026-08-10T13:00:00Z".into(),
+            })
+            .expect("clear initial");
+
+        let updated = usage_event("2026-08-10T12:15:00Z", 9);
+        let added = usage_event("2026-08-10T12:45:00Z", 3);
+        let mut partial = usage_scan(vec![updated, added], 2);
+        partial.coverage.status = CoverageStatus::Partial;
+        partial.sources[0].coverage.status = CoverageStatus::Partial;
+        partial.sources[0].coverage.reasons = vec![crate::usage::CoverageReason {
+            code: crate::usage::CoverageReasonCode::MalformedJson,
+            count: 1,
+        }];
+        // Line 1 is the malformed record. Its previous value must survive while line 0 is
+        // replaced and line 2 is inserted.
+        partial.sources[0].record_keys = vec!["line:0:0".into(), "line:2:0".into()];
+        store
+            .apply_usage_scan(UsageAgent::Codex, &partial)
+            .expect("partial scan");
+
+        let mut inputs = store
+            .usage_events()
+            .expect("events")
+            .into_iter()
+            .map(|event| event.input_tokens)
+            .collect::<Vec<_>>();
+        inputs.sort_unstable();
+        assert_eq!(inputs, vec![2, 3, 9]);
         drop(store);
         fs::remove_dir_all(root).expect("cleanup");
     }
@@ -2227,6 +2867,7 @@ mod tests {
             },
             scanned_source_count: 1,
             skipped_source_count: 0,
+            ignored_empty_records: 0,
             unchanged_source_file_ids: Vec::new(),
             deleted_source_file_ids: Vec::new(),
             sources: vec![UsageSourceScan {
@@ -2235,9 +2876,12 @@ mod tests {
                     identity: "identity-1".into(),
                     size: events.len() as u64,
                     modified_ns,
-                    parser_revision: "usage-rust-v3".into(),
+                    parser_revision: "usage-rust-v4".into(),
                 },
                 source,
+                record_keys: (0..events.len())
+                    .map(|index| format!("line:{index}:0"))
+                    .collect(),
                 records: events,
                 coverage: ScanCoverage {
                     agent: UsageAgent::Codex,

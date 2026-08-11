@@ -116,11 +116,17 @@ data requirements. Architecture and product behavior are defined in
   gap; no watcher or byte-checkpoint dependency is used.
 - Outbox payloads contain allowlisted aggregate fields only. Source file IDs, byte offsets, record
   hashes, paths, raw events, and parser diagnostics remain local. Token/count invariants and payload,
-  row, range, model, and dimension bounds are enforced by the v2 runtime schema before upload and by
-  Relay again before persistence. Empty internal records with no tokens, billable tools, or nonzero
-  source cost do not become Usage facts. Collectors reject the literal model `unknown`; protocol v2
-  decodes it only for a shipped 0.0.5 outbox retry, and Relay discards that row before persistence.
-  Migration `0005_usage_agents.sql` removes previously retained invalid rows.
+  row, range, model, and dimension resource bounds are enforced by the v2 runtime schema before
+  upload and by Relay again before persistence. Model identifiers are opaque provider text: preserve
+  any non-empty bounded identifier, including punctuation and `unknown`; do not apply a naming
+  whitelist or discard an otherwise valid fact because pricing is missing. The one narrow released
+  compatibility exception is Relay's outbox-drain path for parser revision `quota-usage-4`: it
+  filters the literal `unknown` model while materializing those already-released submissions because
+  that shipped storage parser rejected the sentinel. This exception does not apply to current
+  collection or later parser revisions and is covered by the compatibility tests; it is removed with
+  the retained 0.0.8 cleanup window. Empty internal records with no tokens, billable tools, or
+  nonzero source cost do not become Usage facts. Invalid records are isolated and counted in the
+  local diagnostic report rather than rolling back a complete agent.
 - Delete Device is distinct from logout. It transactionally revokes sessions, advances Device
   generation, records a precise watermark, deletes quota/Usage/coverage/receipt rows, and retains a
   minimal hidden tombstone. Old tokens and old-generation outbox entries are terminally rejected.
@@ -150,6 +156,14 @@ data requirements. Architecture and product behavior are defined in
 - Error output and logs use allowlisted codes and fixed recovery text. Never include raw HTTP bodies,
   subprocess stderr, JWTs, authorization codes, user/device secrets, installation IDs, raw GitHub
   subjects, full email addresses, or local source paths.
+- The service owns one bounded diagnostic report for providers/quota, Usage, pricing, account, and
+  synchronization. QuotaBar's Settings action and Linux `quotacli doctor` consume that same report;
+  they never inspect local state or source logs themselves. The report may contain stable component
+  statuses, bounded counters, safe recovery codes, and age/range summaries, but never paths,
+  filenames, model lists, prompts, completions, session/conversation IDs, device IDs, credentials,
+  tokens, raw provider responses, or parser excerpts. JSON and copied text are equally redacted.
+  The complete-data and partial-merge rules are canonical in
+  [ADR 0008](decisions/0008-data-integrity-and-diagnostics.md).
 - Account/device display values and provider labels are untrusted presentation data: bound, mask
   where required, render as text rather than HTML, and exclude from security logs.
 - Tests and fixtures use synthetic credentials and identities only. Tests that exercise local files

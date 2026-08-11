@@ -525,6 +525,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     }
     const agents = usageAgentsForRequest(context.req.query("usage_agents"));
     if (!agents) return invalidRequest(context);
+    const includeTruncationFields = context.req.query("usage_agents") === "all";
     const start = UtcHourSchema.safeParse(context.req.query("start_at"));
     const end = UtcHourSchema.safeParse(context.req.query("end_at"));
     const mode = UsageCostModeSchema.safeParse(context.req.query("cost_mode") ?? "calculate");
@@ -551,7 +552,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
       end_at: end.data,
       limit: MAXIMUM_USAGE_READ_ROWS,
     });
-    if (result.truncated) {
+    if (result.truncated || (result.coverage_truncated && !includeTruncationFields)) {
       return resultLimit(context);
     }
     try {
@@ -568,7 +569,10 @@ export function createRelayApp(options: RelayAppOptions): Hono {
             end_at: item.end_at,
             status: item.status,
           })),
-          cost: buildUsageCost(result.rows, mode.data, catalog),
+          cost: buildUsageCost(result.rows, mode.data, catalog, includeTruncationFields),
+          ...(includeTruncationFields && result.coverage_truncated
+            ? { coverage_truncated: true }
+            : {}),
         }),
       );
     } catch (error) {
@@ -807,6 +811,7 @@ async function accountUsageQuery(
   const requestedAgents = context.req.query("usage_agents");
   const agents = usageAgentsForRequest(requestedAgents);
   if (!agents) return invalidRequest(context);
+  const includeTruncationFields = requestedAgents === "all";
   const defaultTo = checkedAt.toISOString().slice(0, 10);
   const defaultFrom = new Date(checkedAt.getTime() - 29 * 24 * 60 * 60 * 1000)
     .toISOString()
@@ -849,7 +854,7 @@ async function accountUsageQuery(
       ? MAXIMUM_USAGE_READ_ROWS
       : maximumAccountUsageSummaryRows,
   });
-  if (result.truncated) {
+  if (result.truncated || (result.coverage_truncated && !includeTruncationFields)) {
     return resultLimit(context);
   }
   try {
@@ -860,6 +865,7 @@ async function accountUsageQuery(
         mode.data,
         catalog,
         summaryOptions.includeHourlyBreakdowns,
+        includeTruncationFields,
       ),
     };
   } catch (error) {

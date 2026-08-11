@@ -6,6 +6,7 @@ struct SettingsHomeView: View {
   let onOpenAgents: () -> Void
   let onOpenDevices: () -> Void
   let onOpenUsage: () -> Void
+  let onOpenDiagnostics: () -> Void
 
   @State private var launchAtLoginEnabled = LaunchAtLoginController.isEnabled
   @State private var isLogoutConfirmationPresented = false
@@ -48,6 +49,16 @@ struct SettingsHomeView: View {
             trailing: model.accountDeviceSummary,
             accessibilityLabel: "Devices",
             action: onOpenDevices
+          )
+        }
+
+        SettingsSection(title: "Diagnostics") {
+          settingsDestinationRow(
+            title: "Diagnostics",
+            systemImage: "stethoscope",
+            trailing: "Copy report",
+            accessibilityLabel: "Diagnostics",
+            action: onOpenDiagnostics
           )
         }
 

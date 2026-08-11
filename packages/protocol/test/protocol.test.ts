@@ -22,6 +22,7 @@ import {
   QuotaSnapshotEnvelopeSchema,
   QuotaSnapshotUploadResponseSchema,
   SessionRefreshResponseSchema,
+  UsageBreakdownSchema,
   UsageHourlyFactSchema,
   UsageSubmissionSchema,
 } from "../src/index.ts";
@@ -260,7 +261,20 @@ describe("quota protocol v2", () => {
         channel_source: "explicit",
       }).success,
     ).toBe(false);
-    expect(UsageHourlyFactSchema.safeParse({ ...fact, model: "unknown" }).success).toBe(false);
+    expect(UsageHourlyFactSchema.safeParse({ ...fact, model: "GPT-5.5[1m]" }).success).toBe(true);
+    expect(UsageHourlyFactSchema.safeParse({ ...fact, model: "unknown" }).success).toBe(true);
+    expect(UsageHourlyFactSchema.safeParse({ ...fact, model: "😀".repeat(128) }).success).toBe(
+      true,
+    );
+    expect(UsageHourlyFactSchema.safeParse({ ...fact, model: "😀".repeat(129) }).success).toBe(
+      false,
+    );
+    expect(
+      UsageHourlyFactSchema.safeParse({ ...fact, model: "model\u2028separator" }).success,
+    ).toBe(true);
+    expect(UsageHourlyFactSchema.safeParse({ ...fact, model: "model\nwith-control" }).success).toBe(
+      false,
+    );
     expect(
       UsageHourlyFactSchema.safeParse({
         ...fact,
@@ -269,6 +283,39 @@ describe("quota protocol v2", () => {
       }).success,
     ).toBe(true);
     expect(UsageHourlyFactSchema.safeParse({ ...fact, prompt: "secret" }).success).toBe(false);
+  });
+
+  it("uses the opaque model contract for model breakdown keys", () => {
+    const breakdown = {
+      dimension: "model" as const,
+      key: "GPT-5.5[1m]",
+      totals: emptyTotals(),
+      cost: emptyCost(),
+    };
+    expect(UsageBreakdownSchema.safeParse(breakdown).success).toBe(true);
+    expect(UsageBreakdownSchema.safeParse({ ...breakdown, key: "😀".repeat(128) }).success).toBe(
+      true,
+    );
+    expect(UsageBreakdownSchema.safeParse({ ...breakdown, key: "😀".repeat(129) }).success).toBe(
+      false,
+    );
+    expect(
+      UsageBreakdownSchema.safeParse({ ...breakdown, key: "model\nwith-control" }).success,
+    ).toBe(false);
+    expect(
+      UsageBreakdownSchema.safeParse({
+        ...breakdown,
+        dimension: "device",
+        key: "d".repeat(128),
+      }).success,
+    ).toBe(true);
+    expect(
+      UsageBreakdownSchema.safeParse({
+        ...breakdown,
+        dimension: "device",
+        key: "d".repeat(129),
+      }).success,
+    ).toBe(false);
   });
 
   it("requires canonical bounded UTC coverage and contained same-agent rows", () => {
@@ -284,7 +331,30 @@ describe("quota protocol v2", () => {
     expect(
       UsageSubmissionSchema.safeParse({
         ...submission,
-        rows: [{ ...submission.rows[0], model: "unknown" }],
+        rows: [{ ...submission.rows[0], model: "openrouter-3o[1m]" }],
+      }).success,
+    ).toBe(true);
+    expect(
+      UsageSubmissionSchema.safeParse({
+        ...submission,
+        rows: Array.from({ length: 65 }, (_, index) => ({
+          ...submission.rows[0],
+          model: `model-${index}`,
+        })),
+      }).success,
+    ).toBe(true);
+    expect(
+      UsageSubmissionSchema.safeParse({
+        ...submission,
+        write_mode: "merge_partial",
+        coverage: { ...submission.coverage, status: "partial" },
+        multipart: { batch_id: "batch_01", part_index: 0, part_count: 2 },
+      }).success,
+    ).toBe(true);
+    expect(
+      UsageSubmissionSchema.safeParse({
+        ...submission,
+        multipart: { batch_id: "batch_01", part_index: 0, part_count: 65 },
       }).success,
     ).toBe(false);
     expect(
@@ -381,6 +451,37 @@ describe("quota protocol v2", () => {
         },
       }).success,
     ).toBe(true);
+    expect(
+      AccountUsageResponseSchema.safeParse({
+        protocol_version: 2,
+        usage: {
+          ...accountSummary().usage,
+          cost: {
+            ...emptyCost(),
+            status: "unavailable",
+            unpriced_rows: 2,
+            unpriced: [
+              {
+                billing_channel: "openai_direct",
+                model: "model-a",
+                reason: "unknown_model",
+                rows: 1,
+              },
+            ],
+            unpriced_truncated: true,
+          },
+        },
+      }).success,
+    ).toBe(true);
+    expect(
+      AccountUsageResponseSchema.safeParse({
+        protocol_version: 2,
+        usage: {
+          ...accountSummary().usage,
+          cost: { ...emptyCost(), unpriced_truncated: false },
+        },
+      }).success,
+    ).toBe(false);
     expect(
       AccountSummarySchema.safeParse({
         ...accountSummary(),

@@ -9,7 +9,7 @@ through [`quota-service`](../../packages/service).
 ```text
 quotacli version
 quotacli status [--provider <id>|all] [--format text|json] [--pretty]
-quotacli doctor
+quotacli doctor [--format text|json] [--pretty]
 quotacli login [--format text|json] [--pretty]
 quotacli logout [--format text|json] [--pretty]
 quotacli auth status [--format text|json] [--pretty]
@@ -38,6 +38,13 @@ printed. Use a browser on another device to open the displayed URL when the CLI 
 
 `account summary` returns the fresh default calculated-cost view through the shared token-refresh
 and compare-and-swap state path.
+
+`doctor` consumes the shared service diagnostic report. It covers provider discovery and quota,
+Usage parsing and coverage, pricing, account state, and synchronization. Text is intended for a
+terminal; JSON is bounded and safe to attach to a bug report. `--pretty` only changes JSON
+whitespace. The command exits `0` only when the report is `healthy`; `degraded` and `blocked` exit
+with `1`. Paths, source filenames, raw logs, prompts, completions, session identifiers, device IDs,
+credentials, and tokens are never printed.
 
 ## Development
 

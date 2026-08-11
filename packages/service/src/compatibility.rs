@@ -9,12 +9,6 @@ use serde_json::Value;
 
 use crate::state::StateStore;
 
-pub(crate) const RELEASED_USAGE_PARSER_REVISION: &str = "quota-usage-4";
-
-pub(crate) fn accepts_released_unknown_usage_model(parser_revision: &str, model: &str) -> bool {
-    model != "unknown" || parser_revision == RELEASED_USAGE_PARSER_REVISION
-}
-
 #[derive(Clone, Default)]
 pub(crate) struct ReleasedPricingCache {
     pub(crate) catalog: Option<Value>,

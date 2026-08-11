@@ -17,7 +17,6 @@ use uuid::Uuid;
 
 use crate::state::StateError;
 
-const CURRENT_SCHEMA: i64 = 1;
 const MAX_LEGACY_ARTIFACT_BYTES: usize = 1_048_576;
 const MAX_LEGACY_CONTEXTS: usize = 32;
 const MAX_LEGACY_OUTBOX_ENTRIES: usize = 64;
@@ -142,35 +141,11 @@ fn legacy_lock_is_stale(path: &Path, owner: &Path) -> bool {
         .is_some_and(|age| age > Duration::from_secs(1))
 }
 
-pub fn apply(conn: &mut Connection, root: &Path) -> Result<(), StateError> {
-    // Hold the published directory lock for schema creation, JSON import, source cleanup, and
-    // marker commit.  A crashed importer is reclaimed by the next opener before retrying.
+pub fn import(conn: &mut Connection, root: &Path) -> Result<(), StateError> {
+    // Hold the published directory lock for JSON import, source cleanup, and marker commit. A
+    // crashed importer is reclaimed by the next opener before retrying. Durable schema creation
+    // is intentionally owned by migration::schema instead.
     let _legacy_lock = LegacyStateLock::acquire(root)?;
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS schema_migrations (
-            version INTEGER PRIMARY KEY,
-            applied_at TEXT NOT NULL
-        );",
-    )?;
-
-    let current: i64 = conn.query_row(
-        "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
-        [],
-        |row| row.get(0),
-    )?;
-    if current > CURRENT_SCHEMA {
-        return Err(StateError::ClientUpgradeRequired);
-    }
-    if current < CURRENT_SCHEMA {
-        let tx = conn.transaction()?;
-        create_schema(&tx)?;
-        tx.execute(
-            "INSERT INTO schema_migrations(version, applied_at) VALUES (?1, ?2)",
-            params![CURRENT_SCHEMA, crate::state::now_rfc3339()],
-        )?;
-        tx.commit()?;
-    }
-
     // Import only once.  This marker also makes a failed import retryable without duplicating
     // outbox entries.  Files are removed only after the transaction and a fresh read succeed.
     let imported = metadata(conn, "legacy_import_complete")?;
@@ -186,84 +161,6 @@ pub fn apply(conn: &mut Connection, root: &Path) -> Result<(), StateError> {
         )?;
     }
     ensure_installation(conn)?;
-    Ok(())
-}
-
-fn create_schema(tx: &Transaction<'_>) -> Result<(), StateError> {
-    tx.execute_batch(
-        "CREATE TABLE IF NOT EXISTS metadata (
-            key TEXT PRIMARY KEY NOT NULL,
-            value TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS components (
-            name TEXT PRIMARY KEY NOT NULL,
-            status TEXT NOT NULL,
-            value_json TEXT,
-            updated_at TEXT,
-            last_error_code TEXT,
-            last_error_action TEXT,
-            refreshing INTEGER NOT NULL DEFAULT 0 CHECK (refreshing IN (0, 1))
-        );
-        CREATE TABLE IF NOT EXISTS installation (
-            id INTEGER PRIMARY KEY CHECK (id = 1),
-            installation_id TEXT NOT NULL,
-            payload_json TEXT
-        );
-        CREATE TABLE IF NOT EXISTS session (
-            id INTEGER PRIMARY KEY CHECK (id = 1),
-            payload_json TEXT NOT NULL,
-            epoch INTEGER NOT NULL DEFAULT 0
-        );
-        CREATE TABLE IF NOT EXISTS legacy_artifacts (
-            name TEXT PRIMARY KEY NOT NULL,
-            payload_json TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS usage_outbox (
-            submission_id TEXT PRIMARY KEY NOT NULL,
-            account_id TEXT NOT NULL,
-            device_id TEXT NOT NULL,
-            generation INTEGER NOT NULL,
-            sequence INTEGER NOT NULL,
-            payload_json TEXT NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS usage_outbox_order
-            ON usage_outbox(account_id, device_id, generation, sequence);
-        CREATE TABLE IF NOT EXISTS usage_file_index (
-            agent TEXT NOT NULL,
-            source_file_id TEXT NOT NULL,
-            identity TEXT NOT NULL,
-            size INTEGER NOT NULL,
-            modified_ns TEXT NOT NULL,
-            parser_revision TEXT NOT NULL,
-            PRIMARY KEY(agent, source_file_id)
-        );
-        CREATE TABLE IF NOT EXISTS usage_file_records (
-            agent TEXT NOT NULL,
-            source_file_id TEXT NOT NULL,
-            record_index INTEGER NOT NULL,
-            occurred_at TEXT NOT NULL,
-            event_json TEXT NOT NULL,
-            PRIMARY KEY(agent, source_file_id, record_index)
-        );
-        CREATE INDEX IF NOT EXISTS usage_file_records_time
-            ON usage_file_records(agent, occurred_at);
-        CREATE TABLE IF NOT EXISTS usage_upload_context (
-            id INTEGER PRIMARY KEY CHECK (id = 1),
-            account_id TEXT NOT NULL,
-            device_id TEXT NOT NULL,
-            generation INTEGER NOT NULL,
-            aggregation_timezone TEXT NOT NULL,
-            lower_bound TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS usage_dirty_ranges (
-            agent TEXT NOT NULL,
-            start_at TEXT NOT NULL,
-            end_at TEXT NOT NULL,
-            PRIMARY KEY(agent, start_at, end_at)
-        );
-        INSERT INTO metadata(key, value) VALUES ('revision', '0')
-            ON CONFLICT(key) DO NOTHING;",
-    )?;
     Ok(())
 }
 
