@@ -10,8 +10,8 @@ Quota has four application products and one shared Rust library boundary:
 
 - QuotaBar is the macOS presentation product. Its app bundle contains one private Rust service;
   Swift owns views, preferences, accessibility, Launch at Login, and strict decoding only.
-- QuotaCLI is a Linux-only native Rust command that uses the shared local service library. The
-  repository builds and tests it on Ubuntu, but does not publish it; Windows is not supported.
+- QuotaCLI is a Linux-only native Rust command that uses the shared local service library. It is
+  released as a static x86_64 binary; Windows is not supported.
 - QuotaRelay owns GitHub-backed Accounts, Devices, scoped native sessions, normalized quota/Usage
   storage, deletion controls, pricing distribution, and account queries. Better Auth owns its Web
   identity/session boundary. Relay runs only as a Cloudflare Worker backed by D1.
@@ -150,7 +150,7 @@ protocol + quota-model + relay-core
 - `apps/menubar/helper` is the macOS private stdio entry point and owns only process startup and IPC
   lifetime around `packages/service`.
 - `apps/cli` is the Linux-only `quotacli` entry point and owns command parsing/terminal output around
-  `packages/service`; it is built and tested but not published.
+  `packages/service`; its release boundary is the native x86_64 Linux binary.
 - `apps/menubar` keeps private IPC/network-wire decoding separate from SwiftUI views and never reads
   local service files or provider-owned credentials.
 - `packages/protocol` defines released managed-network contracts and exported JSON Schemas.

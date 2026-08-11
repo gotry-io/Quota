@@ -11,11 +11,10 @@ a full helper run completed, so launch latency included runtime startup, credent
 provider requests, complete Usage scanning, pricing, and account synchronization. Provider and Usage
 semantics were also split across TypeScript and Swift boundaries that the macOS product did not need.
 
-QuotaBar is the only local product currently distributed. The repository also keeps a Linux-only
-native Rust `quotacli` entry point that reuses the local implementation for build/test validation;
-it is not published. A public macOS CLI, background daemon, LaunchAgent, Unix socket, Windows
-client, or independently versioned local frontend would add lifecycle and compatibility surfaces
-without serving the current product.
+QuotaBar is the macOS local product. The repository also provides a Linux-only native Rust
+`quotacli` entry point that reuses the local implementation. A public macOS CLI, background daemon,
+LaunchAgent, Unix socket, Windows client, or independently versioned local frontend would add
+lifecycle and compatibility surfaces without serving the current product.
 
 ## Decision
 
@@ -27,8 +26,8 @@ socket surface.
 
 The shared implementation lives in `packages/service`. `apps/menubar/helper` is the macOS private
 stdio entry point around that crate, while `apps/cli` is the Linux-only native `quotacli` entry point.
-The Linux binary is built and tested in Ubuntu CI only; it has no release, package publication,
-artifact upload, or version-tag workflow.
+The Linux binary is built and tested in Ubuntu CI and released from `cli-v*` tags as a static x86_64
+binary with a checksum. It has no npm, Homebrew, or source-package publication.
 
 The private protocol is `snake_case` IPC v1 with request IDs, typed operations, stable error and
 recovery codes, independent component state, and revisioned state-change events. Lines are limited to
@@ -74,8 +73,8 @@ compatible because they are released boundaries. There is no fallback to the del
 runtime or compatibility layer for its local command surface.
 
 QuotaBar is distributed as a signed/notarized app and Homebrew Cask. The Cask installs no command.
-Linux `quotacli` remains build/test-only: npm publication, GitHub Release publication, artifact
-uploads, and CLI version tags are intentionally absent.
+Linux `quotacli` is distributed as a static x86_64 binary through GitHub Releases; npm, Homebrew,
+and source-package publication remain intentionally absent.
 
 ## Consequences
 
@@ -89,4 +88,4 @@ uploads, and CLI version tags are intentionally absent.
   TypeScript by Relay/Web. Cross-language fixtures and generated provider IDs guard that boundary.
 - Quitting QuotaBar intentionally stops synchronization. Users who need an always-on/headless agent
   are outside the current product scope.
-- Ubuntu CI verifies the Linux-native `quotacli`; Windows is not built or released.
+- Ubuntu CI verifies and releases the Linux-native `quotacli`; Windows is not built or released.

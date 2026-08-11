@@ -6,7 +6,7 @@ subscription quota and privacy-preserving Usage together across a user's devices
 - **QuotaBar** — native macOS menu-bar UI with a bundled private Rust service for local collection,
   durable state, account sync, and scheduling.
 - **QuotaCLI** — Linux-only native Rust command that reuses the shared local service crate. It is
-  built and tested in CI, but is not published; Windows is not currently supported.
+  released as a static x86_64 binary; Windows is not currently supported.
 - **QuotaRelay** — managed account/device service on Cloudflare Workers and D1.
 - **Quota Web** — public site, GitHub login, device authorization, and account dashboard.
 
@@ -89,13 +89,14 @@ remote migrations or deploy manually without explicit authorization.
 
 ## Distribution
 
-QuotaBar is the only local product currently released. A `menubar-vX.Y.Z` tag builds one signed and
-notarized Apple Silicon app and updates the Homebrew Cask. The Cask installs only `QuotaBar.app`; it
-does not expose the private service as a command. The Linux-only QuotaCLI source is kept for native
-build/test validation; it has no npm publication, GitHub Release, artifact upload, or CLI version-tag
-workflow. Windows is not built or released.
+QuotaBar and QuotaCLI release independently. A `menubar-vX.Y.Z` tag builds one signed and notarized
+Apple Silicon app and updates the Homebrew Cask. The Cask installs only `QuotaBar.app`; it does not
+expose the private service as a command. A `cli-vX.Y.Z` tag publishes a static x86_64 Linux binary
+and checksum to GitHub Releases. QuotaCLI is not published to npm or Homebrew; Windows is not built
+or released.
 
 ```bash
+pnpm version:bump:cli patch      # or minor | major | explicit semver
 pnpm version:bump:menubar patch  # or minor | major | explicit semver
 ```
 
