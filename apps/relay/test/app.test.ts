@@ -235,9 +235,13 @@ describe("managed Relay on real Workers and D1", () => {
     const expanded = (await (
       await app.request("https://quota.gotry.io/api/v2/pricing/catalog?usage_agents=all")
     ).json()) as { entries: Array<{ billing_channel: string }> };
+    const invalid = await app.request(
+      "https://quota.gotry.io/api/v2/pricing/catalog?usage_agents=codex",
+    );
 
     expect(legacy.entries.some((entry) => entry.billing_channel === "xai_direct")).toBe(false);
     expect(expanded.entries.some((entry) => entry.billing_channel === "xai_direct")).toBe(true);
+    expect(invalid.status).toBe(400);
   });
 
   it("keeps the shipped summary range while new clients opt into retained history", async () => {

@@ -771,9 +771,8 @@ export function createRelayApp(options: RelayAppOptions): Hono {
   app.get("/api/v2/pricing/catalog", (context) => {
     if (!hasOnlyQueryKeys(context, ["usage_agents"])) return invalidRequest(context);
     const requestedAgents = context.req.query("usage_agents");
-    const agents = usageAgentsForRequest(requestedAgents);
-    if (!agents) return invalidRequest(context);
     const selected = pricingCatalogForRequest(catalogVariants, requestedAgents);
+    if (!selected) return invalidRequest(context);
     const selectedCatalog = selected.catalog;
     const selectedETag = selected.etag;
     context.header("ETag", selectedETag);

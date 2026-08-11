@@ -132,6 +132,9 @@ final class MenuBarViewModel {
   @ObservationIgnored
   private var loginTask: Task<Void, Never>?
 
+  @ObservationIgnored
+  private var accountActionErrorMessage: String?
+
   init(client: (any LocalServiceServing)? = nil) {
     if let client {
       self.client = client
@@ -213,6 +216,7 @@ final class MenuBarViewModel {
       if self.client == nil { accountErrorMessage = initializationError }
       return
     }
+    accountActionErrorMessage = nil
     accountErrorMessage = nil
     isLoggingIn = true
     loginTask = Task { @MainActor [weak self] in
@@ -227,7 +231,8 @@ final class MenuBarViewModel {
       } catch is CancellationError {
         return
       } catch {
-        accountErrorMessage = Self.message(for: error)
+        accountActionErrorMessage = Self.message(for: error)
+        accountErrorMessage = accountActionErrorMessage
         await reloadState()
       }
     }
@@ -238,11 +243,15 @@ final class MenuBarViewModel {
     loginTask?.cancel()
     loginTask = nil
     isLoggingIn = false
+    accountActionErrorMessage = nil
+    accountErrorMessage = nil
     Task { @MainActor [weak self] in
       do {
         try await client.cancelLogin()
       } catch {
-        self?.accountErrorMessage = Self.message(for: error)
+        let message = Self.message(for: error)
+        self?.accountActionErrorMessage = message
+        self?.accountErrorMessage = message
         await self?.reloadState()
       }
     }
@@ -252,6 +261,7 @@ final class MenuBarViewModel {
     guard !isLoggingOut, let client else { return }
     isLoggingOut = true
     defer { isLoggingOut = false }
+    accountActionErrorMessage = nil
     accountErrorMessage = nil
     do {
       _ = try await client.logout()
@@ -259,7 +269,8 @@ final class MenuBarViewModel {
     } catch is CancellationError {
       return
     } catch {
-      accountErrorMessage = Self.message(for: error)
+      accountActionErrorMessage = Self.message(for: error)
+      accountErrorMessage = accountActionErrorMessage
       await reloadState()
     }
   }
@@ -387,8 +398,8 @@ final class MenuBarViewModel {
 
     if let accountError = state.account.lastError {
       accountErrorMessage = LocalServiceClientError.remote(accountError).errorDescription
-    } else if state.account.value != nil {
-      accountErrorMessage = nil
+    } else {
+      accountErrorMessage = accountActionErrorMessage
     }
   }
 

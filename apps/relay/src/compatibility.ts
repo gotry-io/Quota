@@ -47,8 +47,12 @@ export function usageAgentsForRequest(
 export function pricingCatalogForRequest(
   variants: PricingCatalogVariants,
   requested: string | undefined,
-): { catalog: PricingCatalog; etag: string } {
-  return requested === "all" ? variants.current : variants.released;
+): { catalog: PricingCatalog; etag: string } | undefined {
+  return requested === undefined
+    ? variants.released
+    : requested === "all"
+      ? variants.current
+      : undefined;
 }
 
 export function releasedUsageRangeExceeded(

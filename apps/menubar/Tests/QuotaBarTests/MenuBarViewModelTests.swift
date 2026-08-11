@@ -112,7 +112,42 @@ func consumesServiceMergedOverviewWithoutReprocessingObservations() async throws
 
 @Test @MainActor
 func successfulLoginCancellationDoesNotRestoreStaleLoggingInState() async throws {
-  let state = LocalServiceState(
+  let model = MenuBarViewModel(
+    client: StubLocalService(
+      state: loggingInState(),
+      loginDelayNanoseconds: 30_000_000_000,
+      cancelDelayNanoseconds: 50_000_000
+    )
+  )
+  await model.refreshIfNeeded()
+
+  model.startLogin()
+  model.cancelLogin()
+  #expect(!model.isLoggingIn)
+  try await Task.sleep(nanoseconds: 60_000_000)
+  #expect(!model.isLoggingIn)
+}
+
+@Test @MainActor
+func accountActionErrorSurvivesAStateWithoutAServiceError() async throws {
+  let model = MenuBarViewModel(
+    client: StubLocalService(
+      state: loggingInState(),
+      loginDelayNanoseconds: 30_000_000_000,
+      cancelFails: true
+    )
+  )
+  await model.refreshIfNeeded()
+
+  model.startLogin()
+  model.cancelLogin()
+  try await Task.sleep(nanoseconds: 20_000_000)
+
+  #expect(model.accountErrorMessage == "QuotaBar's local service is unavailable.")
+}
+
+private func loggingInState() -> LocalServiceState {
+  LocalServiceState(
     ipcVersion: 1,
     revision: 1,
     quota: emptyComponent(),
@@ -134,20 +169,6 @@ func successfulLoginCancellationDoesNotRestoreStaleLoggingInState() async throws
     providers: [],
     overview: []
   )
-  let model = MenuBarViewModel(
-    client: StubLocalService(
-      state: state,
-      loginDelayNanoseconds: 30_000_000_000,
-      cancelDelayNanoseconds: 50_000_000
-    )
-  )
-  await model.refreshIfNeeded()
-
-  model.startLogin()
-  model.cancelLogin()
-  #expect(!model.isLoggingIn)
-  try await Task.sleep(nanoseconds: 60_000_000)
-  #expect(!model.isLoggingIn)
 }
 
 private func component<Value: Decodable & Sendable>(
@@ -191,16 +212,19 @@ private struct StubLocalService: LocalServiceServing {
   let events: AsyncStream<LocalServiceEvent>
   let loginDelayNanoseconds: UInt64
   let cancelDelayNanoseconds: UInt64
+  let cancelFails: Bool
 
   init(
     state: LocalServiceState,
     loginDelayNanoseconds: UInt64 = 0,
-    cancelDelayNanoseconds: UInt64 = 0
+    cancelDelayNanoseconds: UInt64 = 0,
+    cancelFails: Bool = false
   ) {
     stateValue = state
     events = AsyncStream { $0.finish() }
     self.loginDelayNanoseconds = loginDelayNanoseconds
     self.cancelDelayNanoseconds = cancelDelayNanoseconds
+    self.cancelFails = cancelFails
   }
 
   func state() async throws -> LocalServiceState { stateValue }
@@ -221,6 +245,9 @@ private struct StubLocalService: LocalServiceServing {
   func cancelLogin() async throws {
     if cancelDelayNanoseconds > 0 {
       try await Task.sleep(nanoseconds: cancelDelayNanoseconds)
+    }
+    if cancelFails {
+      throw LocalServiceClientError.connectionClosed
     }
   }
   func logout() async throws -> LocalServiceLogoutResult {

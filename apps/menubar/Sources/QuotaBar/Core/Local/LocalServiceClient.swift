@@ -199,8 +199,9 @@ actor LocalServiceClient: LocalServiceServing {
       do {
         try standardInput?.write(contentsOf: data)
       } catch {
-        // The actor serializes this path with closeConnection, which resumes this request and all
-        // other in-flight requests before discarding the process.
+        // Remove this waiter before closeConnection resumes the remaining in-flight requests.
+        pending.removeValue(forKey: requestID)?.resume(
+          throwing: LocalServiceClientError.connectionClosed)
         closeConnection(terminate: true, error: LocalServiceClientError.connectionClosed)
       }
     }
