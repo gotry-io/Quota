@@ -140,6 +140,7 @@ impl RelayClient {
             .checked_add(Duration::from_secs(expires_in))
             .ok_or(RelayError::Timeout)?;
         let mut wait = Duration::from_secs(interval);
+        let mut has_polled = false;
         loop {
             if cancel.load(Ordering::Acquire) {
                 return Err(RelayError::Cancelled);
@@ -148,22 +149,28 @@ impl RelayClient {
             if now >= deadline {
                 return Err(RelayError::Timeout);
             }
-            sleep(wait.min(deadline.saturating_duration_since(now)));
-            if cancel.load(Ordering::Acquire) {
-                return Err(RelayError::Cancelled);
-            }
-            if Instant::now() >= deadline {
-                return Err(RelayError::Timeout);
+            if has_polled {
+                sleep(wait.min(deadline.saturating_duration_since(now)));
+                if cancel.load(Ordering::Acquire) {
+                    return Err(RelayError::Cancelled);
+                }
+                if Instant::now() >= deadline {
+                    return Err(RelayError::Timeout);
+                }
             }
             match self.poll_device_token_once(device_code)? {
                 Ok(value) => return Ok(value),
                 Err(rejection) => match rejection.code.as_str() {
-                    "authorization_pending" => wait = rejection.retry_after.unwrap_or(wait),
+                    "authorization_pending" => {
+                        wait = rejection.retry_after.unwrap_or(wait);
+                        has_polled = true;
+                    }
                     "slow_down" => {
                         let increased = wait.saturating_add(Duration::from_secs(5));
                         wait = rejection
                             .retry_after
                             .map_or(increased, |retry_after| retry_after.max(increased));
+                        has_polled = true;
                     }
                     _ => {
                         return Err(RelayError::Rejected {
@@ -2914,14 +2921,7 @@ mod tests {
             .expect("device token");
         server.join().expect("mock server");
         assert_eq!(value, issued);
-        assert_eq!(
-            waits,
-            vec![
-                Duration::from_secs(1),
-                Duration::from_secs(1),
-                Duration::from_secs(6)
-            ]
-        );
+        assert_eq!(waits, vec![Duration::from_secs(1), Duration::from_secs(6)]);
     }
 
     #[test]
@@ -2957,12 +2957,18 @@ mod tests {
             Err(RelayError::Cancelled)
         ));
 
-        let client = RelayClient::for_test("http://127.0.0.1:1").expect("test client");
+        let (origin, server) = spawn_mock_server(vec![http_json(
+            400,
+            Some(1),
+            &serde_json::json!({"error": {"code": "authorization_pending"}}),
+        )]);
+        let client = RelayClient::for_test(&origin).expect("test client");
         let cancel = AtomicBool::new(false);
         let result =
             client.poll_device_token_with_sleep("qdc_test_value", 1, 1, &cancel, &mut |duration| {
                 thread::sleep(duration + Duration::from_millis(20))
             });
+        server.join().expect("mock server");
         assert!(matches!(result, Err(RelayError::Timeout)));
     }
 

@@ -235,12 +235,12 @@ final class MenuBarViewModel {
 
   func cancelLogin() {
     guard let client else { return }
+    loginTask?.cancel()
+    loginTask = nil
+    isLoggingIn = false
     Task { @MainActor [weak self] in
       do {
         try await client.cancelLogin()
-        self?.loginTask?.cancel()
-        self?.loginTask = nil
-        self?.isLoggingIn = false
       } catch {
         self?.accountErrorMessage = Self.message(for: error)
         await self?.reloadState()

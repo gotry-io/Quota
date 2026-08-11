@@ -135,14 +135,18 @@ func successfulLoginCancellationDoesNotRestoreStaleLoggingInState() async throws
     overview: []
   )
   let model = MenuBarViewModel(
-    client: StubLocalService(state: state, loginDelayNanoseconds: 30_000_000_000)
+    client: StubLocalService(
+      state: state,
+      loginDelayNanoseconds: 30_000_000_000,
+      cancelDelayNanoseconds: 50_000_000
+    )
   )
   await model.refreshIfNeeded()
 
   model.startLogin()
   model.cancelLogin()
-  try await Task.sleep(nanoseconds: 20_000_000)
-
+  #expect(!model.isLoggingIn)
+  try await Task.sleep(nanoseconds: 60_000_000)
   #expect(!model.isLoggingIn)
 }
 
@@ -186,11 +190,17 @@ private struct StubLocalService: LocalServiceServing {
   let stateValue: LocalServiceState
   let events: AsyncStream<LocalServiceEvent>
   let loginDelayNanoseconds: UInt64
+  let cancelDelayNanoseconds: UInt64
 
-  init(state: LocalServiceState, loginDelayNanoseconds: UInt64 = 0) {
+  init(
+    state: LocalServiceState,
+    loginDelayNanoseconds: UInt64 = 0,
+    cancelDelayNanoseconds: UInt64 = 0
+  ) {
     stateValue = state
     events = AsyncStream { $0.finish() }
     self.loginDelayNanoseconds = loginDelayNanoseconds
+    self.cancelDelayNanoseconds = cancelDelayNanoseconds
   }
 
   func state() async throws -> LocalServiceState { stateValue }
@@ -208,7 +218,11 @@ private struct StubLocalService: LocalServiceServing {
       deviceGeneration: nil
     )
   }
-  func cancelLogin() async throws {}
+  func cancelLogin() async throws {
+    if cancelDelayNanoseconds > 0 {
+      try await Task.sleep(nanoseconds: cancelDelayNanoseconds)
+    }
+  }
   func logout() async throws -> LocalServiceLogoutResult {
     LocalServiceLogoutResult(status: .signedOut)
   }
