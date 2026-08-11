@@ -339,10 +339,17 @@ describe("managed Relay on real Workers and D1", () => {
         "SELECT COUNT(*) AS count FROM usage_hourly WHERE device_id = 'device_multipart'",
       ).first("count"),
     ).toBe(0);
-    expect(await usage.recordUsage(principal, part1, now.toISOString())).toMatchObject({
-      outcome: "accepted",
-      next_sequence: 2,
-    });
+    const finalResults = await Promise.all(
+      Array.from({ length: 4 }, () => usage.recordUsage(principal, part1, now.toISOString())),
+    );
+    expect(finalResults.some((result) => result.outcome === "accepted")).toBe(true);
+    expect(
+      finalResults.every(
+        (result) =>
+          (result.outcome === "accepted" || result.outcome === "duplicate") &&
+          result.next_sequence === 2,
+      ),
+    ).toBe(true);
     expect(
       await env.DB.prepare(
         "SELECT COUNT(*) AS count FROM usage_hourly WHERE device_id = 'device_multipart'",
@@ -373,11 +380,19 @@ describe("managed Relay on real Workers and D1", () => {
       outcome: "accepted",
       next_sequence: 3,
     });
-    expect(await usage.recordUsage(principal, conflictPart1, now.toISOString())).toMatchObject({
-      outcome: "rejected",
-      rejection_reason: "duplicate_fact_identity",
-      next_sequence: 4,
-    });
+    const rejectedResults = await Promise.all(
+      Array.from({ length: 4 }, () =>
+        usage.recordUsage(principal, conflictPart1, now.toISOString()),
+      ),
+    );
+    expect(rejectedResults).toHaveLength(4);
+    for (const result of rejectedResults) {
+      expect(result).toMatchObject({
+        outcome: "rejected",
+        rejection_reason: "duplicate_fact_identity",
+        next_sequence: 4,
+      });
+    }
     expect(
       await env.DB.prepare(
         "SELECT COUNT(*) AS count FROM usage_hourly WHERE device_id = 'device_multipart'",

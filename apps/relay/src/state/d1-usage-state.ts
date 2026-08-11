@@ -536,7 +536,18 @@ export class D1UsageState implements UsageState {
       .bind(principal.device_id, batchId)
       .all<MultipartPartRow>();
     const first = parts.results[0];
-    if (!first || parts.results.length !== first.part_count) return "pending";
+    if (!first || parts.results.length !== first.part_count) {
+      const rejection = await this.database
+        .prepare(
+          `SELECT rejection_reason
+           FROM usage_submissions
+           WHERE device_id = ?1 AND multipart_batch_id = ?2 AND rejection_reason IS NOT NULL
+           LIMIT 1`,
+        )
+        .bind(principal.device_id, batchId)
+        .first<{ rejection_reason: string }>();
+      return rejection ? "rejected" : "pending";
+    }
     for (const [index, part] of parts.results.entries()) {
       if (
         part.part_index !== index ||
@@ -598,6 +609,8 @@ export class D1UsageState implements UsageState {
         .bind(principal.device_id, batchId),
     );
     await this.database.batch(statements);
+    const receipt = await this.getReceipt(principal.device_id, finalPart.submission_id);
+    if (receipt?.rejection_reason) return "rejected";
     return "committed";
   }
 
@@ -670,6 +683,12 @@ export class D1UsageState implements UsageState {
                AND EXISTS (
                  SELECT 1 FROM usage_submissions
                  WHERE device_id = ?1 AND submission_id = ?5
+                   AND rejection_reason IS NULL
+                   AND (?6 IS NULL OR EXISTS (
+                     SELECT 1 FROM usage_submission_parts
+                     WHERE device_id = ?1 AND batch_id = ?6
+                     GROUP BY part_count HAVING COUNT(*) = part_count
+                   ))
                )`,
           )
           .bind(
@@ -678,6 +697,7 @@ export class D1UsageState implements UsageState {
             submission.coverage.start_at,
             submission.coverage.end_at,
             submission.submission_id,
+            stagedBatchId ?? null,
           ),
       );
     }
@@ -688,17 +708,17 @@ export class D1UsageState implements UsageState {
     }
     if (partial) {
       statements.push(
-        this.preserveCoverageSide(deviceId, submission, "left"),
-        this.preserveCoverageSide(deviceId, submission, "right"),
-        this.deleteCoverageOverlap(deviceId, submission),
-        this.insertPartialCoverage(deviceId, submission, receivedAt),
+        this.preserveCoverageSide(deviceId, submission, "left", stagedBatchId),
+        this.preserveCoverageSide(deviceId, submission, "right", stagedBatchId),
+        this.deleteCoverageOverlap(deviceId, submission, stagedBatchId),
+        this.insertPartialCoverage(deviceId, submission, receivedAt, stagedBatchId),
       );
     } else {
       statements.push(
-        this.preserveCoverageSide(deviceId, submission, "left"),
-        this.preserveCoverageSide(deviceId, submission, "right"),
-        this.deleteCoverageOverlap(deviceId, submission),
-        this.insertCompleteCoverage(deviceId, submission, receivedAt),
+        this.preserveCoverageSide(deviceId, submission, "left", stagedBatchId),
+        this.preserveCoverageSide(deviceId, submission, "right", stagedBatchId),
+        this.deleteCoverageOverlap(deviceId, submission, stagedBatchId),
+        this.insertCompleteCoverage(deviceId, submission, receivedAt, stagedBatchId),
       );
     }
     return statements;
@@ -767,9 +787,13 @@ export class D1UsageState implements UsageState {
                 json_extract(item.value, '$.source_cost_microusd'),
                 json_extract(item.value, '$.source_cost_covered_requests')
          FROM usage_submission_parts AS part, json_each(part.rows_json) AS item
-         WHERE part.device_id = ?1 AND part.batch_id = ?3${conflict}`,
+         WHERE part.device_id = ?1 AND part.batch_id = ?3
+           AND EXISTS (
+             SELECT 1 FROM usage_submissions
+             WHERE device_id = ?1 AND submission_id = ?4 AND rejection_reason IS NULL
+           )${conflict}`,
       )
-      .bind(deviceId, submission.aggregation_timezone, batchId);
+      .bind(deviceId, submission.aggregation_timezone, batchId, submission.submission_id);
   }
 
   private insertRow(
@@ -813,7 +837,7 @@ export class D1UsageState implements UsageState {
                 ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26
          WHERE EXISTS (
            SELECT 1 FROM usage_submissions
-           WHERE device_id = ?1 AND submission_id = ?2
+           WHERE device_id = ?1 AND submission_id = ?2 AND rejection_reason IS NULL
          )${conflict}`,
       )
       .bind(
@@ -850,6 +874,7 @@ export class D1UsageState implements UsageState {
     deviceId: string,
     submission: UsageSubmission,
     side: "left" | "right",
+    stagedBatchId?: string,
   ): D1PreparedStatement {
     const start = side === "left" ? "coverage.start_at" : "?5";
     const end = side === "left" ? "?4" : "coverage.end_at";
@@ -866,7 +891,12 @@ export class D1UsageState implements UsageState {
            AND coverage.start_at < ?5 AND coverage.end_at > ?4 AND ${retained}
            AND EXISTS (
              SELECT 1 FROM usage_submissions
-             WHERE device_id = ?1 AND submission_id = ?2
+             WHERE device_id = ?1 AND submission_id = ?2 AND rejection_reason IS NULL
+               AND (?6 IS NULL OR EXISTS (
+                 SELECT 1 FROM usage_submission_parts
+                 WHERE device_id = ?1 AND batch_id = ?6
+                 GROUP BY part_count HAVING COUNT(*) = part_count
+               ))
            )
          ON CONFLICT(device_id, agent, start_at, end_at) DO NOTHING`,
       )
@@ -876,6 +906,7 @@ export class D1UsageState implements UsageState {
         submission.coverage.agent,
         submission.coverage.start_at,
         submission.coverage.end_at,
+        stagedBatchId ?? null,
       );
   }
 
@@ -883,6 +914,7 @@ export class D1UsageState implements UsageState {
     deviceId: string,
     submission: UsageSubmission,
     acceptedAt: string,
+    stagedBatchId?: string,
   ): D1PreparedStatement {
     return this.database
       .prepare(
@@ -892,7 +924,12 @@ export class D1UsageState implements UsageState {
          SELECT ?1, ?2, ?3, ?4, 'partial', ?5, ?6, ?7
          WHERE EXISTS (
            SELECT 1 FROM usage_submissions
-           WHERE device_id = ?1 AND submission_id = ?6
+           WHERE device_id = ?1 AND submission_id = ?6 AND rejection_reason IS NULL
+             AND (?8 IS NULL OR EXISTS (
+               SELECT 1 FROM usage_submission_parts
+               WHERE device_id = ?1 AND batch_id = ?8
+               GROUP BY part_count HAVING COUNT(*) = part_count
+             ))
          )`,
       )
       .bind(
@@ -903,12 +940,14 @@ export class D1UsageState implements UsageState {
         submission.parser_revision,
         submission.submission_id,
         acceptedAt,
+        stagedBatchId ?? null,
       );
   }
 
   private deleteCoverageOverlap(
     deviceId: string,
     submission: UsageSubmission,
+    stagedBatchId?: string,
   ): D1PreparedStatement {
     return this.database
       .prepare(
@@ -916,7 +955,12 @@ export class D1UsageState implements UsageState {
          WHERE device_id = ?1 AND agent = ?3 AND start_at < ?5 AND end_at > ?4
            AND EXISTS (
              SELECT 1 FROM usage_submissions
-             WHERE device_id = ?1 AND submission_id = ?2
+             WHERE device_id = ?1 AND submission_id = ?2 AND rejection_reason IS NULL
+               AND (?6 IS NULL OR EXISTS (
+                 SELECT 1 FROM usage_submission_parts
+                 WHERE device_id = ?1 AND batch_id = ?6
+                 GROUP BY part_count HAVING COUNT(*) = part_count
+               ))
            )`,
       )
       .bind(
@@ -925,6 +969,7 @@ export class D1UsageState implements UsageState {
         submission.coverage.agent,
         submission.coverage.start_at,
         submission.coverage.end_at,
+        stagedBatchId ?? null,
       );
   }
 
@@ -932,6 +977,7 @@ export class D1UsageState implements UsageState {
     deviceId: string,
     submission: UsageSubmission,
     acceptedAt: string,
+    stagedBatchId?: string,
   ): D1PreparedStatement {
     return this.database
       .prepare(
@@ -941,7 +987,12 @@ export class D1UsageState implements UsageState {
          SELECT ?1, ?3, ?4, ?5, 'complete', ?6, ?2, ?7
          WHERE EXISTS (
            SELECT 1 FROM usage_submissions
-           WHERE device_id = ?1 AND submission_id = ?2
+           WHERE device_id = ?1 AND submission_id = ?2 AND rejection_reason IS NULL
+             AND (?8 IS NULL OR EXISTS (
+               SELECT 1 FROM usage_submission_parts
+               WHERE device_id = ?1 AND batch_id = ?8
+               GROUP BY part_count HAVING COUNT(*) = part_count
+             ))
          )`,
       )
       .bind(
@@ -952,6 +1003,7 @@ export class D1UsageState implements UsageState {
         submission.coverage.end_at,
         submission.parser_revision,
         acceptedAt,
+        stagedBatchId ?? null,
       );
   }
 
