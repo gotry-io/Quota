@@ -728,7 +728,7 @@ impl LocalBackend for NativeBackend {
                             self.state.session_json().ok().flatten().unwrap_or(session);
                         let mut account_sync_error = None;
                         if let Ok(quota_payload) = &quota_value
-                            && let Err(error) = self.account.upload_snapshot(quota_payload)
+                            && let Err(error) = self.account.upload_quota_report(quota_payload)
                         {
                             account_sync_error = Some(error);
                         }

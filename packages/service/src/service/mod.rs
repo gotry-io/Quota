@@ -721,6 +721,7 @@ impl LocalService {
                             false,
                         );
                         self.spawn_logout_retry(pending);
+                        self.emit(vec![ComponentName::Account]);
                     } else {
                         let _ = self.set_signed_out();
                     }
@@ -759,6 +760,7 @@ impl LocalService {
                             false,
                         );
                         self.spawn_logout_retry(pending);
+                        self.emit(vec![ComponentName::Account]);
                         self.clear_login_active();
                         return;
                     }
@@ -770,6 +772,7 @@ impl LocalService {
                         Some(IpcError::new(ErrorCode::Unavailable, RecoveryAction::Retry)),
                         false,
                     );
+                    self.emit(vec![ComponentName::Account]);
                     self.clear_login_active();
                     return;
                 }
@@ -792,6 +795,9 @@ impl LocalService {
                             false,
                         );
                         self.spawn_logout_retry(pending);
+                        self.emit(vec![ComponentName::Account]);
+                    } else {
+                        let _ = self.set_signed_out();
                     }
                     self.clear_login_active();
                     return;
@@ -834,6 +840,7 @@ impl LocalService {
                         false,
                     );
                     self.spawn_logout_retry(pending);
+                    self.emit(vec![ComponentName::Account]);
                     self.clear_login_active();
                     return;
                 }
@@ -855,6 +862,7 @@ impl LocalService {
                     Some(error.error),
                     false,
                 );
+                self.emit(vec![ComponentName::Account]);
             }
         }
         self.clear_login_active();
@@ -1113,6 +1121,15 @@ mod tests {
     use std::fs;
     use uuid::Uuid;
 
+    #[derive(Default)]
+    struct RecordingSink(Mutex<Vec<IpcEvent>>);
+
+    impl EventSink for RecordingSink {
+        fn event(&self, event: IpcEvent) {
+            self.0.lock().expect("events").push(event);
+        }
+    }
+
     #[test]
     fn get_state_does_not_start_refresh() {
         let root = std::env::temp_dir().join(format!("quota-service-{}", Uuid::new_v4()));
@@ -1134,6 +1151,44 @@ mod tests {
         assert!(response.error.is_none());
         assert!(service.inner.refresh.lock().expect("lock").active.is_none());
         service.shutdown();
+        drop(service);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn failed_background_login_emits_account_state() {
+        let root = std::env::temp_dir().join(format!("quota-login-event-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        let sink = Arc::new(RecordingSink::default());
+        let service = LocalService::new(state, sink.clone(), Arc::new(UnavailableBackend));
+        let request: IpcRequest = serde_json::from_value(serde_json::json!({
+            "type": "request",
+            "request_id": "login",
+            "operation": "login",
+            "payload": {}
+        }))
+        .expect("request");
+
+        let response = service.handle(request);
+        assert!(response.error.is_none());
+        let deadline = std::time::Instant::now() + Duration::from_secs(1);
+        while sink.0.lock().expect("events").is_empty() && std::time::Instant::now() < deadline {
+            thread::yield_now();
+        }
+        assert!(
+            sink.0
+                .lock()
+                .expect("events")
+                .iter()
+                .any(|event| event.changed_components == [ComponentName::Account])
+        );
+
+        service.shutdown();
+        let deadline = std::time::Instant::now() + Duration::from_secs(1);
+        while Arc::strong_count(&service.inner) > 1 && std::time::Instant::now() < deadline {
+            thread::yield_now();
+        }
         drop(service);
         fs::remove_dir_all(root).expect("cleanup");
     }

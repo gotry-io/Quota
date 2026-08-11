@@ -142,6 +142,29 @@ struct LocalServiceClientTests {
   }
 
   @Test
+  func mismatchedResponseIDClosesAllPendingRequests() async throws {
+    let service = try TemporaryService(
+      python: #"""
+        import json
+        import sys
+
+        json.loads(sys.stdin.readline())
+        print(json.dumps({
+            "type": "response",
+            "request_id": "different-request",
+            "result": {},
+        }), flush=True)
+        """#
+    )
+    defer { service.remove() }
+    let client = try LocalServiceClient(executableURL: service.executableURL)
+
+    await #expect(throws: LocalServiceClientError.invalidMessage) {
+      _ = try await client.state()
+    }
+  }
+
+  @Test
   func timesOutAndRestartsAfterAStalledRequest() async throws {
     let service = try TemporaryService(
       python: #"""

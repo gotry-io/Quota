@@ -1866,7 +1866,7 @@ impl AccountManager {
         Ok(control)
     }
 
-    pub fn upload_snapshot(&self, envelope: &Value) -> Result<Value, BackendError> {
+    pub(crate) fn upload_quota_report(&self, report: &Value) -> Result<Value, BackendError> {
         let (session, session_epoch) = self
             .state
             .session_snapshot()
@@ -1881,25 +1881,7 @@ impl AccountManager {
             return Err(session_changed_error());
         }
         let token = session_access_token_from(&session, "device")?;
-        let object = envelope.as_object().ok_or_else(BackendError::unavailable)?;
-        let snapshots = object
-            .get("results")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .flat_map(|result| {
-                result
-                    .get("snapshots")
-                    .and_then(Value::as_array)
-                    .into_iter()
-                    .flatten()
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        let report_captured_at = object
-            .get("captured_at")
-            .and_then(Value::as_str)
-            .ok_or_else(BackendError::unavailable)?;
+        let (report_captured_at, snapshots) = snapshot_payload_from_quota_report(report)?;
         let expected_device_id = session
             .get("device_id")
             .and_then(Value::as_str)
@@ -2177,6 +2159,30 @@ fn session_changed_error() -> BackendError {
             crate::protocol::RecoveryAction::Login,
         ),
     }
+}
+
+fn snapshot_payload_from_quota_report(report: &Value) -> Result<(&str, Vec<Value>), BackendError> {
+    let object = report.as_object().ok_or_else(BackendError::unavailable)?;
+    if object.get("protocol_version").and_then(Value::as_u64) != Some(2) {
+        return Err(BackendError::unavailable());
+    }
+    let captured_at = object
+        .get("captured_at")
+        .and_then(Value::as_str)
+        .ok_or_else(BackendError::unavailable)?;
+    let results = object
+        .get("results")
+        .and_then(Value::as_array)
+        .ok_or_else(BackendError::unavailable)?;
+    let mut snapshots = Vec::new();
+    for result in results {
+        let values = result
+            .get("snapshots")
+            .and_then(Value::as_array)
+            .ok_or_else(BackendError::unavailable)?;
+        snapshots.extend(values.iter().cloned());
+    }
+    Ok((captured_at, snapshots))
 }
 
 fn session_matches_usage_submission(session: &Value, submission: &Value) -> bool {
@@ -2739,6 +2745,37 @@ mod tests {
         assert!(parse_utc_hour_value("2026-08-10T00:00:00Z").is_ok());
         assert!(parse_utc_hour_value("2026-08-10T00:00:00+00:00").is_err());
         assert!(parse_utc_hour_value("2026-08-10T00:00:60Z").is_err());
+    }
+
+    #[test]
+    fn quota_report_snapshot_extraction_is_strict() {
+        let snapshot = valid_snapshot();
+        let report = serde_json::json!({
+            "protocol_version": 2,
+            "captured_at": "2026-08-10T00:00:00Z",
+            "results": [{"snapshots": [snapshot.clone()]}]
+        });
+        let (captured_at, snapshots) =
+            snapshot_payload_from_quota_report(&report).expect("quota report");
+        assert_eq!(captured_at, "2026-08-10T00:00:00Z");
+        assert_eq!(snapshots, [snapshot]);
+
+        assert!(
+            snapshot_payload_from_quota_report(&serde_json::json!({
+                "protocol_version": 2,
+                "captured_at": "2026-08-10T00:00:00Z",
+                "snapshots": []
+            }))
+            .is_err()
+        );
+        assert!(
+            snapshot_payload_from_quota_report(&serde_json::json!({
+                "protocol_version": 2,
+                "captured_at": "2026-08-10T00:00:00Z",
+                "results": [{}]
+            }))
+            .is_err()
+        );
     }
 
     #[test]
