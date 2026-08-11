@@ -1,7 +1,7 @@
 //! Production backend adapter.  The service owns orchestration; this adapter owns the concrete
 //! provider, Usage, pricing, and Relay calls and returns only protocol-shaped values.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::fs::OpenOptions;
 use std::path::PathBuf;
@@ -1901,6 +1901,26 @@ fn usage_multipart_submissions(
     {
         return None;
     }
+    let mut identities = HashSet::with_capacity(rows.len());
+    for row in rows {
+        let identity = serde_json::to_string(&(
+            &row.bucket_start_utc,
+            &row.usage_date,
+            row.usage_hour,
+            row.agent,
+            row.billing_channel,
+            row.channel_source,
+            &row.model,
+            row.context_bucket,
+            &row.service_tier,
+            &row.speed,
+            &row.inference_geo,
+        ))
+        .ok()?;
+        if !identities.insert(identity) {
+            return None;
+        }
+    }
     let batch_id = stable_usage_batch_id(context, rows);
     // Use the maximum part count while packing. The final count can only make the metadata
     // smaller, so a part that fits this conservative envelope is safe at the final rebuild.
@@ -2442,8 +2462,12 @@ mod tests {
             serde_json::to_vec(part).expect("bytes").len() <= crate::relay::MAXIMUM_REQUEST_BYTES
         }));
 
+        let mut duplicate_rows = rows.clone();
+        duplicate_rows[usage::MAX_USAGE_ROWS] = duplicate_rows[0].clone();
+        assert!(usage_multipart_submissions(&context, 30, &duplicate_rows).is_none());
+
         let too_many = vec![fact(); usage::MAX_USAGE_ROWS * MAX_USAGE_MULTIPART_PARTS + 1];
-        assert!(usage_multipart_submissions(&context, 30, &too_many).is_none());
+        assert!(usage_multipart_submissions(&context, 40, &too_many).is_none());
     }
 
     #[test]
