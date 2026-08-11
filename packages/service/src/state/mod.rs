@@ -1269,7 +1269,16 @@ impl StateStore {
                 && current.4 == lower_bound.to_rfc3339_opts(SecondsFormat::AutoSi, true)
         });
         if unchanged {
-            let revision = metadata_u64(&tx, "revision")?;
+            let removed = tx.execute(
+                "DELETE FROM usage_outbox
+                 WHERE account_id != ?1 OR device_id != ?2 OR generation != ?3",
+                params![account_id, device_id, generation as i64],
+            )?;
+            let revision = if removed > 0 {
+                bump_revision(&tx)?
+            } else {
+                metadata_u64(&tx, "revision")?
+            };
             tx.commit()?;
             return Ok(revision);
         }
@@ -2359,6 +2368,74 @@ mod tests {
         assert_eq!(
             store.outbox_entries().expect("entries").len(),
             MAX_USAGE_OUTBOX_ENTRIES as usize
+        );
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn unchanged_usage_context_removes_foreign_outbox_entries() {
+        let root = std::env::temp_dir().join(format!("quota-outbox-context-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let store = StateStore::open(&root).expect("state");
+        store
+            .ensure_usage_context(
+                "account_test",
+                "device_test",
+                1,
+                "UTC",
+                "2026-08-10T00:00:00Z",
+            )
+            .expect("context");
+        {
+            let conn = store.db.lock().expect("database");
+            conn.execute(
+                "INSERT INTO usage_outbox(
+                    submission_id, account_id, device_id, generation, sequence, payload_json
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    "submission_current",
+                    "account_test",
+                    "device_test",
+                    1,
+                    0,
+                    r#"{"submission_id":"submission_current"}"#
+                ],
+            )
+            .expect("current entry");
+            conn.execute(
+                "INSERT INTO usage_outbox(
+                    submission_id, account_id, device_id, generation, sequence, payload_json
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    "submission_foreign",
+                    "account_old",
+                    "device_old",
+                    1,
+                    0,
+                    r#"{"submission_id":"submission_foreign"}"#
+                ],
+            )
+            .expect("foreign entry");
+        }
+
+        let revision = store
+            .ensure_usage_context(
+                "account_test",
+                "device_test",
+                1,
+                "UTC",
+                "2026-08-10T00:00:00Z",
+            )
+            .expect("unchanged context");
+
+        assert_eq!(revision, 2);
+        assert_eq!(store.outbox_entries().expect("entries").len(), 1);
+        assert_eq!(
+            store
+                .outbox_entries_for("account_test", "device_test", 1)
+                .expect("current entries"),
+            vec![serde_json::json!({"submission_id": "submission_current"})]
         );
         drop(store);
         fs::remove_dir_all(root).expect("cleanup");

@@ -552,35 +552,10 @@ export class D1UsageState implements UsageState {
       }
     }
 
-    // Check fact identities in SQL before any mutation. Complete batches would
-    // fail on the Usage PK, while partial batches use an upsert and could
-    // otherwise silently choose whichever duplicate happened to be last.
-    // Reject only the invalid batch after consuming its already-advanced sequence. This keeps one
-    // malformed batch from blocking every later upload without making any of its rows visible.
-    const duplicate = await this.database
-      .prepare(
-        `SELECT 1 AS duplicate
-         FROM usage_submission_parts AS part, json_each(part.rows_json) AS item
-         WHERE part.device_id = ?1 AND part.batch_id = ?2
-         GROUP BY
-           json_extract(item.value, '$.bucket_start_utc'),
-           json_extract(item.value, '$.usage_date'),
-           json_extract(item.value, '$.usage_hour'),
-           json_extract(item.value, '$.agent'),
-           json_extract(item.value, '$.billing_channel'),
-           json_extract(item.value, '$.channel_source'),
-           json_extract(item.value, '$.model'),
-           json_extract(item.value, '$.context_bucket'),
-           json_extract(item.value, '$.service_tier'),
-           json_extract(item.value, '$.speed'),
-           json_extract(item.value, '$.inference_geo')
-         HAVING COUNT(*) > 1
-         LIMIT 1`,
-      )
-      .bind(principal.device_id, batchId)
-      .first<{ duplicate: number }>();
-    if (duplicate) {
-      await this.rejectMultipart(principal.device_id, batchId);
+    // Reject duplicate fact identities without making any batch row visible. Detection, durable
+    // terminal receipts, and staging cleanup share one D1 transaction so a retry always observes
+    // either the complete staged batch or its complete rejection.
+    if (await this.rejectDuplicateMultipart(principal.device_id, batchId)) {
       return "rejected";
     }
 
@@ -622,22 +597,12 @@ export class D1UsageState implements UsageState {
         .prepare("DELETE FROM usage_submission_parts WHERE device_id = ?1 AND batch_id = ?2")
         .bind(principal.device_id, batchId),
     );
-    try {
-      await this.database.batch(statements);
-    } catch (error) {
-      // A multipart batch must not silently merge duplicate fact identities. D1 rolls the failed
-      // materialization back before the batch is moved to its terminal rejected state.
-      if (isUsageFactConflict(error)) {
-        await this.rejectMultipart(principal.device_id, batchId);
-        return "rejected";
-      }
-      throw error;
-    }
+    await this.database.batch(statements);
     return "committed";
   }
 
-  private async rejectMultipart(deviceId: string, batchId: string): Promise<void> {
-    await this.database.batch([
+  private async rejectDuplicateMultipart(deviceId: string, batchId: string): Promise<boolean> {
+    const results = await this.database.batch([
       this.database
         .prepare(
           `UPDATE usage_submissions
@@ -645,13 +610,45 @@ export class D1UsageState implements UsageState {
            WHERE device_id = ?1 AND submission_id IN (
              SELECT submission_id FROM usage_submission_parts
              WHERE device_id = ?1 AND batch_id = ?2
-           )`,
+           ) AND EXISTS (
+             SELECT 1
+             FROM usage_submission_parts AS part, json_each(part.rows_json) AS item
+             WHERE part.device_id = ?1 AND part.batch_id = ?2
+             GROUP BY
+               json_extract(item.value, '$.bucket_start_utc'),
+               json_extract(item.value, '$.usage_date'),
+               json_extract(item.value, '$.usage_hour'),
+               json_extract(item.value, '$.agent'),
+               json_extract(item.value, '$.billing_channel'),
+               json_extract(item.value, '$.channel_source'),
+               json_extract(item.value, '$.model'),
+               json_extract(item.value, '$.context_bucket'),
+               json_extract(item.value, '$.service_tier'),
+               json_extract(item.value, '$.speed'),
+               json_extract(item.value, '$.inference_geo')
+             HAVING COUNT(*) > 1
+             LIMIT 1
+           )
+           RETURNING submission_id`,
         )
         .bind(deviceId, batchId),
       this.database
-        .prepare("DELETE FROM usage_submission_parts WHERE device_id = ?1 AND batch_id = ?2")
+        .prepare(
+          `DELETE FROM usage_submission_parts
+           WHERE device_id = ?1 AND batch_id = ?2
+             AND NOT EXISTS (
+               SELECT 1
+               FROM usage_submission_parts AS part
+               JOIN usage_submissions AS receipt
+                 ON receipt.device_id = part.device_id
+                AND receipt.submission_id = part.submission_id
+               WHERE part.device_id = ?1 AND part.batch_id = ?2
+                 AND receipt.rejection_reason IS NOT 'duplicate_fact_identity'
+             )`,
+        )
         .bind(deviceId, batchId),
     ]);
+    return (results[0]?.results.length ?? 0) > 0;
   }
 
   private usageMutationStatements(
@@ -991,11 +988,6 @@ function receiptMatches(
     receipt.multipart_part_index === (submission.multipart?.part_index ?? null) &&
     receipt.multipart_part_count === (submission.multipart?.part_count ?? null)
   );
-}
-
-function isUsageFactConflict(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return message.includes("UNIQUE constraint failed: usage_hourly.");
 }
 
 function floorUtcHour(value: string): number {

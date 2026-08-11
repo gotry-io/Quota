@@ -1062,12 +1062,7 @@ impl NativeBackend {
             .state
             .outbox_entries_for(account_id, device_id, generation)
             .map_err(|_| BackendError::unavailable())?;
-        let total_outbox = self
-            .state
-            .outbox_entries()
-            .map_err(|_| BackendError::unavailable())?
-            .len();
-        let mut stage_slots = usage_stage_slots(total_outbox);
+        let mut stage_slots = usage_stage_slots(existing.len());
         if stage_slots == 0 {
             return Ok(false);
         }
