@@ -953,12 +953,16 @@ export type QuotaSnapshotUploadResponse = z.infer<typeof QuotaSnapshotUploadResp
 export const UsageUploadOutcomeSchema = z.enum([
   "accepted",
   "duplicate",
+  "rejected",
   "partial",
   "sequence_conflict",
   "stale_generation",
   "deleted",
 ]);
 export type UsageUploadOutcome = z.infer<typeof UsageUploadOutcomeSchema>;
+
+export const UsageUploadRejectionReasonSchema = z.literal("duplicate_fact_identity");
+export type UsageUploadRejectionReason = z.infer<typeof UsageUploadRejectionReasonSchema>;
 
 export const UsageUploadResponseSchema = z
   .object({
@@ -970,6 +974,7 @@ export const UsageUploadResponseSchema = z
     next_sequence: SafeNonnegativeIntegerSchema,
     usage_sync_revision: SafeNonnegativeIntegerSchema,
     deleted_before: Rfc3339InstantSchema.nullable(),
+    rejection_reason: UsageUploadRejectionReasonSchema.optional(),
   })
   .strict()
   .superRefine((response, context) => {
@@ -986,6 +991,13 @@ export const UsageUploadResponseSchema = z
         code: "custom",
         path: ["deleted_before"],
         message: "deleted_before is present only for a deleted device.",
+      });
+    }
+    if ((response.outcome === "rejected") !== (response.rejection_reason !== undefined)) {
+      context.addIssue({
+        code: "custom",
+        path: ["rejection_reason"],
+        message: "rejection_reason is present only for rejected uploads.",
       });
     }
   });

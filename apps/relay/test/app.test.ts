@@ -374,7 +374,9 @@ describe("managed Relay on real Workers and D1", () => {
       next_sequence: 3,
     });
     expect(await usage.recordUsage(principal, conflictPart1, now.toISOString())).toMatchObject({
-      outcome: "sequence_conflict",
+      outcome: "rejected",
+      rejection_reason: "duplicate_fact_identity",
+      next_sequence: 4,
     });
     expect(
       await env.DB.prepare(
@@ -385,9 +387,11 @@ describe("managed Relay on real Workers and D1", () => {
       await env.DB.prepare(
         "SELECT COUNT(*) AS count FROM usage_submission_parts WHERE device_id = 'device_multipart' AND batch_id = 'multipart_conflict'",
       ).first("count"),
-    ).toBe(2);
+    ).toBe(0);
     expect(await usage.recordUsage(principal, conflictPart1, now.toISOString())).toMatchObject({
-      outcome: "sequence_conflict",
+      outcome: "rejected",
+      rejection_reason: "duplicate_fact_identity",
+      next_sequence: 4,
     });
 
     const partialCommon = {
@@ -429,7 +433,9 @@ describe("managed Relay on real Workers and D1", () => {
     expect(
       await usage.recordUsage(principal, partialConflictPart1, now.toISOString()),
     ).toMatchObject({
-      outcome: "sequence_conflict",
+      outcome: "rejected",
+      rejection_reason: "duplicate_fact_identity",
+      next_sequence: 6,
     });
     expect(
       await env.DB.prepare(
@@ -440,11 +446,29 @@ describe("managed Relay on real Workers and D1", () => {
       await env.DB.prepare(
         "SELECT COUNT(*) AS count FROM usage_submission_parts WHERE device_id = 'device_multipart' AND batch_id = 'multipart_partial_conflict'",
       ).first("count"),
-    ).toBe(2);
+    ).toBe(0);
     expect(
       await usage.recordUsage(principal, partialConflictPart1, now.toISOString()),
     ).toMatchObject({
-      outcome: "sequence_conflict",
+      outcome: "rejected",
+      rejection_reason: "duplicate_fact_identity",
+      next_sequence: 6,
+    });
+
+    const afterConflict: UsageSubmission = {
+      ...common,
+      submission_id: "after_multipart_conflict",
+      sequence: 6,
+      coverage: {
+        ...common.coverage,
+        start_at: "2026-08-10T13:00:00Z",
+        end_at: "2026-08-10T14:00:00Z",
+      },
+      rows: [usageFact("after-conflict", "2026-08-10T13:00:00Z")],
+    };
+    expect(await usage.recordUsage(principal, afterConflict, now.toISOString())).toMatchObject({
+      outcome: "accepted",
+      next_sequence: 7,
     });
   });
 

@@ -762,6 +762,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
           ? outcome.usage_sync_revision
           : control.usage_sync_revision,
       deleted_before: outcome.outcome === "deleted_range" ? control.usage_deleted_before : null,
+      ...(outcome.outcome === "rejected" ? { rejection_reason: outcome.rejection_reason } : {}),
     });
     const status =
       outcome.outcome === "sequence_conflict" ||

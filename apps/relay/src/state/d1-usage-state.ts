@@ -31,6 +31,7 @@ interface UsageReceiptRow {
   multipart_batch_id: string | null;
   multipart_part_index: number | null;
   multipart_part_count: number | null;
+  rejection_reason: "duplicate_fact_identity" | null;
 }
 
 interface MultipartPartRow {
@@ -70,13 +71,28 @@ export class D1UsageState implements UsageState {
       if (!receiptMatches(receipt, submission, requestDigest)) {
         return { outcome: "sequence_conflict" };
       }
+      if (receipt.rejection_reason) {
+        return {
+          outcome: "rejected",
+          rejection_reason: receipt.rejection_reason,
+          usage_sync_revision: receipt.usage_sync_revision,
+          next_sequence: receipt.sequence + 1,
+        };
+      }
       if (receipt.multipart_batch_id) {
         const finalized = await this.finalizeMultipart(
           principal,
           receipt.multipart_batch_id,
           receivedAt,
         );
-        if (finalized === "conflict") return { outcome: "sequence_conflict" };
+        if (finalized === "rejected") {
+          return {
+            outcome: "rejected",
+            rejection_reason: "duplicate_fact_identity",
+            usage_sync_revision: receipt.usage_sync_revision,
+            next_sequence: receipt.sequence + 1,
+          };
+        }
       }
       return {
         outcome: "duplicate",
@@ -129,7 +145,14 @@ export class D1UsageState implements UsageState {
         submission.multipart.batch_id,
         receivedAt,
       );
-      if (finalized === "conflict") return { outcome: "sequence_conflict" };
+      if (finalized === "rejected") {
+        return {
+          outcome: "rejected",
+          rejection_reason: "duplicate_fact_identity",
+          usage_sync_revision: revision,
+          next_sequence: submission.sequence + 1,
+        };
+      }
       return {
         outcome: "accepted",
         usage_sync_revision: revision,
@@ -499,7 +522,7 @@ export class D1UsageState implements UsageState {
     principal: DevicePrincipal,
     batchId: string,
     receivedAt: string,
-  ): Promise<"pending" | "committed" | "conflict"> {
+  ): Promise<"pending" | "committed" | "rejected"> {
     const parts = await this.database
       .prepare(
         `SELECT device_id, batch_id, part_index, part_count, submission_id,
@@ -532,8 +555,8 @@ export class D1UsageState implements UsageState {
     // Check fact identities in SQL before any mutation. Complete batches would
     // fail on the Usage PK, while partial batches use an upsert and could
     // otherwise silently choose whichever duplicate happened to be last.
-    // Keep the staged parts intact on conflict so the caller can diagnose or
-    // retry the batch after fixing it; do not materialize all rows in Worker.
+    // Reject only the invalid batch after consuming its already-advanced sequence. This keeps one
+    // malformed batch from blocking every later upload without making any of its rows visible.
     const duplicate = await this.database
       .prepare(
         `SELECT 1 AS duplicate
@@ -556,7 +579,10 @@ export class D1UsageState implements UsageState {
       )
       .bind(principal.device_id, batchId)
       .first<{ duplicate: number }>();
-    if (duplicate) return "conflict";
+    if (duplicate) {
+      await this.rejectMultipart(principal.device_id, batchId);
+      return "rejected";
+    }
 
     const finalPart = parts.results.at(-1);
     if (!finalPart) return "pending";
@@ -599,14 +625,33 @@ export class D1UsageState implements UsageState {
     try {
       await this.database.batch(statements);
     } catch (error) {
-      // A multipart batch must not silently merge duplicate fact identities.
-      // D1 rolls the batch back, leaving every staged part and receipt
-      // available for diagnosis/retry. Other failures must remain visible
-      // instead of being converted into a generic conflict.
-      if (isUsageFactConflict(error)) return "conflict";
+      // A multipart batch must not silently merge duplicate fact identities. D1 rolls the failed
+      // materialization back before the batch is moved to its terminal rejected state.
+      if (isUsageFactConflict(error)) {
+        await this.rejectMultipart(principal.device_id, batchId);
+        return "rejected";
+      }
       throw error;
     }
     return "committed";
+  }
+
+  private async rejectMultipart(deviceId: string, batchId: string): Promise<void> {
+    await this.database.batch([
+      this.database
+        .prepare(
+          `UPDATE usage_submissions
+           SET rejection_reason = 'duplicate_fact_identity'
+           WHERE device_id = ?1 AND submission_id IN (
+             SELECT submission_id FROM usage_submission_parts
+             WHERE device_id = ?1 AND batch_id = ?2
+           )`,
+        )
+        .bind(deviceId, batchId),
+      this.database
+        .prepare("DELETE FROM usage_submission_parts WHERE device_id = ?1 AND batch_id = ?2")
+        .bind(deviceId, batchId),
+    ]);
   }
 
   private usageMutationStatements(
@@ -920,7 +965,8 @@ export class D1UsageState implements UsageState {
     return this.database
       .prepare(
         `SELECT request_digest, generation, sequence, usage_sync_revision, agent, start_at, end_at,
-                write_mode, multipart_batch_id, multipart_part_index, multipart_part_count
+                write_mode, multipart_batch_id, multipart_part_index, multipart_part_count,
+                rejection_reason
          FROM usage_submissions WHERE device_id = ?1 AND submission_id = ?2`,
       )
       .bind(deviceId, submissionId)

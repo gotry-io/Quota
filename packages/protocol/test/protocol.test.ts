@@ -72,6 +72,34 @@ describe("quota protocol v2", () => {
     ).toBe(true);
   });
 
+  it("requires a reason only for a terminally rejected Usage upload", () => {
+    const rejected = {
+      protocol_version: 2,
+      outcome: "rejected",
+      device_id: "device_01",
+      device_generation: 3,
+      accepted_sequence: null,
+      next_sequence: 43,
+      usage_sync_revision: 9,
+      deleted_before: null,
+      rejection_reason: "duplicate_fact_identity",
+    };
+    expect(protocol.UsageUploadResponseSchema.safeParse(rejected).success).toBe(true);
+    expect(
+      protocol.UsageUploadResponseSchema.safeParse({
+        ...rejected,
+        rejection_reason: undefined,
+      }).success,
+    ).toBe(false);
+    expect(
+      protocol.UsageUploadResponseSchema.safeParse({
+        ...rejected,
+        outcome: "accepted",
+        accepted_sequence: 42,
+      }).success,
+    ).toBe(false);
+  });
+
   it("keeps absolute quota balances valid when their currency is not a wire unit", () => {
     const envelope = quotaEnvelope();
     expect(

@@ -21,6 +21,12 @@ export type UsageWriteResult =
       next_sequence: number;
     }
   | {
+      outcome: "rejected";
+      rejection_reason: "duplicate_fact_identity";
+      usage_sync_revision: number;
+      next_sequence: number;
+    }
+  | {
       outcome: "partial" | "sequence_conflict" | "stale_device" | "deleted_range";
     };
 

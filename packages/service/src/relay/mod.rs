@@ -887,27 +887,32 @@ fn validate_snapshot_response(value: &Value) -> Result<(), RelayError> {
 }
 
 fn validate_usage_response(value: &Value) -> Result<(), RelayError> {
-    validate_response_object(
-        value,
-        &[
-            "protocol_version",
-            "outcome",
-            "device_id",
-            "device_generation",
-            "accepted_sequence",
-            "next_sequence",
-            "usage_sync_revision",
-            "deleted_before",
-        ],
-    )?;
     let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
     let outcome = object.get("outcome").and_then(Value::as_str);
+    let base_keys = [
+        "protocol_version",
+        "outcome",
+        "device_id",
+        "device_generation",
+        "accepted_sequence",
+        "next_sequence",
+        "usage_sync_revision",
+        "deleted_before",
+    ];
+    if outcome == Some("rejected") {
+        let mut keys = base_keys.to_vec();
+        keys.push("rejection_reason");
+        validate_response_object(value, &keys)?;
+    } else {
+        validate_response_object(value, &base_keys)?;
+    }
     if object.get("protocol_version").and_then(Value::as_i64) != Some(2)
         || !matches!(
             outcome,
             Some(
                 "accepted"
                     | "duplicate"
+                    | "rejected"
                     | "partial"
                     | "sequence_conflict"
                     | "stale_generation"
@@ -930,6 +935,12 @@ fn validate_usage_response(value: &Value) -> Result<(), RelayError> {
         || !object
             .get("deleted_before")
             .is_some_and(|value| value.is_null() || value.as_str().is_some_and(valid_rfc3339))
+    {
+        return Err(RelayError::InvalidResponse);
+    }
+    if (outcome == Some("rejected"))
+        != (object.get("rejection_reason").and_then(Value::as_str)
+            == Some("duplicate_fact_identity"))
     {
         return Err(RelayError::InvalidResponse);
     }
@@ -2171,7 +2182,7 @@ impl AccountManager {
             .get("outcome")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        if !matches!(outcome, "accepted" | "duplicate") {
+        if !matches!(outcome, "accepted" | "duplicate" | "rejected") {
             return Ok(());
         }
         let (mut session, epoch) = self
@@ -3004,6 +3015,39 @@ mod tests {
         assert!(validate_usage_summary(&summary).is_ok());
         summary["coverage_truncated"] = serde_json::json!(false);
         assert!(validate_usage_summary(&summary).is_err());
+    }
+
+    #[test]
+    fn rejected_usage_response_is_terminal_and_keeps_normal_response_shape() {
+        let normal = serde_json::json!({
+            "protocol_version": 2,
+            "outcome": "accepted",
+            "device_id": "device_1",
+            "device_generation": 1,
+            "accepted_sequence": 4,
+            "next_sequence": 5,
+            "usage_sync_revision": 2,
+            "deleted_before": null
+        });
+        assert!(validate_usage_response(&normal).is_ok());
+
+        let mut rejected = serde_json::json!({
+            "protocol_version": 2,
+            "outcome": "rejected",
+            "device_id": "device_1",
+            "device_generation": 1,
+            "accepted_sequence": null,
+            "next_sequence": 5,
+            "usage_sync_revision": 2,
+            "deleted_before": null,
+            "rejection_reason": "duplicate_fact_identity"
+        });
+        assert!(validate_usage_response(&rejected).is_ok());
+        rejected
+            .as_object_mut()
+            .expect("response")
+            .remove("rejection_reason");
+        assert!(validate_usage_response(&rejected).is_err());
     }
 
     #[test]

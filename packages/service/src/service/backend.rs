@@ -32,7 +32,6 @@ use crate::usage::{self, CoverageStatus, UsageAgent, UsageHourlyFact, UsageScanO
 
 const PARSER_REVISION: &str = "quota-usage-rust-3";
 const FILE_INDEX_PARSER_REVISION: &str = "usage-rust-v4";
-const MAX_USAGE_UPLOADS_PER_REFRESH: usize = 8;
 const MAX_USAGE_OUTBOX_ENTRIES: usize = 64;
 const MAX_USAGE_MULTIPART_PARTS: usize = 64;
 const DEFAULT_TIMEZONE: &str = "UTC";
@@ -136,6 +135,7 @@ fn safe_sync_error_code(value: Option<&Value>) -> &'static str {
         Some("invalid_response") => "invalid_response",
         Some("internal") => "internal",
         Some("unrepresentable_hour") => "unrepresentable_hour",
+        Some("invalid_usage_batch") => "invalid_usage_batch",
         _ => "sync_failed",
     }
 }
@@ -639,6 +639,7 @@ impl NativeBackend {
             .and_then(Value::as_str);
         let sync_blocked = sync_status_value == Some("blocked");
         let sync_failed = sync_status_value == Some("failed");
+        let sync_degraded = sync_status_value == Some("degraded");
         if sync_blocked {
             blocked = true;
             let code = safe_sync_error_code(
@@ -653,7 +654,7 @@ impl NativeBackend {
                 count: 1,
                 message: "recovery_retry".into(),
             });
-        } else if sync_failed {
+        } else if sync_failed || sync_degraded {
             degraded = true;
             let code = safe_sync_error_code(
                 sync_diagnostic
@@ -733,7 +734,7 @@ impl NativeBackend {
         ));
         let sync_status = if sync_blocked {
             "blocked"
-        } else if sync_failed {
+        } else if sync_failed || sync_degraded {
             "degraded"
         } else if outbox_count == 0 && dirty_count == 0 {
             "ready"
@@ -759,6 +760,7 @@ impl NativeBackend {
                     ),
                 ),
                 ("last_upload_failed", i64::from(sync_failed)),
+                ("last_upload_degraded", i64::from(sync_degraded)),
                 ("last_upload_blocked", i64::from(sync_blocked)),
             ]),
         });
@@ -1251,13 +1253,13 @@ impl NativeBackend {
         Ok(blocked_unrepresentable)
     }
 
-    fn drain_outbox(&self) -> Result<(), BackendError> {
+    fn drain_outbox(&self) -> Result<bool, BackendError> {
         let Some((session, session_epoch)) = self
             .state
             .session_snapshot()
             .map_err(|_| BackendError::unavailable())?
         else {
-            return Ok(());
+            return Ok(false);
         };
         if session.get("status").and_then(Value::as_str) != Some("active")
             || !self
@@ -1265,7 +1267,7 @@ impl NativeBackend {
                 .active_session_at_epoch(session_epoch)
                 .map_err(|_| BackendError::unavailable())?
         {
-            return Ok(());
+            return Ok(false);
         }
         let account_id = session
             .get("account_id")
@@ -1283,7 +1285,8 @@ impl NativeBackend {
             .state
             .outbox_entries_for(account_id, device_id, generation)
             .map_err(|_| BackendError::unavailable())?;
-        for entry in entries.into_iter().take(MAX_USAGE_UPLOADS_PER_REFRESH) {
+        let mut rejected = false;
+        for entry in entries.into_iter().take(MAX_USAGE_OUTBOX_ENTRIES) {
             let submission_id = entry
                 .get("submission_id")
                 .and_then(Value::as_str)
@@ -1316,6 +1319,25 @@ impl NativeBackend {
                         .acknowledge_outbox_entry(submission_id)
                         .map_err(|_| BackendError::unavailable())?;
                 }
+                "rejected" => {
+                    if response
+                        .get("accepted_sequence")
+                        .is_none_or(|value| !value.is_null())
+                        || response.get("next_sequence").and_then(Value::as_u64)
+                            != Some(sequence.saturating_add(1))
+                        || response.get("rejection_reason").and_then(Value::as_str)
+                            != Some("duplicate_fact_identity")
+                    {
+                        return Err(BackendError {
+                            error: IpcError::new(ErrorCode::InvalidResponse, RecoveryAction::Retry),
+                        });
+                    }
+                    self.account.record_usage_response(&response)?;
+                    self.state
+                        .acknowledge_outbox_entry(submission_id)
+                        .map_err(|_| BackendError::unavailable())?;
+                    rejected = true;
+                }
                 "partial" => break,
                 "stale_generation" => {
                     return Err(BackendError {
@@ -1335,7 +1357,7 @@ impl NativeBackend {
                 _ => return Err(BackendError::unavailable()),
             }
         }
-        Ok(())
+        Ok(rejected)
     }
 
     fn timezone(&self) -> String {
@@ -1567,7 +1589,7 @@ impl LocalBackend for NativeBackend {
                                 .map(|entries| entries.len() as i64)
                                 .unwrap_or(0);
                             match self.drain_outbox() {
-                                Ok(()) => {
+                                Ok(rejected) => {
                                     let pending = self
                                         .state
                                         .outbox_entries()
@@ -1580,6 +1602,13 @@ impl LocalBackend for NativeBackend {
                                             "attempted": before.saturating_sub(pending),
                                             "pending": pending,
                                             "error": "unrepresentable_hour"
+                                        }));
+                                    } else if rejected {
+                                        self.record_sync_diagnostic(json!({
+                                            "status": "degraded",
+                                            "attempted": before.saturating_sub(pending),
+                                            "pending": pending,
+                                            "error": "invalid_usage_batch"
                                         }));
                                     } else {
                                         self.record_sync_diagnostic(json!({
@@ -2249,6 +2278,27 @@ mod tests {
                 .map(|component| component.status.as_str()),
             Some("blocked")
         );
+        state
+            .write_sync_diagnostic(&json!({
+                "status": "degraded",
+                "error": "invalid_usage_batch"
+            }))
+            .expect("degraded sync diagnostic");
+        let degraded = backend.diagnostic_report().expect("degraded diagnostics");
+        assert_eq!(
+            degraded
+                .components
+                .iter()
+                .find(|component| component.name == "sync")
+                .map(|component| component.status.as_str()),
+            Some("degraded")
+        );
+        assert!(
+            degraded
+                .issues
+                .iter()
+                .any(|issue| issue.component == "sync" && issue.code == "invalid_usage_batch")
+        );
         drop(backend);
         fs::remove_dir_all(root).expect("cleanup");
     }
@@ -2295,7 +2345,7 @@ mod tests {
         assert_eq!(usage_stage_slots(0), 64);
         assert_eq!(usage_stage_slots(63), 1);
         assert_eq!(usage_stage_slots(64), 0);
-        assert_eq!(usage_stage_slots(64), 0);
+        assert_eq!(MAX_USAGE_OUTBOX_ENTRIES, MAX_USAGE_MULTIPART_PARTS);
     }
 
     #[test]

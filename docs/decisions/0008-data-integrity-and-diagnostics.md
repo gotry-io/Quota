@@ -30,6 +30,10 @@ credentials, or reimplement health rules.
   replacement contract and by request byte/row bounds. Partitioning is lossless and deterministic;
   it never drops rows or models to fit a limit. A partition that cannot be represented remains
   pending with a diagnostic issue instead of being silently discarded.
+- A multipart batch is drained within one refresh and remains invisible until complete. If its
+  parts contain duplicate fact identities, Relay atomically rejects and removes only that staged
+  batch after consuming its sequence; the client records a degraded diagnostic and continues with
+  later uploads instead of retrying the same invalid part forever.
 - Partial coverage is explicitly marked and cannot replace or delete remote facts. Complete
   partitions are authoritative only for their exact coverage range. A later complete scan closes
   the gap and may replace the corresponding range.
