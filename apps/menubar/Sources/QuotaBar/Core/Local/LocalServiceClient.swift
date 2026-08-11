@@ -18,19 +18,26 @@ enum LocalServiceClientError: LocalizedError, Equatable {
     case .invalidMessage, .messageTooLarge:
       "QuotaBar's local service returned invalid data. Reinstall or update QuotaBar."
     case .remote(let error):
-      switch error.recoveryAction {
-      case .login:
-        "Sign in to continue."
-      case .configureProvider:
-        "Configure this provider to continue."
-      case .upgrade:
-        "Update QuotaBar to continue."
-      case .reinstall:
-        "Reinstall QuotaBar to repair its local service."
-      case .retry:
-        "The request could not be completed. Try again."
-      case .none:
-        "The request could not be completed."
+      switch error.code {
+      case .deviceDeleted:
+        "This device was removed. Sign in again to reconnect it."
+      case .staleGeneration, .authenticationRequired:
+        "The account session ended. Sign in again to continue syncing."
+      default:
+        switch error.recoveryAction {
+        case .login:
+          "Sign in to continue."
+        case .configureProvider:
+          "Configure this provider to continue."
+        case .upgrade:
+          "Update QuotaBar to continue."
+        case .reinstall:
+          "Reinstall QuotaBar to repair its local service."
+        case .retry:
+          "The request could not be completed. Try again."
+        case .none:
+          "The request could not be completed."
+        }
       }
     }
   }
@@ -373,7 +380,11 @@ private struct RequestEnvelope<Payload: Encodable>: Encodable {
 }
 
 private struct EmptyPayload: Encodable {}
-private struct EmptyResult: Decodable {}
+private struct EmptyResult: Decodable {
+  init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys([])
+  }
+}
 private struct ProviderPayload: Encodable { let provider: String }
 private struct SetProviderConfigPayload: Encodable {
   let provider: String

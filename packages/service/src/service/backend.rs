@@ -526,12 +526,14 @@ impl NativeBackend {
                         .map_err(|_| BackendError::unavailable())?;
                 }
                 "partial" => break,
-                "stale_generation" | "deleted" => {
+                "stale_generation" => {
                     return Err(BackendError {
-                        error: IpcError::new(
-                            ErrorCode::AuthenticationRequired,
-                            RecoveryAction::Login,
-                        ),
+                        error: IpcError::new(ErrorCode::StaleGeneration, RecoveryAction::Login),
+                    });
+                }
+                "deleted" => {
+                    return Err(BackendError {
+                        error: IpcError::new(ErrorCode::DeviceDeleted, RecoveryAction::Login),
                     });
                 }
                 "sequence_conflict" => {
@@ -768,9 +770,11 @@ impl LocalBackend for NativeBackend {
                         }
                         if account_sync_error.is_none() {
                             account_value = self.account.refresh_account_state(cancel.as_ref());
-                            if account_value.as_ref().err().is_some_and(|error| {
-                                error.error.code == ErrorCode::AuthenticationRequired
-                            }) {
+                            if account_value
+                                .as_ref()
+                                .err()
+                                .is_some_and(|error| error.error.code.requires_login())
+                            {
                                 self.clear_active_session();
                             }
                         } else if let Some(error) = account_sync_error {
@@ -778,7 +782,7 @@ impl LocalBackend for NativeBackend {
                         }
                     }
                     Err(error) => {
-                        if error.error.code == ErrorCode::AuthenticationRequired {
+                        if error.error.code.requires_login() {
                             self.clear_active_session();
                         }
                         account_value = Err(error);

@@ -57,7 +57,7 @@ func consumesServiceMergedOverviewWithoutReprocessingObservations() async throws
       ),
       updatedAt: nil,
       lastError: LocalServiceRemoteError(
-        code: .authenticationRequired,
+        code: .deviceDeleted,
         recoveryAction: .login
       ),
       refreshing: false
@@ -107,7 +107,10 @@ func consumesServiceMergedOverviewWithoutReprocessingObservations() async throws
   #expect(providers.first?.accounts.first?.snapshot == snapshot)
   #expect(model.providerConfigurations[.openrouter]?.maskedAPIKey == "OpenRouter ···test")
   #expect(model.lastCheckedAt == now)
-  #expect(model.accountErrorMessage == "Sign in to continue.")
+  #expect(model.accountDisconnectReason == .deviceDeleted)
+  #expect(
+    model.accountErrorMessage == "This device was removed. Sign in again to reconnect it."
+  )
 }
 
 @Test @MainActor

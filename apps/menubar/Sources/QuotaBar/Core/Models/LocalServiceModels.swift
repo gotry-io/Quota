@@ -33,6 +33,8 @@ enum LocalServiceErrorCode: String, Decodable, Sendable {
   case busy
   case cancelled
   case authenticationRequired = "authentication_required"
+  case deviceDeleted = "device_deleted"
+  case staleGeneration = "stale_generation"
   case unavailable
   case providerError = "provider_error"
   case networkError = "network_error"

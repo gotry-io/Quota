@@ -2483,14 +2483,16 @@ pub(crate) fn relay_error_for_backend(error: RelayError) -> crate::protocol::Ipc
         }
         RelayError::Rejected { code, status } => match code.as_str() {
             "invalid_grant" | "unauthorized" | "invalid_token" | "expired_token"
-            | "access_denied" | "deleted" => crate::protocol::IpcError::new(
+            | "access_denied" => crate::protocol::IpcError::new(
                 ErrorCode::AuthenticationRequired,
                 RecoveryAction::Login,
             ),
-            "stale_generation" => crate::protocol::IpcError::new(
-                ErrorCode::AuthenticationRequired,
-                RecoveryAction::Login,
-            ),
+            "deleted" => {
+                crate::protocol::IpcError::new(ErrorCode::DeviceDeleted, RecoveryAction::Login)
+            }
+            "stale_generation" => {
+                crate::protocol::IpcError::new(ErrorCode::StaleGeneration, RecoveryAction::Login)
+            }
             "sequence_conflict" => {
                 crate::protocol::IpcError::new(ErrorCode::InvalidState, RecoveryAction::Reinstall)
             }
@@ -2618,6 +2620,31 @@ mod tests {
     use super::*;
     use std::fs;
     use uuid::Uuid;
+
+    #[test]
+    fn relay_auth_rejections_preserve_disconnect_reason() {
+        for (code, expected) in [
+            ("deleted", crate::protocol::ErrorCode::DeviceDeleted),
+            (
+                "stale_generation",
+                crate::protocol::ErrorCode::StaleGeneration,
+            ),
+            (
+                "invalid_token",
+                crate::protocol::ErrorCode::AuthenticationRequired,
+            ),
+        ] {
+            let error = relay_error_for_backend(RelayError::Rejected {
+                code: code.to_owned(),
+                status: 401,
+            });
+            assert_eq!(error.code, expected);
+            assert_eq!(
+                error.recovery_action,
+                crate::protocol::RecoveryAction::Login
+            );
+        }
+    }
 
     #[test]
     fn managed_origin_is_fixed() {

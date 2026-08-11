@@ -119,6 +119,34 @@ struct LocalServiceClientTests {
   }
 
   @Test
+  func decodesDeviceDisconnectReasonFromRemoteError() async throws {
+    let service = try TemporaryService(
+      python: #"""
+        import json
+        import sys
+
+        request = json.loads(sys.stdin.readline())
+        print(json.dumps({
+            "type": "response",
+            "request_id": request["request_id"],
+            "error": {"code": "device_deleted", "recovery_action": "login"},
+        }), flush=True)
+        """#
+    )
+    defer { service.remove() }
+    let client = try LocalServiceClient(executableURL: service.executableURL)
+    let remoteError = LocalServiceRemoteError(code: .deviceDeleted, recoveryAction: .login)
+
+    await #expect(throws: LocalServiceClientError.remote(remoteError)) {
+      _ = try await client.state()
+    }
+    #expect(
+      LocalServiceClientError.remote(remoteError).errorDescription
+        == "This device was removed. Sign in again to reconnect it."
+    )
+  }
+
+  @Test
   func malformedRemoteErrorClosesThePendingRequest() async throws {
     let service = try TemporaryService(
       python: #"""

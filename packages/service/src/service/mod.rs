@@ -636,7 +636,7 @@ impl LocalService {
             }
             Err(error) => {
                 let no_session = self.inner.state.session_json().ok().flatten().is_none();
-                let retained_auth_failure = error.error.code == ErrorCode::AuthenticationRequired
+                let retained_auth_failure = error.error.code.requires_login()
                     && component == ComponentName::Account
                     && no_session
                     && current.as_ref().is_some_and(|record| {
@@ -647,7 +647,7 @@ impl LocalService {
                             .and_then(Value::as_str)
                             == Some("signed_in")
                             || record.last_error.as_ref().is_some_and(|previous| {
-                                previous.code == ErrorCode::AuthenticationRequired
+                                previous.code.requires_login()
                                     && previous.recovery_action == RecoveryAction::Login
                             })
                     });
@@ -656,12 +656,13 @@ impl LocalService {
                         .as_ref()
                         .map(|value| value.status)
                         .unwrap_or(ComponentStatus::Unavailable),
-                    ErrorCode::AuthenticationRequired
-                        if component == ComponentName::Account && no_session =>
+                    code if code.requires_login()
+                        && component == ComponentName::Account
+                        && no_session =>
                     {
                         ComponentStatus::SignedOut
                     }
-                    ErrorCode::AuthenticationRequired => ComponentStatus::AuthRequired,
+                    code if code.requires_login() => ComponentStatus::AuthRequired,
                     ErrorCode::NetworkError | ErrorCode::Unavailable | ErrorCode::ProviderError => {
                         if current.as_ref().is_some_and(|value| value.value.is_some()) {
                             ComponentStatus::Stale
@@ -697,7 +698,20 @@ impl LocalService {
                 let last_error = if status == ComponentStatus::SignedOut && !retained_auth_failure {
                     None
                 } else {
-                    Some(error.error)
+                    let previous_disconnect = current
+                        .as_ref()
+                        .and_then(|record| record.last_error.clone())
+                        .filter(|previous| {
+                            matches!(
+                                previous.code,
+                                ErrorCode::DeviceDeleted | ErrorCode::StaleGeneration
+                            )
+                        });
+                    Some(if error.error.code == ErrorCode::AuthenticationRequired {
+                        previous_disconnect.unwrap_or(error.error)
+                    } else {
+                        error.error
+                    })
                 };
                 let _ = self.update_component(
                     component,
@@ -1235,11 +1249,23 @@ mod tests {
             Arc::new(UnavailableBackend),
         );
 
-        for _ in 0..2 {
+        let cases = [
+            ErrorCode::DeviceDeleted,
+            ErrorCode::AuthenticationRequired,
+            ErrorCode::StaleGeneration,
+            ErrorCode::AuthenticationRequired,
+        ];
+        let expected = [
+            ErrorCode::DeviceDeleted,
+            ErrorCode::DeviceDeleted,
+            ErrorCode::StaleGeneration,
+            ErrorCode::StaleGeneration,
+        ];
+        for (error_code, expected_code) in cases.into_iter().zip(expected) {
             service.apply_component_result(
                 ComponentName::Account,
                 Err(BackendError {
-                    error: IpcError::new(ErrorCode::AuthenticationRequired, RecoveryAction::Login),
+                    error: IpcError::new(error_code, RecoveryAction::Login),
                 }),
             );
             let account = state
@@ -1249,7 +1275,7 @@ mod tests {
             assert_eq!(account.status, ComponentStatus::SignedOut);
             assert_eq!(
                 account.last_error.map(|error| error.code),
-                Some(ErrorCode::AuthenticationRequired)
+                Some(expected_code)
             );
         }
 

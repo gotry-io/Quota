@@ -65,11 +65,22 @@ pub enum ErrorCode {
     Busy,
     Cancelled,
     AuthenticationRequired,
+    DeviceDeleted,
+    StaleGeneration,
     Unavailable,
     ProviderError,
     NetworkError,
     InvalidResponse,
     Internal,
+}
+
+impl ErrorCode {
+    pub const fn requires_login(self) -> bool {
+        matches!(
+            self,
+            Self::AuthenticationRequired | Self::DeviceDeleted | Self::StaleGeneration
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]

@@ -164,7 +164,9 @@ struct SettingsHomeView: View {
           url: AppMetadata.accountURL
         )
 
-        if let accountErrorMessage = model.accountErrorMessage {
+        if let accountErrorMessage = model.accountErrorMessage,
+          accountErrorMessage != signedOutMessage
+        {
           Label(accountErrorMessage, systemImage: "exclamationmark.circle")
             .quotaMetaStyle()
             .fixedSize(horizontal: false, vertical: true)
@@ -176,7 +178,14 @@ struct SettingsHomeView: View {
   }
 
   private var signedOutMessage: String {
-    "Sync quota and Usage across your devices."
+    switch model.accountDisconnectReason {
+    case .deviceDeleted:
+      "This device was removed. Sign in again to reconnect it."
+    case .sessionEnded:
+      "The account session ended. Sign in again to continue syncing."
+    case nil:
+      "Sync quota and Usage across your devices."
+    }
   }
 
   private var usageSummary: String {

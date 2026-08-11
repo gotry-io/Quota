@@ -69,6 +69,11 @@ enum AccountViewState: Equatable {
   case signedIn
 }
 
+enum AccountDisconnectReason: Equatable {
+  case deviceDeleted
+  case sessionEnded
+}
+
 #if DEBUG
   struct MenuBarVisualState {
     let report: QuotaCollectionReport
@@ -90,6 +95,7 @@ final class MenuBarViewModel {
   private(set) var isRefreshing = false
   private(set) var isLoggingIn = false
   private(set) var isLoggingOut = false
+  private(set) var accountDisconnectReason: AccountDisconnectReason?
   private(set) var lastCheckedAt: Date?
   private(set) var providerConfigurations: [ProviderID: LocalServiceProviderConfig] = [:]
 
@@ -227,6 +233,7 @@ final class MenuBarViewModel {
       }
       do {
         _ = try await client.login()
+        loginTask = nil
         await reloadState()
       } catch is CancellationError {
         return
@@ -380,6 +387,16 @@ final class MenuBarViewModel {
     authStatus =
       state.account.value?.authStatus
       ?? (state.account.status == .signedOut ? .signedOut : nil)
+    accountDisconnectReason =
+      if authStatus == .signedOut {
+        switch state.account.lastError?.code {
+        case .deviceDeleted: .deviceDeleted
+        case .staleGeneration, .authenticationRequired: .sessionEnded
+        default: nil
+        }
+      } else {
+        nil
+      }
     overview = state.overview
     providerConfigurations = Dictionary(
       uniqueKeysWithValues: state.providers.map { ($0.provider, $0) }
