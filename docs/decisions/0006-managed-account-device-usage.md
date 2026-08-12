@@ -24,6 +24,11 @@ Rust service is the sole native OAuth public client and writer of installation i
 account/device sessions, upload sequences, Usage state, and Usage outbox. Swift renders typed IPC
 state; it does not read credentials or service files.
 
+The same service owns a durable per-installation Usage upload preference. Disabling it preserves
+local collection and display, stops staging and draining the Usage outbox, and makes QuotaBar present
+Usage from This Mac only. Pending work resumes after re-enabling. It is not a remote deletion action;
+already uploaded data remains until the user invokes the existing Device or Account deletion flow.
+
 Browser login uses Authorization Code with PKCE and headless login uses the OAuth Device
 Authorization Grant. Successful native login issues separate account-read and current-device-write
 token families. Refresh tokens rotate with compare-and-swap semantics. Better Auth owns browser
@@ -63,6 +68,8 @@ SQLite adapter, Relay discovery document, arbitrary Relay URL, anonymous owner, 
 
 - Account and Device lifecycle is consistent across native QuotaBar and Web surfaces.
 - Local collection and cached display continue while signed out or offline; remote sync does not.
+- Local collection and display also continue while Usage upload is disabled; quota/account sync stays
+  independent and remote Usage history is not implicitly deleted.
 - The service can aggregate quota and Usage without receiving the underlying work or provider
   credentials.
 - Earlier D1 and protocol cutovers applied only to unreleased data and interfaces. The bounded

@@ -1,4 +1,4 @@
-import { validatePricingCatalog } from "@gotry-io/quota-model";
+import { validateModelCatalog, validatePricingCatalog } from "@gotry-io/quota-model";
 import {
   AccountDevicesResponseSchema,
   AccountQuotaResponseSchema,
@@ -6,6 +6,7 @@ import {
   AccountSummarySchema,
   AccountUsageHourlyResponseSchema,
   AccountUsageResponseSchema,
+  BILLING_AGENTS,
   DeleteDeviceResponseSchema,
   DeviceAuthorizationDecisionRequestSchema,
   DeviceAuthorizationRequestSchema,
@@ -19,6 +20,9 @@ import {
   PROTOCOL_VERSION,
   type PricingCatalog,
   PricingCatalogSchema,
+  MODEL_CATALOG,
+  type ModelCatalog,
+  ModelCatalogSchema,
   QuotaSnapshotEnvelopeSchema,
   QuotaSnapshotUploadResponseSchema,
   type RelayErrorCode,
@@ -44,12 +48,6 @@ import { type Context, Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import type { WebAccountAuth } from "./account/better-auth.ts";
 import { AccountFlowError, type AccountService, isLoopbackRedirect } from "./account/service.ts";
-import {
-  pricingCatalogForRequest,
-  pricingCatalogVariants,
-  releasedUsageRangeExceeded,
-  usageAgentsForRequest,
-} from "./compatibility.ts";
 import { managedServiceInfo } from "./config.ts";
 import { PRICING_CATALOG, PRICING_CATALOG_ETAG } from "./pricing-catalog.ts";
 import { bearerToken, type SecretHasher } from "./security.ts";
@@ -85,6 +83,7 @@ export interface RelayAppOptions {
   hasher: SecretHasher;
   now?: () => Date;
   pricingCatalog?: PricingCatalog;
+  modelCatalog?: ModelCatalog;
 }
 
 export function accountMaintenanceInput(checkedAt: Date): AccountMaintenanceInput {
@@ -111,7 +110,15 @@ export function createRelayApp(options: RelayAppOptions): Hono {
   const catalogETag = options.pricingCatalog
     ? `"${options.pricingCatalog.revision}"`
     : PRICING_CATALOG_ETAG;
-  const catalogVariants = pricingCatalogVariants(catalog, catalogETag);
+  const parsedModelCatalog = ModelCatalogSchema.parse(options.modelCatalog ?? MODEL_CATALOG);
+  const modelCatalogValidation = validateModelCatalog(parsedModelCatalog);
+  if (!modelCatalogValidation.valid) {
+    throw new Error("Model catalog validation failed");
+  }
+  const modelCatalog = modelCatalogValidation.catalog;
+  const modelCatalogETag = options.modelCatalog
+    ? '"' + options.modelCatalog.revision + '"'
+    : '"' + modelCatalog.revision + '"';
 
   app.get("/healthz", (context) => context.json({ status: "ok", ...managedServiceInfo() }));
   for (const path of [
@@ -465,10 +472,18 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     if (principal instanceof Response) {
       return principal;
     }
-    const selected = await accountUsageQuery(context, principal, options, catalog, now(), {
-      allByDefault: true,
-      includeHourlyBreakdowns: false,
-    });
+    const selected = await accountUsageQuery(
+      context,
+      principal,
+      options,
+      catalog,
+      modelCatalog,
+      now(),
+      {
+        allByDefault: true,
+        includeHourlyBreakdowns: false,
+      },
+    );
     if (selected instanceof Response) {
       return selected;
     }
@@ -501,7 +516,14 @@ export function createRelayApp(options: RelayAppOptions): Hono {
       if (principal instanceof Response) {
         return principal;
       }
-      const selected = await accountUsageQuery(context, principal, options, catalog, now());
+      const selected = await accountUsageQuery(
+        context,
+        principal,
+        options,
+        catalog,
+        modelCatalog,
+        now(),
+      );
       return selected instanceof Response
         ? selected
         : context.json(
@@ -523,9 +545,10 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     ) {
       return invalidRequest(context);
     }
-    const agents = usageAgentsForRequest(context.req.query("usage_agents"));
-    if (!agents) return invalidRequest(context);
-    const includeTruncationFields = context.req.query("usage_agents") === "all";
+    const requestedAgents = context.req.query("usage_agents");
+    if (requestedAgents !== undefined && requestedAgents !== "all") {
+      return invalidRequest(context);
+    }
     const start = UtcHourSchema.safeParse(context.req.query("start_at"));
     const end = UtcHourSchema.safeParse(context.req.query("end_at"));
     const mode = UsageCostModeSchema.safeParse(context.req.query("cost_mode") ?? "calculate");
@@ -547,12 +570,12 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     }
     const result = await options.usageState.queryAccountUsage(principal.account_id, {
       ...(deviceId ? { device_id: deviceId } : {}),
-      agents,
+      agents: BILLING_AGENTS,
       start_at: start.data,
       end_at: end.data,
       limit: MAXIMUM_USAGE_READ_ROWS,
     });
-    if (result.truncated || (result.coverage_truncated && !includeTruncationFields)) {
+    if (result.truncated) {
       return resultLimit(context);
     }
     try {
@@ -569,10 +592,8 @@ export function createRelayApp(options: RelayAppOptions): Hono {
             end_at: item.end_at,
             status: item.status,
           })),
-          cost: buildUsageCost(result.rows, mode.data, catalog, includeTruncationFields),
-          ...(includeTruncationFields && result.coverage_truncated
-            ? { coverage_truncated: true }
-            : {}),
+          cost: buildUsageCost(result.rows, mode.data, catalog),
+          ...(result.coverage_truncated ? { coverage_truncated: true } : {}),
         }),
       );
     } catch (error) {
@@ -776,16 +797,25 @@ export function createRelayApp(options: RelayAppOptions): Hono {
   app.get("/api/v2/pricing/catalog", (context) => {
     if (!hasOnlyQueryKeys(context, ["usage_agents"])) return invalidRequest(context);
     const requestedAgents = context.req.query("usage_agents");
-    const selected = pricingCatalogForRequest(catalogVariants, requestedAgents);
-    if (!selected) return invalidRequest(context);
-    const selectedCatalog = selected.catalog;
-    const selectedETag = selected.etag;
-    context.header("ETag", selectedETag);
+    if (requestedAgents !== undefined && requestedAgents !== "all") {
+      return invalidRequest(context);
+    }
+    context.header("ETag", catalogETag);
     context.header("Cache-Control", "public, max-age=300, must-revalidate");
-    if (context.req.header("If-None-Match") === selectedETag) {
+    if (context.req.header("If-None-Match") === catalogETag) {
       return context.body(null, 304);
     }
-    return context.json(selectedCatalog);
+    return context.json(catalog);
+  });
+
+  app.get("/api/v2/model/catalog", (context) => {
+    if (!hasOnlyQueryKeys(context, [])) return invalidRequest(context);
+    context.header("ETag", modelCatalogETag);
+    context.header("Cache-Control", "public, max-age=300, must-revalidate");
+    if (context.req.header("If-None-Match") === modelCatalogETag) {
+      return context.body(null, 304);
+    }
+    return context.json(modelCatalog);
   });
 
   app.notFound((context) => notFound(context));
@@ -800,19 +830,40 @@ async function accountUsageQuery(
   principal: AccountPrincipal,
   options: RelayAppOptions,
   catalog: PricingCatalog,
+  modelCatalog: ModelCatalog,
   checkedAt: Date,
   summaryOptions: { allByDefault: boolean; includeHourlyBreakdowns: boolean } = {
     allByDefault: false,
     includeHourlyBreakdowns: true,
   },
 ) {
-  if (!hasOnlyQueryKeys(context, ["from", "to", "device_id", "cost_mode", "usage_agents"])) {
+  if (
+    !hasOnlyQueryKeys(context, [
+      "from",
+      "to",
+      "device_id",
+      "cost_mode",
+      "usage_agents",
+      "model_catalog",
+      "usage_clients",
+    ])
+  ) {
     return invalidRequest(context);
   }
   const requestedAgents = context.req.query("usage_agents");
-  const agents = usageAgentsForRequest(requestedAgents);
-  if (!agents) return invalidRequest(context);
-  const includeTruncationFields = requestedAgents === "all";
+  const modelCatalogQuery = context.req.query("model_catalog");
+  const usageClientsQuery = context.req.query("usage_clients");
+  if (
+    (modelCatalogQuery !== undefined && modelCatalogQuery !== "1") ||
+    (usageClientsQuery !== undefined && usageClientsQuery !== "1")
+  ) {
+    return invalidRequest(context);
+  }
+  const modelCatalogOptIn = modelCatalogQuery === "1";
+  const usageClientsOptIn = usageClientsQuery === "1";
+  if (requestedAgents !== undefined && requestedAgents !== "all") {
+    return invalidRequest(context);
+  }
   const defaultTo = checkedAt.toISOString().slice(0, 10);
   const defaultFrom = new Date(checkedAt.getTime() - 29 * 24 * 60 * 60 * 1000)
     .toISOString()
@@ -820,10 +871,7 @@ async function accountUsageQuery(
   const requestedFrom = context.req.query("from");
   const requestedTo = context.req.query("to");
   const allDates =
-    summaryOptions.allByDefault &&
-    context.req.query("usage_agents") === "all" &&
-    requestedFrom === undefined &&
-    requestedTo === undefined;
+    summaryOptions.allByDefault && requestedFrom === undefined && requestedTo === undefined;
   const range = allDates
     ? null
     : UsageDateRangeSchema.safeParse({
@@ -831,10 +879,7 @@ async function accountUsageQuery(
         to: requestedTo ?? defaultTo,
       });
   const mode = UsageCostModeSchema.safeParse(context.req.query("cost_mode") ?? "calculate");
-  const exceedsReleasedRange =
-    range?.success === true &&
-    releasedUsageRangeExceeded(requestedAgents, range.data.from, range.data.to);
-  if (range?.success === false || exceedsReleasedRange || !mode.success) {
+  if (range?.success === false || !mode.success) {
     return invalidRequest(context);
   }
   const deviceId = context.req.query("device_id");
@@ -843,7 +888,7 @@ async function accountUsageQuery(
   }
   const result = await options.usageState.queryAccountUsage(principal.account_id, {
     ...(deviceId ? { device_id: deviceId } : {}),
-    agents,
+    agents: BILLING_AGENTS,
     ...(range?.success
       ? {
           from: range.data.from,
@@ -855,7 +900,7 @@ async function accountUsageQuery(
       ? MAXIMUM_USAGE_READ_ROWS
       : maximumAccountUsageSummaryRows,
   });
-  if (result.truncated || (result.coverage_truncated && !includeTruncationFields)) {
+  if (result.truncated) {
     return resultLimit(context);
   }
   try {
@@ -866,7 +911,8 @@ async function accountUsageQuery(
         mode.data,
         catalog,
         summaryOptions.includeHourlyBreakdowns,
-        includeTruncationFields,
+        modelCatalogOptIn ? modelCatalog : undefined,
+        usageClientsOptIn,
       ),
     };
   } catch (error) {

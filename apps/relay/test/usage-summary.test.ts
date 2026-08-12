@@ -1,4 +1,5 @@
 import type { StoredUsageHourlyFact } from "@gotry-io/relay-core";
+import { MODEL_CATALOG } from "@gotry-io/quota-protocol";
 import { describe, expect, it } from "vitest";
 import { PRICING_CATALOG } from "../src/pricing-catalog.ts";
 import { buildUsageSummary } from "../src/usage-summary.ts";
@@ -53,6 +54,39 @@ describe("Usage summary", () => {
     ).toBe(false);
   });
 
+  it("keeps client and provider ownership when structured account Usage is requested", () => {
+    const rows = [usageRow(null, 0), usageRow(null, 1)].map((row) => ({
+      ...row,
+      model: "shared-model",
+      source_cost_microusd: "10",
+      source_cost_covered_requests: 1,
+    }));
+    const structured = buildUsageSummary(
+      { rows, coverage: [], truncated: false },
+      { from: "2026-08-10", to: "2026-08-10" },
+      "reported",
+      PRICING_CATALOG,
+      false,
+      MODEL_CATALOG,
+      true,
+    );
+
+    expect(structured.clients).toMatchObject([
+      {
+        client: "claude_code",
+        providers: [
+          { provider: "anthropic", models: [{ model: "shared-model", totals: { messages: 1 } }] },
+        ],
+      },
+      {
+        client: "codex",
+        providers: [
+          { provider: "openai", models: [{ model: "shared-model", totals: { messages: 1 } }] },
+        ],
+      },
+    ]);
+  });
+
   it("keeps totals when breakdown cardinality exceeds the response bound", () => {
     const rows = Array.from({ length: 1_001 }, (_, index) => {
       const row = usageRow(null, index, true);
@@ -68,17 +102,6 @@ describe("Usage summary", () => {
     expect(summary.totals.requests).toBe(rows.length);
     expect(summary.breakdowns.length).toBe(1_000);
     expect(summary.breakdowns_truncated).toBe(true);
-
-    const legacySummary = buildUsageSummary(
-      { rows, coverage: [], truncated: false, coverage_truncated: true },
-      { from: "2026-07-12", to: "2026-08-10" },
-      "reported",
-      PRICING_CATALOG,
-      true,
-      false,
-    );
-    expect("coverage_truncated" in legacySummary).toBe(false);
-    expect("breakdowns_truncated" in legacySummary).toBe(false);
   });
 
   it("keeps opaque punctuation in model breakdown keys", () => {
@@ -122,6 +145,94 @@ describe("Usage summary", () => {
         ),
       ).toThrow();
     }
+  });
+
+  it("normalizes only model breakdown keys and leaves totals/cost unchanged", () => {
+    const row = {
+      ...usageRow(null, 0, false),
+      model: "GPT-5.5[1m]",
+      source_cost_microusd: "12",
+      source_cost_covered_requests: 1,
+    };
+    const raw = buildUsageSummary(
+      { rows: [row], coverage: [], truncated: false },
+      { from: "2026-08-10", to: "2026-08-10" },
+      "reported",
+      PRICING_CATALOG,
+      false,
+    );
+    const normalized = buildUsageSummary(
+      { rows: [row], coverage: [], truncated: false },
+      { from: "2026-08-10", to: "2026-08-10" },
+      "reported",
+      PRICING_CATALOG,
+      false,
+      MODEL_CATALOG,
+    );
+    expect(normalized.totals).toEqual(raw.totals);
+    expect(normalized.cost).toEqual(raw.cost);
+    expect(normalized.breakdowns.find((item) => item.dimension === "model")?.key).toBe("gpt-5.5");
+    expect(normalized.model_catalog_revision).toBe(MODEL_CATALOG.revision);
+
+    const calculated = buildUsageSummary(
+      { rows: [row], coverage: [], truncated: false },
+      { from: "2026-08-10", to: "2026-08-10" },
+      "calculate",
+      PRICING_CATALOG,
+      false,
+      MODEL_CATALOG,
+    );
+    expect(calculated.cost).toMatchObject({ unpriced_rows: 1 });
+    expect(calculated.cost.unpriced).toEqual([
+      expect.objectContaining({ model: "GPT-5.5[1m]", reason: "unknown_model" }),
+    ]);
+  });
+
+  it("regroups retained rows when only the catalog revision changes", () => {
+    const row = { ...usageRow(null, 0, false), model: "GPT-5.5[1m]" };
+    const beforeCatalog = {
+      ...MODEL_CATALOG,
+      revision: "model-before-alias",
+      models: MODEL_CATALOG.models.map((model) =>
+        model.canonical_id === "gpt-5.5" ? { ...model, aliases: [] } : model,
+      ),
+    };
+    const summarize = (modelCatalog: typeof MODEL_CATALOG) =>
+      buildUsageSummary(
+        { rows: [row], coverage: [], truncated: false },
+        { from: "2026-08-10", to: "2026-08-10" },
+        "reported",
+        PRICING_CATALOG,
+        false,
+        modelCatalog,
+      );
+
+    const before = summarize(beforeCatalog);
+    const after = summarize(MODEL_CATALOG);
+    expect(before.breakdowns.find((item) => item.dimension === "model")?.key).toBe("GPT-5.5[1m]");
+    expect(after.breakdowns.find((item) => item.dimension === "model")?.key).toBe("gpt-5.5");
+    expect(after.totals).toEqual(before.totals);
+    expect(after.cost).toEqual(before.cost);
+    expect(row.model).toBe("GPT-5.5[1m]");
+  });
+
+  it("keeps a raw model separate when it collides with a display name", () => {
+    const rows = [
+      { ...usageRow(null, 0, false), model: "gpt-5.5" },
+      { ...usageRow(null, 1, false), model: "GPT-5.5" },
+    ];
+    const summary = buildUsageSummary(
+      { rows, coverage: [], truncated: false },
+      { from: "2026-08-10", to: "2026-08-10" },
+      "reported",
+      PRICING_CATALOG,
+      false,
+      MODEL_CATALOG,
+    );
+    const modelGroups = summary.breakdowns.filter((item) => item.dimension === "model");
+    expect(modelGroups).toHaveLength(2);
+    expect(modelGroups.map((item) => item.totals.requests)).toEqual([1, 1]);
+    expect(modelGroups.map((item) => item.key)).toEqual(["gpt-5.5", "GPT-5.5"]);
   });
 });
 

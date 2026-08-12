@@ -5,6 +5,9 @@ struct MenuBarContentView: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var navigation: MenuBarNavigationState
   @State private var navigationDirection: NavigationDirection = .forward
+  @State private var isLogoutConfirmationPresented = false
+  @State private var usageSource: UsageSource = .account
+  @State private var usagePeriod: UsagePeriod = .today
   private let performsInitialRefresh: Bool
   private let seedsLaunchAtLogin: Bool
 
@@ -45,6 +48,22 @@ struct MenuBarContentView: View {
       await model.refreshIfNeeded()
     }
     .focusEffectDisabled()
+    .disabled(isLogoutConfirmationPresented)
+    .accessibilityHidden(isLogoutConfirmationPresented)
+    .overlay {
+      if isLogoutConfirmationPresented {
+        QuotaConfirmationPopup(
+          title: "Log Out?",
+          message:
+            "This signs QuotaBar out on this Mac. Your device and synced data stay in your Quota account.",
+          confirmTitle: "Log Out",
+          onCancel: { isLogoutConfirmationPresented = false }
+        ) {
+          isLogoutConfirmationPresented = false
+          Task { await model.logout() }
+        }
+      }
+    }
   }
 
   private var panelAnimation: Animation? {
@@ -69,6 +88,12 @@ struct MenuBarContentView: View {
 
   private var headerTrailingAction: MenuBarHeader.TrailingAction {
     if navigation.showsSettingsMenu { return .overflowMenu }
+    if navigation.currentRoute == .usage,
+      model.usageUploadEnabled,
+      model.accountSummary != nil
+    {
+      return .usageSource(usageSource) { usageSource = $0 }
+    }
     if !navigation.canNavigateBack { return .openSettings(openSettings) }
     return .none
   }
@@ -89,7 +114,8 @@ struct MenuBarContentView: View {
         onOpenAgents: { navigate(to: .agents) },
         onOpenDevices: { navigate(to: .devices) },
         onOpenUsage: { navigate(to: .usage) },
-        onOpenDiagnostics: { navigate(to: .diagnostics) }
+        onOpenSupport: { navigate(to: .support) },
+        onRequestLogout: { isLogoutConfirmationPresented = true }
       )
     case .agents:
       AgentsSettingsView(
@@ -106,7 +132,9 @@ struct MenuBarContentView: View {
     case .devices:
       AccountDevicesView(model: model)
     case .usage:
-      AccountUsageView(model: model)
+      AccountUsageView(model: model, source: $usageSource, period: $usagePeriod)
+    case .support:
+      SettingsSupportView(onOpenDiagnostics: { navigate(to: .diagnostics) })
     case .diagnostics:
       SettingsDiagnosticsView(model: model)
     }
@@ -151,6 +179,7 @@ enum MenuBarRoute: Hashable {
   case provider(ProviderID)
   case devices
   case usage
+  case support
   case diagnostics
 
   var title: String {
@@ -160,6 +189,7 @@ enum MenuBarRoute: Hashable {
     case .provider(let provider): provider.displayName
     case .devices: "Devices"
     case .usage: "Usage"
+    case .support: "Support"
     case .diagnostics: "Diagnostics"
     }
   }

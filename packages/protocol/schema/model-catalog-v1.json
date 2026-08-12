@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://quota.gotry.io/schema/model-catalog-v1.json",
+  "title": "Quota report-time model catalog v1",
+  "$comment": "The catalog source is packages/protocol/catalog/model-catalog.json; quota-model additionally rejects duplicate IDs and overlapping aliases.",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "type": "number",
+      "const": 1
+    },
+    "revision": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "models": {
+      "minItems": 1,
+      "maxItems": 512,
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/__schema0"
+      }
+    }
+  },
+  "required": ["schema_version", "revision", "models"],
+  "additionalProperties": false,
+  "$defs": {
+    "__schema0": {
+      "type": "object",
+      "properties": {
+        "canonical_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        },
+        "aliases": {
+          "minItems": 1,
+          "maxItems": 32,
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/__schema1"
+          }
+        }
+      },
+      "required": ["canonical_id", "aliases"],
+      "additionalProperties": false
+    },
+    "__schema1": {
+      "type": "object",
+      "properties": {
+        "reported_model": {
+          "$ref": "#/$defs/__schema2"
+        },
+        "provider": {
+          "$ref": "#/$defs/__schema3"
+        },
+        "client": {
+          "$ref": "#/$defs/__schema4"
+        },
+        "effective_from": {
+          "$ref": "#/$defs/__schema5"
+        },
+        "effective_to": {
+          "$ref": "#/$defs/__schema7"
+        }
+      },
+      "required": ["reported_model", "provider"],
+      "additionalProperties": false
+    },
+    "__schema2": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?=[\\s\\S]{1,128}$)(?![\\s\\S]*\\p{Cc})[\\s\\S]+$"
+    },
+    "__schema3": {
+      "type": "string",
+      "enum": [
+        "openai",
+        "azure_openai",
+        "anthropic",
+        "aws_bedrock",
+        "google_vertex",
+        "openrouter",
+        "xai",
+        "unknown"
+      ]
+    },
+    "__schema4": {
+      "type": "string",
+      "enum": ["codex", "claude_code", "grok", "opencode", "pi"]
+    },
+    "__schema5": {
+      "$ref": "#/$defs/__schema6"
+    },
+    "__schema6": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+    },
+    "__schema7": {
+      "$ref": "#/$defs/__schema6"
+    }
+  }
+}

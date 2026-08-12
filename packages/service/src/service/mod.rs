@@ -230,6 +230,7 @@ impl LocalService {
             Operation::Login => self.login(&request).map(as_json),
             Operation::CancelLogin => self.cancel_login(&request).map(as_json),
             Operation::Logout => self.logout(&request).map(as_json),
+            Operation::SetUsageUpload => self.set_usage_upload(&request).map(as_json),
             Operation::SetProviderConfig => self.set_provider_config(&request).map(as_json),
             Operation::RemoveProviderConfig => self.remove_provider_config(&request).map(as_json),
             Operation::Shutdown => self.shutdown_response(&request).map(as_json),
@@ -463,6 +464,21 @@ impl LocalService {
             config.as_ref(),
             provider_mask_label(&payload.provider),
         ))
+    }
+
+    fn set_usage_upload(&self, request: &IpcRequest) -> Result<UsageUploadSetting, IpcError> {
+        let payload: SetUsageUploadPayload = request.decode_payload()?;
+        self.inner
+            .state
+            .set_usage_upload_enabled(payload.enabled)
+            .map_err(state_error)?;
+        self.emit(vec![ComponentName::Usage]);
+        if payload.enabled {
+            let _ = self.request_refresh();
+        }
+        Ok(UsageUploadSetting {
+            enabled: payload.enabled,
+        })
     }
 
     fn remove_provider_config(&self, request: &IpcRequest) -> Result<ProviderConfigView, IpcError> {
@@ -1191,6 +1207,57 @@ mod tests {
         assert!(service.inner.refresh.lock().expect("lock").active.is_none());
         service.shutdown();
         drop(service);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn disabling_usage_upload_is_durable_and_emits_usage_state() {
+        let root = std::env::temp_dir().join(format!("quota-usage-upload-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        let sink = Arc::new(RecordingSink::default());
+        let service = LocalService::new(state.clone(), sink.clone(), Arc::new(UnavailableBackend));
+        assert!(
+            state
+                .snapshot()
+                .expect("initial state")
+                .usage_upload_enabled
+        );
+        let request: IpcRequest = serde_json::from_value(serde_json::json!({
+            "type": "request",
+            "request_id": "usage-upload",
+            "operation": "set_usage_upload",
+            "payload": {"enabled": false}
+        }))
+        .expect("request");
+
+        let response = service.handle(request);
+
+        assert!(response.error.is_none());
+        assert_eq!(
+            response
+                .result
+                .as_ref()
+                .and_then(|value| value.get("enabled"))
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert!(
+            !state
+                .snapshot()
+                .expect("updated state")
+                .usage_upload_enabled
+        );
+        assert!(
+            sink.0
+                .lock()
+                .expect("events")
+                .iter()
+                .any(|event| event.changed_components == [ComponentName::Usage])
+        );
+        service.shutdown();
+        drop(service);
+        drop(state);
         fs::remove_dir_all(root).expect("cleanup");
     }
 

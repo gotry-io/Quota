@@ -44,6 +44,8 @@ func consumesServiceMergedOverviewWithoutReprocessingObservations() async throws
   let state = LocalServiceState(
     ipcVersion: 1,
     revision: 7,
+    usageUploadEnabled: true,
+    usagePeriods: emptyUsagePeriods(),
     quota: component(value: report, updatedAt: now),
     usage: component(value: unavailableUsage(now: now), updatedAt: now),
     account: LocalServiceComponent(
@@ -153,6 +155,8 @@ private func loggingInState() -> LocalServiceState {
   LocalServiceState(
     ipcVersion: 1,
     revision: 1,
+    usageUploadEnabled: true,
+    usagePeriods: emptyUsagePeriods(),
     quota: emptyComponent(),
     usage: emptyComponent(),
     account: LocalServiceComponent(
@@ -172,6 +176,16 @@ private func loggingInState() -> LocalServiceState {
     providers: [],
     overview: []
   )
+}
+
+private func emptyUsagePeriods() -> LocalServiceUsagePeriodCache {
+  let values = LocalServiceUsagePeriodValues(
+    today: nil,
+    last7Days: nil,
+    last30Days: nil,
+    all: nil
+  )
+  return LocalServiceUsagePeriodCache(local: values, account: values)
 }
 
 private func component<Value: Decodable & Sendable>(
@@ -203,10 +217,8 @@ private func unavailableUsage(now: Date) -> LocalUsageReport {
     aggregationTimezone: nil,
     range: UsageDateRange(from: "2026-08-01", to: "2026-08-10"),
     status: .unavailable,
-    totals: nil,
-    cost: nil,
     coverage: [],
-    breakdowns: []
+    coverageTruncated: nil
   )
 }
 
@@ -268,6 +280,9 @@ private struct StubLocalService: LocalServiceServing {
   }
   func logout() async throws -> LocalServiceLogoutResult {
     LocalServiceLogoutResult(status: .signedOut)
+  }
+  func setUsageUpload(enabled: Bool) async throws -> LocalServiceUsageUploadSetting {
+    LocalServiceUsageUploadSetting(enabled: enabled)
   }
 
   func setProviderConfig(

@@ -90,11 +90,14 @@ final class MenuBarViewModel {
   private(set) var report: QuotaCollectionReport?
   private(set) var localUsage: LocalUsageReport?
   private(set) var accountSummary: AccountSummary?
+  private(set) var usagePeriods: LocalServiceUsagePeriodCache?
   private(set) var errorMessage: String?
   private(set) var accountErrorMessage: String?
   private(set) var isRefreshing = false
   private(set) var isLoggingIn = false
   private(set) var isLoggingOut = false
+  private(set) var isUpdatingUsageUpload = false
+  private(set) var usageUploadEnabled = true
   private(set) var accountDisconnectReason: AccountDisconnectReason?
   private(set) var lastCheckedAt: Date?
   private(set) var providerConfigurations: [ProviderID: LocalServiceProviderConfig] = [:]
@@ -170,6 +173,35 @@ final class MenuBarViewModel {
       report = visualTestState.report
       localUsage = visualTestState.localUsage
       accountSummary = visualTestState.accountSummary
+      if let usage = visualTestState.accountSummary?.usage {
+        let detail = LocalServiceUsageDetail(
+          range: usage.range,
+          usage: LocalUsagePeriodSummary(
+            totals: UsageSummaryTotals(usage.totals),
+            cost: usage.cost,
+            clients: usage.clients ?? [],
+            modelsTruncated: usage.breakdownsTruncated
+          ),
+          fallbackModels: usage.clients == nil
+            ? usage.breakdowns.filter { $0.dimension == .model }.map {
+              LocalUsageModelSummary(
+                model: $0.key,
+                totals: UsageSummaryTotals($0.totals),
+                cost: $0.cost
+              )
+            }
+            : [],
+          incomplete: usage.coverage.contains { $0.status == .partial },
+          detailsTruncated: usage.hasTruncatedDetails
+        )
+        let values = LocalServiceUsagePeriodValues(
+          today: detail,
+          last7Days: detail,
+          last30Days: detail,
+          all: detail
+        )
+        usagePeriods = LocalServiceUsagePeriodCache(local: values, account: values)
+      }
       authStatus = visualTestState.authStatus
       overview = visualTestState.overview
     }
@@ -222,6 +254,10 @@ final class MenuBarViewModel {
       throw LocalServiceClientError.serviceMissing
     }
     return try await client.diagnose()
+  }
+
+  func usageDetail(source: UsageSource, period: UsagePeriod) -> LocalServiceUsageDetail? {
+    usagePeriods?.detail(source: source, period: period)
   }
 
   func startLogin() {
@@ -288,6 +324,20 @@ final class MenuBarViewModel {
       accountActionErrorMessage = Self.message(for: error)
       accountErrorMessage = accountActionErrorMessage
       await reloadState()
+    }
+  }
+
+  func setUsageUploadEnabled(_ enabled: Bool) async {
+    guard !isUpdatingUsageUpload, enabled != usageUploadEnabled, let client else { return }
+    isUpdatingUsageUpload = true
+    defer { isUpdatingUsageUpload = false }
+    do {
+      usageUploadEnabled = try await client.setUsageUpload(enabled: enabled).enabled
+      await reloadState()
+    } catch is CancellationError {
+      return
+    } catch {
+      errorMessage = Self.message(for: error)
     }
   }
 
@@ -390,6 +440,8 @@ final class MenuBarViewModel {
 
   private func apply(_ state: LocalServiceState) {
     revision = state.revision
+    usageUploadEnabled = state.usageUploadEnabled
+    usagePeriods = state.usagePeriods
     report = state.quota.value
     localUsage = state.usage.value
     accountSummary = state.account.value?.accountSummary

@@ -4,11 +4,15 @@ import {
   type ChannelSource,
   type ContextBucket,
   IanaTimezoneSchema,
+  type InferenceProvider,
   PROTOCOL_VERSION,
   type PricingCatalog,
   type PricingCatalogEntry,
   PricingCatalogSchema,
   type PricingRates,
+  MAXIMUM_MODEL_CATALOG_ALIASES,
+  type ModelCatalog,
+  ModelCatalogSchema,
   type QuotaSnapshot,
   Rfc3339InstantSchema,
   type UsageCostAssumption,
@@ -211,6 +215,135 @@ export function validatePricingCatalog(input: unknown): PricingCatalogValidation
     }
   }
   return issues.length === 0 ? { valid: true, catalog: parsed.data } : { valid: false, issues };
+}
+
+export type ModelCatalogValidationIssue =
+  | { code: "invalid_schema"; path: string; message: string }
+  | { code: "duplicate_canonical_id"; canonical_id: string }
+  | { code: "ambiguous_aliases"; reported_model: string; provider: InferenceProvider };
+
+export type ModelCatalogValidationResult =
+  | { valid: true; catalog: ModelCatalog }
+  | { valid: false; issues: readonly ModelCatalogValidationIssue[] };
+
+/** Validate model identity metadata and reject aliases that could resolve ambiguously. */
+export function validateModelCatalog(input: unknown): ModelCatalogValidationResult {
+  const parsed = ModelCatalogSchema.safeParse(input);
+  if (!parsed.success) {
+    return {
+      valid: false,
+      issues: parsed.error.issues.map((issue) => ({
+        code: "invalid_schema" as const,
+        path: issue.path.join("."),
+        message: issue.message,
+      })),
+    };
+  }
+
+  const issues: ModelCatalogValidationIssue[] = [];
+  const ids = new Set<string>();
+  let aliasCount = 0;
+  for (const model of parsed.data.models) {
+    if (ids.has(model.canonical_id)) {
+      issues.push({ code: "duplicate_canonical_id", canonical_id: model.canonical_id });
+    }
+    ids.add(model.canonical_id);
+    aliasCount += model.aliases.length;
+  }
+  if (aliasCount > MAXIMUM_MODEL_CATALOG_ALIASES) {
+    issues.push({
+      code: "invalid_schema",
+      path: "models",
+      message: `A model catalog may contain at most ${MAXIMUM_MODEL_CATALOG_ALIASES} aliases.`,
+    });
+  }
+
+  const aliases = parsed.data.models.flatMap((model) =>
+    model.aliases.map((alias) => ({ model, alias })),
+  );
+  for (const { alias } of aliases) {
+    if (ids.has(alias.reported_model)) {
+      issues.push({
+        code: "ambiguous_aliases",
+        reported_model: alias.reported_model,
+        provider: alias.provider,
+      });
+    }
+  }
+  for (let leftIndex = 0; leftIndex < aliases.length; leftIndex += 1) {
+    const left = aliases[leftIndex];
+    if (!left) continue;
+    for (let rightIndex = leftIndex + 1; rightIndex < aliases.length; rightIndex += 1) {
+      const right = aliases[rightIndex];
+      if (right && aliasesOverlap(left.alias, right.alias)) {
+        issues.push({
+          code: "ambiguous_aliases",
+          reported_model: left.alias.reported_model,
+          provider: left.alias.provider,
+        });
+      }
+    }
+  }
+  return issues.length === 0 ? { valid: true, catalog: parsed.data } : { valid: false, issues };
+}
+
+/** Resolve an exact canonical ID or explicitly scoped alias. */
+export function resolveModel(
+  catalog: ModelCatalog,
+  row: Pick<UsageHourlyFact, "model" | "billing_channel" | "agent" | "bucket_start_utc">,
+): string | undefined {
+  const canonical = catalog.models.find((model) => model.canonical_id === row.model);
+  if (canonical) return canonical.canonical_id;
+  const date = row.bucket_start_utc.slice(0, 10);
+  const provider = inferenceProvider(row.billing_channel);
+  const matches = catalog.models.flatMap((model) =>
+    model.aliases
+      .filter(
+        (alias) =>
+          alias.reported_model === row.model &&
+          alias.provider === provider &&
+          (alias.client === undefined || alias.client === row.agent) &&
+          (alias.effective_from === undefined || alias.effective_from <= date) &&
+          (alias.effective_to === undefined || date < alias.effective_to),
+      )
+      .map(() => model),
+  );
+  return matches.length === 1 ? matches[0]?.canonical_id : undefined;
+}
+
+function aliasesOverlap(
+  left: ModelCatalog["models"][number]["aliases"][number],
+  right: ModelCatalog["models"][number]["aliases"][number],
+): boolean {
+  if (
+    left.reported_model !== right.reported_model ||
+    left.provider !== right.provider ||
+    (left.client !== undefined && right.client !== undefined && left.client !== right.client)
+  ) {
+    return false;
+  }
+  const startsOverlap =
+    left.effective_from === undefined ||
+    right.effective_to === undefined ||
+    left.effective_from < right.effective_to;
+  const endsOverlap =
+    right.effective_from === undefined ||
+    left.effective_to === undefined ||
+    right.effective_from < left.effective_to;
+  return startsOverlap && endsOverlap;
+}
+
+export function inferenceProvider(channel: BillingChannel): InferenceProvider {
+  switch (channel) {
+    case "openai_direct":
+      return "openai";
+    case "anthropic_direct":
+      return "anthropic";
+    case "xai_direct":
+      return "xai";
+    default:
+      return channel;
+  }
 }
 
 export type PricingResolution =

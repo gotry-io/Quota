@@ -27,17 +27,20 @@ QuotaBar starts a fixed signed `Contents/Helpers/quota-service` child and commun
 versioned stdin/stdout NDJSON. Each request has a fixed fifteen-second deadline; a timed-out child is
 closed and the next request starts a fresh helper. The shared Rust service immediately returns its
 last valid SQLite state, then collects provider quota, incrementally indexes Usage logs, refreshes
-pricing, and synchronizes a signed-in account in the background. Its five-minute scheduler exists
-only for the QuotaBar process lifetime, so quitting QuotaBar stops local work and synchronization.
-Linux `quotacli` uses the same Rust service semantics through a native command-line entry point.
+pricing and report-time model aliases, and synchronizes a signed-in account in the background. Its
+five-minute scheduler exists only for the QuotaBar process lifetime, so quitting QuotaBar stops local
+work and synchronization. Linux `quotacli` uses the same Rust service semantics through a native
+command-line entry point.
 
-Swift owns presentation, preferences, accessibility, and Launch at Login. Rust owns provider and
-Usage semantics, credentials, OAuth, Relay traffic, persistence, outbox sequencing, merging local and
-account observations, and scheduling. QuotaRelay and Quota Web remain TypeScript. See the canonical
+Swift owns presentation, UI preferences, accessibility, and Launch at Login. Rust owns provider and
+Usage semantics, credentials, OAuth, Relay traffic, persistence, the durable Usage upload setting,
+outbox sequencing, merging local and account observations, and scheduling. QuotaRelay and Quota Web
+remain TypeScript. See the canonical
 [architecture](docs/architecture.md), [security baseline](docs/security.md),
 [provider strategies](docs/provider-collection.md), [native service decision](docs/decisions/0007-rust-native-local-service.md),
 and [managed account decision](docs/decisions/0006-managed-account-device-usage.md). The data
-integrity and diagnostic contract is [ADR 0008](docs/decisions/0008-data-integrity-and-diagnostics.md).
+integrity and diagnostic contract is [ADR 0008](docs/decisions/0008-data-integrity-and-diagnostics.md),
+and report-time model identity is [ADR 0009](docs/decisions/0009-versioned-model-catalog.md).
 
 ## Repository layout
 
@@ -56,8 +59,14 @@ docs/                     Architecture, security, provider, and decision records
 
 Provider registration starts in `packages/provider/catalog.json`. Run
 `pnpm generate:provider-catalog` after a catalog change to regenerate Rust, Swift, and TypeScript
-provider IDs. Wire JSON uses `snake_case`. Managed network protocol v2 remains compatible with
-released clients; bundled private IPC v1 changes atomically with QuotaBar.
+provider IDs. Wire JSON uses `snake_case`. Managed network protocol v2 remains the released network
+boundary; completed bounded response variants are not retained. Bundled private IPC v1 changes
+atomically with QuotaBar. Its local Usage v3 report carries scan status and coverage; state snapshots
+carry precomputed period totals grouped by client, then inference provider, then model. Summary totals are total, input,
+output, cache-read input, cache-write input, reasoning, and usage-bearing output messages; sessions
+are not collected.
+The service precomputes Today, 7 Days, 30 Days, and All detail for This Mac and the signed-in Account,
+so QuotaBar switches periods without collection or network work; Overview remains quota-only.
 
 ## Development
 
@@ -116,10 +125,12 @@ The repository implements protocol v2 account/device authentication, independent
 upload sequencing, D1 persistence and deletion watermarks, seven Rust quota collectors, five Rust
 Usage parsers with file-level incremental indexing, effective-dated cost calculation, owner-only
 local SQLite state and provider configuration, persistent private IPC, QuotaBar account/provider
-configuration UI, and the Web account dashboard. Model identifiers are opaque bounded provider text;
-valid facts remain usable when pricing is unknown. Record/file failures are isolated and complete
-uploads are partitioned losslessly, while partial scans do not replace remote facts. The service
-diagnostic report makes every capability's status and safe counters observable.
+configuration UI, fixed-window client-scoped account-or-local Usage detail, and the Web account dashboard. Raw model
+identifiers remain opaque bounded provider text; a separately versioned catalog derives stable
+report keys without rewriting facts or changing pricing. Valid facts remain usable when pricing or
+model aliases are unknown. Record/file failures are isolated and complete uploads are partitioned
+losslessly, while partial scans do not replace remote facts. The service diagnostic report makes
+every capability's status and safe counters observable.
 
 Production GitHub OAuth and D1 deployment require the secrets documented by the managed Relay
 configuration. The checked-in deployment workflow is the only authorized production path.

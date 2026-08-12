@@ -3,6 +3,9 @@ import {
   MAXIMUM_USAGE_BREAKDOWNS,
   MAXIMUM_UNPRICED_ITEMS,
   type AccountUsageSummary,
+  type InferenceProvider,
+  type LocalUsageClientSummary,
+  type ModelCatalog,
   type PricingCatalog,
   type UsageBreakdownDimension,
   type UsageCostMode,
@@ -15,8 +18,10 @@ import {
 } from "@gotry-io/quota-protocol";
 import {
   foldPreparedUsageCosts,
+  inferenceProvider,
   type PreparedUsageCosts,
   prepareUsageCosts,
+  resolveModel,
 } from "@gotry-io/quota-model";
 import type {
   StoredUsageCoverage,
@@ -39,7 +44,8 @@ export function buildUsageSummary(
   mode: UsageCostMode,
   catalog: PricingCatalog,
   includeHourlyBreakdowns = true,
-  includeTruncationFields = true,
+  modelCatalog?: ModelCatalog,
+  includeClients = false,
 ): AccountUsageSummary {
   const facts = result.rows.map(usageFact);
   const preparedCosts = prepareUsageCosts(facts, catalog, mode);
@@ -53,7 +59,8 @@ export function buildUsageSummary(
     for (const dimension of includeHourlyBreakdowns
       ? breakdownDimensions
       : breakdownDimensions.slice(0, -2)) {
-      if (!addGroup(groups, dimension, breakdownKey(row, dimension), fact, index)) {
+      const groupKey = breakdownKey(row, dimension, modelCatalog);
+      if (!addGroup(groups, dimension, groupKey.identity, groupKey.key, fact, index)) {
         breakdownsTruncated = true;
       }
     }
@@ -65,22 +72,25 @@ export function buildUsageSummary(
         dimension: group.dimension,
         key: group.key,
         totals: serializedTotals(group.totals),
-        cost: boundedFoldPreparedUsageCosts(
-          preparedCosts,
-          group.rowIndexes,
-          includeTruncationFields,
-        ),
+        cost: boundedFoldPreparedUsageCosts(preparedCosts, group.rowIndexes),
       };
     });
+  const clientSummary = includeClients
+    ? buildUsageClients(result.rows, facts, preparedCosts, modelCatalog)
+    : undefined;
   return boundedModelResult(() =>
     AccountUsageSummarySchema.parse({
       range,
       totals: serializedTotals(totals),
-      cost: boundedFoldPreparedUsageCosts(preparedCosts, undefined, includeTruncationFields),
+      cost: boundedFoldPreparedUsageCosts(preparedCosts),
       coverage: result.coverage.map(coverageSummary),
       breakdowns,
-      ...(includeTruncationFields && result.coverage_truncated ? { coverage_truncated: true } : {}),
-      ...(includeTruncationFields && breakdownsTruncated ? { breakdowns_truncated: true } : {}),
+      ...(clientSummary ? { clients: clientSummary.clients } : {}),
+      ...(modelCatalog ? { model_catalog_revision: modelCatalog.revision } : {}),
+      ...(result.coverage_truncated ? { coverage_truncated: true } : {}),
+      ...(breakdownsTruncated || clientSummary?.modelsTruncated
+        ? { breakdowns_truncated: true }
+        : {}),
     }),
   );
 }
@@ -89,15 +99,10 @@ export function buildUsageCost(
   rows: readonly StoredUsageHourlyFact[],
   mode: UsageCostMode,
   catalog: PricingCatalog,
-  includeTruncationFields = true,
 ): UsageCostOutcome {
   return boundedModelResult(() => {
     const facts = rows.map(usageFact);
-    return boundedFoldPreparedUsageCosts(
-      prepareUsageCosts(facts, catalog, mode),
-      undefined,
-      includeTruncationFields,
-    );
+    return boundedFoldPreparedUsageCosts(prepareUsageCosts(facts, catalog, mode));
   });
 }
 
@@ -123,36 +128,153 @@ function coverageSummary(item: StoredUsageCoverage) {
   };
 }
 
+function buildUsageClients(
+  rows: readonly StoredUsageHourlyFact[],
+  facts: readonly UsageHourlyFact[],
+  preparedCosts: PreparedUsageCosts,
+  modelCatalog?: ModelCatalog,
+): { clients: LocalUsageClientSummary[]; modelsTruncated: boolean } {
+  const clients = new Map<string, UsageClientGroup>();
+  let modelCount = 0;
+  let modelsTruncated = false;
+  for (const [index, row] of rows.entries()) {
+    let client = clients.get(row.agent);
+    if (!client) {
+      client = { client: row.agent, rowIndexes: [], providers: new Map() };
+      clients.set(row.agent, client);
+    }
+    client.rowIndexes.push(index);
+
+    const providerID = inferenceProvider(row.billing_channel);
+    let provider = client.providers.get(providerID);
+    if (!provider) {
+      provider = { provider: providerID, rowIndexes: [], models: new Map() };
+      client.providers.set(providerID, provider);
+    }
+    provider.rowIndexes.push(index);
+
+    const modelKey = breakdownKey(row, "model", modelCatalog);
+    let model = provider.models.get(modelKey.identity);
+    if (!model) {
+      if (modelCount === MAXIMUM_USAGE_BREAKDOWNS) {
+        modelsTruncated = true;
+        continue;
+      }
+      model = { model: modelKey.key, rowIndexes: [] };
+      provider.models.set(modelKey.identity, model);
+      modelCount += 1;
+    }
+    model.rowIndexes.push(index);
+  }
+
+  return {
+    clients: [...clients.values()]
+      .sort((left, right) => left.client.localeCompare(right.client))
+      .map((client) => ({
+        client: client.client,
+        totals: summaryTotals(facts, client.rowIndexes),
+        cost: boundedFoldPreparedUsageCosts(preparedCosts, client.rowIndexes),
+        providers: [...client.providers.values()]
+          .sort((left, right) => left.provider.localeCompare(right.provider))
+          .map((provider) => ({
+            provider: provider.provider,
+            totals: summaryTotals(facts, provider.rowIndexes),
+            cost: boundedFoldPreparedUsageCosts(preparedCosts, provider.rowIndexes),
+            models: [...provider.models]
+              .sort(([left], [right]) => left.localeCompare(right))
+              .map(([, model]) => ({
+                model: model.model,
+                totals: summaryTotals(facts, model.rowIndexes),
+                cost: boundedFoldPreparedUsageCosts(preparedCosts, model.rowIndexes),
+              })),
+          })),
+      })),
+    modelsTruncated,
+  };
+}
+
+function summaryTotals(facts: readonly UsageHourlyFact[], indexes: readonly number[]) {
+  const totals = emptyTotals();
+  for (const index of indexes) {
+    const fact = facts[index];
+    if (!fact) throw new UsageSummaryLimitError();
+    addTotals(totals, fact);
+  }
+  const totalTokens = totals.input_tokens + totals.output_tokens;
+  const cacheWriteInputTokens =
+    totals.cache_write_5m_tokens +
+    totals.cache_write_1h_tokens +
+    totals.cache_write_inferred_tokens;
+  if (!Number.isSafeInteger(totalTokens) || !Number.isSafeInteger(cacheWriteInputTokens)) {
+    throw new UsageSummaryLimitError();
+  }
+  return {
+    total_tokens: totalTokens,
+    input_tokens: totals.input_tokens,
+    output_tokens: totals.output_tokens,
+    cache_read_input_tokens: totals.cache_read_tokens,
+    cache_write_input_tokens: cacheWriteInputTokens,
+    reasoning_tokens: totals.reasoning_tokens,
+    messages: totals.requests,
+  };
+}
+
+interface UsageClientGroup {
+  client: StoredUsageHourlyFact["agent"];
+  rowIndexes: number[];
+  providers: Map<InferenceProvider, UsageProviderGroup>;
+}
+
+interface UsageProviderGroup {
+  provider: InferenceProvider;
+  rowIndexes: number[];
+  models: Map<string, UsageModelGroup>;
+}
+
+interface UsageModelGroup {
+  model: string;
+  rowIndexes: number[];
+}
+
 function breakdownKey(
   row: StoredUsageHourlyFact,
   dimension: (typeof breakdownDimensions)[number],
-): string {
+  modelCatalog?: ModelCatalog,
+): { identity: string; key: string } {
   switch (dimension) {
     case "device":
-      return row.device_id;
+      return { identity: row.device_id, key: row.device_id };
     case "agent":
-      return row.agent;
+      return { identity: row.agent, key: row.agent };
     case "model":
-      return row.model;
+      if (!modelCatalog) return { identity: "raw:" + row.model, key: row.model };
+      const resolution = resolveModel(modelCatalog, row);
+      return resolution
+        ? {
+            identity: "canonical:" + resolution,
+            key: resolution,
+          }
+        : { identity: "raw:" + row.model, key: row.model };
     case "billing_channel":
-      return row.billing_channel;
+      return { identity: row.billing_channel, key: row.billing_channel };
     case "usage_date":
-      return row.usage_date;
+      return { identity: row.usage_date, key: row.usage_date };
     case "bucket_start_utc":
-      return row.bucket_start_utc;
+      return { identity: row.bucket_start_utc, key: row.bucket_start_utc };
   }
 }
 
 function addGroup(
   groups: Map<string, UsageSummaryGroup>,
   dimension: UsageBreakdownDimension,
+  identity: string,
   key: string,
   row: UsageHourlyFact,
   rowIndex: number,
 ): boolean {
   // Model text is opaque and may contain punctuation such as ':'. Keep the
   // display fields separate instead of recovering them from a delimiter.
-  const compound = `${dimension}\u0000${key}`;
+  const compound = dimension + "\u0000" + identity;
   let group = groups.get(compound);
   if (!group) {
     if (groups.size >= MAXIMUM_USAGE_BREAKDOWNS) return false;
@@ -228,10 +350,9 @@ function serializedTotals(totals: MutableUsageTotals): UsageTokenTotals {
 function boundedFoldPreparedUsageCosts(
   prepared: PreparedUsageCosts,
   indexes?: readonly number[],
-  includeTruncationFields = true,
 ): UsageCostOutcome {
   const selected = indexes ?? prepared.rows.map((_, index) => index);
-  if (!includeTruncationFields || !hasTooManyUnpricedDetails(prepared, selected)) {
+  if (!hasTooManyUnpricedDetails(prepared, selected)) {
     return foldPreparedUsageCosts(prepared, indexes);
   }
 

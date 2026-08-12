@@ -9,7 +9,8 @@ the root [`README.md`](../README.md); credential and retained-data rules live in
 Quota has four application products and one shared Rust library boundary:
 
 - QuotaBar is the macOS presentation product. Its app bundle contains one private Rust service;
-  Swift owns views, preferences, accessibility, Launch at Login, and strict decoding only.
+  Swift owns views, UI preferences, accessibility, Launch at Login, and strict decoding only. The
+  Rust service owns the durable Usage upload setting so it applies before background work begins.
 - QuotaCLI is a Linux-only native Rust command that uses the shared local service library. It is
   released as a static x86_64 binary; Windows is not supported.
 - QuotaRelay owns GitHub-backed Accounts, Devices, scoped native sessions, normalized quota/Usage
@@ -51,9 +52,11 @@ official provider sessions       agent JSON/JSONL logs
 QuotaBar launches the fixed signed `Contents/Helpers/quota-service` path once. Requests, responses,
 and state-change events are newline-delimited `snake_case` JSON with a 1 MiB line limit and request
 IDs. Supported operations are state read, diagnose, refresh, login/cancel, logout, provider
-configuration, and shutdown. `get_state` performs no collection or network work: it returns the
-current SQLite-backed snapshot immediately. State components carry independent status, last-good
-value, update time, error/recovery code, and refreshing flag for quota, Usage, account, and pricing.
+configuration, Usage upload configuration, and shutdown. `get_state` performs no collection or
+network work: it returns the current SQLite-backed snapshot, including precomputed Today, 7 Days,
+30 Days, and All Usage periods, immediately. State components carry
+independent status, last-good value, update time, error/recovery code, and refreshing flag for quota,
+Usage, account, and pricing.
 
 The service begins a background startup refresh after IPC is available, emits revisioned
 `state_changed` events, and schedules subsequent refreshes every five minutes. Manual refresh uses
@@ -87,8 +90,9 @@ Provider credentials remain provider-owned when available. Optional API-key prov
 the released shared owner-only configuration root and `providers.json`; QuotaBar sends secrets only
 over the child process's stdin, never argv or preferences. Environment variables remain supported
 inputs. Operational state has one owner: `state.sqlite` stores installation/account state, component
-last-good values, file index, normalized Usage facts, pricing state, sequences, and the durable
-outbox. SQLite migrations are explicit and append-only.
+last-good values, file index, normalized Usage facts, fixed-period presentation cache, pricing state,
+sequences, and the durable outbox and Usage upload setting. SQLite migrations are explicit and
+append-only.
 
 Usage indexing is the final file-level invalidation design. Each refresh performs bounded source
 discovery, records parser revision plus file identity, size, and modification time, skips unchanged
@@ -102,12 +106,51 @@ missing pricing never discards a valid fact.
 Bounded Usage detail responses may explicitly mark truncated coverage, breakdown, or unpriced-model
 detail; exact totals remain usable and clients surface that degradation.
 
-On first launch, the one-time SQLite migration imports the released installation, session, Usage
-cache, Usage outbox, and pricing cache exactly once. The import is transactional and idempotent;
-source files are removed only after the new state is readable. The bounded released-client window
-and removal checklist are defined in [ADR 0007](decisions/0007-rust-native-local-service.md). The
-current shared `providers.json`/`ProviderConfigLock` path and OAuth `client_id=quotacli` are live
-interfaces. The removed TypeScript/Bun runtime has no dual-read/write path or fallback.
+The local Usage report is a private v3 presentation contract, separate from the released managed
+network v2 facts and account summaries. It carries collection status, coverage, timezone, and the
+model-catalog revision. State snapshots separately carry the precomputed Today, 7 Days, 30 Days, and
+All summaries, each with exact totals, cost, and `clients[].providers[].models[]` detail. `total_tokens` is input plus output;
+cache-read and cache-write tokens are named input subsets; reasoning is an output subset; and
+`messages` is the sum of normalized usage-bearing model output facts. It is not a session count, and
+sessions are not collected. The Rust report first groups facts by the agent client that emitted the
+usage, then groups each model under the inference provider derived from the fact's billing channel;
+client and model text never choose or override that provider. QuotaBar renders client groups only on
+the Usage detail page; Overview remains quota-only. The local SQLite migration discards only
+incompatible derived Usage presentations; indexed facts and the managed outbox remain intact and
+rebuild the current v3 report on refresh.
+
+Local periods are folded from the indexed facts once; signed-in Account periods use the dedicated
+Relay Usage Summary route and are committed
+only as a complete set. QuotaBar reads these values from `get_state`, so opening Usage and changing
+the period performs no collection or network request.
+
+Local collection and report generation continue when Usage upload is disabled. The service neither
+stages nor drains the managed Usage outbox while disabled; pending local work is retained and resumes
+after re-enabling. `get_state` omits cached Account Usage while disabled so QuotaBar stays local-only.
+Quota and account synchronization remain independent.
+
+Report-time model normalization is a separate derived view. The language-neutral source of truth is
+`packages/protocol/catalog/model-catalog.json`, with the generated
+`packages/protocol/schema/model-catalog-v1.json` artifact. Rust and Relay match only an exact
+`reported_model` + inference `provider` alias, with optional agent `client` and UTC effective-date
+bounds; there are no regex, case, trim, fuzzy, or guessed aliases. Raw model text remains unchanged in SQLite,
+Usage uploads, and D1. A catalog update therefore regroups existing raw rows the next time a report
+is built, without reparsing source files or rewriting fact rows. Resolved model breakdown keys use
+the stable canonical ID; unresolved rows retain their raw model text.
+
+Current native clients opt into `usage.clients[].providers[].models[]` on account summaries with
+`usage_clients=1`. Relay derives this account-wide structure directly from retained normalized facts,
+preserving the row-level client, billing-channel provider, and model relationship across Devices.
+The field is omitted without the opt-in because released protocol-v2 clients decode summaries
+strictly. A native client talking to a released Relay retries without the unknown key and temporarily
+uses the returned model breakdowns on the Usage page; it never reconstructs ownership from
+independent breakdowns or model text.
+
+The native-cutover import and its version-specific Relay behavior ended in 0.0.8 as defined by
+[ADR 0007](decisions/0007-rust-native-local-service.md). Applied SQLite migrations remain ordered
+history; the current shared `providers.json`/`ProviderConfigLock` path and OAuth
+`client_id=quotacli` are live interfaces. The removed TypeScript/Bun runtime has no dual-read/write
+path or fallback.
 
 ## Managed account and sync
 
@@ -135,12 +178,22 @@ The random installation ID is HMACed with an account-scoped server key before st
 Usage upload sequences are independent and recovered from authoritative Device control before
 upload. Outbox retry reuses submission ID and sequence, making crash-after-commit a duplicate rather
 than double counting. A deletion watermark rebuilds only permitted facts under the new Device
-generation.
+generation. Disabling Usage upload is a local Device preference: native Usage presentation becomes
+local-only, while already uploaded account history remains subject to the existing Device and Account
+deletion controls.
 
 Pricing is versioned and effective-dated with ETag caching. Rust calculates local cost; Relay keeps
 the equivalent server-side TypeScript calculation for account summaries. Exact
 channel/model/date/dimension matching is required. Missing prices stay unpriced/partial; cost is not
-an invoice or subscription spend.
+an invoice or subscription spend. Model normalization is intentionally independent: raw facts are
+priced before report grouping, and normalization never creates pricing aliases or changes a cost or
+unpriced outcome.
+
+QuotaRelay publishes the model catalog independently at `GET /api/v2/model/catalog`, with ETag
+validation and `public, max-age=300, must-revalidate` caching. Account summaries include the catalog
+revision only for current clients that explicitly opt in with `model_catalog=1`; strict older
+requests receive no new field. The Rust client stores the payload and ETag atomically with a
+last-known-good cache. Catalog fetch failure never blocks collection, upload, totals, or a report.
 
 ## Source and dependency rules
 
@@ -170,6 +223,8 @@ protocol + quota-model + relay-core
 - `packages/protocol` defines released managed-network contracts and exported JSON Schemas.
 - `packages/protocol/fixtures/pricing-conformance.json` is the language-neutral pricing input and
   expected-output fixture consumed by both Rust service and TypeScript quota-model tests.
+- `packages/protocol/catalog/model-catalog.json` is the language-neutral report-time model catalog;
+  its schema is generated from `ModelCatalogSchema` and consumed by both Rust and TypeScript.
 - `packages/quota-model` and `packages/relay-core` remain TypeScript runtime-neutral code used by
   Relay/Web; they are not imported by the local Rust service.
 - `apps/relay` is the only Cloudflare/D1 adapter and must not import filesystem, subprocess, TCP, or
@@ -182,9 +237,8 @@ protocol + quota-model + relay-core
 QuotaRelay mounts Hono routes at `/oauth/v2` and `/api/v2`, Better Auth at `/api/auth/v2`, and health
 routes at their documented paths. It authenticates each route with the minimum account, device, or
 browser scope and performs Device/Account deletion, rotation/revocation, and Usage replacement in
-storage transactions. Released 0.0.5 clients retain their bounded two-agent response variant only
-through the completed 0.0.6/0.0.7 compatibility window. Current clients explicitly request all Usage
-agents, and 0.0.8 contains no client-version response branch.
+storage transactions. Relay serves the current Usage agents and pricing catalog without the ended
+0.0.5 response variant; current clients explicitly send `usage_agents=all`.
 
 Quota Web builds static Vite assets independently. `/my` reads account summaries and manages
 Devices and deletion; `/activate` approves or denies native authorization. Better Auth owns GitHub

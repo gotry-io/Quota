@@ -52,6 +52,7 @@ protocol LocalServiceServing: Sendable {
   func login() async throws -> LocalServiceLoginResult
   func cancelLogin() async throws
   func logout() async throws -> LocalServiceLogoutResult
+  func setUsageUpload(enabled: Bool) async throws -> LocalServiceUsageUploadSetting
   func setProviderConfig(
     _ provider: ProviderID,
     apiKey: String,
@@ -148,6 +149,13 @@ actor LocalServiceClient: LocalServiceServing {
 
   func logout() async throws -> LocalServiceLogoutResult {
     try await request(operation: "logout", payload: EmptyPayload())
+  }
+
+  func setUsageUpload(enabled: Bool) async throws -> LocalServiceUsageUploadSetting {
+    try await request(
+      operation: "set_usage_upload",
+      payload: SetUsageUploadPayload(enabled: enabled)
+    )
   }
 
   func setProviderConfig(
@@ -400,6 +408,7 @@ private struct EmptyResult: Decodable {
   }
 }
 private struct ProviderPayload: Encodable { let provider: String }
+private struct SetUsageUploadPayload: Encodable { let enabled: Bool }
 private struct SetProviderConfigPayload: Encodable {
   let provider: String
   let apiKey: String

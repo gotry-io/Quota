@@ -18,6 +18,8 @@ import {
   DeviceSyncResponseSchema,
   LogoutResponseSchema,
   LocalUsageReportSchema,
+  LocalUsageReportV2Schema,
+  ModelCatalogSchema,
   OAuthTokenRequestSchema,
   OAuthTokenResponseSchema,
   PricingCatalogSchema,
@@ -59,7 +61,7 @@ const UsagePayloadSchema = z.union([
   UsageSubmissionSchema,
   UsageUploadResponseSchema,
   AccountUsageSummarySchema,
-  LocalUsageReportSchema,
+  LocalUsageReportV2Schema,
 ]);
 
 const outputs = [
@@ -89,11 +91,25 @@ const outputs = [
       "Runtime validation additionally enforces token subset conservation, source-cost coverage, unique same-agent contained rows, and bounded ordered UTC-hour coverage.",
   },
   {
+    filename: "local-usage-v3.json",
+    title: "Quota local Usage report v3",
+    schema: LocalUsageReportSchema,
+    comment:
+      "Local-only Usage collection status and coverage; period summaries are precomputed in the private state snapshot.",
+  },
+  {
     filename: "pricing-catalog-v2.json",
     title: "Quota pricing catalog v2",
     schema: PricingCatalogSchema,
     comment:
       "quota-model additionally rejects duplicate IDs and entries whose channel/model/effective range/dimensions could resolve ambiguously.",
+  },
+  {
+    filename: "model-catalog-v1.json",
+    title: "Quota report-time model catalog v1",
+    schema: ModelCatalogSchema,
+    comment:
+      "The catalog source is packages/protocol/catalog/model-catalog.json; quota-model additionally rejects duplicate IDs and overlapping aliases.",
   },
 ] as const;
 

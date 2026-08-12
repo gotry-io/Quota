@@ -75,8 +75,32 @@ direct usage collection and report `auth_required` if Claude rejects the cached 
 ## Local Usage logs
 
 Usage parsing is independent from subscription-quota authentication. It reads local agent-owned
-JSONL files and emits normalized request facts plus typed scan coverage; it never reads provider
-tokens for this path.
+JSONL files and emits normalized usage-bearing model output facts plus typed scan coverage; it never
+reads provider tokens for this path. One fact represents one persisted assistant/output response
+whose Usage is measurable. Aggregated managed-v2 rows retain the released `requests` field; the
+local-v3 summary exposes their sum as `messages`. This is neither a conversation count nor a session
+count, and sessions are intentionally not collected. In v3 summaries, `total_tokens` is
+`input_tokens + output_tokens`; cache-read and cache-write input tokens are subsets of input, and
+reasoning tokens are a subset of output.
+
+Provider grouping uses the normalized fact's explicit billing channel, including a documented
+collector-owned default where the source has one. It never derives provider ownership from model
+text or from `client`. The local-v3 `provider` is the channel's inference provider; `client` records
+which agent emitted the usage-bearing output. Summaries are nested as
+`clients[].providers[].models[]`; unknown channels remain the `unknown` provider within their
+originating client.
+
+### Report-time model catalog
+
+Collectors preserve every non-empty bounded `model` value exactly as reported, including punctuation,
+case, and unknown provider strings. Model cleanup is applied only while building a report from the
+stored facts. The shared catalog matches an explicit `reported_model` and inference `provider`, with
+optional exact agent `client` and `[effective_from, effective_to)` UTC-date scope; it does not use regex,
+automatic case/trim rules, fuzzy matching, or inferred aliases. Resolved model groups use the stable
+canonical ID, while unresolved breakdowns retain the raw value. Updating the catalog regroups
+historical rows on the next report without reparsing source files or modifying SQLite/Relay facts.
+This view is independent of pricing: pricing sees the raw model first, and normalization does not
+make an otherwise unpriced fact priced.
 
 ### Codex Usage
 
@@ -115,13 +139,16 @@ tokens for this path.
 
 ### Grok Usage
 
-1. Discover `events.jsonl` below `$GROK_HOME/sessions` and JSONL trace exports below
-   `$GROK_HOME/trace-exports`, defaulting `GROK_HOME` to `~/.grok`.
-2. Parse only per-response `usage` events with a valid model and timestamp. Preserve uncached input,
-   cache reads/creation, output, reasoning, tools, exact source cost when supplied, and the
-   `xai_direct` channel.
-3. Current interactive Grok session transcripts record model turns but do not persist token usage;
-   scanning them therefore produces complete empty coverage rather than invented request counts.
+1. Discover `updates.jsonl` below `$GROK_HOME/sessions`, defaulting `GROK_HOME` to `~/.grok`.
+2. Parse `_x.ai/session/update` records whose nested `sessionUpdate` is `turn_completed` and Usage is
+   present. Preserve the numeric Unix timestamp, exact reported model, inclusive input, cache
+   read/creation, output, reasoning, exact source cost, and the `xai_direct` channel. Canceled turns
+   with null Usage emit no fact.
+3. Grok reports completed output turns as `numTurns`; use that value for `messages`, not the lower-level
+   `modelCalls`. Current records contain one `modelUsage` entry. A multi-model record is partial until
+   Grok exposes per-model output-turn counts, so the collector never invents message attribution.
+4. `inputTokens` already includes cache-read and cache-creation tokens. Validate those fields as input
+   subsets and do not add them again.
 
 ### OpenCode Usage
 

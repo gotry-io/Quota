@@ -21,7 +21,8 @@ use uuid::Uuid;
 use crate::migration;
 use crate::protocol::{
     ComponentName, ComponentState, ComponentStatus, ErrorCode, IPC_VERSION, IpcError,
-    ProviderConfigView, QuotaOverviewItem, RecoveryAction, StateSnapshot,
+    ProviderConfigView, QuotaOverviewItem, RecoveryAction, StateSnapshot, UsagePeriod,
+    UsagePeriodCache, UsageSource,
 };
 use crate::usage::{NormalizedUsageEvent, UsageAgent, UsageFileIndex, UsageScanResult};
 
@@ -307,6 +308,7 @@ impl StateStore {
     pub fn snapshot(&self) -> Result<StateSnapshot, StateError> {
         let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
         let revision = metadata_u64(&conn, "revision")?;
+        let usage_upload_enabled = metadata_bool(&conn, "usage_upload_enabled")?;
         let quota = read_component(&conn, ComponentName::Quota)?;
         let usage = read_component(&conn, ComponentName::Usage)?;
         let account =
@@ -323,12 +325,25 @@ impl StateStore {
                 last_error: None,
                 refreshing: false,
             });
+        let mut usage_periods = read_usage_periods(&conn)?;
+        let account_usage_available = usage_upload_enabled
+            && account
+                .value
+                .as_ref()
+                .and_then(|value| value.get("auth_status"))
+                .and_then(Value::as_str)
+                == Some("signed_in");
+        if !account_usage_available {
+            usage_periods.account = Default::default();
+        }
         let pricing = read_component(&conn, ComponentName::Pricing)?;
         let providers = read_provider_views(&self.root)?;
         let overview = read_overview(&conn)?;
         Ok(StateSnapshot {
             ipc_version: IPC_VERSION,
             revision,
+            usage_upload_enabled,
+            usage_periods,
             quota: quota
                 .unwrap_or_else(|| ComponentRecord::empty(ComponentStatus::Unavailable))
                 .to_wire(),
@@ -347,6 +362,41 @@ impl StateStore {
     pub fn component(&self, name: ComponentName) -> Result<Option<ComponentRecord>, StateError> {
         let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
         read_component(&conn, name)
+    }
+
+    pub fn replace_usage_periods(
+        &self,
+        source: UsageSource,
+        values: &[(UsagePeriod, Value)],
+    ) -> Result<u64, StateError> {
+        if values.len() != 4
+            || values
+                .iter()
+                .map(|(period, _)| period)
+                .collect::<HashSet<_>>()
+                .len()
+                != 4
+        {
+            return Err(StateError::InvalidState);
+        }
+        let mut conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        let tx = conn.transaction()?;
+        let source = usage_source_key(source);
+        tx.execute("DELETE FROM usage_period_cache WHERE source = ?1", [source])?;
+        for (period, value) in values {
+            let raw = serde_json::to_string(value)?;
+            if raw.len() > crate::protocol::MAXIMUM_LINE_BYTES {
+                return Err(StateError::InvalidState);
+            }
+            tx.execute(
+                "INSERT INTO usage_period_cache(source, period, value_json)
+                 VALUES (?1, ?2, ?3)",
+                params![source, usage_period_key(*period), raw],
+            )?;
+        }
+        let revision = bump_revision(&tx)?;
+        tx.commit()?;
+        Ok(revision)
     }
 
     pub fn write_usage_scan_diagnostics(
@@ -471,6 +521,63 @@ impl StateStore {
         Ok(revision)
     }
 
+    pub fn model_catalog_etag(&self) -> Result<Option<String>, StateError> {
+        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        conn.query_row(
+            "SELECT etag FROM model_catalog_cache WHERE id = 1",
+            [],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()
+        .map(|value| value.flatten())
+        .map_err(StateError::from)
+    }
+
+    pub fn model_catalog(&self) -> Result<Option<Value>, StateError> {
+        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        let raw: Option<String> = conn
+            .query_row(
+                "SELECT payload_json FROM model_catalog_cache WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        raw.map(|value| serde_json::from_str(&value).map_err(StateError::from))
+            .transpose()
+    }
+
+    /// Atomically replace the model catalog payload and its validator cache tag. An invalid
+    /// payload is rejected before this transaction, so the previous last-known-good value stays
+    /// available after a failed fetch.
+    pub fn commit_model_catalog(
+        &self,
+        value: &Value,
+        etag: Option<&str>,
+    ) -> Result<u64, StateError> {
+        if !crate::model_catalog::validate_model_catalog_value(value).valid {
+            return Err(StateError::InvalidState);
+        }
+        if etag.is_some_and(|value| value.len() > 256 || value.trim() != value) {
+            return Err(StateError::InvalidState);
+        }
+        let raw = serde_json::to_string(value)?;
+        if raw.len() > crate::protocol::MAXIMUM_LINE_BYTES {
+            return Err(StateError::InvalidState);
+        }
+        let mut conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        let tx = conn.transaction()?;
+        tx.execute(
+            "INSERT INTO model_catalog_cache(id, payload_json, etag)
+             VALUES (1, ?1, ?2)
+             ON CONFLICT(id) DO UPDATE SET payload_json = excluded.payload_json,
+             etag = excluded.etag",
+            params![raw, etag],
+        )?;
+        let revision = bump_revision(&tx)?;
+        tx.commit()?;
+        Ok(revision)
+    }
+
     pub fn set_component(
         &self,
         name: ComponentName,
@@ -538,6 +645,26 @@ impl StateStore {
     pub fn current_revision(&self) -> Result<u64, StateError> {
         let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
         metadata_u64(&conn, "revision")
+    }
+
+    pub fn usage_upload_enabled(&self) -> Result<bool, StateError> {
+        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        metadata_bool(&conn, "usage_upload_enabled")
+    }
+
+    pub fn set_usage_upload_enabled(&self, enabled: bool) -> Result<u64, StateError> {
+        let mut conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        let tx = conn.transaction()?;
+        if metadata_bool(&tx, "usage_upload_enabled")? == enabled {
+            return metadata_u64(&tx, "revision");
+        }
+        tx.execute(
+            "UPDATE metadata SET value = ?1 WHERE key = 'usage_upload_enabled'",
+            params![if enabled { "1" } else { "0" }],
+        )?;
+        let revision = bump_revision(&tx)?;
+        tx.commit()?;
+        Ok(revision)
     }
 
     pub fn session_json(&self) -> Result<Option<Value>, StateError> {
@@ -1879,6 +2006,40 @@ fn read_component(
     .map_err(StateError::from)
 }
 
+fn read_usage_periods(conn: &Connection) -> Result<UsagePeriodCache, StateError> {
+    let mut statement = conn.prepare(
+        "SELECT source, period, value_json FROM usage_period_cache ORDER BY source, period",
+    )?;
+    let rows = statement.query_map([], |row| {
+        let source: String = row.get(0)?;
+        let period: String = row.get(1)?;
+        let raw: String = row.get(2)?;
+        let source = parse_usage_source(&source).ok_or_else(|| {
+            rusqlite::Error::InvalidColumnType(0, "source".to_owned(), rusqlite::types::Type::Text)
+        })?;
+        let period = parse_usage_period(&period).ok_or_else(|| {
+            rusqlite::Error::InvalidColumnType(1, "period".to_owned(), rusqlite::types::Type::Text)
+        })?;
+        let value = serde_json::from_str(&raw).map_err(|_| {
+            rusqlite::Error::InvalidColumnType(
+                2,
+                "value_json".to_owned(),
+                rusqlite::types::Type::Text,
+            )
+        })?;
+        Ok((source, period, value))
+    })?;
+    let mut cache = UsagePeriodCache::default();
+    for row in rows {
+        let (source, period, value) = row?;
+        match source {
+            UsageSource::Local => cache.local.set(period, value),
+            UsageSource::Account => cache.account.set(period, value),
+        }
+    }
+    Ok(cache)
+}
+
 fn read_overview(conn: &Connection) -> Result<Vec<QuotaOverviewItem>, StateError> {
     let raw: Option<String> = conn
         .query_row(
@@ -2034,6 +2195,14 @@ fn metadata_value(conn: &Connection, key: &str) -> Result<Option<String>, StateE
     .map_err(StateError::from)
 }
 
+fn metadata_bool(conn: &Connection, key: &str) -> Result<bool, StateError> {
+    match metadata_value(conn, key)?.as_deref() {
+        Some("1") => Ok(true),
+        Some("0") => Ok(false),
+        _ => Err(StateError::InvalidState),
+    }
+}
+
 fn bump_revision(conn: &Connection) -> Result<u64, StateError> {
     let current = metadata_u64(conn, "revision")?;
     let next = current.checked_add(1).ok_or(StateError::InvalidState)?;
@@ -2051,6 +2220,40 @@ fn component_key(value: ComponentName) -> &'static str {
         ComponentName::Account => "account",
         ComponentName::Pricing => "pricing",
         ComponentName::Providers => "providers",
+    }
+}
+
+fn usage_source_key(value: UsageSource) -> &'static str {
+    match value {
+        UsageSource::Local => "local",
+        UsageSource::Account => "account",
+    }
+}
+
+fn parse_usage_source(value: &str) -> Option<UsageSource> {
+    match value {
+        "local" => Some(UsageSource::Local),
+        "account" => Some(UsageSource::Account),
+        _ => None,
+    }
+}
+
+fn usage_period_key(value: UsagePeriod) -> &'static str {
+    match value {
+        UsagePeriod::Today => "today",
+        UsagePeriod::Last7Days => "last_7_days",
+        UsagePeriod::Last30Days => "last_30_days",
+        UsagePeriod::All => "all",
+    }
+}
+
+fn parse_usage_period(value: &str) -> Option<UsagePeriod> {
+    match value {
+        "today" => Some(UsagePeriod::Today),
+        "last_7_days" => Some(UsagePeriod::Last7Days),
+        "last_30_days" => Some(UsagePeriod::Last30Days),
+        "all" => Some(UsagePeriod::All),
+        _ => None,
     }
 }
 
@@ -2327,6 +2530,44 @@ mod tests {
             2
         );
         assert_eq!(store.pricing_etag().expect("cleared etag"), None);
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn model_catalog_cache_is_atomic_and_keeps_lkg_on_invalid_payload() {
+        let root =
+            std::env::temp_dir().join(format!("quota-model-catalog-state-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let store = StateStore::open(&root).expect("state");
+        let value = serde_json::json!({
+            "schema_version": 1,
+            "revision": "model-test-1",
+            "models": [{
+                "canonical_id": "gpt-5.5",
+                "aliases": [{"reported_model":"gpt-5.5-alias","provider":"openai"}]
+            }]
+        });
+        store
+            .commit_model_catalog(&value, None)
+            .expect("catalog without etag");
+        assert_eq!(store.model_catalog_etag().expect("etag"), None);
+        assert_eq!(store.model_catalog().expect("catalog"), Some(value.clone()));
+
+        let invalid = serde_json::json!({
+            "schema_version": 1,
+            "revision": "model-test-2",
+            "models": [{
+                "canonical_id": "gpt-5.5",
+                "aliases": []
+            }]
+        });
+        assert!(matches!(
+            store.commit_model_catalog(&invalid, Some("\"model-test-2\"")),
+            Err(StateError::InvalidState)
+        ));
+        assert_eq!(store.model_catalog().expect("lkg"), Some(value));
+        assert_eq!(store.model_catalog_etag().expect("lkg etag"), None);
         drop(store);
         fs::remove_dir_all(root).expect("cleanup");
     }
