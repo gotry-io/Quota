@@ -6,8 +6,17 @@ struct ProviderBrandIcon: View {
   var size: CGFloat = 14
 
   var body: some View {
+    BrandAssetIcon(assetName: provider.brandIconAssetName, size: size)
+  }
+}
+
+struct BrandAssetIcon: View {
+  let assetName: String
+  var size: CGFloat = 14
+
+  var body: some View {
     Group {
-      if let image = ProviderBrandAssets.templateImage(for: provider) {
+      if let image = ProviderBrandAssets.templateImage(named: assetName) {
         Image(nsImage: image)
           .resizable()
           .renderingMode(.template)
@@ -16,7 +25,6 @@ struct ProviderBrandIcon: View {
       }
     }
     .frame(width: size, height: size)
-    // Keep drawing inside the frame; fixed assets should already be padded.
     .clipped()
     .foregroundStyle(QuotaPalette.ink)
     .accessibilityHidden(true)
@@ -25,26 +33,30 @@ struct ProviderBrandIcon: View {
 
 @MainActor
 enum ProviderBrandAssets {
-  private static var cache: [ProviderID: NSImage] = [:]
+  private static var cache: [String: NSImage] = [:]
 
   static func resourceURL(for provider: ProviderID) -> URL? {
+    resourceURL(named: provider.brandIconAssetName)
+  }
+
+  static func resourceURL(named assetName: String) -> URL? {
     if let appResource = Bundle.main.url(
-      forResource: provider.brandIconAssetName,
+      forResource: assetName,
       withExtension: "svg",
       subdirectory: "BrandIcons"
     ) {
       return appResource
     }
-    return Bundle.module.url(forResource: provider.brandIconAssetName, withExtension: "svg")
+    return Bundle.module.url(forResource: assetName, withExtension: "svg")
   }
 
   /// Loads the SVG and bakes a square template bitmap so CoreSVG path quirks
   /// and 1em intrinsic sizes cannot clip at menu-bar icon sizes.
-  static func templateImage(for provider: ProviderID) -> NSImage? {
-    if let cached = cache[provider] {
+  static func templateImage(named assetName: String) -> NSImage? {
+    if let cached = cache[assetName] {
       return cached
     }
-    guard let url = resourceURL(for: provider), let source = NSImage(contentsOf: url) else {
+    guard let url = resourceURL(named: assetName), let source = NSImage(contentsOf: url) else {
       return nil
     }
 
@@ -96,7 +108,7 @@ enum ProviderBrandAssets {
     let image = NSImage(size: NSSize(width: pointSize, height: pointSize))
     image.addRepresentation(rep)
     image.isTemplate = true
-    cache[provider] = image
+    cache[assetName] = image
     return image
   }
 }

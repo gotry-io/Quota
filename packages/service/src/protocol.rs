@@ -21,6 +21,7 @@ pub enum Operation {
     Login,
     CancelLogin,
     Logout,
+    SetUsageUpload,
     SetProviderConfig,
     RemoveProviderConfig,
     Shutdown,
@@ -222,6 +223,22 @@ pub enum EventName {
 #[serde(deny_unknown_fields)]
 pub struct EmptyPayload {}
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UsageSource {
+    Local,
+    Account,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UsagePeriod {
+    Today,
+    Last7Days,
+    Last30Days,
+    All,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderPayload {
@@ -235,6 +252,12 @@ pub struct SetProviderConfigPayload {
     pub api_key: String,
     #[serde(default)]
     pub base_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetUsageUploadPayload {
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -262,6 +285,12 @@ pub struct LoginResult {
 #[serde(deny_unknown_fields)]
 pub struct LogoutResult {
     pub status: AuthStatus,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct UsageUploadSetting {
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -341,12 +370,41 @@ pub struct QuotaOverviewItem {
 pub struct StateSnapshot {
     pub ipc_version: u32,
     pub revision: u64,
+    pub usage_upload_enabled: bool,
+    pub usage_periods: UsagePeriodCache,
     pub quota: ComponentState,
     pub usage: ComponentState,
     pub account: ComponentState,
     pub pricing: ComponentState,
     pub providers: Vec<ProviderConfigView>,
     pub overview: Vec<QuotaOverviewItem>,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct UsagePeriodCache {
+    pub local: UsagePeriodValues,
+    pub account: UsagePeriodValues,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct UsagePeriodValues {
+    pub today: Option<Value>,
+    pub last_7_days: Option<Value>,
+    pub last_30_days: Option<Value>,
+    pub all: Option<Value>,
+}
+
+impl UsagePeriodValues {
+    pub fn set(&mut self, period: UsagePeriod, value: Value) {
+        match period {
+            UsagePeriod::Today => self.today = Some(value),
+            UsagePeriod::Last7Days => self.last_7_days = Some(value),
+            UsagePeriod::Last30Days => self.last_30_days = Some(value),
+            UsagePeriod::All => self.all = Some(value),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

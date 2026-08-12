@@ -25,6 +25,22 @@ enum LocalServiceAuthStatus: String, Decodable, Sendable {
   case logoutPending = "logout_pending"
 }
 
+enum UsageSource: String, Codable, CaseIterable, Identifiable, Sendable {
+  case local
+  case account
+
+  var id: Self { self }
+}
+
+enum UsagePeriod: String, Codable, CaseIterable, Identifiable, Sendable {
+  case today
+  case last7Days = "last_7_days"
+  case last30Days = "last_30_days"
+  case all
+
+  var id: Self { self }
+}
+
 enum LocalServiceErrorCode: String, Decodable, Sendable {
   case invalidRequest = "invalid_request"
   case unsupportedOperation = "unsupported_operation"
@@ -273,6 +289,8 @@ extension LocalServiceOverviewItem {
 struct LocalServiceState: Decodable, Sendable {
   let ipcVersion: Int
   let revision: Int
+  let usageUploadEnabled: Bool
+  let usagePeriods: LocalServiceUsagePeriodCache
   let quota: LocalServiceComponent<QuotaCollectionReport>
   let usage: LocalServiceComponent<LocalUsageReport>
   let account: LocalServiceComponent<LocalServiceAccountState>
@@ -283,6 +301,8 @@ struct LocalServiceState: Decodable, Sendable {
   private enum CodingKeys: String, CodingKey {
     case ipcVersion
     case revision
+    case usageUploadEnabled
+    case usagePeriods
     case quota
     case usage
     case account
@@ -332,11 +352,14 @@ struct LocalServiceState: Decodable, Sendable {
 extension LocalServiceState {
   init(from decoder: Decoder) throws {
     try decoder.rejectUnknownWireKeys([
-      "ipcVersion", "revision", "quota", "usage", "account", "pricing", "providers", "overview",
+      "ipcVersion", "revision", "usageUploadEnabled", "usagePeriods", "quota", "usage",
+      "account", "pricing", "providers", "overview",
     ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     ipcVersion = try container.decode(Int.self, forKey: .ipcVersion)
     revision = try container.decode(Int.self, forKey: .revision)
+    usageUploadEnabled = try container.decode(Bool.self, forKey: .usageUploadEnabled)
+    usagePeriods = try container.decode(LocalServiceUsagePeriodCache.self, forKey: .usagePeriods)
     quota = try container.decode(LocalServiceComponent<QuotaCollectionReport>.self, forKey: .quota)
     usage = try container.decode(LocalServiceComponent<LocalUsageReport>.self, forKey: .usage)
     account = try container.decode(
@@ -403,6 +426,119 @@ struct LocalServiceLogoutResult: Decodable, Sendable {
     case status
   }
 
+}
+
+struct LocalServiceUsageUploadSetting: Decodable, Sendable {
+  let enabled: Bool
+
+  private enum CodingKeys: String, CodingKey {
+    case enabled
+  }
+}
+
+struct LocalServiceUsageDetail: Decodable, Equatable, Sendable {
+  let range: UsageDateRange
+  let usage: LocalUsagePeriodSummary
+  let fallbackModels: [LocalUsageModelSummary]
+  let incomplete: Bool
+  let detailsTruncated: Bool
+
+  private enum CodingKeys: String, CodingKey {
+    case range
+    case usage
+    case fallbackModels
+    case incomplete
+    case detailsTruncated
+  }
+
+  var isValid: Bool {
+    range.isValid && usage.isValid && fallbackModels.count <= 1_000
+      && fallbackModels.allSatisfy(\.isValid)
+      && (usage.clients.isEmpty || fallbackModels.isEmpty)
+  }
+}
+
+struct LocalServiceUsagePeriodCache: Decodable, Equatable, Sendable {
+  let local: LocalServiceUsagePeriodValues
+  let account: LocalServiceUsagePeriodValues
+
+  private enum CodingKeys: String, CodingKey {
+    case local
+    case account
+  }
+
+  func detail(source: UsageSource, period: UsagePeriod) -> LocalServiceUsageDetail? {
+    let values = source == .local ? local : account
+    return switch period {
+    case .today: values.today
+    case .last7Days: values.last7Days
+    case .last30Days: values.last30Days
+    case .all: values.all
+    }
+  }
+}
+
+struct LocalServiceUsagePeriodValues: Decodable, Equatable, Sendable {
+  let today: LocalServiceUsageDetail?
+  let last7Days: LocalServiceUsageDetail?
+  let last30Days: LocalServiceUsageDetail?
+  let all: LocalServiceUsageDetail?
+
+  private enum CodingKeys: String, CodingKey {
+    case today
+    case last7Days
+    case last30Days
+    case all
+  }
+}
+
+extension LocalServiceUsagePeriodCache {
+  init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys(["local", "account"])
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    local = try container.decode(LocalServiceUsagePeriodValues.self, forKey: .local)
+    account = try container.decode(LocalServiceUsagePeriodValues.self, forKey: .account)
+  }
+}
+
+extension LocalServiceUsagePeriodValues {
+  init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys(["today", "last7Days", "last30Days", "all"])
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    today = try container.decodeIfPresent(LocalServiceUsageDetail.self, forKey: .today)
+    last7Days = try container.decodeIfPresent(LocalServiceUsageDetail.self, forKey: .last7Days)
+    last30Days = try container.decodeIfPresent(LocalServiceUsageDetail.self, forKey: .last30Days)
+    all = try container.decodeIfPresent(LocalServiceUsageDetail.self, forKey: .all)
+  }
+}
+
+extension LocalServiceUsageDetail {
+  init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys([
+      "range", "usage", "fallbackModels", "incomplete", "detailsTruncated",
+    ])
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    range = try container.decode(UsageDateRange.self, forKey: .range)
+    usage = try container.decode(LocalUsagePeriodSummary.self, forKey: .usage)
+    fallbackModels = try container.decode([LocalUsageModelSummary].self, forKey: .fallbackModels)
+    incomplete = try container.decode(Bool.self, forKey: .incomplete)
+    detailsTruncated = try container.decode(Bool.self, forKey: .detailsTruncated)
+    guard isValid else {
+      throw DecodingError.dataCorruptedError(
+        forKey: .usage,
+        in: container,
+        debugDescription: "Invalid local service Usage detail."
+      )
+    }
+  }
+}
+
+extension LocalServiceUsageUploadSetting {
+  init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys(["enabled"])
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    enabled = try container.decode(Bool.self, forKey: .enabled)
+  }
 }
 
 extension LocalServiceLogoutResult {

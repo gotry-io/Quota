@@ -1,8 +1,8 @@
 use super::{
-    BillingChannel, ContextBucket, CoverageReasonCode, CoverageStatus, MAX_JSONL_LINE_BYTES,
-    MAX_USAGE_BREAKDOWNS, MAX_USAGE_ROWS, NormalizedUsageEvent, UsageAgent, UsageFileIndex,
-    UsageHourlyFact, UsageScanOptions, aggregate_usage_events, build_usage_breakdowns,
-    build_usage_breakdowns_with_status, fold_usage_facts, scan_claude_usage, scan_codex_usage,
+    BillingChannel, ContextBucket, CoverageReasonCode, CoverageStatus, InferenceProvider,
+    MAX_JSONL_LINE_BYTES, MAX_USAGE_MODELS, MAX_USAGE_ROWS, NormalizedUsageEvent, UsageAgent,
+    UsageFileIndex, UsageHourlyFact, UsageScanOptions, aggregate_usage_events,
+    build_local_usage_summary, fold_usage_facts, scan_claude_usage, scan_codex_usage,
     scan_grok_usage, scan_local_usage, scan_opencode_usage, scan_pi_usage,
 };
 use crate::pricing::{
@@ -10,7 +10,6 @@ use crate::pricing::{
     UsageCostBasis, UsageCostMode, UsageCostStatus, UsageUnpricedReason, calculate_usage_cost,
     calculate_usage_row_cost, validate_pricing_catalog,
 };
-use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use num_bigint::BigUint;
 use rusqlite::{Connection, params};
 use serde_json::{Value, json};
@@ -75,7 +74,7 @@ fn parser_fixtures_preserve_normalized_fields_and_coverage() {
         let filename = if agent == UsageAgent::Codex {
             format!("rollout-{name}.jsonl")
         } else if agent == UsageAgent::Grok {
-            "events.jsonl".into()
+            "updates.jsonl".into()
         } else {
             format!("{name}.jsonl")
         };
@@ -143,8 +142,10 @@ fn parser_fixtures_preserve_normalized_fields_and_coverage() {
                 assert_eq!(event.cache_write_inferred_tokens, 5);
                 assert_eq!(event.output_tokens, 30);
                 assert_eq!(event.reasoning_tokens, 10);
-                assert_eq!(event.billable_tools.web_search, 1);
+                assert_eq!(event.requests, 3);
+                assert_eq!(event.source_cost_covered_requests, 3);
                 assert_eq!(event.source_cost_microusd.as_deref(), Some("12"));
+                assert_eq!(event.occurred_at, "2026-08-02T09:01:00.000Z");
             }
             UsageAgent::Pi => {
                 let event = &result.records[0].event;
@@ -539,9 +540,6 @@ fn opencode_legacy_and_pricing_are_protocol_safe() {
         .expect("calculate cost");
     assert_eq!(cost.status, UsageCostStatus::Complete);
     assert_eq!(cost.amount_microusd.as_deref(), Some("335"));
-    let breakdowns = build_usage_breakdowns(&rows, Some(&catalog), UsageCostMode::Calculate, true)
-        .expect("breakdowns");
-    assert!(!breakdowns.is_empty());
     let _ = fs::remove_dir_all(path);
 }
 
@@ -613,12 +611,11 @@ fn opencode_sqlite_reads_completed_or_created_and_ignores_empty_models() {
 fn grok_ticks_are_exact_and_overflow_is_partial() {
     let path = root("grok-ticks");
     let lines = [
-        json!({"type":"turn_started","ts":"2026-08-02T09:00:00Z","model_id":"grok-4.5"}),
-        json!({"type":"usage","usage":{"input_tokens":1,"output_tokens":1,"cost_in_usd_ticks":"5000"}}),
-        json!({"type":"usage","usage":{"input_tokens":1,"output_tokens":1,"cost_in_usd_ticks":"340282366920938463463374607431768211455"}}),
+        json!({"method":"_x.ai/session/update","timestamp":1785661260_u64,"params":{"update":{"sessionUpdate":"turn_completed","usage":{"inputTokens":1,"outputTokens":1,"totalTokens":2,"cachedReadTokens":0,"cacheCreationTokens":0,"reasoningTokens":0,"modelCalls":1,"costUsdTicks":5000,"modelUsage":{"grok-4.5":{"inputTokens":1,"outputTokens":1,"totalTokens":2,"cachedReadTokens":0,"cacheCreationTokens":0,"reasoningTokens":0,"modelCalls":1,"costUsdTicks":5000}},"numTurns":1}}}}),
+        json!({"method":"_x.ai/session/update","timestamp":1785661320_u64,"params":{"update":{"sessionUpdate":"turn_completed","usage":{"inputTokens":1,"outputTokens":1,"totalTokens":2,"cachedReadTokens":0,"cacheCreationTokens":0,"reasoningTokens":0,"modelCalls":1,"costUsdTicks":u64::MAX,"modelUsage":{"grok-4.5":{"inputTokens":1,"outputTokens":1,"totalTokens":2,"cachedReadTokens":0,"cacheCreationTokens":0,"reasoningTokens":0,"modelCalls":1,"costUsdTicks":u64::MAX}},"numTurns":1}}}}),
     ];
     fs::write(
-        path.join("events.jsonl"),
+        path.join("updates.jsonl"),
         lines
             .iter()
             .map(serde_json::Value::to_string)
@@ -626,7 +623,9 @@ fn grok_ticks_are_exact_and_overflow_is_partial() {
             .join("\n"),
     )
     .expect("write Grok ticks fixture");
+    fs::write(path.join("events.jsonl"), fixture("grok")).expect("write ignored old Grok log");
     let result = scan_grok_usage(&options(&path)).expect("scan Grok ticks");
+    assert_eq!(result.scanned_source_count, 1);
     assert_eq!(result.records.len(), 1);
     assert_eq!(
         result.records[0].event.source_cost_microusd.as_deref(),
@@ -803,7 +802,7 @@ fn aggregation_rejects_invalid_ranges_subsets_timezones_and_safe_integer_overflo
 }
 
 #[test]
-fn usage_internal_rows_models_and_breakdowns_preserve_limits_semantics() {
+fn usage_internal_rows_and_models_preserve_limits_semantics() {
     let models = (0..=64)
         .map(|index| test_event("2026-08-02T00:01:00Z", &format!("gpt-{index}"), 0))
         .collect::<Vec<_>>();
@@ -827,24 +826,6 @@ fn usage_internal_rows_models_and_breakdowns_preserve_limits_semantics() {
     assert_eq!(internal_rows.len(), MAX_USAGE_ROWS + 1);
     let internal_totals = fold_usage_facts(&internal_rows).expect("internal row totals");
     assert_eq!(internal_totals.requests, (MAX_USAGE_ROWS + 1) as u64);
-
-    let start = DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
-        .expect("valid breakdown start")
-        .with_timezone(&Utc);
-    let breakdown_rows = (0..=MAX_USAGE_BREAKDOWNS)
-        .map(|index| {
-            let bucket =
-                (start + Duration::hours(index as i64)).to_rfc3339_opts(SecondsFormat::Secs, true);
-            test_fact(&bucket, "gpt-5")
-        })
-        .collect::<Vec<_>>();
-    let breakdowns = build_usage_breakdowns(&breakdown_rows, None, UsageCostMode::Reported, true)
-        .expect("bounded breakdown detail");
-    assert_eq!(breakdowns.len(), MAX_USAGE_BREAKDOWNS);
-    let (_, truncated) =
-        build_usage_breakdowns_with_status(&breakdown_rows, None, UsageCostMode::Reported, true)
-            .expect("bounded breakdown status");
-    assert!(truncated);
 }
 
 #[test]
@@ -1119,15 +1100,160 @@ fn pricing_caps_unpriced_detail_without_losing_rows_or_status() {
 }
 
 #[test]
-fn usage_breakdowns_cap_detail_without_failing_totals() {
-    let rows = (0..1_001)
+fn local_summary_caps_model_detail_without_failing_totals() {
+    let rows = (0..=MAX_USAGE_MODELS)
         .map(|index| test_fact_with_input("2026-08-02T12:00:00Z", &format!("model-{index}"), 1))
         .collect::<Vec<_>>();
-    let (breakdowns, truncated) =
-        build_usage_breakdowns_with_status(&rows, None, UsageCostMode::Calculate, false)
-            .expect("bounded breakdowns");
-    assert_eq!(breakdowns.len(), 1_000);
-    assert!(truncated);
+    let summary = build_local_usage_summary(&rows, None, None).expect("bounded models");
+    assert_eq!(
+        summary.clients[0].providers[0].models.len(),
+        MAX_USAGE_MODELS
+    );
+    assert!(summary.models_truncated);
+    assert_eq!(summary.totals.messages, (MAX_USAGE_MODELS + 1) as u64);
+}
+
+#[test]
+fn model_key_collision_keeps_canonical_and_raw_groups_separate() {
+    let catalog = serde_json::from_value::<crate::model_catalog::ModelCatalog>(json!({
+        "schema_version": 1,
+        "revision": "test-1",
+        "models": [{
+            "canonical_id": "gpt-5.5",
+            "aliases": [{"reported_model":"gpt-5.5-alias","provider":"openai"}]
+        }]
+    }))
+    .expect("model catalog");
+    let rows = vec![
+        test_fact("2026-08-02T12:00:00Z", "gpt-5.5"),
+        test_fact("2026-08-02T13:00:00Z", "GPT-5.5"),
+    ];
+    let summary = build_local_usage_summary(&rows, None, Some(&catalog)).expect("summary");
+    let models = &summary.clients[0].providers[0].models;
+    assert!(!summary.models_truncated);
+    assert_eq!(models.len(), 2);
+    assert_eq!(
+        models.iter().map(|item| item.totals.messages).sum::<u64>(),
+        2
+    );
+    assert_eq!(
+        models
+            .iter()
+            .map(|item| item.model.as_str())
+            .collect::<Vec<_>>(),
+        vec!["gpt-5.5", "GPT-5.5"]
+    );
+}
+
+#[test]
+fn model_catalog_revision_regroups_retained_rows_without_rewriting_them() {
+    let mut catalog = serde_json::from_value::<crate::model_catalog::ModelCatalog>(json!({
+        "schema_version": 1,
+        "revision": "test-before",
+        "models": [{
+            "canonical_id": "gpt-5.5",
+            "aliases": [{"reported_model":"gpt-5.5-alias","provider":"openai"}]
+        }]
+    }))
+    .expect("model catalog");
+    let rows = vec![test_fact("2026-08-02T12:00:00Z", "GPT-5.5[1m]")];
+    let summarize = |catalog: &crate::model_catalog::ModelCatalog| {
+        build_local_usage_summary(&rows, None, Some(catalog))
+            .expect("summary")
+            .clients
+            .into_iter()
+            .next()
+            .and_then(|client| client.providers.into_iter().next())
+            .and_then(|provider| provider.models.into_iter().next())
+            .expect("model group")
+    };
+
+    let before = summarize(&catalog);
+    catalog.revision = "test-after".into();
+    catalog.models[0].aliases.push(
+        serde_json::from_value(json!({
+            "reported_model": "GPT-5.5[1m]",
+            "provider": "openai",
+            "client": "codex",
+            "effective_from": "2026-04-24"
+        }))
+        .expect("alias"),
+    );
+    let after = summarize(&catalog);
+
+    assert_eq!(before.model, "GPT-5.5[1m]");
+    assert_eq!(after.model, "gpt-5.5");
+    assert_eq!(after.totals, before.totals);
+    assert_eq!(after.cost, before.cost);
+    assert_eq!(rows[0].model, "GPT-5.5[1m]");
+}
+
+#[test]
+fn local_summary_groups_client_provider_model_and_counts_output_messages() {
+    let mut codex = test_fact("2026-08-02T12:00:00Z", "gpt-5.5");
+    codex.input_tokens = 100;
+    codex.cache_read_tokens = 20;
+    codex.cache_write_5m_tokens = 10;
+    codex.output_tokens = 40;
+    codex.reasoning_tokens = 15;
+    codex.requests = 2;
+    let mut anthropic = test_fact("2026-08-02T13:00:00Z", "gpt-5.5");
+    anthropic.agent = UsageAgent::Codex;
+    anthropic.billing_channel = BillingChannel::AnthropicDirect;
+    anthropic.input_tokens = 50;
+    anthropic.cache_write_inferred_tokens = 5;
+    anthropic.output_tokens = 10;
+    anthropic.requests = 1;
+
+    let summary = build_local_usage_summary(&[codex, anthropic], None, None).expect("summary");
+
+    assert_eq!(summary.totals.total_tokens, 200);
+    assert_eq!(summary.totals.input_tokens, 150);
+    assert_eq!(summary.totals.output_tokens, 50);
+    assert_eq!(summary.totals.cache_read_input_tokens, 20);
+    assert_eq!(summary.totals.cache_write_input_tokens, 15);
+    assert_eq!(summary.totals.reasoning_tokens, 15);
+    assert_eq!(summary.totals.messages, 3);
+    assert_eq!(summary.clients.len(), 1);
+    assert_eq!(summary.clients[0].client, UsageAgent::Codex);
+    assert_eq!(summary.clients[0].providers.len(), 2);
+    assert_eq!(
+        summary.clients[0].providers[0].provider,
+        InferenceProvider::Openai
+    );
+    assert_eq!(summary.clients[0].providers[0].models[0].model, "gpt-5.5");
+    assert_eq!(
+        summary.clients[0].providers[1].provider,
+        InferenceProvider::Anthropic
+    );
+    assert_eq!(summary.clients[0].providers[1].models[0].model, "gpt-5.5");
+}
+
+#[test]
+fn local_summary_uses_complete_source_cost_when_catalog_cannot_price_a_model() {
+    let mut grok = test_fact("2026-08-02T12:00:00Z", "grok-4.5-build");
+    grok.agent = UsageAgent::Grok;
+    grok.billing_channel = BillingChannel::XaiDirect;
+    grok.input_tokens = 100;
+    grok.output_tokens = 20;
+    grok.requests = 3;
+    grok.source_cost_microusd = Some("12699".into());
+    grok.source_cost_covered_requests = 3;
+    let catalog = pricing_catalog(Vec::new());
+
+    let summary = build_local_usage_summary(&[grok], Some(&catalog), None).expect("summary");
+
+    assert_eq!(summary.cost.mode, UsageCostMode::Auto);
+    assert_eq!(summary.cost.basis, UsageCostBasis::Reported);
+    assert_eq!(summary.cost.status, UsageCostStatus::Complete);
+    assert_eq!(summary.cost.amount_microusd.as_deref(), Some("12699"));
+    assert_eq!(
+        summary.clients[0].providers[0].models[0]
+            .cost
+            .amount_microusd
+            .as_deref(),
+        Some("12699")
+    );
 }
 
 #[test]

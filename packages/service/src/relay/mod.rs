@@ -95,7 +95,7 @@ impl RelayClient {
     }
 
     #[cfg(test)]
-    fn for_test(origin: &str) -> Result<Self, RelayError> {
+    pub(crate) fn for_test(origin: &str) -> Result<Self, RelayError> {
         Self::from_origin(origin, true)
     }
 
@@ -226,14 +226,56 @@ impl RelayClient {
     }
 
     pub fn account_summary(&self, token: &str, query: &str) -> Result<Value, RelayError> {
-        let suffix = if query.is_empty() {
-            "?usage_agents=all".to_owned()
-        } else if query.contains("usage_agents=") {
-            format!("?{query}")
-        } else {
-            format!("?{query}&usage_agents=all")
-        };
-        self.get_json(&format!("/api/v2/account/summary{suffix}"), token, 200)
+        self.account_usage_query("/api/v2/account/summary", token, query)
+    }
+
+    pub fn account_usage_summary(&self, token: &str, query: &str) -> Result<Value, RelayError> {
+        let response = self.account_usage_query("/api/v2/account/usage/summary", token, query)?;
+        validate_account_usage_response(&response)?;
+        response
+            .get("usage")
+            .cloned()
+            .ok_or(RelayError::InvalidResponse)
+    }
+
+    fn account_usage_query(
+        &self,
+        path: &str,
+        token: &str,
+        query: &str,
+    ) -> Result<Value, RelayError> {
+        let mut parts = query
+            .split('&')
+            .filter(|part| !part.is_empty())
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        if !parts.iter().any(|part| part.starts_with("usage_agents=")) {
+            parts.push("usage_agents=all".to_owned());
+        }
+        let added_usage_clients = !parts.iter().any(|part| part.starts_with("usage_clients="));
+        if added_usage_clients {
+            parts.push("usage_clients=1".to_owned());
+        }
+        let added_model_catalog = !parts.iter().any(|part| part.starts_with("model_catalog="));
+        if added_model_catalog {
+            parts.push("model_catalog=1".to_owned());
+        }
+        let mut result = self.get_json(&format!("{path}?{}", parts.join("&")), token, 200);
+        if (added_usage_clients || added_model_catalog)
+            && matches!(
+                &result,
+                Err(RelayError::Rejected { code, status: 400 }) if code == "invalid_request"
+            )
+        {
+            // Released Relay versions reject these new opt-ins. Remove this after QuotaBar and
+            // QuotaCLI 0.0.10 have completed their compatibility window.
+            parts.retain(|part| {
+                !(added_usage_clients && part.starts_with("usage_clients="))
+                    && !(added_model_catalog && part.starts_with("model_catalog="))
+            });
+            result = self.get_json(&format!("{path}?{}", parts.join("&")), token, 200);
+        }
+        result
     }
 
     pub fn pricing_catalog(
@@ -250,6 +292,36 @@ impl RelayClient {
         let response = self.request(
             self.client
                 .get(self.url("/api/v2/pricing/catalog?usage_agents=all"))
+                .headers(headers),
+            None,
+            None,
+        )?;
+        let next_etag = response
+            .headers()
+            .get(ETAG)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        if response.status().as_u16() == 304 {
+            return Ok((next_etag, None));
+        }
+        let response = check_status(response, 200)?;
+        Ok((next_etag, Some(read_json(response)?)))
+    }
+
+    pub fn model_catalog(
+        &self,
+        etag: Option<&str>,
+    ) -> Result<(Option<String>, Option<Value>), RelayError> {
+        let mut headers = HeaderMap::new();
+        if let Some(etag) = etag {
+            headers.insert(
+                IF_NONE_MATCH,
+                HeaderValue::from_str(etag).map_err(|_| RelayError::InvalidResponse)?,
+            );
+        }
+        let response = self.request(
+            self.client
+                .get(self.url("/api/v2/model/catalog"))
                 .headers(headers),
             None,
             None,
@@ -1056,6 +1128,15 @@ fn validate_account_summary(value: &Value) -> Result<(), RelayError> {
     Ok(())
 }
 
+fn validate_account_usage_response(value: &Value) -> Result<(), RelayError> {
+    validate_response_object(value, &["protocol_version", "usage"])?;
+    let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
+    if object.get("protocol_version").and_then(Value::as_i64) != Some(2) {
+        return Err(RelayError::InvalidResponse);
+    }
+    validate_usage_summary(object.get("usage").ok_or(RelayError::InvalidResponse)?)
+}
+
 fn validate_account_record(value: &Value) -> Result<(), RelayError> {
     validate_response_object(value, &["account_id", "display_label", "created_at"])?;
     let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
@@ -1310,12 +1391,14 @@ fn validate_usage_summary(value: &Value) -> Result<(), RelayError> {
     let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
     let required = ["range", "totals", "cost", "coverage", "breakdowns"];
     if object.len() < required.len()
-        || object.len() > required.len() + 2
+        || object.len() > required.len() + 4
         || required.iter().any(|key| !object.contains_key(*key))
         || object.keys().any(|key| {
             !required.contains(&key.as_str())
                 && key != "breakdowns_truncated"
                 && key != "coverage_truncated"
+                && key != "model_catalog_revision"
+                && key != "clients"
         })
         || object
             .get("breakdowns_truncated")
@@ -1323,6 +1406,9 @@ fn validate_usage_summary(value: &Value) -> Result<(), RelayError> {
         || object
             .get("coverage_truncated")
             .is_some_and(|value| value != &Value::Bool(true))
+        || object
+            .get("model_catalog_revision")
+            .is_some_and(|value| !value.as_str().is_some_and(is_opaque))
     {
         return Err(RelayError::InvalidResponse);
     }
@@ -1368,6 +1454,106 @@ fn validate_usage_summary(value: &Value) -> Result<(), RelayError> {
         }
         validate_usage_totals(object.get("totals").ok_or(RelayError::InvalidResponse)?)?;
         validate_usage_cost(object.get("cost").ok_or(RelayError::InvalidResponse)?)?;
+    }
+    if let Some(clients) = object.get("clients") {
+        validate_usage_clients(clients)?;
+    }
+    Ok(())
+}
+
+fn validate_usage_clients(value: &Value) -> Result<(), RelayError> {
+    let clients = value
+        .as_array()
+        .filter(|clients| clients.len() <= 5)
+        .ok_or(RelayError::InvalidResponse)?;
+    for client in clients {
+        validate_response_object(client, &["client", "totals", "cost", "providers"])?;
+        let object = client.as_object().ok_or(RelayError::InvalidResponse)?;
+        if !matches!(
+            object.get("client").and_then(Value::as_str),
+            Some("codex" | "claude_code" | "grok" | "opencode" | "pi")
+        ) {
+            return Err(RelayError::InvalidResponse);
+        }
+        validate_usage_summary_totals(object.get("totals").ok_or(RelayError::InvalidResponse)?)?;
+        validate_usage_cost(object.get("cost").ok_or(RelayError::InvalidResponse)?)?;
+        let providers = object
+            .get("providers")
+            .and_then(Value::as_array)
+            .filter(|providers| providers.len() <= 8)
+            .ok_or(RelayError::InvalidResponse)?;
+        for provider in providers {
+            validate_response_object(provider, &["provider", "totals", "cost", "models"])?;
+            let object = provider.as_object().ok_or(RelayError::InvalidResponse)?;
+            if !matches!(
+                object.get("provider").and_then(Value::as_str),
+                Some(
+                    "openai"
+                        | "azure_openai"
+                        | "anthropic"
+                        | "aws_bedrock"
+                        | "google_vertex"
+                        | "openrouter"
+                        | "xai"
+                        | "unknown"
+                )
+            ) {
+                return Err(RelayError::InvalidResponse);
+            }
+            validate_usage_summary_totals(
+                object.get("totals").ok_or(RelayError::InvalidResponse)?,
+            )?;
+            validate_usage_cost(object.get("cost").ok_or(RelayError::InvalidResponse)?)?;
+            let models = object
+                .get("models")
+                .and_then(Value::as_array)
+                .filter(|models| models.len() <= 1_000)
+                .ok_or(RelayError::InvalidResponse)?;
+            for model in models {
+                validate_response_object(model, &["model", "totals", "cost"])?;
+                let object = model.as_object().ok_or(RelayError::InvalidResponse)?;
+                if !object
+                    .get("model")
+                    .and_then(Value::as_str)
+                    .is_some_and(valid_model_text)
+                {
+                    return Err(RelayError::InvalidResponse);
+                }
+                validate_usage_summary_totals(
+                    object.get("totals").ok_or(RelayError::InvalidResponse)?,
+                )?;
+                validate_usage_cost(object.get("cost").ok_or(RelayError::InvalidResponse)?)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_usage_summary_totals(value: &Value) -> Result<(), RelayError> {
+    let keys = [
+        "total_tokens",
+        "input_tokens",
+        "output_tokens",
+        "cache_read_input_tokens",
+        "cache_write_input_tokens",
+        "reasoning_tokens",
+        "messages",
+    ];
+    validate_response_object(value, &keys)?;
+    let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
+    let count = |key: &str| object.get(key).and_then(safe_u64);
+    let input = count("input_tokens").ok_or(RelayError::InvalidResponse)?;
+    let output = count("output_tokens").ok_or(RelayError::InvalidResponse)?;
+    let cache_read = count("cache_read_input_tokens").ok_or(RelayError::InvalidResponse)?;
+    let cache_write = count("cache_write_input_tokens").ok_or(RelayError::InvalidResponse)?;
+    if count("total_tokens") != input.checked_add(output)
+        || cache_read
+            .checked_add(cache_write)
+            .is_none_or(|cached| cached > input)
+        || count("reasoning_tokens").is_none_or(|reasoning| reasoning > output)
+        || count("messages").is_none()
+    {
+        return Err(RelayError::InvalidResponse);
     }
     Ok(())
 }
@@ -1914,6 +2100,70 @@ impl AccountManager {
     /// rotation; this process is the sole local writer, so writing the response is atomic at the
     /// SQLite row boundary.
     pub fn refresh_account_state(&self, cancel: &AtomicBool) -> Result<Value, BackendError> {
+        let (summary, session) = self.read_account_summary("cost_mode=calculate", cancel)?;
+        let account_id = session
+            .get("account_id")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        let device_id = session
+            .get("device_id")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        let device_generation = session.get("device_generation").and_then(Value::as_u64);
+        Ok(serde_json::to_value(AccountComponentValue {
+            auth_status: AuthStatus::SignedIn,
+            account_id,
+            device_id,
+            device_generation,
+            account_summary: Some(summary),
+        })
+        .unwrap_or(Value::Null))
+    }
+
+    pub fn account_usage(&self, query: &str, cancel: &AtomicBool) -> Result<Value, BackendError> {
+        let (mut session, mut session_epoch) = self
+            .state
+            .session_snapshot()
+            .map_err(|_| BackendError::unavailable())?
+            .ok_or_else(session_changed_error)?;
+        if !is_active_session(&session) {
+            return Err(session_changed_error());
+        }
+        if cancel.load(Ordering::Acquire) {
+            return Err(BackendError::cancelled());
+        }
+        let account_token =
+            self.ensure_fresh_session(&mut session, &mut session_epoch, "account")?;
+        let usage = self
+            .client
+            .account_usage_summary(&account_token, query)
+            .map_err(|error| BackendError {
+                error: relay_error_for_backend(error),
+            })?;
+        if !self
+            .state
+            .active_session_at_epoch(session_epoch)
+            .map_err(|_| BackendError::unavailable())?
+        {
+            return Err(session_changed_error());
+        }
+        session["account"]["last_refreshed_at"] = Value::String(crate::state::now_rfc3339());
+        if self
+            .state
+            .write_session_json_if_epoch(&session, session_epoch)
+            .map_err(|_| BackendError::unavailable())?
+            .is_none()
+        {
+            return Err(session_changed_error());
+        }
+        Ok(usage)
+    }
+
+    fn read_account_summary(
+        &self,
+        query: &str,
+        cancel: &AtomicBool,
+    ) -> Result<(Value, Value), BackendError> {
         let (mut session, mut session_epoch) = self
             .state
             .session_snapshot()
@@ -1940,7 +2190,7 @@ impl AccountManager {
             self.ensure_fresh_session(&mut session, &mut session_epoch, "account")?;
         let summary = self
             .client
-            .account_summary(&account_token, "cost_mode=calculate")
+            .account_summary(&account_token, query)
             .map_err(|error| BackendError {
                 error: relay_error_for_backend(error),
             })?;
@@ -1966,23 +2216,7 @@ impl AccountManager {
         {
             return Err(session_changed_error());
         }
-        let account_id = session
-            .get("account_id")
-            .and_then(Value::as_str)
-            .map(str::to_owned);
-        let device_id = session
-            .get("device_id")
-            .and_then(Value::as_str)
-            .map(str::to_owned);
-        let device_generation = session.get("device_generation").and_then(Value::as_u64);
-        Ok(serde_json::to_value(AccountComponentValue {
-            auth_status: AuthStatus::SignedIn,
-            account_id,
-            device_id,
-            device_generation,
-            account_summary: Some(summary),
-        })
-        .unwrap_or(Value::Null))
+        Ok((summary, session))
     }
 
     pub fn sync_control_and_update(&self) -> Result<Value, BackendError> {
@@ -2599,9 +2833,7 @@ fn wait_for_callback(
         match listener.accept() {
             Ok((mut stream, _)) => {
                 if let Some(code) = parse_callback(&mut stream, expected_state) {
-                    let _ = stream.write_all(
-                        b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nCache-Control: no-store\r\nConnection: close\r\n\r\nQuota login complete. You can close this window.",
-                    );
+                    let _ = stream.write_all(BROWSER_CALLBACK_SUCCESS_RESPONSE);
                     return Ok(code);
                 }
                 let _ = stream.write_all(
@@ -2615,6 +2847,8 @@ fn wait_for_callback(
         }
     }
 }
+
+const BROWSER_CALLBACK_SUCCESS_RESPONSE: &[u8] = b"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nCache-Control: no-store\r\nReferrer-Policy: no-referrer\r\nContent-Security-Policy: default-src 'none'; script-src 'unsafe-inline'\r\nConnection: close\r\n\r\n<!doctype html><meta charset=utf-8><title>Quota</title><p>Quota login complete. You can close this window.</p><script>history.replaceState(null,'','/callback');window.close()</script>";
 
 fn parse_callback(stream: &mut TcpStream, expected_state: &str) -> Option<String> {
     stream.set_read_timeout(Some(Duration::from_secs(2))).ok()?;
@@ -3307,9 +3541,85 @@ mod tests {
             }
         });
         assert!(validate_account_summary(&value).is_ok());
+        let mut structured = value.clone();
+        structured["usage"]["clients"] = serde_json::json!([{
+            "client": "codex",
+            "totals": {
+                "total_tokens": 12,
+                "input_tokens": 10,
+                "output_tokens": 2,
+                "cache_read_input_tokens": 0,
+                "cache_write_input_tokens": 0,
+                "reasoning_tokens": 0,
+                "messages": 1
+            },
+            "cost": valid_cost(),
+            "providers": [{
+                "provider": "openai",
+                "totals": {
+                    "total_tokens": 12,
+                    "input_tokens": 10,
+                    "output_tokens": 2,
+                    "cache_read_input_tokens": 0,
+                    "cache_write_input_tokens": 0,
+                    "reasoning_tokens": 0,
+                    "messages": 1
+                },
+                "cost": valid_cost(),
+                "models": [{
+                    "model": "gpt-5.6-sol",
+                    "totals": {
+                        "total_tokens": 12,
+                        "input_tokens": 10,
+                        "output_tokens": 2,
+                        "cache_read_input_tokens": 0,
+                        "cache_write_input_tokens": 0,
+                        "reasoning_tokens": 0,
+                        "messages": 1
+                    },
+                    "cost": valid_cost()
+                }]
+            }]
+        }]);
+        assert!(validate_account_summary(&structured).is_ok());
+        structured["usage"]["clients"][0]["totals"]["total_tokens"] = serde_json::json!(13);
+        assert!(validate_account_summary(&structured).is_err());
+
         let mut extra = value;
         extra["account"]["unexpected"] = serde_json::json!(true);
         assert!(validate_account_summary(&extra).is_err());
+    }
+
+    #[test]
+    fn account_usage_retries_once_without_new_opt_ins_for_released_relay() {
+        let usage = serde_json::json!({
+            "range": {"from": "2026-08-06", "to": "2026-08-12"},
+            "totals": valid_totals(),
+            "cost": valid_cost(),
+            "coverage": [],
+            "breakdowns": []
+        });
+        let (origin, server) = spawn_mock_server(vec![
+            http_json(
+                400,
+                None,
+                &serde_json::json!({"error": {"code": "invalid_request"}}),
+            ),
+            http_json(
+                200,
+                None,
+                &serde_json::json!({"protocol_version": 2, "usage": usage}),
+            ),
+        ]);
+        let client = RelayClient::for_test(&origin).expect("test client");
+        let result = client
+            .account_usage_summary(
+                "account-token",
+                "cost_mode=calculate&from=2026-08-06&to=2026-08-12",
+            )
+            .expect("Usage summary");
+        assert_eq!(result["range"]["from"], "2026-08-06");
+        server.join().expect("mock server");
     }
 
     #[test]
@@ -3340,6 +3650,15 @@ mod tests {
         invalid["expires_in"] = serde_json::json!(600);
         invalid["interval"] = serde_json::json!(0);
         assert!(parse_device_authorization_response(&invalid).is_err());
+    }
+
+    #[test]
+    fn browser_callback_success_page_closes_without_retaining_the_code() {
+        let response = std::str::from_utf8(BROWSER_CALLBACK_SUCCESS_RESPONSE).expect("utf8");
+        assert!(response.contains("Content-Type: text/html; charset=utf-8"));
+        assert!(response.contains("history.replaceState(null,'','/callback')"));
+        assert!(response.contains("window.close()"));
+        assert!(!response.contains("code="));
     }
 
     #[test]

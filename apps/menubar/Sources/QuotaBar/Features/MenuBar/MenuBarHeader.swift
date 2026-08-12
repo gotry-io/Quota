@@ -6,6 +6,7 @@ struct MenuBarHeader: View {
     case none
     case openSettings(() -> Void)
     case overflowMenu
+    case usageSource(UsageSource, (UsageSource) -> Void)
   }
 
   let title: String
@@ -134,6 +135,45 @@ struct MenuBarHeader: View {
         setOverflowMenuExpanded(true)
         return .handled
       }
+    case .usageSource(let source, let select):
+      Menu {
+        usageSourceItem(.account, selected: source, select: select)
+        usageSourceItem(.local, selected: source, select: select)
+      } label: {
+        HStack(spacing: QuotaDesign.Spacing.xxs) {
+          Image(systemName: source.systemImage)
+          Text(source.label)
+          Image(systemName: "chevron.down")
+            .font(.system(size: 8, weight: .semibold))
+        }
+        .quotaFont(.meta)
+        .foregroundStyle(QuotaPalette.body)
+        .padding(.horizontal, QuotaDesign.Spacing.xs)
+        .frame(minHeight: QuotaDesign.Layout.minimumInteractiveDimension)
+        .background {
+          RoundedRectangle(cornerRadius: QuotaDesign.Layout.rowCornerRadius, style: .continuous)
+            .fill(QuotaPalette.fieldFill)
+        }
+      }
+      .menuStyle(.borderlessButton)
+      .menuIndicator(.hidden)
+      .fixedSize()
+      .accessibilityLabel("Usage source")
+      .accessibilityValue(source.label)
+    }
+  }
+
+  private func usageSourceItem(
+    _ source: UsageSource,
+    selected: UsageSource,
+    select: @escaping (UsageSource) -> Void
+  ) -> some View {
+    Button { select(source) } label: {
+      Label {
+        Text(source.label)
+      } icon: {
+        Image(systemName: source == selected ? "checkmark" : source.systemImage)
+      }
     }
   }
 
@@ -207,5 +247,12 @@ struct MenuBarHeader: View {
     .buttonStyle(QuotaHeaderButtonStyle())
     .accessibilityLabel(accessibilityLabel)
     .help(accessibilityLabel)
+  }
+}
+
+extension UsageSource {
+  fileprivate var label: String { self == .account ? "Account" : "This Mac" }
+  fileprivate var systemImage: String {
+    self == .account ? "person.crop.circle" : "laptopcomputer"
   }
 }

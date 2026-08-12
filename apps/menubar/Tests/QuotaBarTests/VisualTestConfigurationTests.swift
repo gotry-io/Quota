@@ -40,6 +40,8 @@
       ("provider-openrouter", "OpenRouter", 3),
       ("devices", "Devices", 2),
       ("usage", "Usage", 2),
+      ("support", "Support", 2),
+      ("diagnostics", "Diagnostics", 3),
     ]
 
     for expectation in routeExpectations {

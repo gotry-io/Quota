@@ -14,7 +14,8 @@ data requirements. Architecture and product behavior are defined in
   authorization headers.
 - QuotaRelay accepts only protocol-validated account/device authentication material, normalized
   quota observations, sparse hourly Usage facts, and coverage/control metadata. It never runs a
-  provider collector or exposes command execution.
+  provider collector or exposes command execution. Opt-in account client/model summaries regroup
+  those retained facts and add no prompt, completion, path, session, credential, or new identifier.
 - Rust local clients' Relay traffic is outbound HTTPS to the fixed origin `https://quota.gotry.io`.
   Only loopback HTTP overrides used by tests are allowed. Redirects are refused.
 - QuotaBar launches only the signed `Contents/Helpers/quota-service` child built from the private
@@ -77,7 +78,8 @@ data requirements. Architecture and product behavior are defined in
 - Native browser login uses Authorization Code with PKCE S256, a random state, and a temporary
   `127.0.0.1` callback on a random port. The callback accepts the exact path/state and an
   authorization code only; it rejects tokens in query data and stops after success, cancellation, or
-  timeout.
+  timeout. Its static no-store success page removes the query from browser history and requests that
+  the browser close the callback tab, with text fallback when browser policy blocks self-close.
 - QuotaBar uses that native browser path; the Linux `quotacli` uses the OAuth Device Authorization
   Grant and never opens a browser or loopback listener. Device/user codes are high entropy or
   human-readable as appropriate, single-use, short-lived, hashed at rest, and rate-limited. Polling
@@ -106,6 +108,11 @@ data requirements. Architecture and product behavior are defined in
   closed because it can indicate a cloned local configuration.
 - A snapshot retry reuses its sequence. A Usage retry reuses the immutable submission ID, sequence,
   generation, coverage, and rows. D1 receipts make accepted and duplicate outcomes explicit.
+- The owner-only SQLite `usage_upload_enabled` preference defaults on. When disabled, local indexing,
+  aggregation, and display continue, but the service neither stages nor drains Usage uploads. Pending
+  outbox work remains local and resumes after re-enabling. Cached Account Usage is omitted from the
+  private state response so the native Usage surface remains local-only. The preference does not delete facts that Relay
+  already retained; Device or Account deletion remains the explicit removal boundary.
 - Only a complete collector scan may create authoritative replacement coverage. Permission errors,
   unreadable/changed sources, record limits, malformed or unknown usage records, truncated tails,
   cancellation, or parser uncertainty make coverage partial. Partial coverage never deletes or
@@ -122,6 +129,12 @@ data requirements. Architecture and product behavior are defined in
   whitelist or discard an otherwise valid fact because pricing is missing. Empty internal records
   with no tokens, billable tools, or nonzero source cost do not become Usage facts. Invalid records
   are isolated and counted in the local diagnostic report rather than rolling back a complete agent.
+- Model catalog cleanup is report-only. The raw model value is never rewritten, lowercased, trimmed,
+  deleted, or replaced in SQLite, upload payloads, or D1. Catalog aliases are explicit exact matches
+  scoped by inference provider and optionally agent `client` and UTC date; ambiguous, invalid, or
+  unknown values remain unresolved. A catalog revision can regroup historical rows on the next report, but it does
+  not trigger source-file reparsing or fact rewrites. Pricing resolves the raw value independently,
+  before grouping, so a normalized model may remain unpriced.
 - Delete Device is distinct from logout. It transactionally revokes sessions, advances Device
   generation, records a precise watermark, deletes quota/Usage/coverage/receipt rows, and retains a
   minimal hidden tombstone. Old tokens and old-generation outbox entries are terminally rejected.
@@ -161,6 +174,8 @@ data requirements. Architecture and product behavior are defined in
   [ADR 0008](decisions/0008-data-integrity-and-diagnostics.md).
 - Account/device display values and provider labels are untrusted presentation data: bound, mask
   where required, render as text rather than HTML, and exclude from security logs.
+- Model diagnostics may expose only bounded resolved/unresolved/ambiguous counts and catalog-revision
+  availability; they must never expose model names or aliases.
 - Tests and fixtures use synthetic credentials and identities only. Tests that exercise local files
   use isolated temporary roots and clean them after completion.
 

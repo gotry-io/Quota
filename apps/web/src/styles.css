@@ -659,6 +659,32 @@ footer {
   white-space: nowrap;
 }
 
+.account-menu-trigger {
+  gap: 8px;
+  padding-inline: 4px 0;
+  border-color: transparent;
+  border-radius: 6px;
+  background: transparent;
+}
+
+.account-menu-trigger:hover {
+  background: var(--surface-soft);
+}
+
+.account-menu-trigger::after {
+  content: "";
+  width: 0;
+  height: 0;
+  border-top: 4px solid currentColor;
+  border-right: 4px solid transparent;
+  border-left: 4px solid transparent;
+  transition: transform 120ms ease;
+}
+
+.account-menu[open] .account-menu-trigger::after {
+  transform: rotate(180deg);
+}
+
 .account-menu summary::-webkit-details-marker {
   display: none;
 }

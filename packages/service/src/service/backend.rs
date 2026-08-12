@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::fs::OpenOptions;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
@@ -12,16 +13,17 @@ use std::thread;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 
-use chrono::{DateTime, SecondsFormat, Timelike, Utc};
+use chrono::{DateTime, Days, SecondsFormat, Timelike, Utc};
+use chrono_tz::Tz;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::catalog::ProviderId;
-use crate::pricing::{self, UsageCostMode};
+use crate::pricing;
 use crate::protocol::{
     DiagnosticClient, DiagnosticComponent, DiagnosticIssue, DiagnosticReport, DiagnosticSeverity,
     DiagnosticStatus, ErrorCode, IpcError, QuotaOverviewIdentity, QuotaOverviewItem,
-    QuotaOverviewSource, RecoveryAction,
+    QuotaOverviewSource, RecoveryAction, UsagePeriod, UsageSource,
 };
 use crate::providers::common::ErrorCategory;
 use crate::providers::{self, CollectionContext};
@@ -30,8 +32,8 @@ use crate::service::{BackendError, LocalBackend, LoginOutcome, RefreshOutcome};
 use crate::state::{StateStore, UsageDirtyRange, now_rfc3339};
 use crate::usage::{self, CoverageStatus, UsageAgent, UsageHourlyFact, UsageScanOptions};
 
-const PARSER_REVISION: &str = "quota-usage-rust-3";
-const FILE_INDEX_PARSER_REVISION: &str = "usage-rust-v4";
+const PARSER_REVISION: &str = "quota-usage-rust-4";
+const FILE_INDEX_PARSER_REVISION: &str = "usage-rust-v5";
 const MAX_USAGE_OUTBOX_ENTRIES: usize = 64;
 const MAX_USAGE_MULTIPART_PARTS: usize = 64;
 const DEFAULT_TIMEZONE: &str = "UTC";
@@ -146,6 +148,21 @@ fn pricing_diagnostic_metrics(value: Option<&Value>) -> BTreeMap<String, i64> {
         ("catalog_present", i64::from(value.is_some())),
         ("catalog_valid", i64::from(valid)),
         ("entries", array_len(value, "entries")),
+    ])
+}
+
+fn model_catalog_diagnostic_metrics(value: Option<&Value>) -> BTreeMap<String, i64> {
+    let valid =
+        value.is_some_and(|value| crate::model_catalog::validate_model_catalog_value(value).valid);
+    let revision_available = value
+        .and_then(Value::as_object)
+        .and_then(|object| object.get("revision"))
+        .and_then(Value::as_str)
+        .is_some_and(|revision| !revision.is_empty());
+    metrics([
+        ("catalog_present", i64::from(value.is_some())),
+        ("catalog_valid", i64::from(valid)),
+        ("revision_available", i64::from(revision_available)),
     ])
 }
 
@@ -440,6 +457,20 @@ impl NativeBackend {
                 0
             }
         };
+        let usage_upload_enabled = match self.state.usage_upload_enabled() {
+            Ok(enabled) => enabled,
+            Err(_) => {
+                degraded = true;
+                issues.push(DiagnosticIssue {
+                    component: "sync".into(),
+                    code: "state_unavailable".into(),
+                    severity: DiagnosticSeverity::Error,
+                    count: 1,
+                    message: "Usage upload preference could not be read".into(),
+                });
+                true
+            }
+        };
         let dirty_count = match self.state.dirty_usage_ranges() {
             Ok(ranges) => ranges.len() as i64,
             Err(_) => {
@@ -577,7 +608,7 @@ impl NativeBackend {
                 message: "some source hours retain last-good data".into(),
             });
         }
-        if outbox_count > 0 {
+        if usage_upload_enabled && outbox_count > 0 {
             degraded = true;
             issues.push(DiagnosticIssue {
                 component: "sync".into(),
@@ -589,6 +620,7 @@ impl NativeBackend {
         }
         let quota_value = quota.as_ref().and_then(|record| record.value.as_ref());
         let pricing_value = pricing.as_ref().and_then(|record| record.value.as_ref());
+        let model_catalog_value = self.state.model_catalog().ok().flatten();
         let account_value = account.as_ref().and_then(|record| record.value.as_ref());
         let session = match self.state.session_json() {
             Ok(value) => value,
@@ -606,6 +638,12 @@ impl NativeBackend {
         };
         let quota_metrics = quota_diagnostic_metrics(quota_value);
         let pricing_metrics = pricing_diagnostic_metrics(pricing_value);
+        let model_catalog_metrics = model_catalog_diagnostic_metrics(model_catalog_value.as_ref());
+        usage_metrics.extend(
+            model_catalog_metrics
+                .iter()
+                .map(|(key, value)| (format!("model_{key}"), *value)),
+        );
         let account_metrics = account_diagnostic_metrics(account_value, session.as_ref());
         if pricing_value.is_some()
             && !pricing::validate_pricing_catalog(pricing_value.unwrap()).valid
@@ -617,6 +655,19 @@ impl NativeBackend {
                 severity: DiagnosticSeverity::Warning,
                 count: 1,
                 message: "last pricing catalog failed validation".into(),
+            });
+        }
+        if model_catalog_value
+            .as_ref()
+            .is_some_and(|value| !crate::model_catalog::validate_model_catalog_value(value).valid)
+        {
+            degraded = true;
+            issues.push(DiagnosticIssue {
+                component: "usage".into(),
+                code: "invalid_model_catalog".into(),
+                severity: DiagnosticSeverity::Warning,
+                count: 1,
+                message: "last model catalog failed validation".into(),
             });
         }
         let sync_diagnostic = match self.state.sync_diagnostic() {
@@ -637,9 +688,9 @@ impl NativeBackend {
             .as_ref()
             .and_then(|value| value.get("status"))
             .and_then(Value::as_str);
-        let sync_blocked = sync_status_value == Some("blocked");
-        let sync_failed = sync_status_value == Some("failed");
-        let sync_degraded = sync_status_value == Some("degraded");
+        let sync_blocked = usage_upload_enabled && sync_status_value == Some("blocked");
+        let sync_failed = usage_upload_enabled && sync_status_value == Some("failed");
+        let sync_degraded = usage_upload_enabled && sync_status_value == Some("degraded");
         if sync_blocked {
             blocked = true;
             let code = safe_sync_error_code(
@@ -732,7 +783,9 @@ impl NativeBackend {
             &mut degraded,
             &mut blocked,
         ));
-        let sync_status = if sync_blocked {
+        let sync_status = if !usage_upload_enabled {
+            "ready"
+        } else if sync_blocked {
             "blocked"
         } else if sync_failed || sync_degraded {
             "degraded"
@@ -746,6 +799,7 @@ impl NativeBackend {
             status: sync_status.into(),
             message: None,
             metrics: metrics([
+                ("usage_upload_enabled", i64::from(usage_upload_enabled)),
                 ("dirty_ranges", dirty_count),
                 ("outbox", outbox_count),
                 ("partial_hours", partial_count),
@@ -930,6 +984,7 @@ impl NativeBackend {
         &self,
         usage: &UsageCollection,
         catalog: Option<&pricing::PricingCatalog>,
+        model_catalog: Option<&crate::model_catalog::ModelCatalog>,
     ) -> Result<Value, BackendError> {
         let rows = &usage.rows;
         let coverage: Vec<Value> = usage
@@ -941,7 +996,7 @@ impl NativeBackend {
                     CoverageStatus::Partial => "partial",
                 };
                 json!({
-                    "agent": agent.coverage.agent,
+                    "client": agent.coverage.agent,
                     "start_at": agent.coverage.start_at,
                     "end_at": agent.coverage.end_at,
                     "status": status
@@ -956,37 +1011,46 @@ impl NativeBackend {
         } else {
             "partial"
         };
-        let totals = usage::fold_usage_facts(rows).map_err(|_| BackendError {
-            error: IpcError::new(ErrorCode::InvalidState, RecoveryAction::Retry),
-        })?;
-        let cost = pricing::calculate_usage_cost(rows, catalog, UsageCostMode::Calculate).map_err(
-            |_| BackendError {
+        let generated_at =
+            usage::parse_instant(&usage.generated_at).ok_or_else(|| BackendError {
                 error: IpcError::new(ErrorCode::InvalidState, RecoveryAction::Retry),
-            },
-        )?;
-        let (breakdowns, breakdowns_truncated) = usage::build_usage_breakdowns_with_status(
-            rows,
-            catalog,
-            UsageCostMode::Calculate,
-            false,
-        )
-        .map_err(|_| BackendError::unavailable())?;
-        let (from, to) = usage_date_range(rows);
-        let mut report = json!({
-            "protocol_version": 2,
+            })?;
+        let periods = [
+            UsagePeriod::Today,
+            UsagePeriod::Last7Days,
+            UsagePeriod::Last30Days,
+            UsagePeriod::All,
+        ]
+        .into_iter()
+        .map(|period| {
+            Ok((
+                period,
+                local_usage_detail(
+                    period,
+                    rows,
+                    &usage.timezone,
+                    generated_at,
+                    catalog,
+                    model_catalog,
+                    status == "partial",
+                )?,
+            ))
+        })
+        .collect::<Result<Vec<_>, BackendError>>()?;
+        self.state
+            .replace_usage_periods(UsageSource::Local, &periods)
+            .map_err(|_| BackendError::unavailable())?;
+        let today = usage_period_range(UsagePeriod::Today, &usage.timezone, generated_at)?.0;
+        let (from, to) = usage_date_range(rows, &today);
+        Ok(json!({
+            "protocol_version": 3,
             "generated_at": usage.generated_at,
             "aggregation_timezone": usage.timezone,
             "range": {"from": from, "to": to},
             "status": status,
-            "totals": totals,
-            "cost": cost,
-            "coverage": coverage,
-            "breakdowns": breakdowns
-        });
-        if breakdowns_truncated {
-            report["breakdowns_truncated"] = Value::Bool(true);
-        }
-        Ok(report)
+            "model_catalog_revision": model_catalog.map(|value| value.revision.clone()),
+            "coverage": coverage
+        }))
     }
 
     fn refresh_pricing(&self) -> Result<Value, BackendError> {
@@ -1033,7 +1097,54 @@ impl NativeBackend {
         }
     }
 
+    fn refresh_model_catalog(&self) -> Result<Value, BackendError> {
+        let local = self.state.model_catalog().ok().flatten();
+        let etag = self
+            .state
+            .model_catalog_etag()
+            .map_err(|_| BackendError::unavailable())?;
+        match self.relay.model_catalog(etag.as_deref()) {
+            Ok((next_etag, Some(value)))
+                if crate::model_catalog::validate_model_catalog_value(&value).valid =>
+            {
+                self.state
+                    .commit_model_catalog(&value, next_etag.as_deref().or(etag.as_deref()))
+                    .map_err(|_| BackendError::unavailable())?;
+                Ok(value)
+            }
+            Ok((next_etag, None)) => {
+                let Some(value) = local else {
+                    return Err(BackendError {
+                        error: IpcError::new(ErrorCode::InvalidState, RecoveryAction::Retry),
+                    });
+                };
+                if !crate::model_catalog::validate_model_catalog_value(&value).valid {
+                    return Err(BackendError {
+                        error: IpcError::new(ErrorCode::InvalidState, RecoveryAction::Retry),
+                    });
+                }
+                self.state
+                    .commit_model_catalog(&value, next_etag.as_deref().or(etag.as_deref()))
+                    .map_err(|_| BackendError::unavailable())?;
+                Ok(value)
+            }
+            Ok((_, Some(_))) => Err(BackendError {
+                error: IpcError::new(ErrorCode::InvalidResponse, RecoveryAction::Retry),
+            }),
+            Err(error) => Err(BackendError {
+                error: crate::relay::relay_error_for_backend(error),
+            }),
+        }
+    }
+
     fn stage_outbox(&self, timezone: &str) -> Result<bool, BackendError> {
+        if !self
+            .state
+            .usage_upload_enabled()
+            .map_err(|_| BackendError::unavailable())?
+        {
+            return Ok(false);
+        }
         let Some((session, session_epoch)) = self
             .state
             .session_snapshot()
@@ -1113,6 +1224,13 @@ impl NativeBackend {
         for range in &dirty_ranges {
             if !self
                 .state
+                .usage_upload_enabled()
+                .map_err(|_| BackendError::unavailable())?
+            {
+                return Ok(false);
+            }
+            if !self
+                .state
                 .active_session_at_epoch(session_epoch)
                 .map_err(|_| BackendError::unavailable())?
             {
@@ -1154,6 +1272,13 @@ impl NativeBackend {
                     if let Some((batch_id, submissions)) =
                         usage_multipart_submissions(&first_context, sequence, &chunk_rows)
                     {
+                        if !self
+                            .state
+                            .usage_upload_enabled()
+                            .map_err(|_| BackendError::unavailable())?
+                        {
+                            return Ok(false);
+                        }
                         if submissions.len() > stage_slots {
                             // Durable outbox capacity is separate from this refresh's drain
                             // budget. Wait for enough capacity to stage the complete batch.
@@ -1231,6 +1356,13 @@ impl NativeBackend {
                     start_at: start.to_rfc3339_opts(SecondsFormat::Secs, true),
                     end_at: chunk_end.to_rfc3339_opts(SecondsFormat::Secs, true),
                 };
+                if !self
+                    .state
+                    .usage_upload_enabled()
+                    .map_err(|_| BackendError::unavailable())?
+                {
+                    return Ok(false);
+                }
                 if self
                     .state
                     .stage_outbox_entry(account_id, &submission, &consumed)
@@ -1249,6 +1381,13 @@ impl NativeBackend {
     }
 
     fn drain_outbox(&self) -> Result<bool, BackendError> {
+        if !self
+            .state
+            .usage_upload_enabled()
+            .map_err(|_| BackendError::unavailable())?
+        {
+            return Ok(false);
+        }
         let Some((session, session_epoch)) = self
             .state
             .session_snapshot()
@@ -1282,6 +1421,13 @@ impl NativeBackend {
             .map_err(|_| BackendError::unavailable())?;
         let mut rejected = false;
         for entry in entries.into_iter().take(MAX_USAGE_OUTBOX_ENTRIES) {
+            if !self
+                .state
+                .usage_upload_enabled()
+                .map_err(|_| BackendError::unavailable())?
+            {
+                return Ok(rejected);
+            }
             let submission_id = entry
                 .get("submission_id")
                 .and_then(Value::as_str)
@@ -1357,6 +1503,36 @@ impl NativeBackend {
 
     fn timezone(&self) -> String {
         resolve_timezone(&self.environment)
+    }
+
+    fn refresh_account_usage_periods(
+        &self,
+        account_value: &Value,
+        cancel: &AtomicBool,
+    ) -> Result<(), BackendError> {
+        let all = account_value
+            .get("account_summary")
+            .and_then(|summary| summary.get("usage"))
+            .cloned()
+            .ok_or_else(BackendError::unavailable)?;
+        let mut periods = vec![(UsagePeriod::All, account_usage_detail(all)?)];
+        for period in [
+            UsagePeriod::Today,
+            UsagePeriod::Last7Days,
+            UsagePeriod::Last30Days,
+        ] {
+            let (_, range) = usage_period_range(period, &self.timezone(), Utc::now())?;
+            let (from, to) = range.ok_or_else(BackendError::unavailable)?;
+            let query = format!("cost_mode=calculate&from={from}&to={to}");
+            periods.push((
+                period,
+                account_usage_detail(self.account.account_usage(&query, cancel)?)?,
+            ));
+        }
+        self.state
+            .replace_usage_periods(UsageSource::Account, &periods)
+            .map_err(|_| BackendError::unavailable())?;
+        Ok(())
     }
 
     fn build_overview(&self, quota: &Value, account: Option<&Value>) -> Vec<QuotaOverviewItem> {
@@ -1508,15 +1684,37 @@ impl LocalBackend for NativeBackend {
             .flatten()
             .and_then(|component| component.value)
             .and_then(|value| serde_json::from_value(value).ok());
-        let pricing = self.refresh_pricing();
+        let cached_model_catalog = self.state.model_catalog().ok().flatten().and_then(|value| {
+            crate::model_catalog::validate_model_catalog_value(&value)
+                .valid
+                .then(|| serde_json::from_value(value).ok())
+                .flatten()
+        });
+        let (pricing, model_catalog_refresh) = thread::scope(|scope| {
+            let pricing_job = scope.spawn(|| self.refresh_pricing());
+            let model_catalog_job = scope.spawn(|| self.refresh_model_catalog());
+            (
+                pricing_job
+                    .join()
+                    .unwrap_or_else(|_| Err(BackendError::unavailable())),
+                model_catalog_job
+                    .join()
+                    .unwrap_or_else(|_| Err(BackendError::unavailable())),
+            )
+        });
         let catalog = pricing
             .as_ref()
             .ok()
             .and_then(|value| serde_json::from_value(value.clone()).ok())
             .or(cached_catalog);
+        let model_catalog = model_catalog_refresh
+            .as_ref()
+            .ok()
+            .and_then(|value| serde_json::from_value(value.clone()).ok())
+            .or(cached_model_catalog);
         let usage_collection = usage.ok();
         let usage_value = match usage_collection.as_ref() {
-            Some(value) => self.usage_report(value, catalog.as_ref()),
+            Some(value) => self.usage_report(value, catalog.as_ref(), model_catalog.as_ref()),
             None => Err(BackendError::unavailable()),
         };
         let quota_value = quota;
@@ -1545,7 +1743,16 @@ impl LocalBackend for NativeBackend {
                         {
                             account_sync_error = Some(error);
                         }
-                        if let Some(usage_collection) = usage_collection.as_ref() {
+                        let usage_upload_enabled = match self.state.usage_upload_enabled() {
+                            Ok(enabled) => enabled,
+                            Err(_) => {
+                                account_sync_error = Some(BackendError::unavailable());
+                                false
+                            }
+                        };
+                        if usage_upload_enabled
+                            && let Some(usage_collection) = usage_collection.as_ref()
+                        {
                             let context_result = effective_usage_lower_bound(&current_session)
                                 .and_then(|lower_bound| {
                                     self.state
@@ -1576,7 +1783,7 @@ impl LocalBackend for NativeBackend {
                                 }
                             }
                         }
-                        if account_sync_error.is_none() {
+                        if usage_upload_enabled && account_sync_error.is_none() {
                             let before = self
                                 .state
                                 .outbox_entries()
@@ -1633,6 +1840,14 @@ impl LocalBackend for NativeBackend {
                         }
                         if account_sync_error.is_none() {
                             account_value = self.account.refresh_account_state(cancel.as_ref());
+                            if usage_upload_enabled
+                                && let Ok(value) = &account_value
+                                && let Err(error) =
+                                    self.refresh_account_usage_periods(value, cancel.as_ref())
+                                && error.error.code.requires_login()
+                            {
+                                account_value = Err(error);
+                            }
                             if account_value
                                 .as_ref()
                                 .err()
@@ -1737,18 +1952,168 @@ struct AgentUsage {
     coverage: usage::ScanCoverage,
 }
 
-fn usage_date_range(rows: &[UsageHourlyFact]) -> (String, String) {
-    let today = Utc::now().format("%Y-%m-%d").to_string();
+fn usage_period_range(
+    period: UsagePeriod,
+    timezone: &str,
+    now: DateTime<Utc>,
+) -> Result<(String, Option<(String, String)>), BackendError> {
+    let timezone = Tz::from_str(timezone).map_err(|_| BackendError::unavailable())?;
+    let today = now.with_timezone(&timezone).date_naive();
+    let today_text = today.format("%Y-%m-%d").to_string();
+    let previous_days = match period {
+        UsagePeriod::Today => Some(0),
+        UsagePeriod::Last7Days => Some(6),
+        UsagePeriod::Last30Days => Some(29),
+        UsagePeriod::All => None,
+    };
+    let Some(previous_days) = previous_days else {
+        return Ok((today_text, None));
+    };
+    let from = today
+        .checked_sub_days(Days::new(previous_days))
+        .ok_or_else(BackendError::unavailable)?
+        .format("%Y-%m-%d")
+        .to_string();
+    Ok((today_text.clone(), Some((from, today_text))))
+}
+
+fn local_usage_detail(
+    period: UsagePeriod,
+    rows: &[UsageHourlyFact],
+    timezone: &str,
+    generated_at: DateTime<Utc>,
+    pricing_catalog: Option<&pricing::PricingCatalog>,
+    model_catalog: Option<&crate::model_catalog::ModelCatalog>,
+    incomplete: bool,
+) -> Result<Value, BackendError> {
+    let (today, range) = usage_period_range(period, timezone, generated_at)?;
+    let selected_rows = match &range {
+        Some((from, to)) => rows
+            .iter()
+            .filter(|row| {
+                row.usage_date.as_str() >= from.as_str() && row.usage_date.as_str() <= to.as_str()
+            })
+            .cloned()
+            .collect::<Vec<_>>(),
+        None => rows.to_vec(),
+    };
+    let summary = usage::build_local_usage_summary(&selected_rows, pricing_catalog, model_catalog)
+        .map_err(|_| BackendError::unavailable())?;
+    let details_truncated = summary.models_truncated || summary.cost.unpriced_truncated;
+    let (from, to) = range.unwrap_or_else(|| usage_date_range(&selected_rows, &today));
+    Ok(json!({
+        "range": {"from": from, "to": to},
+        "usage": summary,
+        "fallback_models": [],
+        "incomplete": incomplete,
+        "details_truncated": details_truncated
+    }))
+}
+
+fn account_usage_detail(value: Value) -> Result<Value, BackendError> {
+    let object = value.as_object().ok_or_else(invalid_usage_detail)?;
+    let totals = account_summary_totals(object.get("totals").ok_or_else(invalid_usage_detail)?)?;
+    let cost = object
+        .get("cost")
+        .cloned()
+        .ok_or_else(invalid_usage_detail)?;
+    let has_clients = object.contains_key("clients");
+    let clients = object.get("clients").cloned().unwrap_or_else(|| json!([]));
+    let fallback_models = if has_clients {
+        Vec::new()
+    } else {
+        object
+            .get("breakdowns")
+            .and_then(Value::as_array)
+            .ok_or_else(invalid_usage_detail)?
+            .iter()
+            .filter(|item| item.get("dimension").and_then(Value::as_str) == Some("model"))
+            .map(|item| {
+                Ok(json!({
+                    "model": item
+                        .get("key")
+                        .and_then(Value::as_str)
+                        .ok_or_else(invalid_usage_detail)?,
+                    "totals": account_summary_totals(
+                        item.get("totals").ok_or_else(invalid_usage_detail)?
+                    )?,
+                    "cost": item.get("cost").cloned().ok_or_else(invalid_usage_detail)?
+                }))
+            })
+            .collect::<Result<Vec<_>, BackendError>>()?
+    };
+    let coverage = object
+        .get("coverage")
+        .and_then(Value::as_array)
+        .ok_or_else(invalid_usage_detail)?;
+    let coverage_truncated =
+        object.get("coverage_truncated").and_then(Value::as_bool) == Some(true);
+    let breakdowns_truncated =
+        object.get("breakdowns_truncated").and_then(Value::as_bool) == Some(true);
+    let unpriced_truncated = cost.get("unpriced_truncated").and_then(Value::as_bool) == Some(true);
+    let mut usage = json!({
+        "totals": totals,
+        "cost": cost,
+        "clients": clients
+    });
+    if breakdowns_truncated {
+        usage["models_truncated"] = Value::Bool(true);
+    }
+    Ok(json!({
+        "range": object.get("range").cloned().ok_or_else(invalid_usage_detail)?,
+        "usage": usage,
+        "fallback_models": fallback_models,
+        "incomplete": coverage_truncated
+            || coverage.iter().any(|item| {
+                item.get("status").and_then(Value::as_str) == Some("partial")
+            }),
+        "details_truncated": coverage_truncated || breakdowns_truncated || unpriced_truncated
+    }))
+}
+
+fn account_summary_totals(value: &Value) -> Result<Value, BackendError> {
+    let object = value.as_object().ok_or_else(invalid_usage_detail)?;
+    let count = |name: &str| {
+        object
+            .get(name)
+            .and_then(Value::as_u64)
+            .ok_or_else(invalid_usage_detail)
+    };
+    let input = count("input_tokens")?;
+    let output = count("output_tokens")?;
+    let cache_write_inferred = count("cache_write_inferred_tokens")?;
+    let cache_write = count("cache_write_5m_tokens")?
+        .checked_add(count("cache_write_1h_tokens")?)
+        .and_then(|value| value.checked_add(cache_write_inferred))
+        .ok_or_else(invalid_usage_detail)?;
+    Ok(json!({
+        "total_tokens": input.checked_add(output).ok_or_else(invalid_usage_detail)?,
+        "input_tokens": input,
+        "output_tokens": output,
+        "cache_read_input_tokens": count("cache_read_tokens")?,
+        "cache_write_input_tokens": cache_write,
+        "reasoning_tokens": count("reasoning_tokens")?,
+        "messages": count("requests")?
+    }))
+}
+
+fn invalid_usage_detail() -> BackendError {
+    BackendError {
+        error: IpcError::new(ErrorCode::InvalidResponse, RecoveryAction::Retry),
+    }
+}
+
+fn usage_date_range(rows: &[UsageHourlyFact], fallback_date: &str) -> (String, String) {
     let from = rows
         .iter()
         .map(|row| row.usage_date.clone())
         .min()
-        .unwrap_or_else(|| today.clone());
+        .unwrap_or_else(|| fallback_date.to_owned());
     let to = rows
         .iter()
         .map(|row| row.usage_date.clone())
         .max()
-        .unwrap_or(today);
+        .unwrap_or_else(|| fallback_date.to_owned());
     (from, to)
 }
 
@@ -2211,6 +2576,71 @@ mod tests {
     use std::fs;
 
     #[test]
+    fn usage_periods_are_inclusive_and_use_the_service_timezone() {
+        let now = DateTime::parse_from_rfc3339("2026-08-12T18:00:00Z")
+            .expect("instant")
+            .with_timezone(&Utc);
+        assert_eq!(
+            usage_period_range(UsagePeriod::Last7Days, "Asia/Singapore", now)
+                .expect("range")
+                .1,
+            Some(("2026-08-07".into(), "2026-08-13".into()))
+        );
+        assert!(
+            usage_period_range(UsagePeriod::All, "Asia/Singapore", now)
+                .expect("range")
+                .1
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn account_usage_detail_preserves_models_without_structured_clients() {
+        let cost = json!({
+            "mode": "calculate",
+            "basis": "none",
+            "status": "unavailable",
+            "amount_microusd": null,
+            "catalog_revision": null,
+            "calculated_rows": 0,
+            "reported_rows": 0,
+            "unpriced_rows": 1,
+            "assumptions": [],
+            "unpriced": []
+        });
+        let totals = json!({
+            "input_tokens": 8,
+            "cache_read_tokens": 2,
+            "cache_write_5m_tokens": 1,
+            "cache_write_1h_tokens": 0,
+            "cache_write_inferred_tokens": 0,
+            "output_tokens": 5,
+            "reasoning_tokens": 3,
+            "requests": 2,
+            "web_search_requests": 0,
+            "web_fetch_requests": 0,
+            "source_cost_microusd": null,
+            "source_cost_covered_requests": 0
+        });
+        let detail = account_usage_detail(json!({
+            "range": {"from": "2026-08-06", "to": "2026-08-12"},
+            "totals": totals,
+            "cost": cost,
+            "coverage": [],
+            "breakdowns": [{
+                "dimension": "model",
+                "key": "gpt-test",
+                "totals": totals,
+                "cost": cost
+            }]
+        }))
+        .expect("detail");
+        assert_eq!(detail["usage"]["totals"]["total_tokens"], 13);
+        assert_eq!(detail["usage"]["totals"]["messages"], 2);
+        assert_eq!(detail["fallback_models"][0]["model"], "gpt-test");
+    }
+
+    #[test]
     fn native_backend_collects_empty_home_without_unavailable_fallback() {
         let root = std::env::temp_dir().join(format!("quota-backend-{}", uuid::Uuid::new_v4()));
         let home = root.join("home");
@@ -2248,6 +2678,45 @@ mod tests {
             Some(2)
         );
         assert!(state.session_json().expect("session state").is_none());
+        drop(backend);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn model_catalog_refresh_failure_keeps_last_known_good_for_reports() {
+        let root = std::env::temp_dir().join(format!("quota-model-lkg-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        let value = json!({
+            "schema_version": 1,
+            "revision": "model-test-1",
+            "models": [{
+                "canonical_id": "gpt-5.5",
+                "aliases": [{"reported_model":"gpt-5.5-alias","provider":"openai"}]
+            }]
+        });
+        state
+            .commit_model_catalog(&value, Some("\"model-test-1\""))
+            .expect("lkg");
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("listener");
+        let address = listener.local_addr().expect("address");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("request");
+            let mut request = [0_u8; 8_192];
+            let _ = std::io::Read::read(&mut stream, &mut request);
+            std::io::Write::write_all(
+                &mut stream,
+                b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            )
+            .expect("response");
+        });
+        let relay =
+            Arc::new(RelayClient::for_test(&format!("http://{address}")).expect("test relay"));
+        let backend = NativeBackend::new(state.clone(), relay, "QuotaTest", "test");
+        assert!(backend.refresh_model_catalog().is_err());
+        assert_eq!(state.model_catalog().expect("catalog"), Some(value));
+        server.join().expect("server");
         drop(backend);
         fs::remove_dir_all(root).expect("cleanup");
     }
@@ -2310,6 +2779,25 @@ mod tests {
         );
         assert!(
             degraded
+                .issues
+                .iter()
+                .any(|issue| issue.component == "sync" && issue.code == "invalid_usage_batch")
+        );
+        state
+            .set_usage_upload_enabled(false)
+            .expect("disable Usage upload");
+        assert!(!backend.stage_outbox("UTC").expect("staging disabled"));
+        assert!(!backend.drain_outbox().expect("upload disabled"));
+        let disabled = backend.diagnostic_report().expect("disabled diagnostics");
+        let sync = disabled
+            .components
+            .iter()
+            .find(|component| component.name == "sync")
+            .expect("sync component");
+        assert_eq!(sync.status, "ready");
+        assert_eq!(sync.metrics.get("usage_upload_enabled"), Some(&0));
+        assert!(
+            !disabled
                 .issues
                 .iter()
                 .any(|issue| issue.component == "sync" && issue.code == "invalid_usage_batch")
@@ -2495,18 +2983,19 @@ mod tests {
                 .collect(),
             rows: Vec::new(),
         };
-        let report = backend.usage_report(&collection, None).expect("report");
+        let report = backend
+            .usage_report(&collection, None, None)
+            .expect("report");
         assert_eq!(
             report.get("status").and_then(Value::as_str),
             Some("complete")
         );
-        assert!(report.get("breakdowns_truncated").is_none());
-        assert!(
-            report
-                .get("cost")
-                .and_then(|value| value.get("unpriced_truncated"))
-                .is_none()
+        assert_eq!(
+            report["range"],
+            json!({"from": "2026-08-10", "to": "2026-08-10"})
         );
+        assert!(report.get("usage").is_none());
+        assert!(report.get("today").is_none());
         assert!(
             report
                 .get("coverage")
@@ -2515,6 +3004,38 @@ mod tests {
                     item.get("status").and_then(Value::as_str) == Some("complete")
                 }))
         );
+        let cached = backend.state.snapshot().expect("cached periods");
+        assert_eq!(
+            cached
+                .usage_periods
+                .local
+                .last_7_days
+                .as_ref()
+                .and_then(|detail| detail.get("range")),
+            Some(&json!({"from": "2026-08-04", "to": "2026-08-10"}))
+        );
+        assert!(cached.usage_periods.local.today.is_some());
+        assert_eq!(
+            cached
+                .usage_periods
+                .local
+                .today
+                .as_ref()
+                .and_then(|detail| detail.pointer("/usage/totals/input_tokens"))
+                .and_then(Value::as_u64),
+            Some(0)
+        );
+        assert!(
+            cached
+                .usage_periods
+                .local
+                .today
+                .as_ref()
+                .and_then(|detail| detail.pointer("/usage/models_truncated"))
+                .is_none()
+        );
+        assert!(cached.usage_periods.local.last_30_days.is_some());
+        assert!(cached.usage_periods.local.all.is_some());
         fs::remove_dir_all(root).expect("cleanup");
     }
 

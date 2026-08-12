@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use crate::state::StateError;
 
-const CURRENT_SCHEMA: i64 = 3;
+const CURRENT_SCHEMA: i64 = 4;
 
 pub fn apply(conn: &mut Connection) -> Result<(), StateError> {
     conn.execute_batch(
@@ -28,6 +28,7 @@ pub fn apply(conn: &mut Connection) -> Result<(), StateError> {
             1 => migration_v1(&tx)?,
             2 => migration_v2(&tx)?,
             3 => migration_v3(&tx)?,
+            4 => migration_v4(&tx)?,
             _ => return Err(StateError::InvalidState),
         }
         tx.execute(
@@ -166,6 +167,25 @@ fn migration_v3(tx: &Transaction<'_>) -> Result<(), StateError> {
     Ok(())
 }
 
+fn migration_v4(tx: &Transaction<'_>) -> Result<(), StateError> {
+    tx.execute_batch(
+        "CREATE TABLE model_catalog_cache (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            payload_json TEXT NOT NULL,
+            etag TEXT
+        );
+        CREATE TABLE usage_period_cache (
+            source TEXT NOT NULL,
+            period TEXT NOT NULL,
+            value_json TEXT NOT NULL,
+            PRIMARY KEY(source, period)
+        );
+        INSERT INTO metadata(key, value) VALUES ('usage_upload_enabled', '1');
+        DELETE FROM components WHERE name = 'usage';",
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -207,6 +227,10 @@ mod tests {
             columns(&fresh, "sync_diagnostics"),
             columns(&v1, "sync_diagnostics")
         );
+        assert_eq!(
+            columns(&fresh, "model_catalog_cache"),
+            columns(&v1, "model_catalog_cache")
+        );
         let fresh_versions: Vec<i64> = fresh
             .prepare("SELECT version FROM schema_migrations ORDER BY version")
             .expect("fresh versions")
@@ -221,8 +245,22 @@ mod tests {
             .expect("v1 rows")
             .collect::<Result<Vec<_>, _>>()
             .expect("v1 values");
-        assert_eq!(fresh_versions, vec![1, 2, 3]);
+        assert_eq!(fresh_versions, vec![1, 2, 3, 4]);
         assert_eq!(fresh_versions, v1_versions);
+        assert_eq!(
+            columns(&fresh, "usage_period_cache"),
+            ["source", "period", "value_json"]
+        );
+        assert_eq!(
+            fresh
+                .query_row(
+                    "SELECT value FROM metadata WHERE key = 'usage_upload_enabled'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .expect("Usage upload preference"),
+            "1"
+        );
         assert!(
             fresh
                 .query_row(
@@ -237,6 +275,54 @@ mod tests {
                 .query_row("SELECT COUNT(*) FROM installation", [], |row| row
                     .get::<_, i64>(0))
                 .expect("installation"),
+            1
+        );
+    }
+
+    #[test]
+    fn v4_discards_only_the_derived_usage_component() {
+        let mut conn = Connection::open_in_memory().expect("database");
+        apply(&mut conn).expect("current schema");
+        conn.execute(
+            "INSERT INTO components(name, status, value_json) VALUES ('usage', 'ready', '{}')",
+            [],
+        )
+        .expect("usage component");
+        conn.execute(
+            "INSERT INTO components(name, status, value_json) VALUES ('quota', 'ready', '{}')",
+            [],
+        )
+        .expect("quota component");
+        conn.execute("DELETE FROM schema_migrations WHERE version = 4", [])
+            .expect("rewind migration marker");
+        conn.execute("DROP TABLE model_catalog_cache", [])
+            .expect("rewind catalog cache");
+        conn.execute("DROP TABLE usage_period_cache", [])
+            .expect("rewind period cache");
+        conn.execute(
+            "DELETE FROM metadata WHERE key = 'usage_upload_enabled'",
+            [],
+        )
+        .expect("rewind upload preference");
+
+        apply(&mut conn).expect("v4 migration");
+
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM components WHERE name = 'usage'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("usage count"),
+            0
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM components WHERE name = 'quota'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("quota count"),
             1
         );
     }

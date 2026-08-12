@@ -1,4 +1,3 @@
-import AppKit
 import SwiftUI
 
 struct SettingsHomeView: View {
@@ -6,90 +5,83 @@ struct SettingsHomeView: View {
   let onOpenAgents: () -> Void
   let onOpenDevices: () -> Void
   let onOpenUsage: () -> Void
-  let onOpenDiagnostics: () -> Void
+  let onOpenSupport: () -> Void
+  let onRequestLogout: () -> Void
 
   @State private var launchAtLoginEnabled = LaunchAtLoginController.isEnabled
-  @State private var isLogoutConfirmationPresented = false
 
   var body: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: QuotaDesign.Spacing.md) {
         accountSection
 
-        SettingsSection(title: "Usage") {
-          settingsDestinationRow(
-            title: "This Mac",
-            systemImage: "chart.bar.xaxis",
-            trailing: usageSummary,
-            accessibilityLabel: "Usage",
-            action: onOpenUsage
-          )
+        if let accountErrorMessage = model.accountErrorMessage,
+          accountErrorMessage != signedOutMessage
+        {
+          Label(accountErrorMessage, systemImage: "exclamationmark.circle")
+            .quotaMetaStyle()
+            .fixedSize(horizontal: false, vertical: true)
+        }
+
+        SettingsSection(title: "Quota") {
+          VStack(alignment: .leading, spacing: 0) {
+            settingsDestinationRow(
+              title: "Usage",
+              systemImage: "chart.bar.xaxis",
+              trailing: usageSummary,
+              accessibilityLabel: "Usage",
+              action: onOpenUsage
+            )
+            settingsDestinationRow(
+              title: "Agents",
+              systemImage: "cpu",
+              trailing: agentsSummary,
+              accessibilityLabel: "Agents",
+              action: onOpenAgents
+            )
+          }
         }
 
         SettingsSection(title: "General") {
-          settingsToggleRow(
-            title: "Launch at Login",
-            systemImage: "power",
-            isOn: Binding(
-              get: { launchAtLoginEnabled },
-              set: { desired in
-                _ = LaunchAtLoginController.apply(enabled: desired)
-                launchAtLoginEnabled = LaunchAtLoginController.isEnabled
-              }
-            ),
-            accessibilityLabel: "Launch at Login",
-            accessibilityHint: "Start QuotaBar when you log in"
-          )
-        }
-
-        SettingsSection(title: "Account Data") {
-          settingsDestinationRow(
-            title: "Devices",
-            systemImage: "laptopcomputer.and.iphone",
-            trailing: model.accountDeviceSummary,
-            accessibilityLabel: "Devices",
-            action: onOpenDevices
-          )
-        }
-
-        SettingsSection(title: "Diagnostics") {
-          settingsDestinationRow(
-            title: "Diagnostics",
-            systemImage: "stethoscope",
-            trailing: "Copy report",
-            accessibilityLabel: "Diagnostics",
-            action: onOpenDiagnostics
-          )
-        }
-
-        SettingsSection(title: "Local Providers") {
-          settingsDestinationRow(
-            title: "Agents",
-            systemImage: "cpu",
-            trailing: agentsSummary,
-            accessibilityLabel: "Agents",
-            action: onOpenAgents
-          )
-        }
-
-        SettingsSection(title: "About") {
           VStack(alignment: .leading, spacing: 0) {
-            settingsValueRow(
-              title: "Version",
-              systemImage: "info.circle",
-              value: AppMetadata.versionLabel
+            settingsToggleRow(
+              title: "Launch at Login",
+              systemImage: "power",
+              isOn: Binding(
+                get: { launchAtLoginEnabled },
+                set: { desired in
+                  _ = LaunchAtLoginController.apply(enabled: desired)
+                  launchAtLoginEnabled = LaunchAtLoginController.isEnabled
+                }
+              ),
+              accessibilityLabel: "Launch at Login",
+              accessibilityHint: "Start QuotaBar when you log in"
             )
-            settingsLinkRow(
-              title: "Website",
-              systemImage: "globe",
-              url: AppMetadata.websiteURL
+            settingsToggleRow(
+              title: "Sync Usage",
+              systemImage: "arrow.triangle.2.circlepath",
+              isOn: Binding(
+                get: { model.usageUploadEnabled },
+                set: { desired in
+                  Task { await model.setUsageUploadEnabled(desired) }
+                }
+              ),
+              isEnabled: !model.isUpdatingUsageUpload,
+              accessibilityLabel: "Sync Usage",
+              accessibilityHint: "Upload this Mac's Usage to your Quota account"
             )
-            settingsLinkRow(
-              title: "Feedback",
-              systemImage: "envelope",
-              url: AppMetadata.feedbackURL
+            settingsDestinationRow(
+              title: "Support",
+              systemImage: "questionmark.circle",
+              trailing: AppMetadata.versionLabel,
+              accessibilityLabel: "Support",
+              action: onOpenSupport
             )
           }
+        }
+
+        if model.accountState == .signedIn {
+          logoutRow
         }
       }
       .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -97,16 +89,6 @@ struct SettingsHomeView: View {
       .padding(.vertical, QuotaDesign.Layout.pageVerticalPadding)
     }
     .onAppear { launchAtLoginEnabled = LaunchAtLoginController.isEnabled }
-    .alert("Log Out?", isPresented: $isLogoutConfirmationPresented) {
-      Button("Cancel", role: .cancel) {}
-      Button("Log Out", role: .destructive) {
-        Task { await model.logout() }
-      }
-    } message: {
-      Text(
-        "This signs QuotaBar out on this Mac. Your device and synced data stay in your Quota account."
-      )
-    }
   }
 
   @ViewBuilder
@@ -115,77 +97,88 @@ struct SettingsHomeView: View {
       VStack(alignment: .leading, spacing: 0) {
         switch model.accountState {
         case .signedIn:
-          SettingsListRow(
-            title: model.accountDisplayLabel,
-            systemImage: "person.crop.circle.fill",
-            height: QuotaDesign.Layout.settingsRowHeight
-          ) {
-            Button {
-              isLogoutConfirmationPresented = true
-            } label: {
-              Group {
-                if model.isLoggingOut {
-                  ProgressView().controlSize(.small)
-                } else {
-                  Text("Log Out")
-                }
-              }
-              .quotaFont(.listSecondary)
-              .foregroundStyle(QuotaPalette.critical)
-              .frame(
-                minWidth: QuotaDesign.Layout.minimumInteractiveDimension,
-                minHeight: QuotaDesign.Layout.minimumInteractiveDimension
-              )
-            }
-            .buttonStyle(.plain)
-            .disabled(model.isLoggingOut)
-            .accessibilityLabel(model.isLoggingOut ? "Logging out" : "Log Out")
+          VStack(spacing: 0) {
+            settingsExternalLinkRow(
+              title: model.accountDisplayLabel,
+              systemImage: "person.crop.circle.fill",
+              url: AppMetadata.accountURL
+            )
+            settingsDestinationRow(
+              title: "Devices",
+              systemImage: "laptopcomputer.and.iphone",
+              trailing: model.accountDeviceSummary,
+              accessibilityLabel: "Devices",
+              action: onOpenDevices
+            )
           }
 
         case .logoutPending:
-          accountAction(
-            message: "Logout is pending and will finish when this Mac is online.",
-            title: model.isLoggingOut ? "Retrying…" : "Retry Logout",
-            isEnabled: !model.isLoggingOut,
-            isCompact: true
-          ) {
-            Task { await model.logout() }
+          SettingsListRow(title: "Logout Pending", systemImage: "wifi.slash") {
+            Button {
+              Task { await model.logout() }
+            } label: {
+              if model.isLoggingOut {
+                ProgressView().controlSize(.small)
+              } else {
+                Text("Retry Logout")
+                  .quotaFont(.listSecondary)
+              }
+            }
+            .buttonStyle(.plain)
+            .disabled(model.isLoggingOut)
+            .accessibilityLabel(model.isLoggingOut ? "Retrying logout" : "Retry Logout")
           }
+          .accessibilityHint("Logout will finish when this Mac is online")
 
         case .notChecked, .signedOut:
           if model.isLoggingIn {
-            accountAction(
-              message: "Finish signing in with GitHub in your browser.",
-              title: "Cancel",
-              action: model.cancelLogin
-            )
+            SettingsListRow(title: "Finish sign-in in browser", systemImage: "person.crop.circle") {
+              Button("Cancel", action: model.cancelLogin)
+                .quotaFont(.listSecondary)
+                .buttonStyle(.plain)
+            }
           } else {
-            accountAction(
-              message: signedOutMessage,
-              title: "Continue with GitHub",
-              isCompact: true,
-              action: model.startLogin
-            )
+            Button(action: model.startLogin) {
+              SettingsListRow(
+                title: "Sign In",
+                systemImage: "person.crop.circle.badge.plus"
+              ) {
+                Image(systemName: "chevron.right")
+                  .quotaChevronStyle()
+              }
+            }
+            .buttonStyle(QuotaListRowButtonStyle())
+            .accessibilityLabel("Sign In")
+            .accessibilityHint(signedOutMessage)
           }
-        }
-
-        settingsLinkRow(
-          title: "Manage account",
-          systemImage: "globe",
-          url: AppMetadata.accountURL
-        )
-
-        if let accountErrorMessage = model.accountErrorMessage,
-          accountErrorMessage != signedOutMessage
-        {
-          Label(accountErrorMessage, systemImage: "exclamationmark.circle")
-            .quotaMetaStyle()
-            .fixedSize(horizontal: false, vertical: true)
-            .padding(.horizontal, QuotaDesign.Layout.groupContentInset)
-            .padding(.bottom, QuotaDesign.Layout.groupContentInset)
         }
       }
     }
+  }
+
+  private var logoutRow: some View {
+    Button {
+      onRequestLogout()
+    } label: {
+      HStack(spacing: QuotaDesign.Spacing.sm) {
+        Image(systemName: "rectangle.portrait.and.arrow.right")
+          .quotaFont(.secondary)
+          .foregroundStyle(QuotaPalette.critical)
+          .frame(width: QuotaDesign.Layout.settingsIconColumnWidth)
+        Text(model.isLoggingOut ? "Logging Out…" : "Log Out")
+          .quotaFont(.settingsLabel)
+          .foregroundStyle(QuotaPalette.critical)
+        Spacer(minLength: 0)
+      }
+      .padding(.horizontal, QuotaDesign.Layout.groupContentInset)
+      .frame(maxWidth: .infinity, minHeight: QuotaDesign.Layout.settingsRowHeight)
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(QuotaListRowButtonStyle())
+    .quotaGroupSurface()
+    .disabled(model.isLoggingOut)
+    .accessibilityLabel(model.isLoggingOut ? "Logging out" : "Log Out")
+    .accessibilityHint("Shows a confirmation")
   }
 
   private var signedOutMessage: String {
@@ -200,10 +193,16 @@ struct SettingsHomeView: View {
   }
 
   private var usageSummary: String {
-    guard let report = model.localUsage, report.status != .unavailable,
-      let totals = report.totals
-    else { return "Unavailable" }
-    return "\(UsageValueFormatter.count(totals.inputTokens + totals.outputTokens)) tokens"
+    let totalTokens: Int?
+    if model.accountState == .signedIn, model.usageUploadEnabled {
+      totalTokens = model.accountSummary.map { UsageSummaryTotals($0.usage.totals).totalTokens }
+    } else if model.localUsage?.status != .unavailable {
+      totalTokens = model.usageDetail(source: .local, period: .all)?.usage.totals.totalTokens
+    } else {
+      totalTokens = nil
+    }
+    guard let totalTokens else { return "Unavailable" }
+    return "\(UsageValueFormatter.count(totalTokens)) tokens"
   }
 
   private var agentsSummary: String {
@@ -212,30 +211,11 @@ struct SettingsHomeView: View {
     return visible == total ? "\(total)" : "\(visible)/\(total)"
   }
 
-  private func accountAction(
-    message: String,
-    title: String,
-    isEnabled: Bool = true,
-    isCompact: Bool = false,
-    action: @escaping () -> Void
-  ) -> some View {
-    VStack(alignment: .leading, spacing: QuotaDesign.Spacing.sm) {
-      Text(message)
-        .quotaSecondaryStyle()
-        .fixedSize(horizontal: false, vertical: true)
-
-      Button(title, action: action)
-        .buttonStyle(QuotaPrimaryButtonStyle(isCompact: isCompact))
-        .disabled(!isEnabled)
-    }
-    .padding(QuotaDesign.Layout.groupContentInset)
-    .frame(maxWidth: .infinity, alignment: .leading)
-  }
-
   private func settingsToggleRow(
     title: String,
     systemImage: String,
     isOn: Binding<Bool>,
+    isEnabled: Bool = true,
     accessibilityLabel: String,
     accessibilityHint: String
   ) -> some View {
@@ -249,6 +229,7 @@ struct SettingsHomeView: View {
     .accessibilityElement(children: .combine)
     .accessibilityLabel(accessibilityLabel)
     .accessibilityHint(accessibilityHint)
+    .disabled(!isEnabled)
   }
 
   private func settingsDestinationRow(
@@ -274,27 +255,66 @@ struct SettingsHomeView: View {
     .accessibilityHint(trailing)
   }
 
-  private func settingsValueRow(title: String, systemImage: String, value: String) -> some View {
-    SettingsListRow(title: title, systemImage: systemImage) {
-      Text(value)
-        .quotaMonoListValueStyle()
-        .textSelection(.enabled)
-    }
-    .accessibilityElement(children: .combine)
-    .accessibilityLabel("\(title) \(value)")
-  }
+}
 
-  private func settingsLinkRow(title: String, systemImage: String, url: URL) -> some View {
-    Button {
-      NSWorkspace.shared.open(url)
-    } label: {
-      SettingsListRow(title: title, systemImage: systemImage) {
-        Image(systemName: "arrow.up.right")
-          .quotaAffordanceStyle()
+struct SettingsSupportView: View {
+  let onOpenDiagnostics: () -> Void
+
+  var body: some View {
+    ScrollView {
+      VStack(alignment: .leading, spacing: QuotaDesign.Spacing.md) {
+        SettingsSection(title: "Help") {
+          VStack(alignment: .leading, spacing: 0) {
+            Button(action: onOpenDiagnostics) {
+              SettingsListRow(title: "Diagnostics", systemImage: "stethoscope") {
+                Image(systemName: "chevron.right")
+                  .quotaChevronStyle()
+              }
+            }
+            .buttonStyle(QuotaListRowButtonStyle())
+            .accessibilityLabel("Diagnostics")
+
+            settingsExternalLinkRow(
+              title: "Feedback",
+              systemImage: "envelope",
+              url: AppMetadata.feedbackURL
+            )
+          }
+        }
+
+        SettingsSection(title: "About") {
+          VStack(alignment: .leading, spacing: 0) {
+            settingsExternalLinkRow(
+              title: "Website",
+              systemImage: "globe",
+              url: AppMetadata.websiteURL
+            )
+            SettingsListRow(title: "Version", systemImage: "info.circle") {
+              Text(AppMetadata.versionLabel)
+                .quotaMonoListValueStyle()
+                .textSelection(.enabled)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Version \(AppMetadata.versionLabel)")
+          }
+        }
       }
+      .frame(maxWidth: .infinity, alignment: .topLeading)
+      .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
+      .padding(.vertical, QuotaDesign.Layout.pageVerticalPadding)
     }
-    .buttonStyle(QuotaListRowButtonStyle())
-    .accessibilityLabel(title)
-    .accessibilityHint("Opens in browser")
   }
+}
+
+@MainActor
+private func settingsExternalLinkRow(title: String, systemImage: String, url: URL) -> some View {
+  Link(destination: url) {
+    SettingsListRow(title: title, systemImage: systemImage) {
+      Image(systemName: "arrow.up.right")
+        .quotaAffordanceStyle()
+    }
+  }
+  .buttonStyle(QuotaListRowButtonStyle())
+  .accessibilityLabel(title)
+  .accessibilityHint("Opens in browser")
 }

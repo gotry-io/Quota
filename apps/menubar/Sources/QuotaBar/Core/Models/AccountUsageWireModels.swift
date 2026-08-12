@@ -36,6 +36,30 @@ enum BillingChannel: String, Codable, Sendable {
   case unknown
 }
 
+enum InferenceProvider: String, Codable, Sendable {
+  case openai
+  case azureOpenAI = "azure_openai"
+  case anthropic
+  case awsBedrock = "aws_bedrock"
+  case googleVertex = "google_vertex"
+  case openrouter
+  case xai
+  case unknown
+
+  var displayName: String {
+    switch self {
+    case .openai: "OpenAI"
+    case .azureOpenAI: "Azure OpenAI"
+    case .anthropic: "Anthropic"
+    case .awsBedrock: "AWS Bedrock"
+    case .googleVertex: "Google Vertex AI"
+    case .openrouter: "OpenRouter"
+    case .xai: "xAI"
+    case .unknown: "Unknown Provider"
+    }
+  }
+}
+
 enum ChannelSource: String, Codable, Sendable {
   case explicit
   case agentDefault = "agent_default"
@@ -270,10 +294,12 @@ struct UsageSubmissionV2: Decodable, Equatable, Sendable {
     aggregationTimezone = try container.decode(String.self, forKey: .aggregationTimezone)
     coverage = try container.decode(UsageCoverage.self, forKey: .coverage)
     rows = try container.decode([UsageHourlyFact].self, forKey: .rows)
-    writeMode = container.contains(.writeMode)
+    writeMode =
+      container.contains(.writeMode)
       ? try container.decode(UsageSubmissionWriteMode.self, forKey: .writeMode)
       : nil
-    multipart = container.contains(.multipart)
+    multipart =
+      container.contains(.multipart)
       ? try container.decode(UsageSubmissionMultipart.self, forKey: .multipart)
       : nil
 
@@ -731,8 +757,10 @@ struct AccountUsageSummary: Codable, Equatable, Sendable {
   let range: UsageDateRange
   let totals: UsageTokenTotals
   let cost: UsageCostOutcome
+  let modelCatalogRevision: String?
   let coverage: [UsageCoverageSummaryItem]
   let breakdowns: [UsageBreakdown]
+  let clients: [LocalUsageClientSummary]?
   let coverageTruncated: Bool?
   let breakdownsTruncated: Bool?
 
@@ -740,8 +768,10 @@ struct AccountUsageSummary: Codable, Equatable, Sendable {
     case range
     case totals
     case cost
+    case modelCatalogRevision
     case coverage
     case breakdowns
+    case clients
     case coverageTruncated
     case breakdownsTruncated
   }
@@ -750,16 +780,20 @@ struct AccountUsageSummary: Codable, Equatable, Sendable {
     range: UsageDateRange,
     totals: UsageTokenTotals,
     cost: UsageCostOutcome,
+    modelCatalogRevision: String? = nil,
     coverage: [UsageCoverageSummaryItem],
     breakdowns: [UsageBreakdown],
+    clients: [LocalUsageClientSummary]? = nil,
     coverageTruncated: Bool? = nil,
     breakdownsTruncated: Bool? = nil
   ) {
     self.range = range
     self.totals = totals
     self.cost = cost
+    self.modelCatalogRevision = modelCatalogRevision
     self.coverage = coverage
     self.breakdowns = breakdowns
+    self.clients = clients
     self.coverageTruncated = coverageTruncated
     self.breakdownsTruncated = breakdownsTruncated
   }
@@ -772,25 +806,31 @@ struct AccountUsageSummary: Codable, Equatable, Sendable {
     range.isValid
       && totals.isValid
       && cost.isValid
+      && modelCatalogRevision.map(isUsageOpaqueID) != false
       && coverage.count <= 2_048
       && coverage.allSatisfy(\.isValid)
       && breakdowns.count <= 1_000
       && breakdowns.allSatisfy(\.isValid)
+      && clients.map { $0.count <= 5 && $0.allSatisfy(\.isValid) } != false
   }
 }
 
 extension AccountUsageSummary {
   init(from decoder: Decoder) throws {
     try decoder.rejectUnknownWireKeys([
-      "range", "totals", "cost", "coverage", "breakdowns", "coverageTruncated",
+      "range", "totals", "cost", "modelCatalogRevision", "coverage", "breakdowns",
+      "clients",
+      "coverageTruncated",
       "breakdownsTruncated",
     ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     range = try container.decode(UsageDateRange.self, forKey: .range)
     totals = try container.decode(UsageTokenTotals.self, forKey: .totals)
     cost = try container.decode(UsageCostOutcome.self, forKey: .cost)
+    modelCatalogRevision = try container.decodeIfPresent(String.self, forKey: .modelCatalogRevision)
     coverage = try container.decode([UsageCoverageSummaryItem].self, forKey: .coverage)
     breakdowns = try container.decode([UsageBreakdown].self, forKey: .breakdowns)
+    clients = try container.decodeIfPresent([LocalUsageClientSummary].self, forKey: .clients)
     coverageTruncated = try decodeTrueMarker(.coverageTruncated, from: container)
     breakdownsTruncated = try decodeTrueMarker(.breakdownsTruncated, from: container)
   }
@@ -802,53 +842,332 @@ enum LocalUsageReportStatus: String, Codable, Sendable {
   case unavailable
 }
 
+struct UsageSummaryTotals: Codable, Equatable, Sendable {
+  let totalTokens: Int
+  let inputTokens: Int
+  let outputTokens: Int
+  let cacheReadInputTokens: Int
+  let cacheWriteInputTokens: Int
+  let reasoningTokens: Int
+  let messages: Int
+
+  private enum CodingKeys: String, CodingKey {
+    case totalTokens
+    case inputTokens
+    case outputTokens
+    case cacheReadInputTokens
+    case cacheWriteInputTokens
+    case reasoningTokens
+    case messages
+  }
+
+  var isValid: Bool {
+    let counts = [
+      totalTokens, inputTokens, outputTokens, cacheReadInputTokens, cacheWriteInputTokens,
+      reasoningTokens, messages,
+    ]
+    return counts.allSatisfy { (0...jsonSafeIntegerMaximum).contains($0) }
+      && safeSum([inputTokens, outputTokens]) == totalTokens
+      && safeSum([cacheReadInputTokens, cacheWriteInputTokens]).map { $0 <= inputTokens } == true
+      && reasoningTokens <= outputTokens
+  }
+
+  init(
+    totalTokens: Int,
+    inputTokens: Int,
+    outputTokens: Int,
+    cacheReadInputTokens: Int,
+    cacheWriteInputTokens: Int,
+    reasoningTokens: Int,
+    messages: Int
+  ) {
+    self.totalTokens = totalTokens
+    self.inputTokens = inputTokens
+    self.outputTokens = outputTokens
+    self.cacheReadInputTokens = cacheReadInputTokens
+    self.cacheWriteInputTokens = cacheWriteInputTokens
+    self.reasoningTokens = reasoningTokens
+    self.messages = messages
+  }
+
+  init(_ totals: UsageTokenTotals) {
+    totalTokens = totals.inputTokens + totals.outputTokens
+    inputTokens = totals.inputTokens
+    outputTokens = totals.outputTokens
+    cacheReadInputTokens = totals.cacheReadTokens
+    cacheWriteInputTokens =
+      totals.cacheWrite5mTokens + totals.cacheWrite1hTokens + totals.cacheWriteInferredTokens
+    reasoningTokens = totals.reasoningTokens
+    messages = totals.requests
+  }
+
+  init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys([
+      "totalTokens", "inputTokens", "outputTokens", "cacheReadInputTokens",
+      "cacheWriteInputTokens", "reasoningTokens", "messages",
+    ])
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    totalTokens = try container.decode(Int.self, forKey: .totalTokens)
+    inputTokens = try container.decode(Int.self, forKey: .inputTokens)
+    outputTokens = try container.decode(Int.self, forKey: .outputTokens)
+    cacheReadInputTokens = try container.decode(Int.self, forKey: .cacheReadInputTokens)
+    cacheWriteInputTokens = try container.decode(Int.self, forKey: .cacheWriteInputTokens)
+    reasoningTokens = try container.decode(Int.self, forKey: .reasoningTokens)
+    messages = try container.decode(Int.self, forKey: .messages)
+    guard isValid else {
+      throw DecodingError.dataCorruptedError(
+        forKey: .totalTokens, in: container, debugDescription: "Invalid Usage summary totals.")
+    }
+  }
+}
+
+struct LocalUsageModelSummary: Codable, Equatable, Sendable {
+  let model: String
+  let totals: UsageSummaryTotals
+  let cost: UsageCostOutcome
+
+  private enum CodingKeys: String, CodingKey {
+    case model
+    case totals
+    case cost
+  }
+
+  var isValid: Bool { isUsageModel(model) && totals.isValid && cost.isValid }
+
+  init(
+    model: String,
+    totals: UsageSummaryTotals,
+    cost: UsageCostOutcome
+  ) {
+    self.model = model
+    self.totals = totals
+    self.cost = cost
+  }
+
+  init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys(["model", "totals", "cost"])
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    model = try container.decode(String.self, forKey: .model)
+    totals = try container.decode(UsageSummaryTotals.self, forKey: .totals)
+    cost = try container.decode(UsageCostOutcome.self, forKey: .cost)
+    guard isValid else {
+      throw DecodingError.dataCorruptedError(
+        forKey: .model, in: container, debugDescription: "Invalid local Usage model summary.")
+    }
+  }
+}
+
+struct LocalUsageProviderSummary: Codable, Equatable, Sendable {
+  let provider: InferenceProvider
+  let totals: UsageSummaryTotals
+  let cost: UsageCostOutcome
+  let models: [LocalUsageModelSummary]
+
+  private enum CodingKeys: String, CodingKey {
+    case provider
+    case totals
+    case cost
+    case models
+  }
+
+  var isValid: Bool {
+    totals.isValid && cost.isValid && models.count <= 1_000
+      && models.allSatisfy(\.isValid)
+  }
+
+  init(
+    provider: InferenceProvider,
+    totals: UsageSummaryTotals,
+    cost: UsageCostOutcome,
+    models: [LocalUsageModelSummary]
+  ) {
+    self.provider = provider
+    self.totals = totals
+    self.cost = cost
+    self.models = models
+  }
+
+  init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys(["provider", "totals", "cost", "models"])
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    provider = try container.decode(InferenceProvider.self, forKey: .provider)
+    totals = try container.decode(UsageSummaryTotals.self, forKey: .totals)
+    cost = try container.decode(UsageCostOutcome.self, forKey: .cost)
+    models = try container.decode([LocalUsageModelSummary].self, forKey: .models)
+    guard isValid else {
+      throw DecodingError.dataCorruptedError(
+        forKey: .provider, in: container, debugDescription: "Invalid local Usage provider summary.")
+    }
+  }
+}
+
+struct LocalUsageClientSummary: Codable, Equatable, Sendable {
+  let client: BillingAgent
+  let totals: UsageSummaryTotals
+  let cost: UsageCostOutcome
+  let providers: [LocalUsageProviderSummary]
+
+  private enum CodingKeys: String, CodingKey {
+    case client
+    case totals
+    case cost
+    case providers
+  }
+
+  var isValid: Bool {
+    totals.isValid && cost.isValid && providers.count <= 8 && providers.allSatisfy(\.isValid)
+  }
+
+  init(
+    client: BillingAgent,
+    totals: UsageSummaryTotals,
+    cost: UsageCostOutcome,
+    providers: [LocalUsageProviderSummary]
+  ) {
+    self.client = client
+    self.totals = totals
+    self.cost = cost
+    self.providers = providers
+  }
+
+  init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys(["client", "totals", "cost", "providers"])
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    client = try container.decode(BillingAgent.self, forKey: .client)
+    totals = try container.decode(UsageSummaryTotals.self, forKey: .totals)
+    cost = try container.decode(UsageCostOutcome.self, forKey: .cost)
+    providers = try container.decode([LocalUsageProviderSummary].self, forKey: .providers)
+    guard isValid else {
+      throw DecodingError.dataCorruptedError(
+        forKey: .client, in: container, debugDescription: "Invalid local Usage client summary.")
+    }
+  }
+}
+
+struct LocalUsagePeriodSummary: Codable, Equatable, Sendable {
+  let totals: UsageSummaryTotals
+  let cost: UsageCostOutcome
+  let clients: [LocalUsageClientSummary]
+  let modelsTruncated: Bool?
+
+  private enum CodingKeys: String, CodingKey {
+    case totals
+    case cost
+    case clients
+    case modelsTruncated
+  }
+
+  var isValid: Bool {
+    totals.isValid && cost.isValid && clients.count <= 5 && clients.allSatisfy(\.isValid)
+      && modelsTruncated != false
+  }
+
+  init(
+    totals: UsageSummaryTotals,
+    cost: UsageCostOutcome,
+    clients: [LocalUsageClientSummary],
+    modelsTruncated: Bool? = nil
+  ) {
+    self.totals = totals
+    self.cost = cost
+    self.clients = clients
+    self.modelsTruncated = modelsTruncated
+  }
+
+  init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys(["totals", "cost", "clients", "modelsTruncated"])
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    totals = try container.decode(UsageSummaryTotals.self, forKey: .totals)
+    cost = try container.decode(UsageCostOutcome.self, forKey: .cost)
+    clients = try container.decode([LocalUsageClientSummary].self, forKey: .clients)
+    modelsTruncated = try decodeTrueMarker(.modelsTruncated, from: container)
+    guard isValid else {
+      throw DecodingError.dataCorruptedError(
+        forKey: .clients, in: container, debugDescription: "Invalid local Usage period summary.")
+    }
+  }
+}
+
+struct LocalUsageCoverage: Codable, Equatable, Sendable {
+  let client: BillingAgent
+  let startAt: String
+  let endAt: String
+  let status: CoverageStatus
+
+  private enum CodingKeys: String, CodingKey {
+    case client
+    case startAt
+    case endAt
+    case status
+  }
+
+  var isOrdered: Bool {
+    guard let start = UsageCoverage.utcHour(startAt), let end = UsageCoverage.utcHour(endAt) else {
+      return false
+    }
+    return end > start
+  }
+
+  init(
+    client: BillingAgent,
+    startAt: String,
+    endAt: String,
+    status: CoverageStatus
+  ) {
+    self.client = client
+    self.startAt = startAt
+    self.endAt = endAt
+    self.status = status
+  }
+
+  init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys(["client", "startAt", "endAt", "status"])
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    client = try container.decode(BillingAgent.self, forKey: .client)
+    startAt = try container.decode(String.self, forKey: .startAt)
+    endAt = try container.decode(String.self, forKey: .endAt)
+    status = try container.decode(CoverageStatus.self, forKey: .status)
+    guard isOrdered else {
+      throw DecodingError.dataCorruptedError(
+        forKey: .startAt, in: container, debugDescription: "Invalid local Usage coverage range.")
+    }
+  }
+}
+
 struct LocalUsageReport: Codable, Equatable, Sendable {
   let protocolVersion: Int
   let generatedAt: Date
   let aggregationTimezone: String?
   let range: UsageDateRange
   let status: LocalUsageReportStatus
-  let totals: UsageTokenTotals?
-  let cost: UsageCostOutcome?
-  let coverage: [UsageCoverage]
-  let breakdowns: [UsageBreakdown]
+  let modelCatalogRevision: String?
+  let coverage: [LocalUsageCoverage]
   let coverageTruncated: Bool?
-  let breakdownsTruncated: Bool?
-
-  var hasTruncatedDetails: Bool {
-    coverageTruncated == true || breakdownsTruncated == true || cost?.hasUnpricedTruncatedDetails == true
-  }
 
   init(
-    protocolVersion: Int = 2,
+    protocolVersion: Int = 3,
     generatedAt: Date,
     aggregationTimezone: String?,
     range: UsageDateRange,
     status: LocalUsageReportStatus,
-    totals: UsageTokenTotals?,
-    cost: UsageCostOutcome?,
-    coverage: [UsageCoverage],
-    breakdowns: [UsageBreakdown],
-    coverageTruncated: Bool? = nil,
-    breakdownsTruncated: Bool? = nil
+    modelCatalogRevision: String? = nil,
+    coverage: [LocalUsageCoverage],
+    coverageTruncated: Bool? = nil
   ) {
     self.protocolVersion = protocolVersion
     self.generatedAt = generatedAt
     self.aggregationTimezone = aggregationTimezone
     self.range = range
     self.status = status
-    self.totals = totals
-    self.cost = cost
+    self.modelCatalogRevision = modelCatalogRevision
     self.coverage = coverage
-    self.breakdowns = breakdowns
     self.coverageTruncated = coverageTruncated
-    self.breakdownsTruncated = breakdownsTruncated
   }
 
   init(from decoder: Decoder) throws {
     try decoder.rejectUnknownWireKeys([
-      "protocolVersion", "generatedAt", "aggregationTimezone", "range", "status", "totals", "cost",
-      "coverage", "breakdowns", "coverageTruncated", "breakdownsTruncated",
+      "protocolVersion", "generatedAt", "aggregationTimezone", "range", "status",
+      "modelCatalogRevision", "coverage", "coverageTruncated",
     ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     protocolVersion = try container.decode(Int.self, forKey: .protocolVersion)
@@ -856,12 +1175,9 @@ struct LocalUsageReport: Codable, Equatable, Sendable {
     aggregationTimezone = try container.decode(String?.self, forKey: .aggregationTimezone)
     range = try container.decode(UsageDateRange.self, forKey: .range)
     status = try container.decode(LocalUsageReportStatus.self, forKey: .status)
-    totals = try container.decode(UsageTokenTotals?.self, forKey: .totals)
-    cost = try container.decode(UsageCostOutcome?.self, forKey: .cost)
-    coverage = try container.decode([UsageCoverage].self, forKey: .coverage)
-    breakdowns = try container.decode([UsageBreakdown].self, forKey: .breakdowns)
+    modelCatalogRevision = try container.decode(String?.self, forKey: .modelCatalogRevision)
+    coverage = try container.decode([LocalUsageCoverage].self, forKey: .coverage)
     coverageTruncated = try decodeTrueMarker(.coverageTruncated, from: container)
-    breakdownsTruncated = try decodeTrueMarker(.breakdownsTruncated, from: container)
 
     let unavailable = status == .unavailable
     let expectedStatus: LocalUsageReportStatus =
@@ -869,22 +1185,17 @@ struct LocalUsageReport: Codable, Equatable, Sendable {
     let validAvailable =
       !unavailable
       && aggregationTimezone.flatMap(TimeZone.init(identifier:)) != nil
-      && totals?.isValid == true
-      && cost?.isValid == true
+      && modelCatalogRevision.map(isUsageOpaqueID) != false
       && status == expectedStatus
     let validUnavailable =
       unavailable
       && aggregationTimezone == nil
-      && totals == nil
-      && cost == nil
+      && modelCatalogRevision == nil
       && coverage.isEmpty
-      && breakdowns.isEmpty
-    guard protocolVersion == 2,
+    guard protocolVersion == 3,
       range.isValid,
       coverage.count <= 2_048,
       coverage.allSatisfy(\.isOrdered),
-      breakdowns.count <= 1_000,
-      breakdowns.allSatisfy(\.isValid),
       validAvailable || validUnavailable
     else {
       throw DecodingError.dataCorruptedError(
@@ -902,12 +1213,9 @@ struct LocalUsageReport: Codable, Equatable, Sendable {
     try container.encode(aggregationTimezone, forKey: .aggregationTimezone)
     try container.encode(range, forKey: .range)
     try container.encode(status, forKey: .status)
-    try container.encode(totals, forKey: .totals)
-    try container.encode(cost, forKey: .cost)
+    try container.encode(modelCatalogRevision, forKey: .modelCatalogRevision)
     try container.encode(coverage, forKey: .coverage)
-    try container.encode(breakdowns, forKey: .breakdowns)
     try container.encodeIfPresent(coverageTruncated, forKey: .coverageTruncated)
-    try container.encodeIfPresent(breakdownsTruncated, forKey: .breakdownsTruncated)
   }
 
   private enum CodingKeys: String, CodingKey {
@@ -916,12 +1224,9 @@ struct LocalUsageReport: Codable, Equatable, Sendable {
     case aggregationTimezone
     case range
     case status
-    case totals
-    case cost
+    case modelCatalogRevision
     case coverage
-    case breakdowns
     case coverageTruncated
-    case breakdownsTruncated
   }
 }
 
@@ -1669,7 +1974,7 @@ private func isUsagePricingDimension(_ value: String) -> Bool {
 private func isUsageModel(_ value: String) -> Bool {
   guard !value.isEmpty, value.unicodeScalars.count <= 128 else { return false }
   return value.unicodeScalars.allSatisfy { scalar in
-    !((0 ... 31).contains(scalar.value) || (127 ... 159).contains(scalar.value))
+    !((0...31).contains(scalar.value) || (127...159).contains(scalar.value))
   }
 }
 

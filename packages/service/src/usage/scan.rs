@@ -15,7 +15,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-pub const DEFAULT_PARSER_REVISION: &str = "usage-rust-v4";
+pub const DEFAULT_PARSER_REVISION: &str = "usage-rust-v5";
 
 #[derive(Clone, Debug)]
 pub struct UsageScanOptions {
@@ -135,7 +135,7 @@ pub(crate) fn roots_for(agent: UsageAgent, options: &UsageScanOptions) -> Vec<Pa
         }
         UsageAgent::Grok => {
             let root = env("GROK_HOME").unwrap_or_else(|| home.join(".grok"));
-            vec![root.join("sessions"), root.join("trace-exports")]
+            vec![root.join("sessions")]
         }
         UsageAgent::OpenCode => {
             let root = env("XDG_DATA_HOME").unwrap_or_else(|| home.join(".local").join("share"));
@@ -734,13 +734,7 @@ pub(crate) fn accepts_file(agent: UsageAgent, path: &Path) -> bool {
     match agent {
         UsageAgent::Codex => name.starts_with("rollout-") && name.ends_with(".jsonl"),
         UsageAgent::ClaudeCode | UsageAgent::Pi => name.ends_with(".jsonl"),
-        UsageAgent::Grok => {
-            name == "events.jsonl"
-                || (path
-                    .components()
-                    .any(|component| component.as_os_str().to_str() == Some("trace-exports"))
-                    && name.ends_with(".jsonl"))
-        }
+        UsageAgent::Grok => name == "updates.jsonl",
         UsageAgent::OpenCode => name == "opencode.db" || name.ends_with(".json"),
     }
 }

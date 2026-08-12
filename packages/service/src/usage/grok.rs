@@ -1,9 +1,9 @@
 use super::scan::{UsageParser, discover_usage_files_at, roots_for, scan_jsonl_files};
 use super::{
     BillableTools, BillingChannel, ChannelSource, NormalizedUsageEvent, NormalizedUsageRecord,
-    ParsedLine, UsageAgent, UsageError, bounded_dimension, bounded_model, canonical_instant,
-    context_bucket, object, optional_count,
+    ParsedLine, UsageAgent, UsageError, bounded_model_text, context_bucket, object,
 };
+use chrono::{DateTime, SecondsFormat, Utc};
 use serde_json::{Map, Value};
 
 pub fn scan_grok_usage(
@@ -11,80 +11,92 @@ pub fn scan_grok_usage(
 ) -> Result<super::UsageScanResult, UsageError> {
     let discovery =
         discover_usage_files_at(UsageAgent::Grok, &roots_for(UsageAgent::Grok, options))?;
-    scan_jsonl_files(UsageAgent::Grok, options, discovery, || {
-        GrokParser::default()
-    })
+    scan_jsonl_files(UsageAgent::Grok, options, discovery, || GrokParser)
 }
 
-#[derive(Default)]
-struct GrokParser {
-    model: Option<String>,
-    turn_started_at: Option<String>,
-}
+struct GrokParser;
 
 impl UsageParser for GrokParser {
     fn parse(&mut self, value: &Map<String, Value>, source_file_id: &str) -> ParsedLine {
-        match value.get("type").and_then(Value::as_str) {
-            Some("turn_started") => {
-                self.turn_started_at = value
-                    .get("ts")
-                    .and_then(Value::as_str)
-                    .and_then(canonical_instant);
-                self.model = if value.get("model_id").and_then(Value::as_str) == Some("unknown") {
-                    None
-                } else {
-                    bounded_model(value.get("model_id"))
-                };
-                ParsedLine::empty()
-            }
-            Some("usage") => self.usage(value, source_file_id),
-            _ => ParsedLine::empty(),
+        if value.get("method").and_then(Value::as_str) != Some("_x.ai/session/update") {
+            return ParsedLine::empty();
         }
+        let Some(params) = object(value.get("params")) else {
+            return ParsedLine::reason(super::CoverageReasonCode::InvalidUsage);
+        };
+        let Some(update) = object(params.get("update")) else {
+            return ParsedLine::reason(super::CoverageReasonCode::InvalidUsage);
+        };
+        if update.get("sessionUpdate").and_then(Value::as_str) != Some("turn_completed") {
+            return ParsedLine::empty();
+        }
+        let Some(usage_value) = update.get("usage") else {
+            return ParsedLine::empty();
+        };
+        if usage_value.is_null() {
+            return ParsedLine::empty();
+        }
+        let Some(usage) = object(Some(usage_value)) else {
+            return ParsedLine::reason(super::CoverageReasonCode::InvalidUsage);
+        };
+        self.usage(value, usage, source_file_id)
     }
 }
 
 impl GrokParser {
-    fn usage(&self, value: &Map<String, Value>, source_file_id: &str) -> ParsedLine {
-        let Some(usage) = object(value.get("usage")) else {
+    fn usage(
+        &self,
+        value: &Map<String, Value>,
+        usage: &Map<String, Value>,
+        source_file_id: &str,
+    ) -> ParsedLine {
+        let Some(messages) = super::safe_count(usage.get("numTurns")).filter(|value| *value > 0)
+        else {
             return ParsedLine::reason(super::CoverageReasonCode::InvalidUsage);
         };
-        let explicit_model = value.get("model_id").or_else(|| value.get("model"));
-        if explicit_model.and_then(Value::as_str) == Some("unknown") {
+        let Some(model_calls) = super::safe_count(usage.get("modelCalls")) else {
+            return ParsedLine::reason(super::CoverageReasonCode::InvalidUsage);
+        };
+        let Some(models) = object(usage.get("modelUsage")) else {
+            return ParsedLine::reason(super::CoverageReasonCode::InvalidUsage);
+        };
+        if models.len() != 1 {
+            return ParsedLine::reason(super::CoverageReasonCode::InvalidUsage);
+        }
+        let Some((reported_model, model_value)) = models.iter().next() else {
+            return ParsedLine::reason(super::CoverageReasonCode::InvalidUsage);
+        };
+        if reported_model == "unknown" {
             return ParsedLine::empty();
         }
-        let model = match explicit_model {
-            Some(value) => bounded_model(Some(value)),
-            None => self.model.clone(),
+        let Some(model) = bounded_model_text(Some(reported_model)) else {
+            return ParsedLine::reason(super::CoverageReasonCode::InvalidModel);
         };
-        let Some(model) = model else {
-            return ParsedLine::empty();
+        let Some(model_usage) = object(Some(model_value)) else {
+            return ParsedLine::reason(super::CoverageReasonCode::InvalidUsage);
         };
-        let occurred_at = value
-            .get("ts")
-            .and_then(Value::as_str)
-            .and_then(canonical_instant)
-            .or_else(|| self.turn_started_at.clone());
-        let Some(occurred_at) = occurred_at else {
+        if super::safe_count(model_usage.get("modelCalls")) != Some(model_calls)
+            || model_calls < messages
+        {
+            return ParsedLine::reason(super::CoverageReasonCode::InvalidUsage);
+        }
+        let Some(occurred_at) = seconds_instant(value.get("timestamp")) else {
             return ParsedLine::reason(super::CoverageReasonCode::InvalidTimestamp);
         };
-        let Some((input, cache_read, cache_write, output, reasoning)) = parse_usage(usage) else {
+        let Some((input, cache_read, cache_write, output, reasoning)) = parse_usage(model_usage)
+        else {
             return ParsedLine::reason(super::CoverageReasonCode::InvalidUsage);
         };
-        let source_cost = match exact_cost_microusd(usage.get("cost_in_usd_ticks")) {
+        let source_cost = match exact_cost_microusd(model_usage.get("costUsdTicks")) {
             Ok(value) => value,
             Err(()) => return ParsedLine::reason(super::CoverageReasonCode::InvalidUsage),
-        };
-        let Some(tools) = parse_tools(usage.get("server_tool_use")) else {
-            return ParsedLine::reason(super::CoverageReasonCode::InvalidUsage);
         };
         if input == 0
             && cache_read == 0
             && cache_write == 0
             && output == 0
             && reasoning == 0
-            && tools.web_search == 0
-            && tools.web_fetch == 0
-            && source_cost.as_deref().is_none_or(|value| value == "0")
+            && source_cost.is_none()
         {
             return ParsedLine::ignored_empty();
         }
@@ -103,13 +115,13 @@ impl GrokParser {
                     cache_write_inferred_tokens: cache_write,
                     output_tokens: output,
                     reasoning_tokens: reasoning,
-                    requests: 1,
+                    requests: messages,
                     context_bucket: context_bucket(input),
-                    service_tier: optional_dimension(usage.get("service_tier")),
+                    service_tier: "unknown".into(),
                     speed: "unknown".into(),
                     inference_geo: "unknown".into(),
-                    billable_tools: tools,
-                    source_cost_covered_requests: if source_cost.is_some() { 1 } else { 0 },
+                    billable_tools: BillableTools::default(),
+                    source_cost_covered_requests: if source_cost.is_some() { messages } else { 0 },
                     source_cost_microusd: source_cost,
                 },
                 source_file_id: source_file_id.to_owned(),
@@ -122,44 +134,26 @@ impl GrokParser {
 }
 
 fn parse_usage(usage: &Map<String, Value>) -> Option<(u64, u64, u64, u64, u64)> {
-    let input = super::safe_count(usage.get("input_tokens"))?;
-    let output = super::safe_count(usage.get("output_tokens"))?;
-    let cache_read = optional_count(usage.get("cache_read_input_tokens"))?;
-    let cache_write = optional_count(usage.get("cache_creation_input_tokens"))?;
-    let reasoning = optional_count(usage.get("reasoning_tokens"))?;
-    (reasoning <= output).then_some((
-        super::safe_sum(&[input, cache_read, cache_write])?,
-        cache_read,
-        cache_write,
-        output,
-        reasoning,
-    ))
+    let input = super::safe_count(usage.get("inputTokens"))?;
+    let output = super::safe_count(usage.get("outputTokens"))?;
+    let total = super::safe_count(usage.get("totalTokens"))?;
+    let cache_read = super::safe_count(usage.get("cachedReadTokens"))?;
+    let cache_write = super::safe_count(usage.get("cacheCreationTokens"))?;
+    let reasoning = super::safe_count(usage.get("reasoningTokens"))?;
+    (total == super::safe_sum(&[input, output])?
+        && super::safe_sum(&[cache_read, cache_write])? <= input
+        && reasoning <= output)
+        .then_some((input, cache_read, cache_write, output, reasoning))
 }
 
-fn parse_tools(value: Option<&Value>) -> Option<BillableTools> {
-    let Some(value) = value else {
-        return Some(BillableTools::default());
-    };
-    if value.is_null() {
-        return Some(BillableTools::default());
-    }
-    let tools = object(Some(value))?;
-    Some(BillableTools {
-        web_search: optional_count(tools.get("web_search_requests"))?,
-        web_fetch: optional_count(tools.get("web_fetch_requests"))?,
-    })
+fn seconds_instant(value: Option<&Value>) -> Option<String> {
+    let seconds = super::safe_count(value)?;
+    DateTime::<Utc>::from_timestamp(i64::try_from(seconds).ok()?, 0)
+        .map(|value| value.to_rfc3339_opts(SecondsFormat::Millis, true))
 }
 
 fn exact_cost_microusd(value: Option<&Value>) -> Result<Option<String>, ()> {
-    let Some(value) = value else { return Ok(None) };
-    if value.is_null() {
-        return Ok(None);
-    }
-    let Some(ticks) = (match value {
-        Value::String(value) => value.parse::<u128>().ok(),
-        Value::Number(value) => value.as_u64().map(u128::from),
-        _ => None,
-    }) else {
+    let Some(ticks) = value.and_then(Value::as_u64) else {
         return Err(());
     };
     if ticks == 0 {
@@ -171,12 +165,4 @@ fn exact_cost_microusd(value: Option<&Value>) -> Result<Option<String>, ()> {
         return Err(());
     }
     Ok(Some(value))
-}
-
-fn optional_dimension(value: Option<&Value>) -> String {
-    match value {
-        None | Some(Value::Null) => "unknown".into(),
-        Some(Value::String(value)) if value.is_empty() => "unknown".into(),
-        Some(value) => bounded_dimension(Some(value)).unwrap_or_else(|| "unknown".into()),
-    }
 }

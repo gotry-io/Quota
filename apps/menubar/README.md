@@ -17,7 +17,12 @@ The Rust service returns persisted component state immediately, then performs st
 the background. It owns the five-minute schedule, providers, Usage, pricing, OAuth/account sync,
 SQLite, outbox, and local/account observation merge. QuotaBar owns presentation, provider visibility
 and ordering preferences, native provider configuration fields, account actions, accessibility, and
-Launch at Login. Quitting the app closes stdin and stops the service and all synchronization.
+Launch at Login. The service persists the Usage upload preference so it applies before its startup
+refresh. Quitting the app closes stdin and stops the service and all synchronization.
+
+Each background refresh precomputes Today, 7 Days, 30 Days, and All for This Mac and, when enabled,
+the signed-in Account. The four values are persisted and returned by `get_state`; Swift only selects
+among them and never slices totals or infers client/provider/model ownership.
 
 Settings includes a **Diagnostics** action backed by the private `diagnose` IPC operation. It copies
 the same bounded, redacted report consumed by Linux `quotacli doctor`, covering provider/quota
@@ -59,7 +64,7 @@ Build the deterministic visual app with `pnpm build:menubar:visual`. It accepts:
 ```text
 --data-source fixture|live
 --fixture loading|content|cached-refresh-error|empty|unavailable
---route overview|settings|agents|provider-codex|provider-openrouter|devices|usage
+--route overview|settings|agents|provider-codex|provider-openrouter|devices|usage|support|diagnostics
 --appearance system|light|dark
 --text-size standard|extra-large|accessibility
 ```

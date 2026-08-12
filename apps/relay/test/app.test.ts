@@ -1,7 +1,6 @@
 import { applyD1Migrations, env } from "cloudflare:test";
 import type { D1Migration } from "@cloudflare/vitest-pool-workers";
 import {
-  AccountUsageSummarySchema,
   type DeviceAuthorizationResponse,
   MAXIMUM_USAGE_COVERAGE_HOURS,
   type OAuthTokenResponse,
@@ -487,7 +486,7 @@ describe("managed Relay on real Workers and D1", () => {
     });
   });
 
-  it("filters additive Usage agents for released v2 clients", async () => {
+  it("filters account Usage by requested agents", async () => {
     await env.DB.batch([
       env.DB.prepare(
         "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_agents', 'subject_agents', ?1, ?1)",
@@ -502,20 +501,20 @@ describe("managed Relay on real Workers and D1", () => {
     ]);
 
     const state = new D1UsageState(env.DB);
-    const legacy = await state.queryAccountUsage("account_agents", {
+    const filtered = await state.queryAccountUsage("account_agents", {
       agents: ["codex", "claude_code"],
       limit: 100,
     });
-    const expanded = await state.queryAccountUsage("account_agents", {
+    const all = await state.queryAccountUsage("account_agents", {
       agents: ["codex", "claude_code", "grok", "opencode", "pi"],
       limit: 100,
     });
 
-    expect(legacy.rows.map((row) => row.agent)).toEqual(["codex"]);
-    expect(expanded.rows.map((row) => row.agent)).toEqual(["codex", "grok"]);
+    expect(filtered.rows.map((row) => row.agent)).toEqual(["codex"]);
+    expect(all.rows.map((row) => row.agent)).toEqual(["codex", "grok"]);
   });
 
-  it("keeps additive pricing channels behind the v2 opt-in", async () => {
+  it("serves the current pricing and model catalogs", async () => {
     const state = new D1AccountState(env.DB);
     const hasher = new SecretHasher(secret);
     const app = createRelayApp({
@@ -534,22 +533,34 @@ describe("managed Relay on real Workers and D1", () => {
       now: () => now,
     });
 
-    const legacy = (await (
-      await app.request("https://quota.gotry.io/api/v2/pricing/catalog")
-    ).json()) as { entries: Array<{ billing_channel: string }> };
-    const expanded = (await (
+    const pricing = (await (
       await app.request("https://quota.gotry.io/api/v2/pricing/catalog?usage_agents=all")
     ).json()) as { entries: Array<{ billing_channel: string }> };
     const invalid = await app.request(
       "https://quota.gotry.io/api/v2/pricing/catalog?usage_agents=codex",
     );
 
-    expect(legacy.entries.some((entry) => entry.billing_channel === "xai_direct")).toBe(false);
-    expect(expanded.entries.some((entry) => entry.billing_channel === "xai_direct")).toBe(true);
+    expect(pricing.entries.some((entry) => entry.billing_channel === "xai_direct")).toBe(true);
     expect(invalid.status).toBe(400);
+
+    const modelCatalog = await app.request("https://quota.gotry.io/api/v2/model/catalog");
+    expect(modelCatalog.status).toBe(200);
+    expect(modelCatalog.headers.get("cache-control")).toBe("public, max-age=300, must-revalidate");
+    const modelETag = modelCatalog.headers.get("etag");
+    expect(modelETag).toBeTruthy();
+    expect((await modelCatalog.json()) as { revision: string }).toMatchObject({
+      revision: expect.any(String),
+    });
+    const modelNotModified = await app.request("https://quota.gotry.io/api/v2/model/catalog", {
+      headers: { "If-None-Match": modelETag ?? "" },
+    });
+    expect(modelNotModified.status).toBe(304);
+    expect(
+      (await app.request("https://quota.gotry.io/api/v2/model/catalog?unexpected=1")).status,
+    ).toBe(400);
   });
 
-  it("keeps the shipped summary range while new clients opt into retained history", async () => {
+  it("serves retained account history and opted-in client groups", async () => {
     await env.DB.batch([
       env.DB.prepare(
         "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_history', 'account_history', ?1, ?1)",
@@ -585,41 +596,47 @@ describe("managed Relay on real Workers and D1", () => {
       now: () => now,
     });
 
-    const legacy = (await (
-      await app.request("https://quota.gotry.io/api/v2/account/summary")
-    ).json()) as {
-      usage: { range: { from: string; to: string }; totals: { requests: number } };
-    };
-    const expanded = (await (
+    const current = (await (
       await app.request("https://quota.gotry.io/api/v2/account/summary?usage_agents=all")
     ).json()) as {
       usage: {
         range: { from: string; to: string };
         totals: { requests: number };
         breakdowns: Array<{ dimension: string }>;
+        clients?: unknown;
+      };
+    };
+    const structured = (await (
+      await app.request(
+        "https://quota.gotry.io/api/v2/account/summary?usage_agents=all&model_catalog=1&usage_clients=1",
+      )
+    ).json()) as {
+      usage: {
+        clients: Array<{
+          client: string;
+          totals: { messages: number };
+          providers: Array<{ provider: string; models: Array<{ model: string }> }>;
+        }>;
       };
     };
 
-    expect(legacy.usage).toMatchObject({
-      range: { from: "2026-07-12", to: "2026-08-10" },
-      totals: { requests: 1 },
-    });
-    expect(expanded.usage).toMatchObject({
+    expect(current.usage).toMatchObject({
       range: { from: "2025-01-01", to: "2026-08-09" },
       totals: { requests: 2 },
     });
+    expect(current.usage.clients).toBeUndefined();
+    expect(structured.usage.clients).toMatchObject([
+      {
+        client: "codex",
+        totals: { messages: 2 },
+        providers: [{ provider: "openai", models: [{ model: "gpt-5.6-sol" }] }],
+      },
+    ]);
     expect(
-      expanded.usage.breakdowns.some(
+      current.usage.breakdowns.some(
         ({ dimension }) => dimension === "usage_date" || dimension === "bucket_start_utc",
       ),
     ).toBe(false);
-    expect(
-      (
-        await app.request(
-          "https://quota.gotry.io/api/v2/account/summary?from=2025-01-01&to=2026-08-10",
-        )
-      ).status,
-    ).toBe(400);
     expect(
       (
         await app.request(
@@ -627,9 +644,12 @@ describe("managed Relay on real Workers and D1", () => {
         )
       ).status,
     ).toBe(200);
+    expect(
+      (await app.request("https://quota.gotry.io/api/v2/account/summary?usage_clients=0")).status,
+    ).toBe(400);
   });
 
-  it("keeps high-cardinality legacy summaries on the released response shape", async () => {
+  it("marks high-cardinality summaries as truncated", async () => {
     const models = JSON.stringify(Array.from({ length: 1_001 }, (_, index) => index));
     await env.DB.batch([
       env.DB.prepare(
@@ -679,26 +699,25 @@ describe("managed Relay on real Workers and D1", () => {
       now: () => now,
     });
 
-    const legacyResponse = await app.request(
-      "https://quota.gotry.io/api/v2/account/summary?cost_mode=reported",
-    );
-    const legacy = (await legacyResponse.json()) as { usage: Record<string, unknown> };
-    expect(legacyResponse.status).toBe(200);
-    const legacySchema = AccountUsageSummarySchema.omit({
-      coverage_truncated: true,
-      breakdowns_truncated: true,
-    });
-    expect(legacySchema.safeParse(legacy.usage).success).toBe(true);
-    expect("coverage_truncated" in legacy.usage).toBe(false);
-    expect("breakdowns_truncated" in legacy.usage).toBe(false);
-
-    const expanded = (await (
+    const summary = (await (
       await app.request("https://quota.gotry.io/api/v2/account/summary?usage_agents=all")
     ).json()) as {
       usage: { breakdowns_truncated?: boolean; cost: { unpriced_truncated?: boolean } };
     };
-    expect(expanded.usage.breakdowns_truncated).toBe(true);
-    expect(expanded.usage.cost.unpriced_truncated).toBe(true);
+    expect(summary.usage.breakdowns_truncated).toBe(true);
+    expect(summary.usage.cost.unpriced_truncated).toBe(true);
+
+    const optedInResponse = await app.request(
+      "https://quota.gotry.io/api/v2/account/summary?usage_agents=all&model_catalog=1",
+    );
+    const optedIn = (await optedInResponse.json()) as {
+      usage: { model_catalog_revision?: string };
+    };
+    expect(optedInResponse.status).toBe(200);
+    expect(optedIn.usage.model_catalog_revision).toEqual(expect.any(String));
+    expect(
+      (await app.request("https://quota.gotry.io/api/v2/account/summary?model_catalog=0")).status,
+    ).toBe(400);
   });
 
   it("stores Better Auth sessions encrypted behind hashed keys", async () => {

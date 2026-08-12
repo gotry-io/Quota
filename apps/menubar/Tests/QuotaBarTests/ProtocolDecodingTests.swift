@@ -11,6 +11,10 @@ func loadsBundledProviderBrandSVGs() throws {
     #expect(url.pathExtension == "svg")
     #expect(NSImage(contentsOf: url) != nil)
   }
+  for assetName in ["azureai", "bedrock", "vertexai", "opencode", "pi"] {
+    let url = try #require(ProviderBrandAssets.resourceURL(named: assetName))
+    #expect(NSImage(contentsOf: url) != nil)
+  }
 }
 
 @Test @MainActor
@@ -99,12 +103,37 @@ func decodesAccountSummaryWithUsageCost() throws {
   expandedUsage["cost"] = expandedCost
   expandedUsage["coverage_truncated"] = true
   expandedUsage["breakdowns_truncated"] = true
+  let structuredTotals: [String: Any] = [
+    "total_tokens": 1200,
+    "input_tokens": 1000,
+    "output_tokens": 200,
+    "cache_read_input_tokens": 100,
+    "cache_write_input_tokens": 0,
+    "reasoning_tokens": 50,
+    "messages": 1,
+  ]
+  expandedUsage["clients"] = [[
+    "client": "codex",
+    "totals": structuredTotals,
+    "cost": expandedCost,
+    "providers": [[
+      "provider": "openai",
+      "totals": structuredTotals,
+      "cost": expandedCost,
+      "models": [[
+        "model": "gpt-5.6-sol",
+        "totals": structuredTotals,
+        "cost": expandedCost,
+      ]],
+    ]],
+  ]]
   expandedObject["usage"] = expandedUsage
   let expandedData = try JSONSerialization.data(withJSONObject: expandedObject)
   let expanded = try QuotaWireCodec.makeDecoder().decode(AccountSummary.self, from: expandedData)
   #expect(expanded.usage.hasTruncatedDetails)
   #expect(expanded.usage.cost.hasUnpricedTruncatedDetails)
   #expect(expanded.usage.cost.unpricedRows == 1)
+  #expect(expanded.usage.clients?.first?.providers.first?.models.first?.model == "gpt-5.6-sol")
 
   var falseMarkerObject = expandedObject
   var falseMarkerUsage = try #require(falseMarkerObject["usage"] as? [String: Any])
@@ -209,6 +238,8 @@ func rejectsUnknownNestedLocalServiceStateFields() throws {
     {
       "ipc_version": 1,
       "revision": 0,
+      "usage_upload_enabled": true,
+      "usage_periods": {"local": {}, "account": {}},
       "quota": {
         "status": "unavailable",
         "value": null,
@@ -256,6 +287,7 @@ func rejectsUnknownNestedLocalServiceStateFields() throws {
 
   let state = try QuotaWireCodec.makeDecoder().decode(LocalServiceState.self, from: data)
   #expect(state.pricing.value?.revision == "pricing_test")
+  #expect(state.usageUploadEnabled)
 
   let pricingExtra = Data(
     String(decoding: data, as: UTF8.self).replacingOccurrences(
@@ -316,13 +348,15 @@ func decodesUnifiedDiagnosticsAndRejectsUnknownFields() throws {
 
   var issueObject = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
   issueObject["status"] = "degraded"
-  issueObject["issues"] = [[
-    "component": "usage",
-    "code": "scan_partial",
-    "severity": "warning",
-    "count": 2,
-    "message": "some sources are incomplete",
-  ]]
+  issueObject["issues"] = [
+    [
+      "component": "usage",
+      "code": "scan_partial",
+      "severity": "warning",
+      "count": 2,
+      "message": "some sources are incomplete",
+    ]
+  ]
   let issueData = try JSONSerialization.data(withJSONObject: issueObject)
   let issueReport = try QuotaWireCodec.makeDecoder().decode(
     LocalServiceDiagnosticReport.self, from: issueData
@@ -463,33 +497,112 @@ func decodesLocalUsageTruncationFields() throws {
     aggregationTimezone: nil,
     range: UsageDateRange(from: "2026-08-01", to: "2026-08-02"),
     status: .unavailable,
-    totals: nil,
-    cost: nil,
     coverage: [],
-    breakdowns: [],
-    coverageTruncated: true,
-    breakdownsTruncated: true
+    coverageTruncated: true
   )
   let data = try QuotaWireCodec.makeEncoder().encode(report)
+  let encodedText = String(decoding: data, as: UTF8.self)
+  #expect(!encodedText.contains("\"today\""))
+  #expect(!encodedText.contains("\"usage\""))
   let decoded = try QuotaWireCodec.makeDecoder().decode(LocalUsageReport.self, from: data)
-  #expect(decoded.hasTruncatedDetails)
   #expect(decoded.coverageTruncated == true)
-  #expect(decoded.breakdownsTruncated == true)
+
+  var missingRevisionObject = try #require(
+    JSONSerialization.jsonObject(with: data) as? [String: Any])
+  missingRevisionObject.removeValue(forKey: "model_catalog_revision")
+  let missingRevision = try JSONSerialization.data(withJSONObject: missingRevisionObject)
+  #expect(throws: DecodingError.self) {
+    _ = try QuotaWireCodec.makeDecoder().decode(LocalUsageReport.self, from: missingRevision)
+  }
 
   let falseMarker = LocalUsageReport(
     generatedAt: report.generatedAt,
     aggregationTimezone: nil,
     range: report.range,
     status: .unavailable,
-    totals: nil,
-    cost: nil,
     coverage: [],
-    breakdowns: [],
     coverageTruncated: false
   )
   let falseMarkerData = try QuotaWireCodec.makeEncoder().encode(falseMarker)
   #expect(throws: DecodingError.self) {
     _ = try QuotaWireCodec.makeDecoder().decode(LocalUsageReport.self, from: falseMarkerData)
+  }
+}
+
+@Test
+func decodesLocalUsagePeriodClientProviderModelSummary() throws {
+  let totals = UsageTokenTotals(
+    inputTokens: 100,
+    cacheReadTokens: 20,
+    cacheWrite5mTokens: 0,
+    cacheWrite1hTokens: 0,
+    cacheWriteInferredTokens: 0,
+    outputTokens: 30,
+    reasoningTokens: 10,
+    requests: 1,
+    webSearchRequests: 0,
+    webFetchRequests: 0,
+    sourceCostMicrousd: "0",
+    sourceCostCoveredRequests: 1
+  )
+  let summaryTotals = UsageSummaryTotals(totals)
+  let cost = UsageCostOutcome(
+    mode: .calculate,
+    basis: .calculated,
+    status: .complete,
+    amountMicrousd: "0",
+    catalogRevision: "pricing_1",
+    calculatedRows: 1,
+    reportedRows: 0,
+    unpricedRows: 0,
+    assumptions: [],
+    unpriced: []
+  )
+  let model = LocalUsageModelSummary(
+    model: "gpt-5.5",
+    totals: summaryTotals,
+    cost: cost
+  )
+  let provider = LocalUsageProviderSummary(
+    provider: .openai,
+    totals: summaryTotals,
+    cost: cost,
+    models: [model]
+  )
+  let client = LocalUsageClientSummary(
+    client: .codex,
+    totals: summaryTotals,
+    cost: cost,
+    providers: [provider]
+  )
+  let summary = LocalUsagePeriodSummary(
+    totals: summaryTotals,
+    cost: cost,
+    clients: [client]
+  )
+  let data = try QuotaWireCodec.makeEncoder().encode(summary)
+  let decoded = try QuotaWireCodec.makeDecoder().decode(LocalUsagePeriodSummary.self, from: data)
+  #expect(decoded.totals == summaryTotals)
+  #expect(decoded.clients.first?.client == .codex)
+  #expect(decoded.clients.first?.providers.first?.provider == .openai)
+  #expect(decoded.clients.first?.providers.first?.models.first?.model == "gpt-5.5")
+  #expect(decoded.clients.first?.providers.first?.models.first?.totals.messages == 1)
+
+  var modelObject = try #require(
+    JSONSerialization.jsonObject(with: QuotaWireCodec.makeEncoder().encode(model))
+      as? [String: Any])
+  modelObject["client"] = "codex"
+  let duplicatedContext = try JSONSerialization.data(withJSONObject: modelObject)
+  #expect(throws: DecodingError.self) {
+    _ = try QuotaWireCodec.makeDecoder().decode(
+      LocalUsageModelSummary.self, from: duplicatedContext)
+  }
+
+  var nestedExtraObject = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+  nestedExtraObject["extra"] = true
+  let nestedExtra = try JSONSerialization.data(withJSONObject: nestedExtraObject)
+  #expect(throws: DecodingError.self) {
+    _ = try QuotaWireCodec.makeDecoder().decode(LocalUsagePeriodSummary.self, from: nestedExtra)
   }
 }
 
@@ -737,7 +850,8 @@ func decodesUsageSubmissionAndConservesTokenSubsets() throws {
     "part_count": 2,
   ]
   let multipartData = try JSONSerialization.data(withJSONObject: multipartObject)
-  let multipart = try QuotaWireCodec.makeDecoder().decode(UsageSubmissionV2.self, from: multipartData)
+  let multipart = try QuotaWireCodec.makeDecoder().decode(
+    UsageSubmissionV2.self, from: multipartData)
   #expect(multipart.writeMode == .mergePartial)
   #expect(multipart.multipart?.partIndex == 0)
 

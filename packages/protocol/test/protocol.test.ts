@@ -12,6 +12,7 @@ import {
   DeviceAuthorizationRequestSchema,
   DeviceAuthorizationResponseSchema,
   DeviceSyncResponseSchema,
+  LOCAL_USAGE_PROTOCOL_VERSION,
   LocalUsageReportSchema,
   MAXIMUM_SNAPSHOTS_PER_ENVELOPE,
   OAuthTokenRequestSchema,
@@ -519,35 +520,43 @@ describe("quota protocol v2", () => {
 
   it("keeps local Usage available independently from an account", () => {
     const report = {
-      protocol_version: 2,
+      protocol_version: 3,
       generated_at: "2026-08-02T12:30:00Z",
       aggregation_timezone: "Asia/Singapore",
       range: { from: "2026-07-04", to: "2026-08-02" },
       status: "partial",
-      totals: emptyTotals(),
-      cost: emptyCost(),
+      model_catalog_revision: "model_2026_08_02",
       coverage: [
         {
-          agent: "codex",
+          client: "codex",
           start_at: "2026-07-03T00:00:00Z",
           end_at: "2026-08-02T13:00:00Z",
           status: "partial",
         },
       ],
-      breakdowns: [],
     };
-    expect(LocalUsageReportSchema.safeParse(report).success).toBe(true);
+    expect(LOCAL_USAGE_PROTOCOL_VERSION).toBe(3);
+    const parsed = LocalUsageReportSchema.parse(report);
+    expect(parsed.model_catalog_revision).toBe("model_2026_08_02");
     expect(LocalUsageReportSchema.safeParse({ ...report, status: "complete" }).success).toBe(false);
     expect(
       LocalUsageReportSchema.safeParse({
         ...report,
         status: "unavailable",
         aggregation_timezone: null,
-        totals: null,
-        cost: null,
+        model_catalog_revision: null,
         coverage: [],
       }).success,
     ).toBe(true);
+    expect(
+      LocalUsageReportSchema.safeParse({
+        ...report,
+        aggregation_timezone: null,
+      }).success,
+    ).toBe(false);
+    expect(
+      LocalUsageReportSchema.safeParse({ ...report, model_catalog_revision: undefined }).success,
+    ).toBe(false);
   });
 
   it("validates a versioned effective-dated pricing catalog without embedding prices", () => {
@@ -580,7 +589,16 @@ describe("quota protocol v2", () => {
       .filter((file) => file.endsWith(".json"))
       .sort();
     expect(schemaFiles.length).toBeGreaterThan(0);
-    expect(schemaFiles.every((file) => file.endsWith("-v2.json"))).toBe(true);
+    expect(schemaFiles).toContain("model-catalog-v1.json");
+    expect(schemaFiles).toContain("local-usage-v3.json");
+    expect(
+      schemaFiles.every(
+        (file) =>
+          file === "model-catalog-v1.json" ||
+          file === "local-usage-v3.json" ||
+          file.endsWith("-v2.json"),
+      ),
+    ).toBe(true);
 
     for (const schemaFile of schemaFiles) {
       const schema = JSON.parse(await readFile(`${schemaDirectory}/${schemaFile}`, "utf8")) as {

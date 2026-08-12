@@ -76,7 +76,7 @@ Use semantic roles from `QuotaDesign.Typography`:
 | `secondary` | 11pt regular | Body support and recovery copy |
 | `meta` | 10pt regular | Age, state, and tertiary metadata |
 | `mono` / `monoMeta` | 11pt / 10pt | Commands and technical values |
-| `remainingValue` | 13pt semibold | Remaining quota |
+| `remainingValue` | 12pt medium | Remaining quota |
 
 Dynamic Type scales semantic text roles. Utility symbols keep their optical sizes, while their hit
 targets stay at least 28pt. Technical strings and chevrons never receive primary-text emphasis.
@@ -86,7 +86,8 @@ targets stay at least 28pt. Technical strings and chevrons never receive primary
 The header shows:
 
 - Overview: Quota mark, **QuotaBar**, and Settings gear.
-- Child page: Back, page title, and no redundant trailing action.
+- Child page: Back and page title. Usage alone may place its Account/This Mac source menu at the
+  trailing edge because the choice changes the whole page.
 - Settings root: Back, **Settings**, and an overflow menu containing **Quit QuotaBar**.
 
 The footer is a single quiet button: **Last checked HH:MM**, or **Not checked** before any sync. It is
@@ -115,6 +116,9 @@ Render the service-provided Overview in saved catalog order. Each provider row m
 account observations; Rust has already merged global identities and selected one freshest valid
 observation. Swift never repeats that policy. Never add or average percentages across devices.
 
+Overview shows quota only. Usage totals, models, messages, and cost remain on the Usage detail page in
+Settings and never create or extend an Overview provider group.
+
 Each quota observation shows:
 
 - provider brand and name;
@@ -135,34 +139,34 @@ current sync keeps last-known content visible and adds one inline warning.
 Settings section order is fixed:
 
 1. **Account**
-2. **General**
-3. **Account Data**
-4. **Diagnostics**
-5. **Local Providers**
-6. **About**
+2. **Quota**
+3. **General**
 
 Account states:
 
-- Signed out or not checked: short benefit copy and **Continue with GitHub**.
-- Login running: browser completion copy and **Cancel**. Cancellation sends the typed service
-  operation and closes the browser flow.
-- Signed in: one compact account row with a local avatar, account display label, and **Log Out**.
-  The first click opens a native confirmation with **Cancel** and destructive **Log Out** actions;
-  it states that the remote Device and synced data remain.
-- Logout pending: explicit offline completion copy and **Retry Logout**.
-- Removed or expired device session: concise reconnect copy; never show raw reason codes or ids.
+- Signed out or not checked: the Account group contains only one standard-height **Sign In** row.
+- Login running: one standard-height browser completion row with **Cancel**. Cancellation sends the
+  typed service operation and closes the browser flow.
+- Signed in: the Account group contains the account row followed by **Devices**. Clicking the account
+  row opens the web account surface. A separate **Log Out** row sits at the bottom of the Settings
+  page, after every group. It opens an app-owned confirmation popup with **Cancel** and destructive
+  **Log Out** actions; it states that the remote Device and synced data remain. Do not use a system
+  alert for this flow.
+- Logout pending: one standard-height status row with **Retry Logout**.
+- Removed or expired device session: use the same **Sign In** action and never show raw reason codes
+  or ids. Authentication-provider choice belongs to the login flow, not this row's label.
 
 The Account group is the only place for account authentication actions. Buttons invoke typed private
 service operations; there are no embedded web views.
-The account row is followed by a **Manage account** link to the web account surface.
+Do not add a separate account-management row; the signed-in account label is that destination.
 
-Usage is a first-class destination showing This Mac without requiring an account. General contains
-the native mini **Launch at Login** switch. Account Data contains Devices. Local Providers contains
-Agents. Diagnostics is a first-class destination backed by the private `diagnose` operation. It shows
-one bounded status for Providers, Quota, Usage, Pricing, Account, and Sync, plus safe issue counts,
-and offers **Copy Text** and **Copy JSON** actions using the system pasteboard. About contains version,
-Website, and Feedback. The Usage source control is a compact native segmented control inside the shared
-Settings group surface.
+Quota contains the **Usage** and **Agents** destinations. The Usage root summary uses account-wide
+totals while signed in with Usage sync enabled, and local totals otherwise. General contains the
+native mini **Launch at Login** and **Sync Usage** switches followed by the **Support** destination.
+Support contains Diagnostics, Feedback, Website, and version; Diagnostics remains backed by the
+private `diagnose` operation and shows one bounded status for Providers, Quota, Usage, Pricing,
+Account, and Sync, plus safe issue counts and **Copy Text** and **Copy JSON** actions. The Usage source
+control is not repeated in Settings.
 
 ### Devices
 
@@ -173,26 +177,53 @@ account surface.
 
 ### Usage
 
-Usage defaults to the typed all-history local report. When an account summary is available, a segmented
-This Mac/Account control changes the source without changing the presentation. It contains:
+Usage defaults to Account when an account summary is available and Usage sync is enabled; otherwise
+it uses This Mac. The compact source menu is the Usage header's trailing action; its options are
+simply **Account**, with a single-account symbol, and **This Mac**. Omit the menu when Account data is
+unavailable or Usage sync is disabled; in those states the page is unambiguously local. Changing
+source preserves the selected period.
 
-- Period: inclusive `from` and `to` dates.
-- Tokens: input, cached input, output, reasoning, and requests.
-- Cost: amount, basis, pricing catalog revision, and unpriced row count.
-- Models: model-dimension rows with compact token/request totals and estimated cost.
-- Coverage: Codex, Claude Code, Grok, OpenCode, and Pi complete/partial range counts.
+A four-item 28pt tab control selects Today, 7 Days, 30 Days, or All; Today is the default. Its
+labels use the regular 10.5pt list-secondary type size. The control owns one overall neutral
+background, with the selected item highlighted inside it; do not wrap it in another group surface.
+The selection is one inclusive date window from the service's precomputed snapshot. Opening Usage
+and changing either selector never introduces a loading state or starts collection/network work.
+The default page contains:
+
+- Summary: a titled group with separate Tokens and Cost headline metrics followed by the six token
+  and message metrics in a two-column grid. Headline values use the primary text tone; grid labels
+  stay muted while their values use the secondary tone.
+- Models: grouped by inference provider, independent of the collecting client. Every model remains a
+  static single row ending in `tokens · cost` when priced, or only `tokens` when unpriced.
+
+Provider headings use the structured inference-provider brand mark; never infer an icon from model
+text. Model rows have no repeated icon and align under the provider label. When no owned brand asset
+exists, use an honest semantic system symbol rather than another provider's logo. Approved
+monochrome brand assets come from the Lobe Icons source recorded in the bundled third-party notice.
+Every provider, regardless of model count, uses the same separate noninteractive heading with a 14pt
+provider icon. The Models surface has 8pt vertical insets, provider groups have 8pt between them, and
+each heading has 4pt before its compact static model rows; model rows also have 4pt between them.
+Model rows have no icons or disclosure controls and use regular secondary text. Each provider shows
+at most the first five models in the existing cost/tokens order. If the same provider/model pair
+appears through more than one client, append the client name only to disambiguate those rows.
+
+Date text, cost metadata, pricing revision, and coverage are not separate default sections. Complete
+data shows no diagnostic copy. Partial collection produces one compact warning. An unavailable
+summary cost uses `— unpriced`, while model rows omit unavailable cost entirely; neither state adds
+another alert. Technical detail remains available through Diagnostics.
 
 Usage counts use locale-aware decimal formatting below 1,000 and compact SI-style `k`, `M`, and `B`
-suffixes for larger values. Model rows are sorted by token volume, then model name.
+suffixes for larger values. Usage groups use priced-cost-first ordering, then fall back to tokens and
+name for stability.
 
-Cost copy is exact:
+Compact cost copy is exact:
 
-- complete: `$X estimated`;
-- partial: `≥ $X partial`;
+- complete: `$X`;
+- partial: `≥ $X`;
 - unavailable: `— unpriced`.
 
 Do not infer missing prices, silently treat partial cost as total cost, or recompute typed output.
-USD formatting may show up to six fractional digits so small costs remain meaningful.
+Summary and model values use two fractional digits to preserve the single-line layout.
 
 ### Agents
 
@@ -221,6 +252,7 @@ Swift clears the field after Save; the service owns validation, owner-only persi
 | `SettingsSection` | Quiet label plus adaptive group surface |
 | `SettingsListRow` | Shared icon/title/subtitle/trailing alignment |
 | `QuotaCommandRow` | Selectable official-provider sign-in command and Copy/Copied feedback |
+| `QuotaConfirmationPopup` | Scrimmed app-owned confirmation with cancel and destructive actions |
 | `QuotaPrimaryButtonStyle` | Accent capsule for the primary task |
 | `QuotaListRowButtonStyle` | Nested hover/press feedback with full-row hit target |
 | `ProviderBrandIcon` | Catalog brand resource with stable optical sizing |

@@ -56,6 +56,8 @@
     case providerOpenRouter = "provider-openrouter"
     case devices
     case usage
+    case support
+    case diagnostics
 
     fileprivate var path: [MenuBarRoute] {
       switch self {
@@ -66,6 +68,8 @@
       case .providerOpenRouter: [.settings, .agents, .provider(.openrouter)]
       case .devices: [.settings, .devices]
       case .usage: [.settings, .usage]
+      case .support: [.settings, .support]
+      case .diagnostics: [.settings, .support, .diagnostics]
       }
     }
   }
@@ -261,8 +265,8 @@
     summary: AccountUsageSummary
   ) -> LocalUsageReport {
     let coverage = summary.coverage.map {
-      UsageCoverage(
-        agent: $0.agent,
+      LocalUsageCoverage(
+        client: $0.agent,
         startAt: $0.startAt,
         endAt: $0.endAt,
         status: $0.status
@@ -273,10 +277,9 @@
       aggregationTimezone: "UTC",
       range: summary.range,
       status: coverage.allSatisfy { $0.status == .complete } ? .complete : .partial,
-      totals: summary.totals,
-      cost: summary.cost,
+      modelCatalogRevision: "visual-model-catalog",
       coverage: coverage,
-      breakdowns: summary.breakdowns
+      coverageTruncated: nil
     )
   }
 
@@ -286,10 +289,9 @@
       aggregationTimezone: nil,
       range: UsageDateRange(from: "2026-07-03", to: "2026-08-01"),
       status: .unavailable,
-      totals: nil,
-      cost: nil,
+      modelCatalogRevision: nil,
       coverage: [],
-      breakdowns: []
+      coverageTruncated: nil
     )
   }
 
@@ -468,7 +470,7 @@
     formatter.dateFormat = "yyyy-MM-dd"
     let to = formatter.string(from: date)
     let from = formatter.string(from: date.addingTimeInterval(-6 * 86_400))
-    return AccountUsageSummary(
+    let summary = AccountUsageSummary(
       range: UsageDateRange(from: from, to: to),
       totals: totals,
       cost: cost,
@@ -550,6 +552,39 @@
           )
         ),
       ]
+    )
+    return AccountUsageSummary(
+      range: summary.range,
+      totals: summary.totals,
+      cost: summary.cost,
+      modelCatalogRevision: summary.modelCatalogRevision,
+      coverage: summary.coverage,
+      breakdowns: summary.breakdowns,
+      clients: summary.breakdowns.enumerated().map { index, breakdown in
+        let totals = UsageSummaryTotals(breakdown.totals)
+        let provider = index == 0 ? InferenceProvider.openai : .anthropic
+        let client = index == 0 ? BillingAgent.codex : .claudeCode
+        let model = LocalUsageModelSummary(
+          model: breakdown.key,
+          totals: totals,
+          cost: breakdown.cost
+        )
+        return LocalUsageClientSummary(
+          client: client,
+          totals: totals,
+          cost: breakdown.cost,
+          providers: [
+            LocalUsageProviderSummary(
+              provider: provider,
+              totals: totals,
+              cost: breakdown.cost,
+              models: [model]
+            )
+          ]
+        )
+      },
+      coverageTruncated: summary.coverageTruncated,
+      breakdownsTruncated: summary.breakdownsTruncated
     )
   }
 

@@ -32,6 +32,12 @@ document.querySelector<HTMLFormElement>("#logout-form")?.addEventListener("submi
 document.querySelector<HTMLButtonElement>("#delete-account")?.addEventListener("click", () => {
   void deleteAccount();
 });
+const accountMenu = document.querySelector<HTMLDetailsElement>(".account-menu");
+document.addEventListener("pointerdown", (event) => {
+  if (accountMenu?.open && event.target instanceof Node && !accountMenu.contains(event.target)) {
+    accountMenu.open = false;
+  }
+});
 
 const path = window.location.pathname;
 const legacyPath = legacyDashboardRedirect(path);
@@ -52,7 +58,7 @@ async function showDashboard(): Promise<void> {
       headers: { Accept: "application/json" },
     } satisfies RequestInit;
     const response = await fetch(
-      "/api/v2/account/summary?cost_mode=calculate&usage_agents=all",
+      "/api/v2/account/summary?cost_mode=calculate&usage_agents=all&model_catalog=1",
       request,
     );
     if (response.status === 401) {
@@ -72,7 +78,6 @@ async function showDashboard(): Promise<void> {
 
 function renderDashboard(summary: AccountSummary): void {
   const accountLabel = summary.account.display_label ?? "GitHub account";
-  text("dashboard-title", accountLabel);
   text("account-menu-label", accountLabel);
   text("input-total", formatCount(summary.usage.totals.input_tokens));
   text("output-total", formatCount(summary.usage.totals.output_tokens));
@@ -155,12 +160,12 @@ function renderQuotaWindow(
   const heading = document.createElement("div");
   heading.className = "quota-window-heading";
   const title = document.createElement("span");
-  title.textContent = window.title;
+  const balanceOnly = window.remaining_value !== undefined && window.limit_value === undefined;
+  title.textContent = balanceOnly ? "Balance" : window.title;
   const remaining = document.createElement("strong");
   remaining.textContent = formatQuotaRemaining(window);
   heading.append(title, remaining);
 
-  const balanceOnly = window.remaining_value !== undefined && window.limit_value === undefined;
   item.append(heading);
   if (!balanceOnly) {
     const track = document.createElement("div");
@@ -172,14 +177,14 @@ function renderQuotaWindow(
     item.append(track);
   }
 
-  const meta = document.createElement("p");
-  meta.className = "quota-window-meta";
-  meta.textContent = window.resets_at
-    ? `Resets ${formatDate(window.resets_at)}`
-    : balanceOnly
-      ? "Balance has no reset schedule"
+  if (window.resets_at || !balanceOnly) {
+    const meta = document.createElement("p");
+    meta.className = "quota-window-meta";
+    meta.textContent = window.resets_at
+      ? `Resets ${formatDate(window.resets_at)}`
       : "No reset time reported";
-  item.append(meta);
+    item.append(meta);
+  }
   return item;
 }
 

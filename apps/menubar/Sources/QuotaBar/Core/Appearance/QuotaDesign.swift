@@ -29,7 +29,7 @@ enum QuotaDesign {
     static let headerBrandSize: CGFloat = 18
     /// Navigation/action slot. Grouped content uses its own inset grid.
     static let headerAccessoryWidth: CGFloat = headerControlWidth
-    static let providerRowVerticalPadding: CGFloat = 10
+    static let providerRowVerticalPadding: CGFloat = 8
     /// Vertical padding inside multi-line settings content and command rows.
     static let settingsRowVerticalPadding: CGFloat = 8
     /// Single-line Settings rows (home General / Sources / About).
@@ -38,7 +38,8 @@ enum QuotaDesign {
     static let settingsListRowHeight: CGFloat = 46
     /// Leading mark column (SF Symbol or brand icon).
     static let settingsIconColumnWidth: CGFloat = 16
-    static let progressHeight: CGFloat = 8
+    static let usageProviderIconSize: CGFloat = 14
+    static let progressHeight: CGFloat = 6
     /// Primary filled pill (empty-state Retry, etc.).
     static let controlMinHeight: CGFloat = 36
     /// Compact single-line fields.
@@ -106,8 +107,8 @@ enum QuotaDesign {
 
       fileprivate var baseSize: CGFloat {
         switch self {
-        case .panelTitle, .emptyTitle, .rowTitle, .remainingValue: 13
-        case .settingsLabel: 12
+        case .panelTitle, .emptyTitle, .rowTitle: 13
+        case .settingsLabel, .remainingValue: 12
         case .sectionHeader, .secondary, .mono, .quotaLabel: 11
         case .listSecondary: 10.5
         case .meta, .monoMeta: 10
@@ -116,8 +117,8 @@ enum QuotaDesign {
 
       fileprivate var weight: Font.Weight {
         switch self {
-        case .panelTitle, .sectionHeader, .remainingValue: .semibold
-        case .emptyTitle, .rowTitle, .settingsLabel, .quotaLabel: .medium
+        case .panelTitle, .sectionHeader: .semibold
+        case .emptyTitle, .rowTitle, .settingsLabel, .quotaLabel, .remainingValue: .medium
         case .listSecondary, .secondary, .meta, .mono, .monoMeta: .regular
         }
       }

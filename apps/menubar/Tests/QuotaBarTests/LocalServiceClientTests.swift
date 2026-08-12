@@ -36,6 +36,8 @@ struct LocalServiceClientTests {
                 result = {
                     "ipc_version": 1,
                     "revision": revision,
+                    "usage_upload_enabled": True,
+                    "usage_periods": {"local": {}, "account": {}},
                     "quota": component("unavailable"),
                     "usage": component("unavailable"),
                     "account": component("signed_out", {
@@ -267,6 +269,8 @@ struct LocalServiceClientTests {
                 "result": {
                     "ipc_version": 1,
                     "revision": 1,
+                    "usage_upload_enabled": True,
+                    "usage_periods": {"local": {}, "account": {}},
                     "quota": component("unavailable"),
                     "usage": component("unavailable"),
                     "account": component("signed_out", {

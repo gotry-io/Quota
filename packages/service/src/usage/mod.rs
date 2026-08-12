@@ -40,9 +40,8 @@ pub const MAX_COVERAGE_REASONS: usize = 128;
 /// Protocol v2 `UsageSubmission.rows` bound. Internal retained-history aggregation is unbounded
 /// by this submission limit; service_core chunks complete UTC hours before upload.
 pub const MAX_USAGE_ROWS: usize = 2_048;
-/// Protocol v2 local/account report breakdown bound. Unlike hourly rows, this is enforced when
-/// materializing the IPC breakdown array, with an explicit error rather than truncation.
-pub const MAX_USAGE_BREAKDOWNS: usize = 1_000;
+/// Local v3 report model-detail bound. Exact totals remain available when detail is truncated.
+pub const MAX_USAGE_MODELS: usize = 1_000;
 pub const MAX_USAGE_COVERAGE_ITEMS: usize = 2_048;
 pub const MAX_USAGE_COVERAGE_HOURS: i64 = 24 * 31;
 pub const MAX_SAFE_COUNT: u64 = 9_007_199_254_740_991;
@@ -112,6 +111,49 @@ impl BillingChannel {
             Self::Openrouter => "openrouter",
             Self::XaiDirect => "xai_direct",
             Self::Unknown => "unknown",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, Serialize, PartialOrd)]
+#[serde(rename_all = "snake_case")]
+pub enum InferenceProvider {
+    Openai,
+    AzureOpenai,
+    Anthropic,
+    AwsBedrock,
+    GoogleVertex,
+    Openrouter,
+    Xai,
+    Unknown,
+}
+
+impl InferenceProvider {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Openai => "openai",
+            Self::AzureOpenai => "azure_openai",
+            Self::Anthropic => "anthropic",
+            Self::AwsBedrock => "aws_bedrock",
+            Self::GoogleVertex => "google_vertex",
+            Self::Openrouter => "openrouter",
+            Self::Xai => "xai",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+impl From<BillingChannel> for InferenceProvider {
+    fn from(channel: BillingChannel) -> Self {
+        match channel {
+            BillingChannel::OpenaiDirect => Self::Openai,
+            BillingChannel::AzureOpenai => Self::AzureOpenai,
+            BillingChannel::AnthropicDirect => Self::Anthropic,
+            BillingChannel::AwsBedrock => Self::AwsBedrock,
+            BillingChannel::GoogleVertex => Self::GoogleVertex,
+            BillingChannel::Openrouter => Self::Openrouter,
+            BillingChannel::XaiDirect => Self::Xai,
+            BillingChannel::Unknown => Self::Unknown,
         }
     }
 }
@@ -414,6 +456,49 @@ pub struct UsageTokenTotals {
     pub source_cost_covered_requests: u64,
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct UsageSummaryTotals {
+    pub total_tokens: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_input_tokens: u64,
+    pub cache_write_input_tokens: u64,
+    pub reasoning_tokens: u64,
+    pub messages: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct LocalUsageModelSummary {
+    pub model: String,
+    pub totals: UsageSummaryTotals,
+    pub cost: crate::pricing::UsageCostOutcome,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct LocalUsageProviderSummary {
+    pub provider: InferenceProvider,
+    pub totals: UsageSummaryTotals,
+    pub cost: crate::pricing::UsageCostOutcome,
+    pub models: Vec<LocalUsageModelSummary>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct LocalUsageClientSummary {
+    pub client: UsageAgent,
+    pub totals: UsageSummaryTotals,
+    pub cost: crate::pricing::UsageCostOutcome,
+    pub providers: Vec<LocalUsageProviderSummary>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct LocalUsagePeriodSummary {
+    pub totals: UsageSummaryTotals,
+    pub cost: crate::pricing::UsageCostOutcome,
+    pub clients: Vec<LocalUsageClientSummary>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub models_truncated: bool,
+}
+
 /// Aggregate normalized request facts into deterministic sparse UTC-hour rows.
 pub fn aggregate_usage_events(
     events: &[NormalizedUsageEvent],
@@ -489,96 +574,140 @@ pub fn fold_usage_facts(rows: &[UsageHourlyFact]) -> Result<UsageTokenTotals, Us
     Ok(totals)
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub enum BreakdownDimension {
-    Agent,
-    Model,
-    BillingChannel,
-    UsageDate,
-    BucketStartUtc,
-}
-
-impl BreakdownDimension {
-    pub const LOCAL: [Self; 5] = [
-        Self::Agent,
-        Self::Model,
-        Self::BillingChannel,
-        Self::UsageDate,
-        Self::BucketStartUtc,
-    ];
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Agent => "agent",
-            Self::Model => "model",
-            Self::BillingChannel => "billing_channel",
-            Self::UsageDate => "usage_date",
-            Self::BucketStartUtc => "bucket_start_utc",
-        }
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct UsageBreakdown {
-    pub dimension: String,
-    pub key: String,
-    pub totals: UsageTokenTotals,
-    pub cost: crate::pricing::UsageCostOutcome,
-}
-
-/// Build deterministic local breakdowns.  Device breakdowns are assembled by
-/// the account/Relay layer because a local fact has no device identity.
-pub fn build_usage_breakdowns(
+pub fn build_local_usage_summary(
     rows: &[UsageHourlyFact],
-    catalog: Option<&crate::pricing::PricingCatalog>,
-    mode: crate::pricing::UsageCostMode,
-    include_hourly: bool,
-) -> Result<Vec<UsageBreakdown>, UsageError> {
-    build_usage_breakdowns_with_status(rows, catalog, mode, include_hourly).map(|(rows, _)| rows)
-}
-
-/// Build deterministic local breakdowns and report whether the bounded detail list omitted
-/// groups. Totals and cost are calculated over all source rows before detail is capped.
-pub fn build_usage_breakdowns_with_status(
-    rows: &[UsageHourlyFact],
-    catalog: Option<&crate::pricing::PricingCatalog>,
-    mode: crate::pricing::UsageCostMode,
-    include_hourly: bool,
-) -> Result<(Vec<UsageBreakdown>, bool), UsageError> {
-    let mut groups: BTreeMap<(BreakdownDimension, String), Vec<usize>> = BTreeMap::new();
-    for (index, row) in rows.iter().enumerate() {
+    pricing_catalog: Option<&crate::pricing::PricingCatalog>,
+    model_catalog: Option<&crate::model_catalog::ModelCatalog>,
+) -> Result<LocalUsagePeriodSummary, UsageError> {
+    for row in rows {
         validate_fact(row)?;
-        for dimension in BreakdownDimension::LOCAL
-            .into_iter()
-            .take(if include_hourly { 5 } else { 3 })
-        {
-            let key = match dimension {
-                BreakdownDimension::Agent => row.agent.to_string(),
-                BreakdownDimension::Model => row.model.clone(),
-                BreakdownDimension::BillingChannel => row.billing_channel.as_str().to_string(),
-                BreakdownDimension::UsageDate => row.usage_date.clone(),
-                BreakdownDimension::BucketStartUtc => row.bucket_start_utc.clone(),
-            };
-            groups.entry((dimension, key)).or_default().push(index);
-        }
     }
-    let truncated = groups.len() > MAX_USAGE_BREAKDOWNS;
-    let prepared = crate::pricing::prepare_usage_costs(rows, catalog, mode)?;
-    let breakdowns = groups
-        .into_iter()
-        .take(MAX_USAGE_BREAKDOWNS)
-        .map(|((dimension, key), indexes)| {
-            let grouped_rows: Vec<UsageHourlyFact> =
-                indexes.iter().map(|index| rows[*index].clone()).collect();
-            Ok(UsageBreakdown {
-                dimension: dimension.as_str().to_string(),
-                key,
-                totals: fold_usage_facts(&grouped_rows)?,
-                cost: crate::pricing::fold_prepared_usage_costs(&prepared, Some(&indexes))?,
-            })
-        })
-        .collect::<Result<Vec<UsageBreakdown>, UsageError>>()?;
-    Ok((breakdowns, truncated))
+    let totals = summary_totals(rows)?;
+    let cost = crate::pricing::calculate_usage_cost(
+        rows,
+        pricing_catalog,
+        crate::pricing::UsageCostMode::Auto,
+    )?;
+    let mut client_groups: BTreeMap<UsageAgent, Vec<usize>> = BTreeMap::new();
+    for (index, row) in rows.iter().enumerate() {
+        client_groups.entry(row.agent).or_default().push(index);
+    }
+
+    let mut clients = Vec::new();
+    let mut model_count = 0usize;
+    let mut models_truncated = false;
+    for (client, client_indexes) in client_groups {
+        let client_rows = rows_for_indexes(rows, &client_indexes);
+        let mut provider_groups: BTreeMap<InferenceProvider, Vec<usize>> = BTreeMap::new();
+        for index in client_indexes {
+            provider_groups
+                .entry(rows[index].billing_channel.into())
+                .or_default()
+                .push(index);
+        }
+
+        let mut providers = Vec::new();
+        for (provider, provider_indexes) in provider_groups {
+            let provider_rows = rows_for_indexes(rows, &provider_indexes);
+            let mut model_groups: BTreeMap<String, (String, Vec<usize>)> = BTreeMap::new();
+            for index in provider_indexes {
+                let row = &rows[index];
+                let (identity, model) = match model_catalog {
+                    Some(catalog) => crate::model_catalog::resolve_model(catalog, row).map_or_else(
+                        || (format!("raw:{}", row.model), row.model.clone()),
+                        |canonical_id| (format!("canonical:{canonical_id}"), canonical_id),
+                    ),
+                    None => (format!("raw:{}", row.model), row.model.clone()),
+                };
+                model_groups
+                    .entry(identity)
+                    .or_insert_with(|| (model, Vec::new()))
+                    .1
+                    .push(index);
+            }
+
+            let mut models = Vec::new();
+            for (_identity, (model, indexes)) in model_groups {
+                if model_count == MAX_USAGE_MODELS {
+                    models_truncated = true;
+                    break;
+                }
+                let model_rows = rows_for_indexes(rows, &indexes);
+                models.push(LocalUsageModelSummary {
+                    model,
+                    totals: summary_totals(&model_rows)?,
+                    cost: crate::pricing::calculate_usage_cost(
+                        &model_rows,
+                        pricing_catalog,
+                        crate::pricing::UsageCostMode::Auto,
+                    )?,
+                });
+                model_count += 1;
+            }
+            providers.push(LocalUsageProviderSummary {
+                provider,
+                totals: summary_totals(&provider_rows)?,
+                cost: crate::pricing::calculate_usage_cost(
+                    &provider_rows,
+                    pricing_catalog,
+                    crate::pricing::UsageCostMode::Auto,
+                )?,
+                models,
+            });
+        }
+        clients.push(LocalUsageClientSummary {
+            client,
+            totals: summary_totals(&client_rows)?,
+            cost: crate::pricing::calculate_usage_cost(
+                &client_rows,
+                pricing_catalog,
+                crate::pricing::UsageCostMode::Auto,
+            )?,
+            providers,
+        });
+    }
+    Ok(LocalUsagePeriodSummary {
+        totals,
+        cost,
+        clients,
+        models_truncated,
+    })
+}
+
+fn summary_totals(rows: &[UsageHourlyFact]) -> Result<UsageSummaryTotals, UsageError> {
+    let totals = fold_usage_facts(rows)?;
+    let total_tokens = totals
+        .input_tokens
+        .checked_add(totals.output_tokens)
+        .filter(|value| *value <= MAX_SAFE_COUNT)
+        .ok_or_else(|| {
+            UsageError("Usage total token count exceeds JSON safe integer range".into())
+        })?;
+    let cache_write_input_tokens = totals
+        .cache_write_5m_tokens
+        .checked_add(totals.cache_write_1h_tokens)
+        .and_then(|value| value.checked_add(totals.cache_write_inferred_tokens))
+        .filter(|value| *value <= MAX_SAFE_COUNT)
+        .ok_or_else(|| {
+            UsageError("Usage cache-write count exceeds JSON safe integer range".into())
+        })?;
+    Ok(UsageSummaryTotals {
+        total_tokens,
+        input_tokens: totals.input_tokens,
+        output_tokens: totals.output_tokens,
+        cache_read_input_tokens: totals.cache_read_tokens,
+        cache_write_input_tokens,
+        reasoning_tokens: totals.reasoning_tokens,
+        messages: totals.requests,
+    })
+}
+
+fn rows_for_indexes(rows: &[UsageHourlyFact], indexes: &[usize]) -> Vec<UsageHourlyFact> {
+    indexes.iter().map(|index| rows[*index].clone()).collect()
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 pub(crate) fn parse_instant(value: &str) -> Option<DateTime<Utc>> {

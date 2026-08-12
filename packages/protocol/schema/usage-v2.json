@@ -109,6 +109,9 @@
         "cost": {
           "$ref": "#/$defs/__schema31"
         },
+        "model_catalog_revision": {
+          "$ref": "#/$defs/__schema1"
+        },
         "coverage": {
           "maxItems": 2048,
           "type": "array",
@@ -121,6 +124,13 @@
           "type": "array",
           "items": {
             "$ref": "#/$defs/__schema43"
+          }
+        },
+        "clients": {
+          "maxItems": 5,
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/__schema44"
           }
         },
         "coverage_truncated": {
@@ -139,37 +149,37 @@
       "type": "object",
       "properties": {
         "protocol_version": {
-          "$ref": "#/$defs/__schema44"
+          "$ref": "#/$defs/__schema48"
         },
         "generated_at": {
           "$ref": "#/$defs/__schema26"
         },
         "aggregation_timezone": {
-          "$ref": "#/$defs/__schema45"
+          "$ref": "#/$defs/__schema49"
         },
         "range": {
           "$ref": "#/$defs/__schema28"
         },
         "status": {
-          "$ref": "#/$defs/__schema46"
+          "$ref": "#/$defs/__schema50"
         },
         "totals": {
-          "$ref": "#/$defs/__schema47"
-        },
-        "cost": {
-          "$ref": "#/$defs/__schema48"
-        },
-        "coverage": {
-          "$ref": "#/$defs/__schema49"
-        },
-        "breakdowns": {
           "$ref": "#/$defs/__schema51"
         },
-        "coverage_truncated": {
+        "cost": {
           "$ref": "#/$defs/__schema52"
         },
-        "breakdowns_truncated": {
+        "coverage": {
           "$ref": "#/$defs/__schema53"
+        },
+        "breakdowns": {
+          "$ref": "#/$defs/__schema55"
+        },
+        "coverage_truncated": {
+          "$ref": "#/$defs/__schema56"
+        },
+        "breakdowns_truncated": {
+          "$ref": "#/$defs/__schema57"
         }
       },
       "required": [
@@ -761,10 +771,118 @@
       ]
     },
     "__schema44": {
+      "type": "object",
+      "properties": {
+        "client": {
+          "$ref": "#/$defs/__schema6"
+        },
+        "totals": {
+          "$ref": "#/$defs/__schema45"
+        },
+        "cost": {
+          "$ref": "#/$defs/__schema31"
+        },
+        "providers": {
+          "maxItems": 8,
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/__schema46"
+          }
+        }
+      },
+      "required": ["client", "totals", "cost", "providers"],
+      "additionalProperties": false
+    },
+    "__schema45": {
+      "type": "object",
+      "properties": {
+        "total_tokens": {
+          "$ref": "#/$defs/__schema3"
+        },
+        "input_tokens": {
+          "$ref": "#/$defs/__schema3"
+        },
+        "output_tokens": {
+          "$ref": "#/$defs/__schema3"
+        },
+        "cache_read_input_tokens": {
+          "$ref": "#/$defs/__schema3"
+        },
+        "cache_write_input_tokens": {
+          "$ref": "#/$defs/__schema3"
+        },
+        "reasoning_tokens": {
+          "$ref": "#/$defs/__schema3"
+        },
+        "messages": {
+          "$ref": "#/$defs/__schema3"
+        }
+      },
+      "required": [
+        "total_tokens",
+        "input_tokens",
+        "output_tokens",
+        "cache_read_input_tokens",
+        "cache_write_input_tokens",
+        "reasoning_tokens",
+        "messages"
+      ],
+      "additionalProperties": false
+    },
+    "__schema46": {
+      "type": "object",
+      "properties": {
+        "provider": {
+          "type": "string",
+          "enum": [
+            "openai",
+            "azure_openai",
+            "anthropic",
+            "aws_bedrock",
+            "google_vertex",
+            "openrouter",
+            "xai",
+            "unknown"
+          ]
+        },
+        "totals": {
+          "$ref": "#/$defs/__schema45"
+        },
+        "cost": {
+          "$ref": "#/$defs/__schema31"
+        },
+        "models": {
+          "maxItems": 1000,
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/__schema47"
+          }
+        }
+      },
+      "required": ["provider", "totals", "cost", "models"],
+      "additionalProperties": false
+    },
+    "__schema47": {
+      "type": "object",
+      "properties": {
+        "model": {
+          "$ref": "#/$defs/__schema15"
+        },
+        "totals": {
+          "$ref": "#/$defs/__schema45"
+        },
+        "cost": {
+          "$ref": "#/$defs/__schema31"
+        }
+      },
+      "required": ["model", "totals", "cost"],
+      "additionalProperties": false
+    },
+    "__schema48": {
       "type": "number",
       "const": 2
     },
-    "__schema45": {
+    "__schema49": {
       "anyOf": [
         {
           "$ref": "#/$defs/__schema4"
@@ -774,11 +892,11 @@
         }
       ]
     },
-    "__schema46": {
+    "__schema50": {
       "type": "string",
       "enum": ["complete", "partial", "unavailable"]
     },
-    "__schema47": {
+    "__schema51": {
       "anyOf": [
         {
           "$ref": "#/$defs/__schema29"
@@ -788,7 +906,7 @@
         }
       ]
     },
-    "__schema48": {
+    "__schema52": {
       "anyOf": [
         {
           "$ref": "#/$defs/__schema31"
@@ -798,14 +916,14 @@
         }
       ]
     },
-    "__schema49": {
+    "__schema53": {
       "maxItems": 2048,
       "type": "array",
       "items": {
-        "$ref": "#/$defs/__schema50"
+        "$ref": "#/$defs/__schema54"
       }
     },
-    "__schema50": {
+    "__schema54": {
       "type": "object",
       "properties": {
         "agent": {
@@ -824,18 +942,18 @@
       "required": ["agent", "start_at", "end_at", "status"],
       "additionalProperties": false
     },
-    "__schema51": {
+    "__schema55": {
       "maxItems": 1000,
       "type": "array",
       "items": {
         "$ref": "#/$defs/__schema43"
       }
     },
-    "__schema52": {
+    "__schema56": {
       "type": "boolean",
       "const": true
     },
-    "__schema53": {
+    "__schema57": {
       "type": "boolean",
       "const": true
     }
