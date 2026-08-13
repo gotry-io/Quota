@@ -506,7 +506,7 @@ describe("managed Relay on real Workers and D1", () => {
       limit: 100,
     });
     const all = await state.queryAccountUsage("account_agents", {
-      agents: ["codex", "claude_code", "grok", "opencode", "pi", "cursor"],
+      agents: ["codex", "claude_code", "grok", "opencode", "pi"],
       limit: 100,
     });
 
