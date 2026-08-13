@@ -117,6 +117,46 @@ func consumesServiceMergedOverviewWithoutReprocessingObservations() async throws
 }
 
 @Test @MainActor
+func emptyUsageCacheWhileRefreshingIsPreparingNotMissing() async throws {
+  let state = LocalServiceState(
+    ipcVersion: 1,
+    revision: 1,
+    usageUploadEnabled: true,
+    usagePeriods: emptyUsagePeriods(),
+    quota: emptyComponent(),
+    usage: LocalServiceComponent(
+      status: .unavailable,
+      value: nil,
+      updatedAt: nil,
+      lastError: nil,
+      refreshing: true
+    ),
+    account: LocalServiceComponent(
+      status: .signedOut,
+      value: LocalServiceAccountState(
+        authStatus: .signedOut,
+        accountID: nil,
+        deviceID: nil,
+        deviceGeneration: nil,
+        accountSummary: nil
+      ),
+      updatedAt: nil,
+      lastError: nil,
+      refreshing: false
+    ),
+    pricing: emptyComponent(),
+    providers: [],
+    providerBrowserSessions: [],
+    overview: []
+  )
+  let model = MenuBarViewModel(client: StubLocalService(state: state))
+  await model.refreshIfNeeded()
+  #expect(model.usageDetail(source: .local, period: .today) == nil)
+  #expect(model.isPreparingUsage(source: .local))
+  #expect(!model.isPreparingUsage(source: .account))
+}
+
+@Test @MainActor
 func successfulLoginCancellationDoesNotRestoreStaleLoggingInState() async throws {
   let model = MenuBarViewModel(
     client: StubLocalService(

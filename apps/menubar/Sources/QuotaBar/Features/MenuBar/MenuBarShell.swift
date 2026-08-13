@@ -72,23 +72,29 @@ struct MenuBarFooterView: View {
         guard !model.isRefreshing else { return }
         Task { await model.refresh() }
       } label: {
-        Text(lastCheckedLabel)
+        Text(LastCheckedLabel.string(from: model.lastCheckedAt))
           .frame(minHeight: QuotaDesign.Layout.minimumInteractiveDimension)
           .contentShape(Rectangle())
       }
       .buttonStyle(.plain)
-      .accessibilityLabel("Refresh all quota. \(lastCheckedLabel)")
+      .accessibilityLabel(
+        "Refresh all quota. \(LastCheckedLabel.accessibleString(from: model.lastCheckedAt))"
+      )
     }
     .quotaSecondaryStyle()
     .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
     .frame(height: QuotaDesign.Layout.footerHeight)
   }
+}
 
-  /// Sync completion clock; provider observations keep their own timestamps.
-  private var lastCheckedLabel: String {
-    guard let lastCheckedAt = model.lastCheckedAt else {
-      return "Not checked"
-    }
-    return "Last checked \(lastCheckedAt.formatted(date: .omitted, time: .shortened))"
+enum LastCheckedLabel {
+  static func string(from date: Date?) -> String {
+    guard let date else { return "—" }
+    return date.formatted(date: .omitted, time: .shortened)
+  }
+
+  static func accessibleString(from date: Date?) -> String {
+    guard let date else { return "Not checked" }
+    return "Last checked \(date.formatted(date: .omitted, time: .shortened))"
   }
 }

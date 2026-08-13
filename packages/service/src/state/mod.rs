@@ -378,13 +378,14 @@ impl StateStore {
         source: UsageSource,
         values: &[(UsagePeriod, Value)],
     ) -> Result<u64, StateError> {
-        if values.len() != 4
+        if values.is_empty()
+            || values.len() > 4
             || values
                 .iter()
                 .map(|(period, _)| period)
                 .collect::<HashSet<_>>()
                 .len()
-                != 4
+                != values.len()
         {
             return Err(StateError::InvalidState);
         }
@@ -2793,6 +2794,58 @@ mod tests {
             2
         );
         assert_eq!(store.pricing_etag().expect("cleared etag"), None);
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn account_usage_period_cache_keeps_available_windows_without_all_four() {
+        let root = std::env::temp_dir().join(format!("quota-account-usage-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let store = StateStore::open(&root).expect("state");
+        store
+            .set_component(
+                ComponentName::Account,
+                ComponentStatus::Ready,
+                Some(serde_json::json!({
+                    "auth_status": "signed_in",
+                    "account_id": "account_test",
+                    "device_id": "device_test",
+                    "device_generation": 1,
+                    "account_summary": null
+                })),
+                Some("2026-08-13T00:00:00Z".into()),
+                None,
+                false,
+            )
+            .expect("signed in");
+        let detail = serde_json::json!({
+            "range": {"from": "2026-08-13", "to": "2026-08-13"},
+            "usage": {"totals": {"total_tokens": 1}, "cost": {"status": "unavailable"}, "clients": []},
+            "fallback_models": [],
+            "incomplete": false,
+            "details_truncated": false
+        });
+        store
+            .replace_usage_periods(
+                crate::protocol::UsageSource::Account,
+                &[
+                    (UsagePeriod::Today, detail.clone()),
+                    (UsagePeriod::Last7Days, detail.clone()),
+                    (UsagePeriod::All, detail),
+                ],
+            )
+            .expect("partial account windows");
+        let account = store.snapshot().expect("snapshot").usage_periods.account;
+        assert!(account.today.is_some());
+        assert!(account.last_7_days.is_some());
+        assert!(account.last_30_days.is_none());
+        assert!(account.all.is_some());
+        assert!(
+            store
+                .replace_usage_periods(crate::protocol::UsageSource::Account, &[])
+                .is_err()
+        );
         drop(store);
         fs::remove_dir_all(root).expect("cleanup");
     }

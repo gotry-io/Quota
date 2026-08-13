@@ -114,6 +114,8 @@ final class MenuBarViewModel {
   private(set) var errorMessage: String?
   private(set) var accountErrorMessage: String?
   private(set) var isRefreshing = false
+  private(set) var usageRefreshing = false
+  private(set) var accountRefreshing = false
   private(set) var isLoggingIn = false
   private(set) var isLoggingOut = false
   private(set) var isUpdatingUsageUpload = false
@@ -308,6 +310,10 @@ final class MenuBarViewModel {
 
   func usageDetail(source: UsageSource, period: UsagePeriod) -> LocalServiceUsageDetail? {
     usagePeriods?.detail(source: source, period: period)
+  }
+
+  func isPreparingUsage(source: UsageSource) -> Bool {
+    source == .local ? usageRefreshing : accountRefreshing
   }
 
   func startLogin() {
@@ -720,7 +726,9 @@ final class MenuBarViewModel {
     providerBrowserSessions = Dictionary(
       uniqueKeysWithValues: state.providerBrowserSessions.map { ($0.provider, $0) }
     )
-    isRefreshing = state.quota.refreshing || state.usage.refreshing || state.account.refreshing
+    usageRefreshing = state.usage.refreshing
+    accountRefreshing = state.account.refreshing
+    isRefreshing = state.quota.refreshing || usageRefreshing || accountRefreshing
     isLoggingIn = authStatus == .loggingIn || loginTask != nil
     isLoggingOut = authStatus == .logoutPending
     lastCheckedAt = [state.quota.updatedAt, state.usage.updatedAt].compactMap { $0 }.max()

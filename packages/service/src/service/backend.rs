@@ -1538,12 +1538,14 @@ impl NativeBackend {
         account_value: &Value,
         cancel: &AtomicBool,
     ) -> Result<(), BackendError> {
-        let all = account_value
+        let mut periods = Vec::new();
+        if let Some(all) = account_value
             .get("account_summary")
             .and_then(|summary| summary.get("usage"))
             .cloned()
-            .ok_or_else(BackendError::unavailable)?;
-        let mut periods = vec![(UsagePeriod::All, account_usage_detail(all)?)];
+        {
+            push_account_usage_period(&mut periods, UsagePeriod::All, all);
+        }
         for period in [
             UsagePeriod::Today,
             UsagePeriod::Last7Days,
@@ -1552,10 +1554,14 @@ impl NativeBackend {
             let (_, range) = usage_period_range(period, &self.timezone(), Utc::now())?;
             let (from, to) = range.ok_or_else(BackendError::unavailable)?;
             let query = format!("cost_mode=calculate&from={from}&to={to}");
-            periods.push((
-                period,
-                account_usage_detail(self.account.account_usage(&query, cancel)?)?,
-            ));
+            match self.account.account_usage(&query, cancel) {
+                Ok(usage) => push_account_usage_period(&mut periods, period, usage),
+                Err(error) if error.error.code.requires_login() => return Err(error),
+                Err(_) => {}
+            }
+        }
+        if periods.is_empty() {
+            return Err(BackendError::unavailable());
         }
         self.state
             .replace_usage_periods(UsageSource::Account, &periods)
@@ -2071,6 +2077,16 @@ fn local_usage_detail(
         "incomplete": incomplete,
         "details_truncated": details_truncated
     }))
+}
+
+fn push_account_usage_period(
+    periods: &mut Vec<(UsagePeriod, Value)>,
+    period: UsagePeriod,
+    value: Value,
+) {
+    if let Ok(detail) = account_usage_detail(value) {
+        periods.push((period, detail));
+    }
 }
 
 fn account_usage_detail(value: Value) -> Result<Value, BackendError> {
@@ -2701,6 +2717,67 @@ mod tests {
         assert_eq!(detail["usage"]["totals"]["total_tokens"], 13);
         assert_eq!(detail["usage"]["totals"]["messages"], 2);
         assert_eq!(detail["fallback_models"][0]["model"], "gpt-test");
+    }
+
+    #[test]
+    fn account_usage_detail_keeps_structured_clients() {
+        let cost = json!({
+            "mode": "calculate",
+            "basis": "calculated",
+            "status": "complete",
+            "amount_microusd": "1",
+            "catalog_revision": "official-2026-08-10-4",
+            "calculated_rows": 1,
+            "reported_rows": 0,
+            "unpriced_rows": 0,
+            "assumptions": [],
+            "unpriced": []
+        });
+        let summary_totals = json!({
+            "total_tokens": 13,
+            "input_tokens": 8,
+            "output_tokens": 5,
+            "cache_read_input_tokens": 2,
+            "cache_write_input_tokens": 1,
+            "reasoning_tokens": 3,
+            "messages": 2
+        });
+        let relay_totals = json!({
+            "input_tokens": 8,
+            "cache_read_tokens": 2,
+            "cache_write_5m_tokens": 1,
+            "cache_write_1h_tokens": 0,
+            "cache_write_inferred_tokens": 0,
+            "output_tokens": 5,
+            "reasoning_tokens": 3,
+            "requests": 2,
+            "web_search_requests": 0,
+            "web_fetch_requests": 0,
+            "source_cost_microusd": null,
+            "source_cost_covered_requests": 0
+        });
+        let detail = account_usage_detail(json!({
+            "range": {"from": "2026-08-13", "to": "2026-08-13"},
+            "totals": relay_totals,
+            "cost": cost,
+            "coverage": [],
+            "breakdowns": [],
+            "clients": [{
+                "client": "codex",
+                "totals": summary_totals,
+                "cost": cost,
+                "providers": [{
+                    "provider": "openai",
+                    "totals": summary_totals,
+                    "cost": cost,
+                    "models": [{"model": "gpt-5.4", "totals": summary_totals, "cost": cost}]
+                }]
+            }]
+        }))
+        .expect("detail");
+        assert_eq!(detail["usage"]["clients"][0]["client"], "codex");
+        assert_eq!(detail["usage"]["totals"]["messages"], 2);
+        assert_eq!(detail["fallback_models"], json!([]));
     }
 
     #[test]

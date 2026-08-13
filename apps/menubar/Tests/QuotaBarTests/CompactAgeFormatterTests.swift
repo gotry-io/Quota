@@ -22,6 +22,23 @@ struct CompactAgeFormatterTests {
   }
 }
 
+struct LastCheckedLabelTests {
+  @Test
+  func neverCheckedIsAnEmDash() {
+    #expect(LastCheckedLabel.string(from: nil) == "—")
+    #expect(LastCheckedLabel.accessibleString(from: nil) == "Not checked")
+  }
+
+  @Test
+  func checkedLabelIsTimeOnly() {
+    let date = Date(timeIntervalSince1970: 1_786_617_600)
+    let label = LastCheckedLabel.string(from: date)
+    #expect(!label.isEmpty)
+    #expect(!label.localizedCaseInsensitiveContains("last checked"))
+    #expect(LastCheckedLabel.accessibleString(from: date).localizedStandardContains("Last checked"))
+  }
+}
+
 struct ResetDateFormatterTests {
   private var calendar: Calendar {
     var calendar = Calendar(identifier: .gregorian)

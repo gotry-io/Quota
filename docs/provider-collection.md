@@ -193,7 +193,8 @@ upload partitions are summarized by the unified `quotacli doctor`/QuotaBar diagn
    then retry once. A failed/no-op refresh must not suppress that retry. A valid cached token works
    without the `grok` executable.
 5. Prefer `config.creditUsagePercent` and `config.currentPeriod`. For non-unified accounts, retain the
-   deprecated `config.used.val / config.monthlyLimit.val * 100` fields documented by Grok Build.
+   deprecated `config.used.val / config.monthlyLimit.val * 100` fields documented by Grok Build. A
+   new period that omits those usage fields is 0% used, not malformed.
 6. Billing does not expose a subscription plan field. Infer a CodexBar-compatible plan hint from local
    credentials only: OIDC scopes under `https://auth.x.ai::` (and `auth_mode: oidc`) map to
    `supergrok`; other `auth_mode` values may be kept as a weak plan slug when they look like a plan

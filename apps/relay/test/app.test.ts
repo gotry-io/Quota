@@ -718,6 +718,13 @@ describe("managed Relay on real Workers and D1", () => {
     expect(
       (await app.request("https://quota.gotry.io/api/v2/account/summary?model_catalog=0")).status,
     ).toBe(400);
+    expect(
+      (
+        await app.request(
+          "https://quota.gotry.io/api/v2/account/usage/summary?usage_agents=all&from=2026-08-09&to=2026-08-09",
+        )
+      ).status,
+    ).toBe(200);
   });
 
   it("stores Better Auth sessions encrypted behind hashed keys", async () => {

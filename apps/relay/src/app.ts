@@ -15,17 +15,17 @@ import {
   LogoutResponseSchema,
   MAXIMUM_USAGE_READ_ROWS,
   MAXIMUM_USAGE_SUBMISSION_BYTES,
-  OAuthTokenRequestSchema,
-  OAuthTokenResponseSchema,
-  PROTOCOL_VERSION,
-  PublicProfileSchema,
-  PublicProfileSettingsSchema,
-  PublicProfileUpdateRequestSchema,
-  type PricingCatalog,
-  PricingCatalogSchema,
   MODEL_CATALOG,
   type ModelCatalog,
   ModelCatalogSchema,
+  OAuthTokenRequestSchema,
+  OAuthTokenResponseSchema,
+  PROTOCOL_VERSION,
+  type PricingCatalog,
+  PricingCatalogSchema,
+  PublicProfileSchema,
+  PublicProfileSettingsSchema,
+  PublicProfileUpdateRequestSchema,
   QuotaSnapshotEnvelopeSchema,
   QuotaSnapshotUploadResponseSchema,
   type RelayErrorCode,
@@ -53,9 +53,9 @@ import type { WebAccountAuth } from "./account/better-auth.ts";
 import { AccountFlowError, type AccountService, isLoopbackRedirect } from "./account/service.ts";
 import { managedServiceInfo } from "./config.ts";
 import { PRICING_CATALOG, PRICING_CATALOG_ETAG } from "./pricing-catalog.ts";
+import { normalizePublicSlug, publicProfileFromAccount } from "./public-profile.ts";
 import { bearerToken, type SecretHasher } from "./security.ts";
 import { buildUsageCost, buildUsageSummary, UsageSummaryLimitError } from "./usage-summary.ts";
-import { normalizePublicSlug, publicProfileFromAccount } from "./public-profile.ts";
 
 const maximumCredentialBodyBytes = 64 * 1024;
 const maximumSnapshotBodyBytes = 256 * 1024;
@@ -949,7 +949,7 @@ async function accountUsageQuery(
   checkedAt: Date,
   summaryOptions: { allByDefault: boolean; includeHourlyBreakdowns: boolean } = {
     allByDefault: false,
-    includeHourlyBreakdowns: true,
+    includeHourlyBreakdowns: false,
   },
 ) {
   if (

@@ -90,9 +90,10 @@ The header shows:
   trailing edge because the choice changes the whole page.
 - Settings root: Back, **Settings**, and an overflow menu containing **Quit QuotaBar**.
 
-The footer is a single quiet button: **Last checked HH:MM**, or **Not checked** before any sync. It is
-the sync completion clock, not the age of every provider observation. Selecting it runs one sync;
-clicks while a sync is active are ignored.
+The footer is a single quiet button showing the sync-completion clock as locale-shortened time only
+(`15:40` / `3:40 PM`), or **—** before any sync. VoiceOver still says **Last checked** plus that
+time. It is not the age of every provider observation. Selecting it runs one sync; clicks while a
+sync is active are ignored.
 
 Navigation transitions move horizontally by direction and combine with opacity. Reduce Motion uses
 opacity only. A page change clears transient focus/menu state. Escape dismisses a transient menu;
@@ -192,7 +193,10 @@ A four-item 28pt tab control selects Today, 7 Days, 30 Days, or All; Today is th
 labels use the regular 10.5pt list-secondary type size. The control owns one overall neutral
 background, with the selected item highlighted inside it; do not wrap it in another group surface.
 The selection is one inclusive date window from the service's precomputed snapshot. Opening Usage
-and changing either selector never introduces a loading state or starts collection/network work.
+and changing either selector never starts collection or network work and never shows a loading
+state when a snapshot already exists. If the selected source has no snapshot yet and that
+component is still refreshing, the page says **Preparing Usage…** instead of implying Usage is
+absent. After refresh finishes with no snapshot, it says **No Usage is available for this period.**
 The default page contains:
 
 - Summary: a titled group with separate Tokens and Cost headline metrics followed by the six token

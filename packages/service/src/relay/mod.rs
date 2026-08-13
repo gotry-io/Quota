@@ -2121,42 +2121,13 @@ impl AccountManager {
     }
 
     pub fn account_usage(&self, query: &str, cancel: &AtomicBool) -> Result<Value, BackendError> {
-        let (mut session, mut session_epoch) = self
-            .state
-            .session_snapshot()
-            .map_err(|_| BackendError::unavailable())?
-            .ok_or_else(session_changed_error)?;
-        if !is_active_session(&session) {
-            return Err(session_changed_error());
-        }
-        if cancel.load(Ordering::Acquire) {
-            return Err(BackendError::cancelled());
-        }
-        let account_token =
-            self.ensure_fresh_session(&mut session, &mut session_epoch, "account")?;
-        let usage = self
-            .client
-            .account_usage_summary(&account_token, query)
-            .map_err(|error| BackendError {
-                error: relay_error_for_backend(error),
-            })?;
-        if !self
-            .state
-            .active_session_at_epoch(session_epoch)
-            .map_err(|_| BackendError::unavailable())?
-        {
-            return Err(session_changed_error());
-        }
-        session["account"]["last_refreshed_at"] = Value::String(crate::state::now_rfc3339());
-        if self
-            .state
-            .write_session_json_if_epoch(&session, session_epoch)
-            .map_err(|_| BackendError::unavailable())?
-            .is_none()
-        {
-            return Err(session_changed_error());
-        }
-        Ok(usage)
+        // Shipped /api/v2/account/usage/summary still materializes hourly facts with a 1_000-row
+        // cap and returns 413 for a 30-day window. Account summary uses the 100_000-row path.
+        let (summary, _) = self.read_account_summary(query, cancel)?;
+        summary
+            .get("usage")
+            .cloned()
+            .ok_or_else(BackendError::unavailable)
     }
 
     fn read_account_summary(
