@@ -32,19 +32,16 @@ struct AppUpdateService: Sendable {
   }
 
   func check(currentVersion: String) async -> AppUpdateOffer? {
+    var documents: [Data] = []
     for url in feedURLs {
       guard let (data, response) = try? await session.data(from: url),
-        (response as? HTTPURLResponse)?.statusCode == 200,
-        let feed = AppUpdateDecision.parseFeed(data)
+        (response as? HTTPURLResponse)?.statusCode == 200
       else {
         continue
       }
-      if let offer = AppUpdateDecision.offer(currentVersion: currentVersion, feed: feed) {
-        return offer
-      }
-      return nil
+      documents.append(data)
     }
-    return nil
+    return AppUpdateDecision.offer(currentVersion: currentVersion, feedDocuments: documents)
   }
 
   func apply(_ offer: AppUpdateOffer) async throws {
@@ -80,12 +77,16 @@ struct AppUpdateService: Sendable {
     let mount = FileManager.default.temporaryDirectory
       .appending(path: "QuotaBarMount-\(UUID().uuidString)", directoryHint: .isDirectory)
     try FileManager.default.createDirectory(at: mount, withIntermediateDirectories: true)
-    try run("/usr/bin/hdiutil", ["attach", dmg.path, "-nobrowse", "-readonly", "-mountpoint", mount.path])
+    try run(
+      "/usr/bin/hdiutil",
+      ["attach", dmg.path, "-nobrowse", "-readonly", "-mountpoint", mount.path]
+    )
     defer { _ = try? run("/usr/bin/hdiutil", ["detach", mount.path, "-force"]) }
     guard let app = try findApp(in: mount) else {
       throw AppUpdateError.archiveMissingApp
     }
-    try scheduleReplace(app)
+    let staged = try stageAppForReplace(app)
+    try scheduleReplace(staged)
   }
 
   private func installZip(_ zip: URL) async throws {
@@ -99,7 +100,19 @@ struct AppUpdateService: Sendable {
     try scheduleReplace(app)
   }
 
-  private func findApp(in root: URL) throws -> URL? {
+  func stageAppForReplace(_ app: URL) throws -> URL {
+    let folder = FileManager.default.temporaryDirectory
+      .appending(path: "QuotaBarStaged-\(UUID().uuidString)", directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    let destination = folder.appending(path: "QuotaBar.app")
+    try run(
+      "/usr/bin/ditto",
+      ["--rsrc", "--extattr", "--acl", app.path, destination.path]
+    )
+    return destination
+  }
+
+  func findApp(in root: URL) throws -> URL? {
     let contents = try FileManager.default.contentsOfDirectory(
       at: root, includingPropertiesForKeys: nil)
     if let match = contents.first(where: { $0.lastPathComponent == "QuotaBar.app" }) {

@@ -93,6 +93,17 @@ enum AppUpdateDecision {
     return nil
   }
 
+  /// Prefer the newest parseable feed so a stale website document cannot hide a later release.
+  static func offer(currentVersion: String, feedDocuments: [Data]) -> AppUpdateOffer? {
+    selectOffer(currentVersion: currentVersion, feeds: feedDocuments.compactMap(parseFeed))
+  }
+
+  static func selectOffer(currentVersion: String, feeds: [AppUpdateFeed]) -> AppUpdateOffer? {
+    feeds.compactMap { offer(currentVersion: currentVersion, feed: $0) }.max { left, right in
+      compare(left.version, to: right.version) == .older
+    }
+  }
+
   static func parseVersion(_ raw: String) -> (numbers: [Int], prerelease: String?)? {
     let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return nil }

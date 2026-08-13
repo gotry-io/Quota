@@ -186,8 +186,10 @@ The shared Rust service is the native OAuth public client used by QuotaBar and L
 QuotaBar uses Authorization Code with PKCE and a temporary loopback callback; Linux `quotacli` uses
 the OAuth Device Authorization Grant and never opens a browser or loopback listener. Device
 `display_name` is the host computer name (macOS ComputerName, otherwise hostname), not the product
-name. QuotaBar checks `https://quota.gotry.io/updates/menubar.json` and the GitHub release feed,
-prompts from Support, and applies a verified `.dmg` or `.zip` in-app. Relay returns
+name. QuotaBar checks `https://quota.gotry.io/updates/menubar.json` and the GitHub release
+`menubar-update.json`, then offers the newest valid version so a stale website document cannot hide
+a later release. Support prompts, then applies a verified `.dmg` or `.zip` after copying the app off
+any mounted disk image. Relay returns
 separate account-read and current-device-write sessions; access and refresh expiry are explicit and
 refresh rotates atomically. The network `client_id` value `quotacli` remains unchanged because it is
 part of released protocol v2.
