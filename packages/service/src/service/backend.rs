@@ -239,10 +239,7 @@ impl NativeBackend {
         let home = std::env::var_os("HOME")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("/"));
-        let device_name = std::env::var("HOSTNAME")
-            .ok()
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or_else(|| client_name.to_owned());
+        let device_name = crate::relay::local_device_display_name(client_name);
         let account = AccountManager::new(relay.clone(), state.clone(), device_name);
         Self {
             state,
@@ -265,13 +262,13 @@ impl NativeBackend {
 
     /// Discover providers through the same provider-owned credential paths used for collection.
     /// No account or Relay state is read or changed.
-    pub fn configured_providers(&self) -> Vec<ProviderId> {
-        let context = self.collection_context(Arc::new(AtomicBool::new(false)));
-        ProviderId::ALL
+    pub fn configured_providers(&self) -> Result<Vec<ProviderId>, BackendError> {
+        let context = self.collection_context(Arc::new(AtomicBool::new(false)))?;
+        Ok(ProviderId::ALL
             .iter()
             .copied()
             .filter(|provider| !providers::discover(*provider, &context).is_empty())
-            .collect()
+            .collect())
     }
 
     pub fn diagnostic_report(&self) -> Result<DiagnosticReport, BackendError> {
@@ -280,14 +277,34 @@ impl NativeBackend {
         let mut degraded = false;
         let mut blocked = false;
 
-        let discovered = self.configured_providers().len() as i64;
+        let discovered = match self.configured_providers() {
+            Ok(providers) => providers.len() as i64,
+            Err(_) => {
+                degraded = true;
+                issues.push(DiagnosticIssue {
+                    component: "providers".into(),
+                    code: "state_unavailable".into(),
+                    severity: DiagnosticSeverity::Error,
+                    count: 1,
+                    message: "provider browser session state could not be read".into(),
+                });
+                0
+            }
+        };
         let (config_present, config_readable) = config_file_diagnostic(self.state.root());
         let configured = match self.state.snapshot() {
-            Ok(snapshot) => snapshot
-                .providers
-                .iter()
-                .filter(|provider| provider.configured)
-                .count() as i64,
+            Ok(snapshot) => {
+                (snapshot
+                    .providers
+                    .iter()
+                    .filter(|provider| provider.configured)
+                    .count()
+                    + snapshot
+                        .provider_browser_sessions
+                        .iter()
+                        .filter(|session| session.configured)
+                        .count()) as i64
+            }
             Err(_) => {
                 degraded = true;
                 issues.push(DiagnosticIssue {
@@ -849,7 +866,7 @@ impl NativeBackend {
         provider_ids: &[ProviderId],
         cancel: Arc<AtomicBool>,
     ) -> Result<Value, BackendError> {
-        let context = self.collection_context(cancel.clone());
+        let context = self.collection_context(cancel.clone())?;
         let captured_at = context.observed_at();
         let results = thread::scope(|scope| {
             let jobs = provider_ids.iter().copied().map(|provider| {
@@ -881,16 +898,27 @@ impl NativeBackend {
         }))
     }
 
-    fn collection_context(&self, cancel: Arc<AtomicBool>) -> CollectionContext {
-        CollectionContext {
+    fn collection_context(
+        &self,
+        cancel: Arc<AtomicBool>,
+    ) -> Result<CollectionContext, BackendError> {
+        let browser_sessions = self
+            .state
+            .provider_browser_sessions()
+            .map_err(|_| BackendError::unavailable())?
+            .into_iter()
+            .map(|(provider, session)| (provider, session.cookie_header))
+            .collect();
+        Ok(CollectionContext {
             home_directory: self.home.clone(),
             environment: self.environment.clone(),
             config_path: Some(self.state.root().join("providers.json")),
+            browser_sessions,
             client_name: self.client_name.clone(),
             client_version: self.client_version.clone(),
             now: Some(now_rfc3339()),
             cancel: Some(cancel),
-        }
+        })
     }
 
     fn collect_usage(&self, cancel: Arc<AtomicBool>) -> Result<UsageCollection, BackendError> {
@@ -1577,6 +1605,14 @@ impl NativeBackend {
                     let Some(snapshot) = observation.get("snapshot") else {
                         continue;
                     };
+                    if !snapshot
+                        .get("provider")
+                        .and_then(Value::as_str)
+                        .and_then(ProviderId::parse)
+                        .is_some_and(|provider| provider.metadata().account_sync)
+                    {
+                        continue;
+                    }
                     let display_name = display_names
                         .get(device_id)
                         .map(String::as_str)
@@ -1661,6 +1697,33 @@ fn collect_one_provider(provider: ProviderId, context: &CollectionContext) -> Va
 impl LocalBackend for NativeBackend {
     fn diagnose(&self) -> Result<DiagnosticReport, BackendError> {
         self.diagnostic_report()
+    }
+
+    fn validate_provider_browser_session(
+        &self,
+        provider: ProviderId,
+        cookie_header: &str,
+    ) -> Result<crate::providers::ValidatedBrowserSession, BackendError> {
+        let context = self.collection_context(Arc::new(AtomicBool::new(false)))?;
+        providers::validate_browser_session(provider, cookie_header, &context).map_err(|error| {
+            BackendError {
+                error: match error.category {
+                    ErrorCategory::AuthRequired => IpcError::new(
+                        ErrorCode::AuthenticationRequired,
+                        RecoveryAction::ConfigureProvider,
+                    ),
+                    ErrorCategory::Unavailable => {
+                        IpcError::new(ErrorCode::NetworkError, RecoveryAction::Retry)
+                    }
+                    ErrorCategory::Unsupported => {
+                        IpcError::new(ErrorCode::UnsupportedOperation, RecoveryAction::None)
+                    }
+                    ErrorCategory::Error => {
+                        IpcError::new(ErrorCode::ProviderError, RecoveryAction::Retry)
+                    }
+                },
+            }
+        })
     }
 
     fn refresh(&self, cancel: Arc<AtomicBool>) -> RefreshOutcome {
@@ -2669,7 +2732,12 @@ mod tests {
         let mut backend = NativeBackend::new(state.clone(), relay, "QuotaTest", "test");
         backend.home = home;
         backend.environment.clear();
-        assert!(backend.configured_providers().is_empty());
+        assert!(
+            backend
+                .configured_providers()
+                .expect("providers")
+                .is_empty()
+        );
         let report = backend
             .collect_quota(Arc::new(AtomicBool::new(false)))
             .expect("local quota report");

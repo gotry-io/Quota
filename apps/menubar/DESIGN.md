@@ -123,9 +123,13 @@ Each quota observation shows:
 
 - provider brand and name;
 - optional masked account label and normalized plan badge;
-- remaining value as the strongest number;
+- remaining value as the strongest number, with no "left" or "remaining" suffix;
+- budget windows that also have an absolute remaining amount as `71% · $3.75`;
+- percent-only windows as `71%`;
+- balance-only windows as `$12.34` (or the unit amount) under a **Balance** title;
 - one meter per quota window when a percent is meaningful;
-- reset time, stale state, and selected source display name as quiet metadata;
+- reset time, stale state, and selected source display name as quiet metadata. Reset copy uses
+  weekday and time within six days, otherwise month and day; it does not imply the window period;
 - **Local** for signed-out local collection or **Device** for an account observation.
 
 Expired `valid_until` and explicit stale status use stale presentation. A provider authentication
@@ -238,7 +242,17 @@ Provider detail contains:
   and compact observation age;
 - **This Mac Sign-in**: the catalog-provided copyable official-provider command; or
 - **This Mac Configuration**: native secure API-key entry, optional base URL when catalog-enabled,
-  masked saved state, Save, and Remove.
+  masked saved state, Save, and Remove; and
+- **Browser Session** when catalog-enabled: disconnected **Sign In**, bounded **Waiting / Cancel**,
+  non-cancellable **Connecting** after commit begins, or a connected masked account with only
+  **Disconnect**. Confirmed disconnect is likewise non-cancellable. There is no switch-account
+  action; a different account is disconnect, then sign in.
+
+Browser-session login uses app-owned selection/confirmation popups at the panel root, never system
+alerts or sheets. Login is pinned to one supported browser; an unsupported default HTTPS handler
+requires a browser selection before opening the URL. One unambiguous new account may commit
+automatically; multiple accounts require selection. Lists scroll within the panel; the popup owns
+focus, Escape, keyboard, and VoiceOver while the underlying page is disabled and accessibility-hidden.
 
 QuotaBar never reads provider credential files. New values travel only over private child stdin and
 Swift clears the field after Save; the service owns validation, owner-only persistence, and masking.
@@ -253,12 +267,18 @@ Swift clears the field after Save; the service owns validation, owner-only persi
 | `SettingsListRow` | Shared icon/title/subtitle/trailing alignment |
 | `QuotaCommandRow` | Selectable official-provider sign-in command and Copy/Copied feedback |
 | `QuotaConfirmationPopup` | Scrimmed app-owned confirmation with cancel and destructive actions |
-| `QuotaPrimaryButtonStyle` | Accent capsule for the primary task |
+| `QuotaPrimaryButtonStyle` | Accent capsule for the one primary task on a surface |
+| `QuotaSecondaryButtonStyle` | Compact field-height control for secondary or destructive in-section actions |
 | `QuotaListRowButtonStyle` | Nested hover/press feedback with full-row hit target |
 | `ProviderBrandIcon` | Catalog brand resource with stable optical sizing |
 
-Prefer these components over page-local replicas. Provider assets remain in
-`Resources/BrandIcons`; do not copy their geometry into SwiftUI paths.
+Prefer these components over page-local replicas. In-section actions never mix an accent capsule
+with a system or bordered control. **Sign In**, **Save**, and empty-state **Retry** use compact
+primary. **Cancel**, **Remove**, **Disconnect**, and the second Diagnostics copy action use
+secondary; destructive labels use the destructive variant. Full-width Settings rows such as **Log
+Out** stay list rows. Do not use `ButtonStyle.bordered` or an unstyled system button inside the
+panel. Provider assets remain in `Resources/BrandIcons`; do not copy their geometry into SwiftUI
+paths.
 
 ## Accessibility and input
 

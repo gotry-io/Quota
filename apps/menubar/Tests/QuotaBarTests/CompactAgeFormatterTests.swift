@@ -21,3 +21,50 @@ struct CompactAgeFormatterTests {
     #expect(CompactAgeFormatter.string(since: now.addingTimeInterval(-age), now: now) == expected)
   }
 }
+
+struct ResetDateFormatterTests {
+  private var calendar: Calendar {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+    calendar.locale = Locale(identifier: "en_US_POSIX")
+    return calendar
+  }
+
+  private var locale: Locale { Locale(identifier: "en_US_POSIX") }
+
+  @Test
+  func nearResetKeepsWeekdayAndTime() {
+    let now = date(2026, 8, 13, 12, 0)
+    let reset = date(2026, 8, 15, 16, 3)
+    #expect(
+      ResetDateFormatter.string(from: reset, now: now, calendar: calendar, locale: locale)
+        == "Sat 4:03 PM"
+    )
+  }
+
+  @Test
+  func monthlyResetUsesMonthAndDay() {
+    let now = date(2026, 8, 13, 12, 0)
+    let reset = date(2026, 9, 12, 8, 3)
+    #expect(
+      ResetDateFormatter.string(from: reset, now: now, calendar: calendar, locale: locale)
+        == "Sep 12"
+    )
+  }
+
+  @Test
+  func laterYearIncludesYear() {
+    let now = date(2026, 8, 13, 12, 0)
+    let reset = date(2027, 1, 3, 8, 0)
+    #expect(
+      ResetDateFormatter.string(from: reset, now: now, calendar: calendar, locale: locale)
+        == "Jan 3, 2027"
+    )
+  }
+
+  private func date(_ year: Int, _ month: Int, _ day: Int, _ hour: Int, _ minute: Int) -> Date {
+    calendar.date(
+      from: DateComponents(year: year, month: month, day: day, hour: hour, minute: minute)
+    )!
+  }
+}

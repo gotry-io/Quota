@@ -19,6 +19,8 @@ pub enum ProviderId {
     Kimi,
     #[serde(rename = "litellm")]
     LiteLlm,
+    #[serde(rename = "cursor")]
+    Cursor,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -30,6 +32,14 @@ pub struct ApiKeyConfig {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BrowserSessionConfig {
+    pub login_url: &'static str,
+    pub cookie_hosts: &'static [&'static str],
+    pub cookie_names: &'static [&'static str],
+    pub browser_priority: &'static [&'static str],
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ProviderCatalogEntry {
     pub id: ProviderId,
     pub display_name: &'static str,
@@ -37,8 +47,10 @@ pub struct ProviderCatalogEntry {
     pub default_visible: bool,
     pub setup_action: &'static str,
     pub brand_icon_asset: &'static str,
+    pub account_sync: bool,
     pub environment_keys: &'static [&'static str],
     pub credential_config: Option<ApiKeyConfig>,
+    pub browser_session: Option<BrowserSessionConfig>,
     pub default_base_url: Option<&'static str>,
     pub base_url_environment_key: Option<&'static str>,
 }
@@ -51,8 +63,10 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
         default_visible: true,
         setup_action: "codex login",
         brand_icon_asset: "openai",
+        account_sync: true,
         environment_keys: &["CODEX_HOME"],
         credential_config: None,
+        browser_session: None,
         default_base_url: None,
         base_url_environment_key: None,
     },
@@ -63,8 +77,10 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
         default_visible: true,
         setup_action: "claude auth login",
         brand_icon_asset: "claude",
+        account_sync: true,
         environment_keys: &["CLAUDE_CONFIG_DIR"],
         credential_config: None,
+        browser_session: None,
         default_base_url: None,
         base_url_environment_key: None,
     },
@@ -75,8 +91,10 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
         default_visible: true,
         setup_action: "grok login",
         brand_icon_asset: "grok",
+        account_sync: true,
         environment_keys: &["GROK_HOME"],
         credential_config: None,
+        browser_session: None,
         default_base_url: None,
         base_url_environment_key: None,
     },
@@ -87,6 +105,7 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
         default_visible: false,
         setup_action: "Configure in QuotaBar",
         brand_icon_asset: "openrouter",
+        account_sync: true,
         environment_keys: &["OPENROUTER_API_KEY"],
         credential_config: Some(ApiKeyConfig {
             supports_base_url: false,
@@ -94,6 +113,7 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
             allow_private_http: false,
             mask_label: "OpenRouter",
         }),
+        browser_session: None,
         default_base_url: Some("https://openrouter.ai/api/v1"),
         base_url_environment_key: None,
     },
@@ -104,6 +124,7 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
         default_visible: false,
         setup_action: "Configure in QuotaBar",
         brand_icon_asset: "deepseek",
+        account_sync: true,
         environment_keys: &["DEEPSEEK_API_KEY", "DEEPSEEK_KEY"],
         credential_config: Some(ApiKeyConfig {
             supports_base_url: false,
@@ -111,6 +132,7 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
             allow_private_http: false,
             mask_label: "DeepSeek",
         }),
+        browser_session: None,
         default_base_url: Some("https://api.deepseek.com"),
         base_url_environment_key: None,
     },
@@ -121,6 +143,7 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
         default_visible: false,
         setup_action: "Configure in QuotaBar",
         brand_icon_asset: "kimi",
+        account_sync: true,
         environment_keys: &["KIMI_CODE_API_KEY", "KIMI_API_KEY"],
         credential_config: Some(ApiKeyConfig {
             supports_base_url: false,
@@ -128,6 +151,7 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
             allow_private_http: false,
             mask_label: "Kimi",
         }),
+        browser_session: None,
         default_base_url: Some("https://api.kimi.com"),
         base_url_environment_key: None,
     },
@@ -138,6 +162,7 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
         default_visible: false,
         setup_action: "Configure in QuotaBar",
         brand_icon_asset: "litellm",
+        account_sync: true,
         environment_keys: &["LITELLM_API_KEY", "LITELLM_BASE_URL"],
         credential_config: Some(ApiKeyConfig {
             supports_base_url: true,
@@ -145,12 +170,48 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
             allow_private_http: true,
             mask_label: "LiteLLM",
         }),
+        browser_session: None,
         default_base_url: None,
         base_url_environment_key: Some("LITELLM_BASE_URL"),
+    },
+    ProviderCatalogEntry {
+        id: ProviderId::Cursor,
+        display_name: "Cursor",
+        order: 7,
+        default_visible: false,
+        setup_action: "Sign in with browser",
+        brand_icon_asset: "cursor",
+        account_sync: false,
+        environment_keys: &[],
+        credential_config: None,
+        browser_session: Some(BrowserSessionConfig {
+            login_url: "https://authenticator.cursor.sh/",
+            cookie_hosts: &[
+                "cursor.com",
+                "www.cursor.com",
+                "cursor.sh",
+                "authenticator.cursor.sh",
+            ],
+            cookie_names: &[
+                "WorkosCursorSessionToken",
+                "__Secure-next-auth.session-token",
+                "next-auth.session-token",
+                "wos-session",
+                "__Secure-wos-session",
+                "authjs.session-token",
+                "__Secure-authjs.session-token",
+            ],
+            browser_priority: &[
+                "safari", "chrome", "edge", "brave", "arc", "dia", "chromium", "firefox",
+            ],
+        }),
+        default_base_url: None,
+        base_url_environment_key: None,
     },
 ];
 
 impl ProviderId {
+    /// Every local collector. Use metadata.account_sync as the managed Account/Relay v2 boundary.
     pub const ALL: &'static [Self] = &[
         Self::Codex,
         Self::Claude,
@@ -159,6 +220,7 @@ impl ProviderId {
         Self::DeepSeek,
         Self::Kimi,
         Self::LiteLlm,
+        Self::Cursor,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -170,6 +232,7 @@ impl ProviderId {
             Self::DeepSeek => "deepseek",
             Self::Kimi => "kimi",
             Self::LiteLlm => "litellm",
+            Self::Cursor => "cursor",
         }
     }
 
@@ -182,6 +245,7 @@ impl ProviderId {
             "deepseek" => Some(Self::DeepSeek),
             "kimi" => Some(Self::Kimi),
             "litellm" => Some(Self::LiteLlm),
+            "cursor" => Some(Self::Cursor),
             _ => None,
         }
     }
@@ -195,6 +259,7 @@ impl ProviderId {
             Self::DeepSeek => &PROVIDER_CATALOG[4],
             Self::Kimi => &PROVIDER_CATALOG[5],
             Self::LiteLlm => &PROVIDER_CATALOG[6],
+            Self::Cursor => &PROVIDER_CATALOG[7],
         }
     }
 }

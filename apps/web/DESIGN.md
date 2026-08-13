@@ -22,7 +22,9 @@ The site has three surfaces:
 
 1. `/` explains local collection, one GitHub-backed Account, Devices, and API-equivalent Usage cost.
 2. `/my` shows the signed-in user's name, quota snapshots, account totals, cost coverage, Usage
-   activity, model/agent breakdowns, Devices, and explicit Device deletion. Account actions live in
+   activity, model/agent breakdowns, Devices, and explicit Device deletion. Quota remaining has no
+   "left"/"remaining" suffix; budget windows with an amount use `71% · $3.75`, percent-only windows
+   use `71%`, and balance-only windows use **Balance** plus `$12.34`. Account actions live in
    the account menu, whose trigger is the signed-in GitHub username. The shipped `/app` bookmark
    is a single redirect to `/my`.
 3. `/activate` approves or denies a released native-client device authorization code.

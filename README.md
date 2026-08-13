@@ -10,7 +10,8 @@ subscription quota and privacy-preserving Usage together across a user's devices
 - **QuotaRelay** — managed account/device service on Cloudflare Workers and D1.
 - **Quota Web** — public site, GitHub login, device authorization, and account dashboard.
 
-Quota collection supports Codex, Claude Code, Grok, OpenRouter, DeepSeek, Kimi Code, and LiteLLM.
+Quota collection supports Codex, Claude Code, Grok, OpenRouter, DeepSeek, Kimi Code, LiteLLM, and
+local-only Cursor browser sessions on macOS.
 Local Usage analytics supports Codex, Claude Code, Grok, OpenCode, and Pi logs. Provider credentials,
 prompts, completions, raw events, local paths, and conversation identifiers never upload.
 
@@ -40,7 +41,9 @@ remain TypeScript. See the canonical
 [provider strategies](docs/provider-collection.md), [native service decision](docs/decisions/0007-rust-native-local-service.md),
 and [managed account decision](docs/decisions/0006-managed-account-device-usage.md). The data
 integrity and diagnostic contract is [ADR 0008](docs/decisions/0008-data-integrity-and-diagnostics.md),
-and report-time model identity is [ADR 0009](docs/decisions/0009-versioned-model-catalog.md).
+report-time model identity is [ADR 0009](docs/decisions/0009-versioned-model-catalog.md), and
+provider browser-session authentication is
+[ADR 0010](docs/decisions/0010-provider-browser-session-auth.md).
 
 ## Repository layout
 
@@ -67,6 +70,9 @@ output, cache-read input, cache-write input, reasoning, and usage-bearing output
 are not collected.
 The service precomputes Today, 7 Days, 30 Days, and All detail for This Mac and the signed-in Account,
 so QuotaBar switches periods without collection or network work; Overview remains quota-only.
+Catalog `account_sync` distinguishes the released network-v2 provider set from local-only
+providers. menubar-v0.0.9 shipped strict decoding for the closed v2 provider enum, so Cursor never
+enters v2 upload envelopes or managed Account summaries.
 
 ## Development
 

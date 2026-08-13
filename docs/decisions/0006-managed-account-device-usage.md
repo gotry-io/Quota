@@ -19,8 +19,10 @@ safe retries and deletion.
 Quota supports one managed service at `https://quota.gotry.io` and GitHub is its only account identity
 provider. Better Auth is the browser identity/session boundary and owns provider OAuth state, PKCE,
 cookies, expiry, and standard auth-route origin protection. Quota keeps only its product-specific
-Device lifecycle and native token families. An Account directly owns Devices. QuotaBar's bundled
-Rust service is the sole native OAuth public client and writer of installation identity,
+Device lifecycle and native token families. An Account directly owns Devices. Each Device
+`display_name` is the host computer name collected at login, not the QuotaBar or QuotaCLI product
+name. QuotaBar's bundled Rust service is the sole native OAuth public client and writer of
+installation identity,
 account/device sessions, upload sequences, Usage state, and Usage outbox. Swift renders typed IPC
 state; it does not read credentials or service files.
 

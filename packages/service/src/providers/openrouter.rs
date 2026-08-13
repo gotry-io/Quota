@@ -205,7 +205,7 @@ fn map_windows(credits: Option<&Credits>, key: Option<&Key>) -> Vec<QuotaWindow>
     if let Some(credits) = credits.filter(|value| value.total > 0.0) {
         windows.push(QuotaWindow {
             id: "credits".to_owned(),
-            title: "Credits".to_owned(),
+            title: "Balance (USD)".to_owned(),
             used_percent: 0.0,
             resets_at: None,
             duration_seconds: None,
@@ -294,6 +294,7 @@ mod tests {
         assert_eq!(windows[0].id, "key_daily");
         assert_eq!(windows[0].used_percent, 40.0);
         assert_eq!(windows[1].id, "credits");
+        assert_eq!(windows[1].title, "Balance (USD)");
         assert_eq!(windows[1].remaining_value, Some(60.0));
     }
 }

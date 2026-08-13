@@ -191,17 +191,32 @@ function renderQuotaWindow(
 function formatQuotaRemaining(
   window: AccountQuotaObservation["snapshot"]["windows"][number],
 ): string {
-  if (window.remaining_value !== undefined) {
-    if (window.value_unit === "usd") {
-      return new Intl.NumberFormat(WEB_LOCALE, {
-        style: "currency",
-        currency: "USD",
-        maximumFractionDigits: 2,
-      }).format(window.remaining_value);
-    }
-    return `${formatCount(window.remaining_value)}${window.value_unit === "credits" ? " credits" : ""}`;
+  const percent = formatPercent(100 - window.used_percent);
+  const absolute = formatAbsoluteRemaining(window);
+  const balanceOnly = window.remaining_value !== undefined && window.limit_value === undefined;
+  if (absolute === undefined) {
+    return percent;
   }
-  return `${formatPercent(100 - window.used_percent)} remaining`;
+  if (balanceOnly) {
+    return absolute;
+  }
+  return `${percent} · ${absolute}`;
+}
+
+function formatAbsoluteRemaining(
+  window: AccountQuotaObservation["snapshot"]["windows"][number],
+): string | undefined {
+  if (window.remaining_value === undefined) {
+    return undefined;
+  }
+  if (window.value_unit === "usd") {
+    return new Intl.NumberFormat(WEB_LOCALE, {
+      style: "currency",
+      currency: "USD",
+      maximumFractionDigits: 2,
+    }).format(window.remaining_value);
+  }
+  return `${formatCount(window.remaining_value)}${window.value_unit === "credits" ? " credits" : ""}`;
 }
 
 function formatPercent(value: number): string {

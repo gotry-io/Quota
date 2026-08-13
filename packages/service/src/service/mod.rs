@@ -99,6 +99,11 @@ pub trait LocalBackend: Send + Sync {
         cancel: Arc<AtomicBool>,
     ) -> Result<LoginOutcome, BackendError>;
     fn logout(&self, pending_session: &Value) -> Result<(), BackendError>;
+    fn validate_provider_browser_session(
+        &self,
+        provider: crate::catalog::ProviderId,
+        cookie_header: &str,
+    ) -> Result<crate::providers::ValidatedBrowserSession, BackendError>;
 }
 
 #[cfg(test)]
@@ -123,6 +128,13 @@ impl LocalBackend for UnavailableBackend {
         Err(BackendError::unavailable())
     }
     fn logout(&self, _: &Value) -> Result<(), BackendError> {
+        Err(BackendError::unavailable())
+    }
+    fn validate_provider_browser_session(
+        &self,
+        _: crate::catalog::ProviderId,
+        _: &str,
+    ) -> Result<crate::providers::ValidatedBrowserSession, BackendError> {
         Err(BackendError::unavailable())
     }
 }
@@ -233,6 +245,15 @@ impl LocalService {
             Operation::SetUsageUpload => self.set_usage_upload(&request).map(as_json),
             Operation::SetProviderConfig => self.set_provider_config(&request).map(as_json),
             Operation::RemoveProviderConfig => self.remove_provider_config(&request).map(as_json),
+            Operation::ValidateProviderBrowserSession => self
+                .validate_provider_browser_session(&request)
+                .map(as_json),
+            Operation::CommitProviderBrowserSession => {
+                self.commit_provider_browser_session(&request).map(as_json)
+            }
+            Operation::RemoveProviderBrowserSession => {
+                self.remove_provider_browser_session(&request).map(as_json)
+            }
             Operation::Shutdown => self.shutdown_response(&request).map(as_json),
         };
         match result {
@@ -495,6 +516,93 @@ impl LocalService {
             None,
             provider_mask_label(&payload.provider),
         ))
+    }
+
+    fn validate_provider_browser_session(
+        &self,
+        request: &IpcRequest,
+    ) -> Result<ProviderBrowserSessionCandidate, IpcError> {
+        let (provider, validated) = self.validated_provider_browser_session(request)?;
+        Ok(ProviderBrowserSessionCandidate {
+            provider: provider.as_str().to_owned(),
+            account_fingerprint: validated.account_fingerprint,
+            account_label: validated.account_label,
+        })
+    }
+
+    fn commit_provider_browser_session(
+        &self,
+        request: &IpcRequest,
+    ) -> Result<ProviderBrowserSessionView, IpcError> {
+        let (provider, validated) = self.validated_provider_browser_session(request)?;
+        self.inner
+            .state
+            .set_provider_browser_session(
+                provider.as_str(),
+                &crate::state::ProviderBrowserSession {
+                    cookie_header: validated.cookie_header,
+                    account_fingerprint: validated.account_fingerprint.clone(),
+                    account_label: validated.account_label.clone(),
+                },
+            )
+            .map_err(state_error)?;
+        self.emit(vec![ComponentName::Providers]);
+        let _ = self.request_refresh();
+        Ok(ProviderBrowserSessionView {
+            provider: provider.as_str().to_owned(),
+            configured: true,
+            account_fingerprint: Some(validated.account_fingerprint),
+            account_label: validated.account_label,
+        })
+    }
+
+    fn validated_provider_browser_session(
+        &self,
+        request: &IpcRequest,
+    ) -> Result<
+        (
+            crate::catalog::ProviderId,
+            crate::providers::ValidatedBrowserSession,
+        ),
+        IpcError,
+    > {
+        let payload: ProviderBrowserSessionPayload = request.decode_payload()?;
+        let provider = crate::catalog::ProviderId::parse(&payload.provider)
+            .filter(|provider| provider.metadata().browser_session.is_some())
+            .ok_or_else(|| IpcError::new(ErrorCode::InvalidRequest, RecoveryAction::None))?;
+        let cookie_header = crate::providers::common::normalize_browser_cookie_header(
+            provider,
+            &payload.cookie_header,
+        )
+        .map_err(|_| IpcError::new(ErrorCode::InvalidRequest, RecoveryAction::None))?;
+        let validated = self
+            .inner
+            .backend
+            .validate_provider_browser_session(provider, &cookie_header)
+            .map_err(|error| error.error)?;
+        Ok((provider, validated))
+    }
+
+    fn remove_provider_browser_session(
+        &self,
+        request: &IpcRequest,
+    ) -> Result<ProviderBrowserSessionView, IpcError> {
+        let payload: ProviderPayload = request.decode_payload()?;
+        let provider = crate::catalog::ProviderId::parse(&payload.provider)
+            .filter(|provider| provider.metadata().browser_session.is_some())
+            .ok_or_else(|| IpcError::new(ErrorCode::InvalidRequest, RecoveryAction::None))?;
+        self.inner
+            .state
+            .remove_provider_browser_session(provider.as_str())
+            .map_err(state_error)?;
+        self.emit(vec![ComponentName::Providers]);
+        let _ = self.request_refresh();
+        Ok(ProviderBrowserSessionView {
+            provider: provider.as_str().to_owned(),
+            configured: false,
+            account_fingerprint: None,
+            account_label: None,
+        })
     }
 
     fn shutdown_response(&self, request: &IpcRequest) -> Result<EmptyResult, IpcError> {
@@ -1183,6 +1291,143 @@ mod tests {
         fn event(&self, event: IpcEvent) {
             self.0.lock().expect("events").push(event);
         }
+    }
+
+    struct BrowserSessionBackend {
+        reject: bool,
+    }
+
+    impl LocalBackend for BrowserSessionBackend {
+        fn refresh(&self, _: Arc<AtomicBool>) -> RefreshOutcome {
+            let unavailable = || Err(BackendError::unavailable());
+            RefreshOutcome {
+                quota: unavailable(),
+                usage: unavailable(),
+                account: unavailable(),
+                pricing: unavailable(),
+                overview: None,
+            }
+        }
+
+        fn diagnose(&self) -> Result<DiagnosticReport, BackendError> {
+            Err(BackendError::unavailable())
+        }
+
+        fn login(&self, _: &str, _: Arc<AtomicBool>) -> Result<LoginOutcome, BackendError> {
+            Err(BackendError::unavailable())
+        }
+
+        fn logout(&self, _: &Value) -> Result<(), BackendError> {
+            Err(BackendError::unavailable())
+        }
+
+        fn validate_provider_browser_session(
+            &self,
+            _: crate::catalog::ProviderId,
+            cookie_header: &str,
+        ) -> Result<crate::providers::ValidatedBrowserSession, BackendError> {
+            if self.reject {
+                return Err(BackendError {
+                    error: IpcError::new(
+                        ErrorCode::AuthenticationRequired,
+                        RecoveryAction::ConfigureProvider,
+                    ),
+                });
+            }
+            Ok(crate::providers::ValidatedBrowserSession {
+                cookie_header: cookie_header.to_owned(),
+                account_fingerprint: "b".repeat(64),
+                account_label: Some("ne***@example.com".into()),
+            })
+        }
+    }
+
+    fn browser_session_request(operation: &str, cookie_header: &str) -> IpcRequest {
+        serde_json::from_value(serde_json::json!({
+            "type": "request",
+            "request_id": operation,
+            "operation": operation,
+            "payload": {"provider": "cursor", "cookie_header": cookie_header}
+        }))
+        .expect("browser-session request")
+    }
+
+    #[test]
+    fn browser_session_validate_commit_and_failure_preserve_atomic_state() {
+        let root = std::env::temp_dir().join(format!("quota-service-browser-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        state
+            .set_provider_browser_session(
+                "cursor",
+                &crate::state::ProviderBrowserSession {
+                    cookie_header: "wos-session=old-secret".into(),
+                    account_fingerprint: "a".repeat(64),
+                    account_label: Some("ol***@example.com".into()),
+                },
+            )
+            .expect("old session");
+        let service = LocalService::new(
+            state.clone(),
+            Arc::new(RecordingSink::default()),
+            Arc::new(BrowserSessionBackend { reject: false }),
+        );
+
+        let validated = service.handle(browser_session_request(
+            "validate_provider_browser_session",
+            "wos-session=new-secret",
+        ));
+        assert!(validated.error.is_none());
+        assert_eq!(
+            state
+                .provider_browser_session("cursor")
+                .expect("read")
+                .expect("old retained")
+                .cookie_header,
+            "wos-session=old-secret"
+        );
+
+        let committed = service.handle(browser_session_request(
+            "commit_provider_browser_session",
+            "wos-session=new-secret",
+        ));
+        assert!(committed.error.is_none());
+        assert_eq!(
+            state
+                .provider_browser_session("cursor")
+                .expect("read")
+                .expect("new stored")
+                .cookie_header,
+            "wos-session=new-secret"
+        );
+        service.shutdown();
+
+        let rejected = LocalService::new(
+            state.clone(),
+            Arc::new(RecordingSink::default()),
+            Arc::new(BrowserSessionBackend { reject: true }),
+        );
+        let response = rejected.handle(browser_session_request(
+            "commit_provider_browser_session",
+            "wos-session=rejected-secret",
+        ));
+        assert_eq!(
+            response.error.map(|error| error.code),
+            Some(ErrorCode::AuthenticationRequired)
+        );
+        assert_eq!(
+            state
+                .provider_browser_session("cursor")
+                .expect("read")
+                .expect("new retained")
+                .cookie_header,
+            "wos-session=new-secret"
+        );
+        rejected.shutdown();
+        drop(rejected);
+        drop(service);
+        drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
     }
 
     #[test]

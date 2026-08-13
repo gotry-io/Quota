@@ -16,6 +16,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 pub const HTTP_TIMEOUT: Duration = Duration::from_secs(20);
 pub const HTTP_BODY_LIMIT: usize = 1_048_576;
 pub const LOCAL_FILE_LIMIT: usize = 1_048_576;
+pub const BROWSER_COOKIE_HEADER_LIMIT: usize = 8_192;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ErrorCategory {
@@ -121,11 +122,19 @@ pub struct ProviderSession {
     pub credential_source: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ValidatedBrowserSession {
+    pub cookie_header: String,
+    pub account_fingerprint: String,
+    pub account_label: Option<String>,
+}
+
 #[derive(Clone, Debug)]
 pub struct CollectionContext {
     pub home_directory: PathBuf,
     pub environment: HashMap<String, String>,
     pub config_path: Option<PathBuf>,
+    pub browser_sessions: HashMap<ProviderId, String>,
     pub client_name: String,
     pub client_version: String,
     pub now: Option<String>,
@@ -218,6 +227,7 @@ impl Default for CollectionContext {
             home_directory,
             environment,
             config_path: None,
+            browser_sessions: HashMap::new(),
             client_name: "Quota".to_owned(),
             client_version: "development".to_owned(),
             now: None,
@@ -258,6 +268,53 @@ impl CollectionContext {
             .map(|value| value.load(std::sync::atomic::Ordering::Acquire))
             .unwrap_or(false)
     }
+
+    pub fn browser_session(&self, provider: ProviderId) -> Option<&str> {
+        self.browser_sessions.get(&provider).map(String::as_str)
+    }
+}
+
+pub fn normalize_browser_cookie_header(
+    provider: ProviderId,
+    header: &str,
+) -> Result<String, ProviderError> {
+    let source = provider_source(provider.as_str());
+    let Some(spec) = provider.metadata().browser_session else {
+        return Err(ProviderError::new(ErrorCategory::Unsupported, source));
+    };
+    if header.is_empty()
+        || header.len() > BROWSER_COOKIE_HEADER_LIMIT
+        || header.chars().any(char::is_control)
+    {
+        return Err(ProviderError::new(ErrorCategory::Error, source));
+    }
+    let mut cookies = std::collections::BTreeMap::new();
+    for pair in header.split(';') {
+        let pair = pair.trim_matches([' ', '\t']);
+        let (name, value) = pair
+            .split_once('=')
+            .ok_or_else(|| ProviderError::new(ErrorCategory::Error, source))?;
+        if name.is_empty()
+            || value.is_empty()
+            || !spec.cookie_names.contains(&name)
+            || !value.bytes().all(is_cookie_octet)
+            || cookies.insert(name, value).is_some()
+        {
+            return Err(ProviderError::new(ErrorCategory::Error, source));
+        }
+    }
+    if cookies.is_empty() {
+        return Err(ProviderError::new(ErrorCategory::Error, source));
+    }
+    Ok(cookies
+        .into_iter()
+        .map(|(name, value)| format!("{name}={value}"))
+        .collect::<Vec<_>>()
+        .join("; "))
+}
+
+fn is_cookie_octet(byte: u8) -> bool {
+    matches!(byte, 0x21 | 0x23..=0x2B | 0x2D..=0x3A | 0x3C..=0x5B | 0x5D..=0x7E)
 }
 
 pub fn read_bounded_file(path: &Path, limit: usize) -> Option<Vec<u8>> {
@@ -529,8 +586,12 @@ pub struct HttpClient {
 
 impl HttpClient {
     pub fn new() -> Result<Self, ProviderError> {
+        Self::with_timeout(HTTP_TIMEOUT)
+    }
+
+    pub fn with_timeout(timeout: Duration) -> Result<Self, ProviderError> {
         Client::builder()
-            .timeout(HTTP_TIMEOUT)
+            .timeout(timeout)
             .redirect(Policy::none())
             .build()
             .map(|client| Self { client })
@@ -846,6 +907,7 @@ mod tests {
                 .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
                 .collect(),
             config_path: Some(path),
+            browser_sessions: HashMap::new(),
             client_name: "QuotaTest".to_owned(),
             client_version: "test".to_owned(),
             now: Some("2026-08-10T00:00:00Z".to_owned()),
@@ -955,6 +1017,36 @@ mod tests {
         );
         assert_eq!(mask_secret("API", "opaque-secret"), "API ···cret");
         assert_eq!(mask_secret("API", "short"), "API key");
+    }
+
+    #[test]
+    fn browser_cookie_header_is_allowlisted_canonical_and_bounded() {
+        let normalized =
+            normalize_browser_cookie_header(ProviderId::Cursor, "wos-session=abc==:%25")
+                .expect("header");
+        assert_eq!(normalized, "wos-session=abc==:%25");
+        for header in [
+            "unknown=value",
+            "wos-session=",
+            "wos-session=has space",
+            "wos-session= value",
+            "wos-session =value",
+            "wos-session=\"quoted\"",
+            "wos-session=a,b",
+            "wos-session=a\\b",
+            "wos-session=é",
+            "wos-session=ok\r\nInjected: yes",
+            "wos-session=one; wos-session=two",
+        ] {
+            assert!(normalize_browser_cookie_header(ProviderId::Cursor, header).is_err());
+        }
+        assert!(
+            normalize_browser_cookie_header(
+                ProviderId::Cursor,
+                &format!("wos-session={}", "x".repeat(BROWSER_COOKIE_HEADER_LIMIT))
+            )
+            .is_err()
+        );
     }
 
     #[test]

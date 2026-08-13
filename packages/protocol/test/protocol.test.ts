@@ -12,12 +12,16 @@ import {
   DeviceAuthorizationRequestSchema,
   DeviceAuthorizationResponseSchema,
   DeviceSyncResponseSchema,
+  LOCAL_PROVIDER_IDS,
   LOCAL_USAGE_PROTOCOL_VERSION,
+  LocalProviderIdSchema,
   LocalUsageReportSchema,
   MAXIMUM_SNAPSHOTS_PER_ENVELOPE,
   OAuthTokenRequestSchema,
   OAuthTokenResponseSchema,
   PROTOCOL_VERSION,
+  PROVIDER_IDS,
+  ProviderIdSchema,
   PricingCatalogSchema,
   QuotaCollectionReportSchema,
   QuotaSnapshotEnvelopeSchema,
@@ -29,6 +33,13 @@ import {
 } from "../src/index.ts";
 
 describe("quota protocol v2", () => {
+  it("keeps local-only providers out of the released managed-account enum", () => {
+    expect(PROVIDER_IDS).not.toContain("cursor");
+    expect(ProviderIdSchema.safeParse("cursor").success).toBe(false);
+    expect(LOCAL_PROVIDER_IDS).toContain("cursor");
+    expect(LocalProviderIdSchema.safeParse("cursor").success).toBe(true);
+  });
+
   it("accepts the sole quota upload contract with device generation", () => {
     const envelope = quotaEnvelope();
     expect(QuotaSnapshotEnvelopeSchema.parse(envelope)).toEqual(envelope);
@@ -138,6 +149,11 @@ describe("quota protocol v2", () => {
           outcome: "auth_required",
           snapshots: [],
           message: "Sign in again",
+        },
+        {
+          provider: "cursor",
+          outcome: "success",
+          snapshots: [snapshot("cursor")],
         },
       ],
     };
@@ -613,7 +629,7 @@ describe("quota protocol v2", () => {
   });
 });
 
-function snapshot(provider: "codex" | "claude") {
+function snapshot(provider: "codex" | "claude" | "cursor") {
   return {
     provider,
     account: { fingerprint: `${provider}-fixture`, fingerprint_scope: "source" as const },

@@ -3,7 +3,15 @@
 
 import Foundation
 
+struct BrowserSessionSpec: Equatable, Sendable {
+  let loginURL: String
+  let cookieHosts: [String]
+  let cookieNames: [String]
+  let browserPriority: [String]
+}
+
 enum ProviderID: String, Codable, CaseIterable, Identifiable, Sendable {
+  // Every provider available to the local macOS app, including local-only collectors.
   case `codex`
   case `claude`
   case `grok`
@@ -11,6 +19,7 @@ enum ProviderID: String, Codable, CaseIterable, Identifiable, Sendable {
   case `deepseek`
   case `kimi`
   case `litellm`
+  case `cursor`
 
   var id: String { rawValue }
 
@@ -23,6 +32,7 @@ enum ProviderID: String, Codable, CaseIterable, Identifiable, Sendable {
     case .`deepseek`: "DeepSeek"
     case .`kimi`: "Kimi Code"
     case .`litellm`: "LiteLLM"
+    case .`cursor`: "Cursor"
     }
   }
 
@@ -36,6 +46,7 @@ enum ProviderID: String, Codable, CaseIterable, Identifiable, Sendable {
     case .`deepseek`: false
     case .`kimi`: false
     case .`litellm`: false
+    case .`cursor`: false
     }
   }
 
@@ -49,6 +60,7 @@ enum ProviderID: String, Codable, CaseIterable, Identifiable, Sendable {
     case .`deepseek`: "Configure in QuotaBar"
     case .`kimi`: "Configure in QuotaBar"
     case .`litellm`: "Configure in QuotaBar"
+    case .`cursor`: "Sign in with browser"
     }
   }
 
@@ -61,6 +73,7 @@ enum ProviderID: String, Codable, CaseIterable, Identifiable, Sendable {
     case .`deepseek`: "deepseek"
     case .`kimi`: "kimi"
     case .`litellm`: "litellm"
+    case .`cursor`: "cursor"
     }
   }
 
@@ -73,6 +86,7 @@ enum ProviderID: String, Codable, CaseIterable, Identifiable, Sendable {
     case .`deepseek`: 4
     case .`kimi`: 5
     case .`litellm`: 6
+    case .`cursor`: 7
     }
   }
 
@@ -94,6 +108,7 @@ enum ProviderID: String, Codable, CaseIterable, Identifiable, Sendable {
     case .`deepseek`: false
     case .`kimi`: false
     case .`litellm`: true
+    case .`cursor`: false
     }
   }
 
@@ -106,6 +121,7 @@ enum ProviderID: String, Codable, CaseIterable, Identifiable, Sendable {
     case .`deepseek`: false
     case .`kimi`: false
     case .`litellm`: true
+    case .`cursor`: false
     }
   }
 
@@ -118,6 +134,38 @@ enum ProviderID: String, Codable, CaseIterable, Identifiable, Sendable {
     case .`deepseek`: false
     case .`kimi`: false
     case .`litellm`: true
+    case .`cursor`: false
+    }
+  }
+
+  var browserSession: BrowserSessionSpec? {
+    switch self {
+    case .`codex`: nil
+    case .`claude`: nil
+    case .`grok`: nil
+    case .`openrouter`: nil
+    case .`deepseek`: nil
+    case .`kimi`: nil
+    case .`litellm`: nil
+    case .`cursor`: BrowserSessionSpec(
+      loginURL: "https://authenticator.cursor.sh/",
+      cookieHosts: ["cursor.com", "www.cursor.com", "cursor.sh", "authenticator.cursor.sh"],
+      cookieNames: ["WorkosCursorSessionToken", "__Secure-next-auth.session-token", "next-auth.session-token", "wos-session", "__Secure-wos-session", "authjs.session-token", "__Secure-authjs.session-token"],
+      browserPriority: ["safari", "chrome", "edge", "brave", "arc", "dia", "chromium", "firefox"])
+    }
+  }
+
+  /// Whether this provider is valid in the released managed Account/Relay v2 protocol.
+  var syncsToAccount: Bool {
+    switch self {
+    case .`codex`: true
+    case .`claude`: true
+    case .`grok`: true
+    case .`openrouter`: true
+    case .`deepseek`: true
+    case .`kimi`: true
+    case .`litellm`: true
+    case .`cursor`: false
     }
   }
 }

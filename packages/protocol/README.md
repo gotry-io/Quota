@@ -4,8 +4,9 @@ The single v2 wire contract shared by QuotaBar's Rust local service, managed Quo
 models.
 
 - TypeScript runtime validation lives in `src`.
-- `ProviderId` / `ProviderIdSchema` are generated from `packages/provider/catalog.json` into
-  `src/provider-ids.generated.ts` via `pnpm generate:provider-catalog`. Do not hand-edit that file.
+- Managed-network `ProviderId` and local-report `LocalProviderId` are generated from
+  `packages/provider/catalog.json` into `src/provider-ids.generated.ts` via
+  `pnpm generate:provider-catalog`. Do not hand-edit that file.
 - Language-neutral JSON Schemas live in `schema` and are served by Quota Web under `/schema/`.
   Run `pnpm --filter @gotry-io/quota-protocol generate:schema` after changing a runtime schema.
 - Canonical schema identifiers use `https://quota.gotry.io/schema/`.

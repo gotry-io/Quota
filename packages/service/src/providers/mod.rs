@@ -6,13 +6,16 @@
 pub mod claude;
 pub mod codex;
 pub mod common;
+pub mod cursor;
 pub mod deepseek;
 pub mod grok;
 pub mod kimi;
 pub mod litellm;
 pub mod openrouter;
 
-pub use common::{CollectionContext, ProviderError, ProviderSession, QuotaSnapshot};
+pub use common::{
+    CollectionContext, ProviderError, ProviderSession, QuotaSnapshot, ValidatedBrowserSession,
+};
 
 use crate::catalog::ProviderId;
 
@@ -25,6 +28,7 @@ pub fn discover(provider: ProviderId, context: &CollectionContext) -> Vec<Provid
         ProviderId::DeepSeek => deepseek::discover(context),
         ProviderId::Kimi => kimi::discover(context),
         ProviderId::LiteLlm => litellm::discover(context),
+        ProviderId::Cursor => cursor::discover(context),
     }
 }
 
@@ -41,5 +45,21 @@ pub fn collect(
         ProviderId::DeepSeek => deepseek::collect(session, context),
         ProviderId::Kimi => kimi::collect(session, context),
         ProviderId::LiteLlm => litellm::collect(session, context),
+        ProviderId::Cursor => cursor::collect(session, context),
+    }
+}
+
+pub fn validate_browser_session(
+    provider: ProviderId,
+    cookie_header: &str,
+    context: &CollectionContext,
+) -> Result<ValidatedBrowserSession, ProviderError> {
+    let cookie_header = common::normalize_browser_cookie_header(provider, cookie_header)?;
+    match provider {
+        ProviderId::Cursor => cursor::validate_browser_session(&cookie_header, context),
+        _ => Err(ProviderError::new(
+            common::ErrorCategory::Unsupported,
+            "browser_session",
+        )),
     }
 }

@@ -52,7 +52,9 @@ official provider sessions       agent JSON/JSONL logs
 QuotaBar launches the fixed signed `Contents/Helpers/quota-service` path once. Requests, responses,
 and state-change events are newline-delimited `snake_case` JSON with a 1 MiB line limit and request
 IDs. Supported operations are state read, diagnose, refresh, login/cancel, logout, provider
-configuration, Usage upload configuration, and shutdown. `get_state` performs no collection or
+configuration, provider browser-session validate/commit/remove, Usage upload configuration, and
+shutdown. Browser-session validate is non-mutating; commit revalidates and transactionally replaces
+the Rust-owned SQLite session. `get_state` performs no collection or
 network work: it returns the current SQLite-backed snapshot, including precomputed Today, 7 Days,
 30 Days, and All Usage periods, immediately. State components carry
 independent status, last-good value, update time, error/recovery code, and refreshing flag for quota,
@@ -84,7 +86,7 @@ reimplements this policy.
 The provider catalog is the language-neutral `packages/provider/catalog.json`, validated by its JSON
 Schema. Generation produces TypeScript protocol IDs, Rust catalog metadata under
 `packages/service/src/catalog.rs`, and Swift `ProviderID`. The shared Rust crate implements all
-seven quota collectors and all five Usage parsers; the macOS and Linux entry points call that crate.
+eight quota collectors and all five Usage parsers; the macOS and Linux entry points call that crate.
 
 Provider credentials remain provider-owned when available. Optional API-key provider overrides use
 the released shared owner-only configuration root and `providers.json`; QuotaBar sends secrets only
@@ -93,6 +95,19 @@ inputs. Operational state has one owner: `state.sqlite` stores installation/acco
 last-good values, file index, normalized Usage facts, fixed-period presentation cache, pricing state,
 sequences, and the durable outbox and Usage upload setting. SQLite migrations are explicit and
 append-only.
+
+Catalog browser-session capability contains an HTTPS login URL, exact Cookie hosts/names, and a
+browser-priority prefix. QuotaBar pins login and discovery to one selected supported browser;
+SweetCookieKit only acquires allowlisted Cookie candidates in Swift memory. Rust owns syntax and
+account validation, durable state, provider networking, and routine refresh. Linux QuotaCLI does
+not implement browser acquisition.
+
+The local provider catalog is broader than released managed network v2. Catalog `account_sync` is
+the explicit Account/Relay boundary: the generated network provider schema includes only opted-in
+providers, while the private local collection schema uses the full catalog. Upload construction
+filters local-only snapshots, and remote summary validation rejects them. menubar-v0.0.9 shipped
+strict closed-enum v2 network decoding, so Cursor remains local-only rather than changing that enum
+in place.
 
 Usage indexing is the final file-level invalidation design. Each refresh performs bounded source
 discovery, records parser revision plus file identity, size, and modification time, skips unchanged
@@ -169,7 +184,9 @@ Rust service ─ quota snapshots + hourly facts ─► D1
 
 The shared Rust service is the native OAuth public client used by QuotaBar and Linux `quotacli`.
 QuotaBar uses Authorization Code with PKCE and a temporary loopback callback; Linux `quotacli` uses
-the OAuth Device Authorization Grant and never opens a browser or loopback listener. Relay returns
+the OAuth Device Authorization Grant and never opens a browser or loopback listener. Device
+`display_name` is the host computer name (macOS ComputerName, otherwise hostname), not the product
+name. Relay returns
 separate account-read and current-device-write sessions; access and refresh expiry are explicit and
 refresh rotates atomically. The network `client_id` value `quotacli` remains unchanged because it is
 part of released protocol v2.

@@ -13,7 +13,7 @@
       "$ref": "#/$defs/__schema0"
     },
     "results": {
-      "maxItems": 7,
+      "maxItems": 8,
       "type": "array",
       "items": {
         "$ref": "#/$defs/__schema1"
@@ -71,7 +71,7 @@
     },
     "__schema3": {
       "type": "string",
-      "enum": ["codex", "claude", "grok", "openrouter", "deepseek", "kimi", "litellm"]
+      "enum": ["codex", "claude", "grok", "openrouter", "deepseek", "kimi", "litellm", "cursor"]
     },
     "__schema4": {
       "type": "object",

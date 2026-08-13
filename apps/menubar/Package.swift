@@ -10,9 +10,15 @@ let package = Package(
   products: [
     .executable(name: "QuotaBar", targets: ["QuotaBar"])
   ],
+  dependencies: [
+    .package(url: "https://github.com/steipete/SweetCookieKit.git", exact: "0.5.2")
+  ],
   targets: [
     .executableTarget(
       name: "QuotaBar",
+      dependencies: [
+        .product(name: "SweetCookieKit", package: "SweetCookieKit")
+      ],
       resources: [.process("Resources")]),
     .testTarget(
       name: "QuotaBarTests",

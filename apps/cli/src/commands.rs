@@ -9,7 +9,7 @@ use quota_service::config::default_state_root;
 use quota_service::protocol::{
     ComponentName, ComponentStatus, IpcEvent, IpcRequest, Operation, RequestMessageType,
 };
-use quota_service::relay::{AccountManager, RelayClient};
+use quota_service::relay::{AccountManager, RelayClient, local_device_display_name};
 use quota_service::service::backend::NativeBackend;
 use quota_service::service::{BackendError, EventSink, LocalService, validate_provider_config};
 use quota_service::state::{StateStore, now_rfc3339};
@@ -230,7 +230,7 @@ fn render_status_text(value: &Value, output: &mut dyn CliOutput) {
                         .and_then(Value::as_f64)
                         .map(|used| (100.0 - used).clamp(0.0, 100.0));
                     if let Some(remaining) = remaining {
-                        output.stdout(&format!("  {title}\t{remaining:.0}% remaining"));
+                        output.stdout(&format!("  {title}\t{remaining:.0}%"));
                     }
                 }
             }
@@ -411,7 +411,7 @@ fn run_login(options: OutputOptions, output: &mut dyn CliOutput, cancel: &Atomic
     let manager = AccountManager::new(
         context.relay.clone(),
         context.state.clone(),
-        cli_device_name(),
+        local_device_display_name("QuotaCLI"),
     );
     let outcome = manager.login_device(cancel, |prompt| {
         let uri = prompt
@@ -598,7 +598,7 @@ fn run_account_summary(options: SummaryOptions, output: &mut dyn CliOutput) -> i
     let manager = AccountManager::new(
         context.relay.clone(),
         context.state.clone(),
-        cli_device_name(),
+        local_device_display_name("QuotaCLI"),
     );
     let component = match manager.refresh_account_state(&AtomicBool::new(false)) {
         Ok(component) => component,
@@ -622,13 +622,6 @@ fn run_account_summary(options: SummaryOptions, output: &mut dyn CliOutput) -> i
     };
     write_json(output, summary, options.pretty);
     0
-}
-
-fn cli_device_name() -> String {
-    std::env::var("HOSTNAME")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| "QuotaCLI".to_owned())
 }
 
 fn run_config(command: ConfigCommand, output: &mut dyn CliOutput) -> i32 {
@@ -927,7 +920,7 @@ mod tests {
         );
         assert_eq!(
             output.stdout,
-            vec!["codex\tWork\tavailable", "  Weekly\t75% remaining"]
+            vec!["codex\tWork\tavailable", "  Weekly\t75%"]
         );
     }
 

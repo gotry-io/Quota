@@ -1381,6 +1381,7 @@ struct AccountQuotaObservation: Codable, Equatable, Sendable {
 
   var isValid: Bool {
     isUsageOpaqueID(deviceID) && (0...jsonSafeIntegerMaximum).contains(sequence)
+      && snapshot.provider.syncsToAccount
   }
 
 }

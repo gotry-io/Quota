@@ -79,6 +79,7 @@ func consumesServiceMergedOverviewWithoutReprocessingObservations() async throws
         baseURL: nil
       )
     ],
+    providerBrowserSessions: [],
     overview: [
       LocalServiceOverviewItem(
         identity: LocalServiceOverviewIdentity(
@@ -174,6 +175,7 @@ private func loggingInState() -> LocalServiceState {
     ),
     pricing: emptyComponent(),
     providers: [],
+    providerBrowserSessions: [],
     overview: []
   )
 }
@@ -304,6 +306,24 @@ private struct StubLocalService: LocalServiceServing {
       maskedAPIKey: nil,
       baseURL: nil
     )
+  }
+
+  func validateProviderBrowserSession(
+    _ provider: ProviderID, cookieHeader: String
+  ) async throws -> LocalServiceProviderBrowserSessionCandidate {
+    throw LocalServiceClientError.serviceMissing
+  }
+
+  func commitProviderBrowserSession(
+    _ provider: ProviderID, cookieHeader: String
+  ) async throws -> LocalServiceProviderBrowserSession {
+    throw LocalServiceClientError.serviceMissing
+  }
+
+  func removeProviderBrowserSession(
+    _ provider: ProviderID
+  ) async throws -> LocalServiceProviderBrowserSession {
+    throw LocalServiceClientError.serviceMissing
   }
   func shutdown() async {}
 }

@@ -162,6 +162,90 @@ struct LocalServiceProviderConfig: Decodable, Equatable, Sendable {
 
 }
 
+struct LocalServiceProviderBrowserSession: Decodable, Equatable, Sendable {
+  let provider: ProviderID
+  let configured: Bool
+  let accountFingerprint: String?
+  let accountLabel: String?
+
+  private enum CodingKeys: String, CodingKey {
+    case provider
+    case configured
+    case accountFingerprint
+    case accountLabel
+  }
+
+  init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys([
+      "provider", "configured", "accountFingerprint", "accountLabel",
+    ])
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    provider = try container.decode(ProviderID.self, forKey: .provider)
+    configured = try container.decode(Bool.self, forKey: .configured)
+    accountFingerprint = try container.decodeIfPresent(String.self, forKey: .accountFingerprint)
+    accountLabel = try container.decodeIfPresent(String.self, forKey: .accountLabel)
+  }
+
+  var isValid: Bool {
+    guard provider.browserSession != nil else { return false }
+    if !configured { return accountFingerprint == nil && accountLabel == nil }
+    guard let accountFingerprint else { return false }
+    return accountFingerprint.count == 64
+      && accountFingerprint.utf8.allSatisfy {
+        (UInt8(ascii: "0")...UInt8(ascii: "9")).contains($0)
+          || (UInt8(ascii: "a")...UInt8(ascii: "f")).contains($0)
+      }
+      && accountLabel.map {
+        !$0.isEmpty && $0.utf8.count <= 128
+          && !$0.unicodeScalars.contains { $0.value < 0x20 || $0.value == 0x7F }
+      } != false
+  }
+}
+
+struct LocalServiceProviderBrowserSessionCandidate: Decodable, Equatable, Sendable {
+  let provider: ProviderID
+  let accountFingerprint: String
+  let accountLabel: String?
+
+  private enum CodingKeys: String, CodingKey {
+    case provider
+    case accountFingerprint
+    case accountLabel
+  }
+
+  init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys(["provider", "accountFingerprint", "accountLabel"])
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    provider = try container.decode(ProviderID.self, forKey: .provider)
+    accountFingerprint = try container.decode(String.self, forKey: .accountFingerprint)
+    accountLabel = try container.decodeIfPresent(String.self, forKey: .accountLabel)
+  }
+
+  init(provider: ProviderID, accountFingerprint: String, accountLabel: String?) {
+    self.provider = provider
+    self.accountFingerprint = accountFingerprint
+    self.accountLabel = accountLabel
+  }
+
+  var isValid: Bool {
+    LocalServiceProviderBrowserSession(
+      provider: provider,
+      configured: true,
+      accountFingerprint: accountFingerprint,
+      accountLabel: accountLabel
+    ).isValid
+  }
+}
+
+extension LocalServiceProviderBrowserSession {
+  init(provider: ProviderID, configured: Bool, accountFingerprint: String?, accountLabel: String?) {
+    self.provider = provider
+    self.configured = configured
+    self.accountFingerprint = accountFingerprint
+    self.accountLabel = accountLabel
+  }
+}
+
 extension LocalServiceProviderConfig {
   init(from decoder: Decoder) throws {
     try decoder.rejectUnknownWireKeys(["provider", "configured", "maskedApiKey", "baseUrl"])
@@ -296,6 +380,7 @@ struct LocalServiceState: Decodable, Sendable {
   let account: LocalServiceComponent<LocalServiceAccountState>
   let pricing: LocalServiceComponent<PricingCatalog>
   let providers: [LocalServiceProviderConfig]
+  let providerBrowserSessions: [LocalServiceProviderBrowserSession]
   let overview: [LocalServiceOverviewItem]
 
   private enum CodingKeys: String, CodingKey {
@@ -308,6 +393,7 @@ struct LocalServiceState: Decodable, Sendable {
     case account
     case pricing
     case providers
+    case providerBrowserSessions
     case overview
   }
 
@@ -323,6 +409,9 @@ struct LocalServiceState: Decodable, Sendable {
         config.provider.isConfigurable
           && (!config.configured || config.maskedAPIKey?.isEmpty == false)
       }),
+      providerBrowserSessions.count <= ProviderID.allCases.count,
+      Set(providerBrowserSessions.map(\.provider)).count == providerBrowserSessions.count,
+      providerBrowserSessions.allSatisfy(\.isValid),
       overview.count <= 2_048,
       Set(overviewIDs).count == overviewIDs.count
     else { return false }
@@ -353,7 +442,7 @@ extension LocalServiceState {
   init(from decoder: Decoder) throws {
     try decoder.rejectUnknownWireKeys([
       "ipcVersion", "revision", "usageUploadEnabled", "usagePeriods", "quota", "usage",
-      "account", "pricing", "providers", "overview",
+      "account", "pricing", "providers", "providerBrowserSessions", "overview",
     ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     ipcVersion = try container.decode(Int.self, forKey: .ipcVersion)
@@ -366,6 +455,8 @@ extension LocalServiceState {
       LocalServiceComponent<LocalServiceAccountState>.self, forKey: .account)
     pricing = try container.decode(LocalServiceComponent<PricingCatalog>.self, forKey: .pricing)
     providers = try container.decode([LocalServiceProviderConfig].self, forKey: .providers)
+    providerBrowserSessions = try container.decode(
+      [LocalServiceProviderBrowserSession].self, forKey: .providerBrowserSessions)
     overview = try container.decode([LocalServiceOverviewItem].self, forKey: .overview)
   }
 }

@@ -20,6 +20,12 @@ and ordering preferences, native provider configuration fields, account actions,
 Launch at Login. The service persists the Usage upload preference so it applies before its startup
 refresh. Quitting the app closes stdin and stops the service and all synchronization.
 
+For catalog browser-session providers, QuotaBar pins login and Cookie discovery to one supported
+browser application. SweetCookieKit 0.5.2 enumerates that browser's profiles with logging disabled
+and returns only exact-host/name allowlist candidates in memory. Swift sends one minimal Cookie
+header at a time to Rust for validation/commit; it never calls provider APIs or persists the header.
+Cursor is the first adapter and stays local-only under the released network-v2 boundary.
+
 Each background refresh precomputes Today, 7 Days, 30 Days, and All for This Mac and, when enabled,
 the signed-in Account. The four values are persisted and returned by `get_state`; Swift only selects
 among them and never slices totals or infers client/provider/model ownership.
