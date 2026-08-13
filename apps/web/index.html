@@ -11,7 +11,7 @@
     <meta property="og:title" content="Quota — Know what you have left" />
     <meta
       property="og:description"
-      content="See remaining quota in the menu bar, export shareable usage, and optionally publish /u/your-name."
+      content="See remaining quota in the menu bar and optionally publish /u/your-github-username."
     />
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://quota.gotry.io" />
@@ -31,7 +31,27 @@
       <nav aria-label="Primary navigation">
         <a href="/#product">Product</a>
         <a href="https://github.com/gotry-io/Quota">GitHub</a>
-        <a class="button button-primary header-action" href="/my">Open Quota</a>
+        <div class="header-session">
+          <button
+            id="header-login"
+            class="button button-primary header-action"
+            type="button"
+            data-web-login
+          >
+            Continue with GitHub
+          </button>
+          <div id="header-account" class="header-account" hidden>
+            <a id="header-account-name" class="header-account-name" href="/my">Account</a>
+            <details id="header-account-menu" class="account-menu">
+              <summary class="account-menu-trigger" aria-label="Account menu"></summary>
+              <div class="account-menu-popover">
+                <form id="logout-form" action="/api/auth/v2/sign-out" method="post">
+                  <button class="text-button" type="submit">Sign out</button>
+                </form>
+              </div>
+            </details>
+          </div>
+        </div>
       </nav>
     </header>
 
@@ -45,8 +65,8 @@
             <h1 id="hero-title">Know what you have left.</h1>
             <p class="hero-summary">
               QuotaBar shows remaining Codex, Claude, Grok, Cursor, and API-key quota from the menu
-              bar. Usage stays on your machines unless you sync an account. Share a card, or publish
-              an optional public page at /u/your-name.
+              bar. Usage stays on your machines unless you sync an account. Optionally publish a
+              public page at /u/your-github-username.
             </p>
             <div class="hero-actions">
               <a
@@ -54,9 +74,7 @@
                 href="https://github.com/gotry-io/Quota/releases/latest/download/QuotaBar-macos-arm64.dmg"
                 >Download QuotaBar .dmg</a
               >
-              <button class="button button-secondary" type="button" data-web-login>
-                Continue with GitHub
-              </button>
+              <a class="button button-secondary" href="#product">See how it works</a>
             </div>
             <div class="install-panel">
               <p class="install-label">Homebrew</p>
@@ -139,43 +157,29 @@
 
         <section class="cta">
           <div><p class="eyebrow eyebrow-dark">Ready when you are</p><h2>Bring every device into one view.</h2></div>
-          <button class="button button-on-dark" type="button" data-web-login>
-            Continue with GitHub
-          </button>
+          <a
+            class="button button-on-dark"
+            href="https://github.com/gotry-io/Quota/releases/latest/download/QuotaBar-macos-arm64.dmg"
+            >Download QuotaBar .dmg</a
+          >
         </section>
       </div>
 
       <section id="dashboard-view" class="dashboard" aria-labelledby="dashboard-title" hidden>
         <div class="dashboard-heading">
-          <div><p class="eyebrow">Quota account · Usage</p><h1 id="dashboard-title">My account</h1></div>
-          <details class="account-menu">
-            <summary id="account-menu-label" class="button account-menu-trigger">Account</summary>
-            <div class="account-menu-popover">
-              <form id="logout-form" action="/api/auth/v2/sign-out" method="post">
-                <button class="text-button" type="submit">Sign out</button>
-              </form>
-            </div>
-          </details>
+          <div><p class="eyebrow">Account</p><h1 id="dashboard-title">Usage</h1></div>
         </div>
         <div id="account-error" class="notice" role="alert" hidden></div>
         <section class="dashboard-section" aria-labelledby="share-title">
           <div class="dashboard-section-heading">
-            <div><p class="eyebrow">Share</p><h2 id="share-title">Export and public page</h2></div>
-          </div>
-          <div class="share-actions">
-            <button id="export-quota" class="button button-secondary" type="button">Export remaining quota</button>
-            <button id="export-usage" class="button button-secondary" type="button">Export usage</button>
+            <div><p class="eyebrow">Share</p><h2 id="share-title">Public page</h2></div>
           </div>
           <form id="public-profile-form" class="public-profile-form">
             <label class="public-profile-toggle">
               <input id="public-profile-enabled" type="checkbox" />
-              Make my remaining quota and usage public at /u/
+              <span>Make remaining quota and usage public at <span id="public-profile-path">/u/</span></span>
             </label>
-            <label for="public-profile-slug">Public username</label>
-            <div class="brew-row">
-              <input id="public-profile-slug" name="slug" maxlength="39" autocomplete="username" />
-              <button class="button button-secondary" type="submit">Save visibility</button>
-            </div>
+            <button class="button button-secondary" type="submit">Save visibility</button>
             <p id="public-profile-status" class="notice" role="status" hidden></p>
           </form>
         </section>
@@ -215,7 +219,7 @@
 
       <section id="public-view" class="dashboard" aria-labelledby="public-title" hidden>
         <div class="dashboard-heading">
-          <div><p class="eyebrow">Public profile</p><h1 id="public-title">Public quota</h1></div>
+          <div><p class="eyebrow">Public profile</p><h1 id="public-title">Quota</h1></div>
         </div>
         <div id="public-error" class="notice" role="alert" hidden></div>
         <div id="public-body" hidden>

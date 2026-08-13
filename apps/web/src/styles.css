@@ -111,6 +111,25 @@ nav {
   font-size: 14px;
 }
 
+.header-session,
+.header-account {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.header-account-name {
+  display: inline-flex;
+  align-items: center;
+  max-width: min(220px, 36vw);
+  min-height: 42px;
+  overflow: hidden;
+  font-weight: 600;
+  color: var(--ink);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 nav a:hover,
 footer a:hover,
 .text-link:hover {
@@ -243,17 +262,12 @@ h1 {
   font-size: 13px;
 }
 
-.share-actions,
 .public-profile-form {
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
   gap: 12px;
   margin-bottom: 16px;
-}
-
-.share-actions {
-  flex-direction: row;
-  flex-wrap: wrap;
 }
 
 .public-profile-toggle {
@@ -263,9 +277,8 @@ h1 {
   color: var(--charcoal);
 }
 
-.public-profile-form label[for="public-profile-slug"] {
-  color: var(--body);
-  font-size: 13px;
+.public-profile-toggle span {
+  line-height: 1.4;
 }
 
 .product-preview {
@@ -711,19 +724,21 @@ footer {
 }
 
 .account-menu summary {
-  max-width: min(320px, 50vw);
-  overflow: hidden;
   list-style: none;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .account-menu-trigger {
-  gap: 8px;
-  padding-inline: 4px 0;
-  border-color: transparent;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 42px;
+  min-height: 42px;
+  padding: 0 6px;
+  border: 0;
   border-radius: 6px;
+  color: var(--charcoal);
   background: transparent;
+  cursor: pointer;
 }
 
 .account-menu-trigger:hover {
@@ -777,11 +792,16 @@ footer {
 }
 
 .summary-grid article,
-.device-card,
-.quota-card {
+.device-card {
   padding: 24px;
   border: 1px solid var(--hairline);
   border-radius: 12px;
+}
+
+.quota-card {
+  padding: 12px 14px;
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
 }
 
 .summary-grid article {
@@ -824,59 +844,67 @@ footer {
 
 .quota-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
+  grid-template-columns: 1fr;
+  gap: 10px;
+  max-width: 560px;
 }
 
 .quota-card-heading {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 16px;
+  gap: 12px;
 }
 
-.quota-card-heading .eyebrow {
-  margin-bottom: 8px;
+.quota-card-identity {
+  min-width: 0;
 }
 
-.quota-card-heading h3 {
-  margin-bottom: 0;
-  overflow-wrap: anywhere;
+.quota-card-provider {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.quota-card-account {
+  margin: 2px 0 0;
+  color: var(--body);
+  font-size: 11px;
 }
 
 .quota-card-meta,
 .quota-window-meta {
-  color: var(--body);
-  font-size: 12px;
-  line-height: 1.5;
+  color: var(--mute);
+  font-size: 11px;
+  line-height: 1.4;
 }
 
 .quota-card-meta {
-  margin: 16px 0 0;
+  margin: 8px 0 0;
 }
 
 .quota-window-list {
   display: grid;
-  gap: 16px;
-  margin-top: 24px;
+  gap: 8px;
+  margin-top: 10px;
 }
 
 .quota-window-card {
-  padding-top: 16px;
-  border-top: 1px solid var(--hairline);
+  padding-top: 8px;
 }
 
 .quota-window-card .quota-window-heading {
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .quota-window-card .quota-track {
-  height: 7px;
+  height: 5px;
+  margin-top: 6px;
 }
 
 .quota-window-meta {
-  margin: 8px 0 0;
-  font-size: 11px;
+  margin: 4px 0 0;
+  font-size: 10px;
 }
 
 .quota-window-list .empty-state {
@@ -1010,29 +1038,34 @@ ul.usage-activity-grid {
   display: block;
   width: 14px;
   height: 14px;
-  border: 1px solid color-mix(in srgb, var(--hairline-strong) 75%, transparent);
+  border: 1px solid var(--hairline-strong);
   border-radius: 3px;
-  background: var(--surface-soft);
+  background: #efefef;
 }
 
 .activity-level-1 {
-  border-color: color-mix(in srgb, var(--brand-mint) 65%, var(--hairline));
-  background: color-mix(in srgb, var(--brand-mint) 42%, white);
+  border-color: #9ad9bf;
+  background: #c6eddc;
 }
 
 .activity-level-2 {
-  border-color: color-mix(in srgb, var(--brand-emerald) 55%, var(--brand-mint));
-  background: color-mix(in srgb, var(--brand-mint) 68%, white);
+  border-color: #5ecaa0;
+  background: #82ddb8;
 }
 
 .activity-level-3 {
-  border-color: var(--brand-emerald);
-  background: color-mix(in srgb, var(--brand-emerald) 66%, white);
+  border-color: #087456;
+  background: #2fa37a;
 }
 
 .activity-level-4 {
-  border-color: var(--brand-emerald);
-  background: var(--brand-emerald);
+  border-color: #065a43;
+  background: #087456;
+}
+
+.activity-today {
+  outline: 2px solid var(--ink);
+  outline-offset: 1px;
 }
 
 .activity-outside {
@@ -1194,7 +1227,7 @@ button:focus-visible {
     gap: 18px;
   }
 
-  nav a:not(:last-child) {
+  nav > a {
     display: none;
   }
 

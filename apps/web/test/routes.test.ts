@@ -25,7 +25,7 @@ test("opens an existing account instead of starting GitHub sign-in again", () =>
 test("parses public profile usernames and rejects invalid slugs", () => {
   assert.equal(publicProfileUsername("/u/octocat"), "octocat");
   assert.equal(publicProfileUsername("/u/ada-lovelace"), "ada-lovelace");
-  assert.equal(publicProfileUsername("/u/Octocat"), null);
+  assert.equal(publicProfileUsername("/u/Octocat"), "octocat");
   assert.equal(publicProfileUsername("/my"), null);
 });
 

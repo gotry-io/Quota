@@ -1,9 +1,9 @@
 export const DASHBOARD_PATH = "/my";
-export const PUBLIC_PROFILE_PATH = /^\/u\/([a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?)$/;
+export const PUBLIC_PROFILE_PATH = /^\/u\/([A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?)$/;
 
 export function publicProfileUsername(pathname: string): string | null {
   const match = PUBLIC_PROFILE_PATH.exec(pathname);
-  return match?.[1] ?? null;
+  return match?.[1]?.toLowerCase() ?? null;
 }
 
 export type AccountEntryAction = "dashboard" | "login" | "error";

@@ -58,7 +58,7 @@ export function buildUsageSummary(
     addTotals(totals, fact);
     for (const dimension of includeHourlyBreakdowns
       ? breakdownDimensions
-      : breakdownDimensions.slice(0, -2)) {
+      : breakdownDimensions.slice(0, -1)) {
       const groupKey = breakdownKey(row, dimension, modelCatalog);
       if (!addGroup(groups, dimension, groupKey.identity, groupKey.key, fact, index)) {
         breakdownsTruncated = true;

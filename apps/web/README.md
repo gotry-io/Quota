@@ -18,8 +18,9 @@ pnpm --filter @gotry-io/quota-web build
 ```
 
 `/my` is the GitHub-backed account dashboard and `/activate` approves or denies a native-client device
-authorization grant. `/app` shipped in 0.0.4, so it remains a single bookmark redirect to `/my`; new
-links and OAuth callbacks use `/my`. Better Auth owns GitHub sign-in, browser sessions, sign-out,
+authorization grant. Unsigned `/my` visits redirect home. `/app` shipped in 0.0.4, so it remains a
+single bookmark redirect to `/my`; new links and OAuth callbacks use `/my`. Better Auth owns GitHub
+sign-in, browser sessions, sign-out,
 OAuth state/PKCE, account deletion, and standard auth-route origin validation. Quota's authorization
 decision and Device deletion routes additionally require a recent session and an exact same-origin
 request.

@@ -47,11 +47,10 @@ describe("Usage summary", () => {
     );
 
     expect(summary.totals.requests).toBe(rows.length);
-    expect(
-      summary.breakdowns.some(
-        ({ dimension }) => dimension === "usage_date" || dimension === "bucket_start_utc",
-      ),
-    ).toBe(false);
+    expect(summary.breakdowns.some(({ dimension }) => dimension === "usage_date")).toBe(true);
+    expect(summary.breakdowns.some(({ dimension }) => dimension === "bucket_start_utc")).toBe(
+      false,
+    );
   });
 
   it("keeps client and provider ownership when structured account Usage is requested", () => {

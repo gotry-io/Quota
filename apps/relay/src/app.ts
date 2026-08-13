@@ -550,10 +550,8 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     if (!account) {
       return unauthorized(context);
     }
-    const slug = body.enabled
-      ? (body.slug ??
-        normalizePublicSlug(account.public_profile_slug ?? account.display_label ?? ""))
-      : (account.public_profile_slug ?? body.slug ?? null);
+    const githubSlug = normalizePublicSlug(account.display_label ?? "");
+    const slug = body.enabled ? githubSlug : (account.public_profile_slug ?? githubSlug);
     if (body.enabled && !slug) {
       return invalidRequest(context);
     }
@@ -578,7 +576,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
   app.get("/api/v2/public/profiles/:username", async (context) => {
     const username = context.req.param("username");
     const slug = normalizePublicSlug(username ?? "");
-    if (!slug || slug !== username) {
+    if (!slug) {
       return notFound(context);
     }
     const limited = await enforceRateLimit(

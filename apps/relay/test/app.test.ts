@@ -506,7 +506,7 @@ describe("managed Relay on real Workers and D1", () => {
       limit: 100,
     });
     const all = await state.queryAccountUsage("account_agents", {
-      agents: ["codex", "claude_code", "grok", "opencode", "pi"],
+      agents: ["codex", "claude_code", "grok", "opencode", "pi", "cursor"],
       limit: 100,
     });
 
@@ -632,10 +632,9 @@ describe("managed Relay on real Workers and D1", () => {
         providers: [{ provider: "openai", models: [{ model: "gpt-5.6-sol" }] }],
       },
     ]);
+    expect(current.usage.breakdowns.some(({ dimension }) => dimension === "usage_date")).toBe(true);
     expect(
-      current.usage.breakdowns.some(
-        ({ dimension }) => dimension === "usage_date" || dimension === "bucket_start_utc",
-      ),
+      current.usage.breakdowns.some(({ dimension }) => dimension === "bucket_start_utc"),
     ).toBe(false);
     expect(
       (

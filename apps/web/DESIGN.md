@@ -22,14 +22,17 @@ The site has four surfaces:
 
 1. `/` explains local collection, one GitHub-backed Account, Devices, and API-equivalent Usage cost.
    The hero offers a QuotaBar `.dmg` download and a copyable `brew install gotry-io/tap/quotabar`
-   command.
-2. `/my` shows the signed-in user's name, quota snapshots, account totals, cost coverage, Usage
-   activity, model/agent breakdowns, Devices, and explicit Device deletion. Quota remaining has no
-   "left"/"remaining" suffix; budget windows with an amount use `71% · $3.75`, percent-only windows
-   use `71%`, and balance-only windows use **Balance** plus `$12.34`. Account actions live in
-   the account menu, whose trigger is the signed-in GitHub username. The shipped `/app` bookmark
-   is a single redirect to `/my`. Signed-in users can export remaining-quota and usage share cards
-   and explicitly choose a public `/u/{username}` page. Profiles stay private until that choice.
+   command. GitHub sign-in lives only in the site header.
+2. `/my` is the signed-in dashboard: compact remaining-quota cards, account totals, cost coverage,
+   Usage activity, model/agent breakdowns, Devices, and explicit Device deletion. Quota remaining
+   has no "left"/"remaining" suffix; budget windows with an amount use `71% · $3.75`, percent-only
+   windows use `71%`, and balance-only windows use **Balance** plus `$12.34`. Quota cards follow
+   the same provider / account / remaining / meter / metadata order as QuotaBar Overview, in a
+   denser web layout. The header shows the GitHub username; the name opens `/my`, and its menu
+   contains only **Sign out**. Unsigned visits to `/my` redirect to `/`. The shipped `/app`
+   bookmark is a single redirect to `/my`. Owners can publish a public page at
+   `/u/{github-username}`; the GitHub username is the only public id. Profiles stay private until
+   that choice.
 3. `/u/{username}` is the opted-in public remaining-quota and usage view. It never includes device
    ids, fingerprints, credentials, or private identifiers. Unknown or private slugs show a plain
    private/unavailable state.
@@ -80,18 +83,17 @@ Color never carries status alone. Every state also has a text label.
 
 ## Landing page
 
-The hero headline is “Know what you have left.” Its primary action is GitHub sign-in and its
-secondary action scrolls to the product explanation. The product preview may show representative
-account Usage, but it must label the cost as API-equivalent and state that unknown prices remain
-unpriced.
+The hero headline is “Know what you have left.” Its primary action is the QuotaBar `.dmg`
+download and its secondary action scrolls to the product explanation. GitHub sign-in is only
+in the header. The product preview may show representative account Usage, but it must label the
+cost as API-equivalent and state that unknown prices remain unpriced.
 
 The explanation follows this order:
 
 - local collection and what never uploads;
 - one Account with Device visibility;
 - defensible, effective-dated cost;
-- the direct local agent logs → QuotaBar local service → Account data path;
-- a final GitHub sign-in action.
+- the direct local agent logs → QuotaBar local service → Account data path.
 
 The hero also presents the live GitHub Releases `.dmg` and the Homebrew tap command. Do not present
 unavailable downloads or documentation as active destinations.
@@ -102,6 +104,8 @@ The dashboard leads with input tokens, output tokens, and API-equivalent cost. C
 coverage/basis; unavailable cost renders as an em dash plus “Unpriced”, and partial cost uses a lower
 bound marker. It reads all retained Account Usage by default. User-facing dates, numbers, units, and
 plan names use the English presentation shared with QuotaBar rather than the browser locale.
+Usage activity is a compact day grid whose cells use token volume for highlight levels, including a
+distinct today outline. The dashboard does not repeat the GitHub username in the page heading.
 
 Device cards show display name, platform, lifecycle status, and last-seen time. Deletion copy must
 say that both the Device and its Quota/Usage data are removed. Agent Usage uses a semantic table with

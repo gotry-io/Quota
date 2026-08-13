@@ -2,6 +2,7 @@ import {
   type AccountDevice,
   type AccountQuotaObservation,
   type AccountSummary,
+  AccountResponseSchema,
   AccountSummarySchema,
   DeviceAuthorizationDecisionRequestSchema,
   PROTOCOL_VERSION,
@@ -10,11 +11,6 @@ import {
 } from "@gotry-io/quota-protocol";
 import "./styles.css";
 import { PublicProfileSchema, PublicProfileSettingsSchema } from "@gotry-io/quota-protocol";
-import {
-  buildShareExport,
-  downloadShareFile,
-  shareInputFromAccountSummary,
-} from "./share-export.ts";
 import {
   accountEntryAction,
   DASHBOARD_PATH,
@@ -56,15 +52,20 @@ const publicUsername = publicProfileUsername(path);
 if (legacyPath) {
   window.location.replace(legacyPath);
 } else if (path === DASHBOARD_PATH) {
+  requiredElement("landing-view").hidden = true;
+  requiredElement("route-loading").hidden = false;
   void showDashboard();
 } else if (publicUsername) {
   void showPublicProfile(publicUsername);
+  void hydrateHeader();
 } else if (path === "/activate") {
   showActivation();
+  void hydrateHeader();
+} else {
+  void hydrateHeader();
 }
 
 async function showDashboard(): Promise<void> {
-  setView("dashboard-view");
   try {
     const request = {
       credentials: "same-origin",
@@ -76,24 +77,24 @@ async function showDashboard(): Promise<void> {
       request,
     );
     if (response.status === 401) {
-      showAccountError("Continue with GitHub to see account devices and Usage.", DASHBOARD_PATH);
-      showUsageActivityMessage("Sign in to see Usage activity.");
+      window.location.replace("/");
       return;
     }
     if (!response.ok) throw new Error("account_unavailable");
     const parsed = AccountSummarySchema.safeParse(await response.json());
     if (!parsed.success) throw new Error("invalid_account_summary");
+    setView("dashboard-view");
+    showSignedInHeader(parsed.data.account.display_label);
     renderDashboard(parsed.data);
     await loadPublicProfileSettings(parsed.data.account.display_label);
   } catch {
+    setView("dashboard-view");
     showAccountError("Quota could not load this account. Refresh to try again.");
     showUsageActivityMessage("Usage activity is unavailable.");
   }
 }
 
 function renderDashboard(summary: AccountSummary): void {
-  const accountLabel = summary.account.display_label ?? "GitHub account";
-  text("account-menu-label", accountLabel);
   text("input-total", formatCount(summary.usage.totals.input_tokens));
   text("output-total", formatCount(summary.usage.totals.output_tokens));
   text("cost-total", formatCost(summary.usage.cost));
@@ -129,7 +130,6 @@ function renderDashboard(summary: AccountSummary): void {
     summary.usage.breakdowns.filter((item) => item.dimension === "usage_date"),
     summary.usage.range,
   );
-  bindShareExports(summary);
 }
 
 function renderQuotaObservation(
@@ -142,21 +142,20 @@ function renderQuotaObservation(
 
   const heading = document.createElement("div");
   heading.className = "quota-card-heading";
-  const title = document.createElement("div");
+  const identity = document.createElement("div");
+  identity.className = "quota-card-identity";
   const provider = document.createElement("p");
-  provider.className = "eyebrow";
+  provider.className = "quota-card-provider";
   provider.textContent = titleCase(snapshot.provider);
-  const plan = document.createElement("h3");
-  plan.textContent = planDisplayName(snapshot.account.plan) ?? "Current plan";
-  title.append(provider, plan);
+  const account = document.createElement("p");
+  account.className = "quota-card-account";
+  const plan = planDisplayName(snapshot.account.plan);
+  account.textContent = [snapshot.account.label, plan].filter(Boolean).join(" · ") || "Account";
+  identity.append(provider, account);
   const status = document.createElement("span");
   status.className = `status-pill status-${snapshot.status}`;
   status.textContent = snapshot.status.replaceAll("_", " ");
-  heading.append(title, status);
-
-  const meta = document.createElement("p");
-  meta.className = "quota-card-meta";
-  meta.textContent = `${deviceName ?? "Device"} · updated ${formatDate(snapshot.observed_at)}`;
+  heading.append(identity, status);
 
   const windows = document.createElement("div");
   windows.className = "quota-window-list";
@@ -164,7 +163,11 @@ function renderQuotaObservation(
   if (snapshot.windows.length === 0) {
     windows.append(emptyState("No quota windows reported."));
   }
-  card.append(heading, meta, windows);
+
+  const meta = document.createElement("p");
+  meta.className = "quota-card-meta";
+  meta.textContent = `${deviceName ?? "Device"} · ${formatDate(snapshot.observed_at)}`;
+  card.append(heading, windows, meta);
   return card;
 }
 
@@ -357,6 +360,8 @@ function agentDisplayName(agent: string): string {
       return "OpenCode";
     case "pi":
       return "Pi";
+    case "cursor":
+      return "Cursor";
     default:
       return titleCase(agent);
   }
@@ -385,7 +390,8 @@ function renderUsageActivity(
   first.setUTCDate(first.getUTCDate() - first.getUTCDay());
   const last = new Date(`${range.to}T00:00:00Z`);
   last.setUTCDate(last.getUTCDate() + (6 - last.getUTCDay()));
-  const maxRequests = Math.max(...[...totals.values()].map((value) => value.requests), 0);
+  const maxTokens = Math.max(...[...totals.values()].map((value) => value.tokens), 0);
+  const today = new Date().toISOString().slice(0, 10);
   const list = document.createElement("ul");
   list.className = "usage-activity-grid";
   list.setAttribute("aria-label", "Usage activity by day");
@@ -393,14 +399,16 @@ function renderUsageActivity(
     const date = cursor.toISOString().slice(0, 10);
     const value = totals.get(date);
     const cell = document.createElement("li");
-    cell.className = `usage-activity-cell ${value ? `activity-level-${activityLevel(value.requests, maxRequests)}` : "activity-level-0"}`;
+    const level = activityLevel(value?.tokens ?? 0, maxTokens);
+    cell.className = `usage-activity-cell activity-level-${level}`;
+    if (date === today) cell.classList.add("activity-today");
     if (date < range.from || date > range.to) {
       cell.classList.add("activity-outside");
       cell.setAttribute("aria-hidden", "true");
     } else {
       const requests = value?.requests ?? 0;
       const tokens = value?.tokens ?? 0;
-      const label = `${formatShortDate(date)}: ${formatCount(requests)} requests, ${formatCount(tokens)} tokens`;
+      const label = `${formatShortDate(date)}: ${formatCount(requests)} messages, ${formatCount(tokens)} tokens`;
       cell.setAttribute("aria-label", label);
       cell.title = label;
     }
@@ -514,23 +522,11 @@ function setView(id: "dashboard-view" | "activate-view" | "public-view"): void {
   requiredElement("route-loading").hidden = true;
 }
 
-function bindShareExports(summary: AccountSummary): void {
-  const exported = buildShareExport(shareInputFromAccountSummary(summary));
-  requiredElement<HTMLButtonElement>("export-quota").onclick = () => {
-    downloadShareFile("quota-remaining.svg", exported.quota_svg, "image/svg+xml");
-    void navigator.clipboard.writeText(exported.quota_text);
-  };
-  requiredElement<HTMLButtonElement>("export-usage").onclick = () => {
-    downloadShareFile("quota-usage.svg", exported.usage_svg, "image/svg+xml");
-    void navigator.clipboard.writeText(exported.usage_text);
-  };
-}
-
 async function loadPublicProfileSettings(displayLabel: string | null): Promise<void> {
   const enabled = requiredElement<HTMLInputElement>("public-profile-enabled");
-  const slug = requiredElement<HTMLInputElement>("public-profile-slug");
   const form = requiredElement<HTMLFormElement>("public-profile-form");
   const status = requiredElement("public-profile-status");
+  const path = requiredElement("public-profile-path");
   const response = await fetch("/api/v2/account/public-profile", {
     credentials: "same-origin",
     redirect: "error",
@@ -540,21 +536,20 @@ async function loadPublicProfileSettings(displayLabel: string | null): Promise<v
   const parsed = PublicProfileSettingsSchema.safeParse(await response.json());
   if (!parsed.success) return;
   enabled.checked = parsed.data.enabled;
-  slug.value = parsed.data.slug ?? displayLabel?.toLowerCase().replaceAll(/[^a-z0-9]+/g, "-") ?? "";
+  const slug = parsed.data.slug ?? githubPublicSlug(displayLabel);
+  path.textContent = slug ? `/u/${slug}` : "/u/";
   form.onsubmit = (event) => {
     event.preventDefault();
     void savePublicProfile();
   };
-  status.hidden = !parsed.data.enabled || !parsed.data.slug;
-  if (parsed.data.enabled && parsed.data.slug) {
-    status.hidden = false;
-    status.textContent = `Public at /u/${parsed.data.slug}`;
+  status.hidden = !parsed.data.enabled || !slug;
+  if (parsed.data.enabled && slug) {
+    status.textContent = `Public at /u/${slug}`;
   }
 }
 
 async function savePublicProfile(): Promise<void> {
   const enabled = requiredElement<HTMLInputElement>("public-profile-enabled").checked;
-  const slug = requiredElement<HTMLInputElement>("public-profile-slug").value.trim();
   const status = requiredElement("public-profile-status");
   const response = await fetch("/api/v2/account/public-profile", {
     method: "PUT",
@@ -567,12 +562,11 @@ async function savePublicProfile(): Promise<void> {
     body: JSON.stringify({
       protocol_version: PROTOCOL_VERSION,
       enabled,
-      ...(slug ? { slug } : {}),
     }),
   });
   status.hidden = false;
   if (response.status === 409) {
-    status.textContent = "That public username is already in use.";
+    status.textContent = "That GitHub username is already in use.";
     return;
   }
   if (!response.ok) {
@@ -584,14 +578,26 @@ async function savePublicProfile(): Promise<void> {
     status.textContent = "Quota could not update public visibility.";
     return;
   }
+  if (parsed.data.slug) {
+    requiredElement("public-profile-path").textContent = `/u/${parsed.data.slug}`;
+  }
   status.textContent = parsed.data.enabled
     ? `Public at /u/${parsed.data.slug}`
     : "This profile is private.";
 }
 
+function githubPublicSlug(displayLabel: string | null): string | null {
+  const slug = displayLabel
+    ?.trim()
+    .toLowerCase()
+    .replaceAll(/[^a-z0-9]+/g, "-")
+    .replaceAll(/^-+|-+$/g, "")
+    .slice(0, 39);
+  return slug || null;
+}
+
 async function showPublicProfile(username: string): Promise<void> {
   setView("public-view");
-  text("public-title", `@${username}`);
   const error = requiredElement("public-error");
   const body = requiredElement("public-body");
   error.hidden = true;
@@ -629,23 +635,28 @@ async function showPublicProfile(username: string): Promise<void> {
     ...parsed.data.quota.map((provider) => {
       const card = document.createElement("article");
       card.className = "quota-card";
-      const heading = document.createElement("h3");
-      heading.textContent = `${titleCase(provider.provider)}${provider.plan ? ` · ${provider.plan}` : ""}`;
+      const heading = document.createElement("div");
+      heading.className = "quota-card-heading";
+      const identity = document.createElement("div");
+      identity.className = "quota-card-identity";
+      const name = document.createElement("p");
+      name.className = "quota-card-provider";
+      name.textContent = titleCase(provider.provider);
+      const plan = document.createElement("p");
+      plan.className = "quota-card-account";
+      plan.textContent = provider.plan ?? "Account";
+      identity.append(name, plan);
+      heading.append(identity);
       const list = document.createElement("div");
       list.className = "quota-window-list";
       for (const window of provider.windows) {
-        const row = document.createElement("div");
-        row.className = "quota-window-heading";
-        const title = document.createElement("span");
-        title.textContent = window.title;
-        const value = document.createElement("strong");
-        value.textContent = formatQuotaRemaining({
-          ...window,
-          id: window.title,
-          used_percent: window.used_percent,
-        });
-        row.append(title, value);
-        list.append(row);
+        list.append(
+          renderQuotaWindow({
+            ...window,
+            id: window.title,
+            used_percent: window.used_percent,
+          }),
+        );
       }
       card.append(heading, list);
       return card;
@@ -665,19 +676,9 @@ async function showPublicProfile(username: string): Promise<void> {
   }
 }
 
-function showAccountError(message: string, action?: string): void {
+function showAccountError(message: string): void {
   const notice = requiredElement("account-error");
-  notice.replaceChildren(document.createTextNode(message));
-  if (action) {
-    const button = document.createElement("button");
-    button.className = "button button-primary notice-action";
-    button.type = "button";
-    button.textContent = "Continue with GitHub";
-    button.addEventListener("click", () => {
-      void beginWebLogin(action);
-    });
-    notice.append(button);
-  }
+  notice.textContent = message;
   notice.hidden = false;
 }
 
@@ -732,6 +733,42 @@ function requiredElement<T extends HTMLElement = HTMLElement>(id: string): T {
   const element = document.getElementById(id);
   if (!element) throw new Error(`Missing required element: ${id}`);
   return element as T;
+}
+
+async function hydrateHeader(): Promise<void> {
+  try {
+    const response = await fetch("/api/v2/account", {
+      credentials: "same-origin",
+      redirect: "error",
+      headers: { Accept: "application/json" },
+    });
+    if (!response.ok) {
+      showSignedOutHeader();
+      return;
+    }
+    const parsed = AccountResponseSchema.safeParse(await response.json());
+    if (!parsed.success) {
+      showSignedOutHeader();
+      return;
+    }
+    showSignedInHeader(parsed.data.account.display_label);
+  } catch {
+    showSignedOutHeader();
+  }
+}
+
+function showSignedInHeader(displayLabel: string | null): void {
+  const login = requiredElement<HTMLButtonElement>("header-login");
+  const account = requiredElement("header-account");
+  const name = requiredElement<HTMLAnchorElement>("header-account-name");
+  login.hidden = true;
+  account.hidden = false;
+  name.textContent = displayLabel?.trim() || "Account";
+}
+
+function showSignedOutHeader(): void {
+  requiredElement<HTMLButtonElement>("header-login").hidden = false;
+  requiredElement("header-account").hidden = true;
 }
 
 async function beginWebLogin(returnTo: string): Promise<void> {

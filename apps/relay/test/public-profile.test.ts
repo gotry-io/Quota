@@ -164,9 +164,10 @@ describe("public profile HTTP gate", () => {
     const enabled = await relay.request("https://quota.gotry.io/api/v2/account/public-profile", {
       method: "PUT",
       headers,
-      body: JSON.stringify({ protocol_version: 2, enabled: true, slug: "octocat" }),
+      body: JSON.stringify({ protocol_version: 2, enabled: true, slug: "custom-name" }),
     });
     expect(enabled.status).toBe(200);
+    expect(await enabled.json()).toMatchObject({ enabled: true, slug: "octocat" });
     const publicRead = await relay.request("https://quota.gotry.io/api/v2/public/profiles/octocat");
     expect(publicRead.status).toBe(200);
     const body = (await publicRead.json()) as { username: string; usage: { input_tokens: number } };
