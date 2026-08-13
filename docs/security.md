@@ -35,10 +35,9 @@ data requirements. Architecture and product behavior are defined in
   in owner-only SQLite. Failed validation/commit preserves the old session; disconnect removes it
   transactionally.
 - Quota Web receives normalized account data only. It does not discover local credentials or logs.
-  Public `/u/{username}` pages exist only after an explicit owner choice, use the GitHub username
-  as the public id, and expose remaining quota windows plus aggregated usage totals. They never
-  include device ids, fingerprints, credentials, cookies, raw logs, prompts, or paths. Private or
-  unknown usernames return not found.
+  Public `/u/{username}` pages use the GitHub username as the public id and expose remaining quota
+  windows plus aggregated usage totals. They never include device ids, fingerprints, credentials,
+  cookies, raw logs, prompts, or paths. Unknown usernames return not found.
 
 ## Local credentials and identity
 

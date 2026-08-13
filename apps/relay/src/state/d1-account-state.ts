@@ -702,7 +702,9 @@ export class D1AccountState implements AccountState {
         `SELECT id, identity_subject, display_label, created_at, updated_at,
                 public_profile_enabled, public_profile_slug
          FROM accounts
-         WHERE public_profile_slug = ?1 AND public_profile_enabled = 1`,
+         WHERE public_profile_slug = ?1 OR LOWER(display_label) = ?1
+         ORDER BY CASE WHEN LOWER(display_label) = ?1 THEN 0 ELSE 1 END, created_at ASC
+         LIMIT 1`,
       )
       .bind(slug)
       .first<AccountRecord>();

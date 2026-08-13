@@ -10,7 +10,7 @@ import {
   type UsageCostOutcome,
 } from "@gotry-io/quota-protocol";
 import "./styles.css";
-import { PublicProfileSchema, PublicProfileSettingsSchema } from "@gotry-io/quota-protocol";
+import { PublicProfileSchema } from "@gotry-io/quota-protocol";
 import {
   accountEntryAction,
   DASHBOARD_PATH,
@@ -20,6 +20,9 @@ import {
 } from "./routes.ts";
 
 const WEB_LOCALE = "en-US";
+const THEME_STORAGE_KEY = "quota-theme";
+
+bindAppearanceToggle();
 
 const year = document.querySelector<HTMLElement>("#copyright-year");
 if (year) year.textContent = String(new Date().getFullYear());
@@ -86,7 +89,6 @@ async function showDashboard(): Promise<void> {
     setView("dashboard-view");
     showSignedInHeader(parsed.data.account.display_label);
     renderDashboard(parsed.data);
-    await loadPublicProfileSettings(parsed.data.account.display_label);
   } catch {
     setView("dashboard-view");
     showAccountError("Quota could not load this account. Refresh to try again.");
@@ -522,78 +524,38 @@ function setView(id: "dashboard-view" | "activate-view" | "public-view"): void {
   requiredElement("route-loading").hidden = true;
 }
 
-async function loadPublicProfileSettings(displayLabel: string | null): Promise<void> {
-  const enabled = requiredElement<HTMLInputElement>("public-profile-enabled");
-  const form = requiredElement<HTMLFormElement>("public-profile-form");
-  const status = requiredElement("public-profile-status");
-  const path = requiredElement("public-profile-path");
-  const response = await fetch("/api/v2/account/public-profile", {
-    credentials: "same-origin",
-    redirect: "error",
-    headers: { Accept: "application/json" },
-  });
-  if (!response.ok) return;
-  const parsed = PublicProfileSettingsSchema.safeParse(await response.json());
-  if (!parsed.success) return;
-  enabled.checked = parsed.data.enabled;
-  const slug = parsed.data.slug ?? githubPublicSlug(displayLabel);
-  path.textContent = slug ? `/u/${slug}` : "/u/";
-  form.onsubmit = (event) => {
-    event.preventDefault();
-    void savePublicProfile();
-  };
-  status.hidden = !parsed.data.enabled || !slug;
-  if (parsed.data.enabled && slug) {
-    status.textContent = `Public at /u/${slug}`;
+function preferredAppearance(): "light" | "dark" {
+  const stored = localStorage.getItem(THEME_STORAGE_KEY);
+  if (stored === "light" || stored === "dark") return stored;
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+function applyAppearance(theme: "light" | "dark"): void {
+  document.documentElement.dataset.theme = theme;
+  document.documentElement.style.colorScheme = theme;
+  document
+    .querySelector<HTMLMetaElement>('meta[name="theme-color"]')
+    ?.setAttribute("content", theme === "dark" ? "#111111" : "#f2f8f5");
+  const toggle = document.querySelector<HTMLButtonElement>("#theme-toggle");
+  if (toggle) {
+    toggle.setAttribute(
+      "aria-label",
+      theme === "dark" ? "Use light appearance" : "Use dark appearance",
+    );
   }
 }
 
-async function savePublicProfile(): Promise<void> {
-  const enabled = requiredElement<HTMLInputElement>("public-profile-enabled").checked;
-  const status = requiredElement("public-profile-status");
-  const response = await fetch("/api/v2/account/public-profile", {
-    method: "PUT",
-    credentials: "same-origin",
-    redirect: "error",
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      protocol_version: PROTOCOL_VERSION,
-      enabled,
-    }),
+function bindAppearanceToggle(): void {
+  applyAppearance(preferredAppearance());
+  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+    const stored = localStorage.getItem(THEME_STORAGE_KEY);
+    if (stored !== "light" && stored !== "dark") applyAppearance(preferredAppearance());
   });
-  status.hidden = false;
-  if (response.status === 409) {
-    status.textContent = "That GitHub username is already in use.";
-    return;
-  }
-  if (!response.ok) {
-    status.textContent = "Quota could not update public visibility.";
-    return;
-  }
-  const parsed = PublicProfileSettingsSchema.safeParse(await response.json());
-  if (!parsed.success) {
-    status.textContent = "Quota could not update public visibility.";
-    return;
-  }
-  if (parsed.data.slug) {
-    requiredElement("public-profile-path").textContent = `/u/${parsed.data.slug}`;
-  }
-  status.textContent = parsed.data.enabled
-    ? `Public at /u/${parsed.data.slug}`
-    : "This profile is private.";
-}
-
-function githubPublicSlug(displayLabel: string | null): string | null {
-  const slug = displayLabel
-    ?.trim()
-    .toLowerCase()
-    .replaceAll(/[^a-z0-9]+/g, "-")
-    .replaceAll(/^-+|-+$/g, "")
-    .slice(0, 39);
-  return slug || null;
+  document.querySelector("#theme-toggle")?.addEventListener("click", () => {
+    const next = preferredAppearance() === "dark" ? "light" : "dark";
+    localStorage.setItem(THEME_STORAGE_KEY, next);
+    applyAppearance(next);
+  });
 }
 
 async function showPublicProfile(username: string): Promise<void> {

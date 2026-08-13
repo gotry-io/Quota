@@ -18,6 +18,10 @@ test("homepage introduces QuotaBar and both install paths", () => {
   assert.doesNotMatch(html, /Open Quota/);
   assert.equal((html.match(/data-web-login/g) ?? []).length, 1);
   assert.match(html, /id="header-account" class="header-account" hidden/);
+  assert.match(html, /id="theme-toggle"/);
+  assert.match(html, /quota-theme/);
+  assert.match(html, /prefers-color-scheme: dark/);
   assert.doesNotMatch(html, /id="export-quota"/);
-  assert.doesNotMatch(html, /id="public-profile-slug"/);
+  assert.doesNotMatch(html, /id="public-profile-form"/);
+  assert.doesNotMatch(html, /id="public-profile-enabled"/);
 });

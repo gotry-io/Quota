@@ -145,7 +145,7 @@ describe("public profile HTTP gate", () => {
     });
   }
 
-  it("serves opted-in usernames and hides private or unknown ones", async () => {
+  it("publishes GitHub usernames by default and ignores disable requests", async () => {
     await env.DB.prepare(
       `INSERT INTO accounts (id, identity_subject, display_label, created_at, updated_at)
        VALUES ('account_public', 'subject_public', 'octocat', ?1, ?1)`,
@@ -158,16 +158,6 @@ describe("public profile HTTP gate", () => {
       "Content-Type": "application/json",
     };
     const relay = app();
-    expect(
-      (await relay.request("https://quota.gotry.io/api/v2/public/profiles/octocat")).status,
-    ).toBe(404);
-    const enabled = await relay.request("https://quota.gotry.io/api/v2/account/public-profile", {
-      method: "PUT",
-      headers,
-      body: JSON.stringify({ protocol_version: 2, enabled: true, slug: "custom-name" }),
-    });
-    expect(enabled.status).toBe(200);
-    expect(await enabled.json()).toMatchObject({ enabled: true, slug: "octocat" });
     const publicRead = await relay.request("https://quota.gotry.io/api/v2/public/profiles/octocat");
     expect(publicRead.status).toBe(200);
     const body = (await publicRead.json()) as { username: string; usage: { input_tokens: number } };
@@ -176,14 +166,20 @@ describe("public profile HTTP gate", () => {
     expect(
       (await relay.request("https://quota.gotry.io/api/v2/public/profiles/unknown")).status,
     ).toBe(404);
+    const settings = await relay.request("https://quota.gotry.io/api/v2/account/public-profile", {
+      headers,
+    });
+    expect(settings.status).toBe(200);
+    expect(await settings.json()).toMatchObject({ enabled: true, slug: "octocat" });
     const disabled = await relay.request("https://quota.gotry.io/api/v2/account/public-profile", {
       method: "PUT",
       headers,
-      body: JSON.stringify({ protocol_version: 2, enabled: false }),
+      body: JSON.stringify({ protocol_version: 2, enabled: false, slug: "custom-name" }),
     });
     expect(disabled.status).toBe(200);
+    expect(await disabled.json()).toMatchObject({ enabled: true, slug: "octocat" });
     expect(
       (await relay.request("https://quota.gotry.io/api/v2/public/profiles/octocat")).status,
-    ).toBe(404);
+    ).toBe(200);
   });
 });

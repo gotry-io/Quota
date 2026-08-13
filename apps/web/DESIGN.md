@@ -12,6 +12,7 @@ open-source tool, not a hosting console or a promotional SaaS dashboard.
 
 - Lead with remaining quota, normalized Usage, and the privacy boundary.
 - Use black type, white space, thin neutral rules, and mint only for brand or healthy state.
+- Support light and dark appearance. Follow the system until the user chooses one in the header.
 - Prefer clear labels and real values over decoration.
 - Do not use gradients, drop shadows, glass effects, fake browser chrome, or ornamental charts.
 - Product names are Quota, QuotaBar, and QuotaRelay.
@@ -30,12 +31,11 @@ The site has four surfaces:
    the same provider / account / remaining / meter / metadata order as QuotaBar Overview, in a
    denser web layout. The header shows the GitHub username; the name opens `/my`, and its menu
    contains only **Sign out**. Unsigned visits to `/my` redirect to `/`. The shipped `/app`
-   bookmark is a single redirect to `/my`. Owners can publish a public page at
-   `/u/{github-username}`; the GitHub username is the only public id. Profiles stay private until
-   that choice.
-3. `/u/{username}` is the opted-in public remaining-quota and usage view. It never includes device
-   ids, fingerprints, credentials, or private identifiers. Unknown or private slugs show a plain
-   private/unavailable state.
+   bookmark is a single redirect to `/my`. Every signed-in GitHub account is public at
+   `/u/{github-username}`. The dashboard has no public-page visibility control.
+3. `/u/{username}` is the public remaining-quota and usage view for that GitHub username. It never
+   includes device ids, fingerprints, credentials, or private identifiers. Unknown usernames show
+   a plain unavailable state.
 4. `/activate` approves or denies a released native-client device authorization code.
 
 GitHub is the only sign-in action. There is no Relay selection, pairing group, owner capability,
@@ -47,22 +47,23 @@ Tokens are defined in `src/styles.css` and must remain the source used by the im
 
 ### Color
 
-| Role | Value | Use |
-| --- | --- | --- |
-| Ink | `#000000` | Primary type and primary actions |
-| Deep ink | `#090909` | Primary-action hover |
-| Charcoal | `#525252` | Secondary labels and navigation |
-| Body | `#737373` | Supporting prose |
-| Muted | `#a3a3a3` | Tertiary metadata |
-| Emerald | `#087456` | Brand and healthy/complete meaning |
-| Mint | `#82ddb8` | Brand accent |
-| Brand surface | `#f2f8f5` | Quiet highlighted regions |
-| Canvas | `#ffffff` | Page and cards |
-| Soft surface | `#fafafa` | Hover and low-contrast grouping |
-| Dark surface | `#171717` | One bounded inverted section |
-| Hairline | `#e5e5e5` | Dividers and card outlines |
+| Role | Light | Dark | Use |
+| --- | --- | --- | --- |
+| Ink | `#000000` | `#f4f4f4` | Primary type and primary actions |
+| Deep ink | `#090909` | `#ffffff` | Primary-action hover |
+| Charcoal | `#525252` | `#c4c4c4` | Secondary labels and navigation |
+| Body | `#737373` | `#a3a3a3` | Supporting prose |
+| Muted | `#a3a3a3` | `#737373` | Tertiary metadata |
+| Emerald / mint | `#087456` / `#82ddb8` | `#82ddb8` | Brand and healthy/complete meaning |
+| Brand surface | `#f2f8f5` | `#10231c` | Quiet highlighted regions |
+| Canvas | `#ffffff` | `#111111` | Page and cards |
+| Soft surface | `#fafafa` | `#1b1b1b` | Hover and low-contrast grouping |
+| Inverted surface | `#171717` | `#f4f4f4` | Bounded opposite-tone section |
+| Hairline | `#e5e5e5` | `#2a2a2a` | Dividers and card outlines |
 
-Color never carries status alone. Every state also has a text label.
+Color never carries status alone. Every state also has a text label. The header theme control
+toggles `light` and `dark`, stores the choice locally, and otherwise follows
+`prefers-color-scheme`. Do not add a third visible “system” control.
 
 ### Type
 
@@ -123,7 +124,8 @@ Quota client.
 
 - At 840 px, two-column hero and architecture layouts become one column.
 - At 620 px, the page gutter reduces, navigation hides nonessential links, actions become full
-  width where useful, summary grids stack, and data tables remain horizontally scrollable.
+  width where useful, summary grids stack, and data tables remain horizontally scrollable. The
+  appearance toggle and account session control stay visible.
 - The layout must work from 320 px upward without clipped actions or horizontal page scrolling.
 
 ## Accessibility and motion
@@ -141,7 +143,7 @@ Before shipping a Web change:
 
 - run the package check and production build;
 - inspect `/`, `/my` (and the shipped `/app` redirect), and `/activate` at desktop and narrow mobile
-  widths when browser tooling is available;
+  widths in both light and dark appearance when browser tooling is available;
 - navigate all controls with a keyboard;
 - verify loading, signed-out, empty, partial/unpriced cost, recent-auth, and failure states;
 - confirm no credential, raw Usage, prompt, path, or untrusted HTML reaches the DOM.

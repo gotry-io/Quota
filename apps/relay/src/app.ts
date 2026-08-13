@@ -524,11 +524,12 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     if (!account) {
       return unauthorized(context);
     }
+    const slug = normalizePublicSlug(account.display_label ?? "");
     return context.json(
       PublicProfileSettingsSchema.parse({
         protocol_version: PROTOCOL_VERSION,
-        enabled: account.public_profile_enabled === 1,
-        slug: account.public_profile_slug ?? null,
+        enabled: true,
+        slug,
       }),
     );
   });
@@ -550,14 +551,13 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     if (!account) {
       return unauthorized(context);
     }
-    const githubSlug = normalizePublicSlug(account.display_label ?? "");
-    const slug = body.enabled ? githubSlug : (account.public_profile_slug ?? githubSlug);
-    if (body.enabled && !slug) {
+    const slug = normalizePublicSlug(account.display_label ?? "");
+    if (!slug) {
       return invalidRequest(context);
     }
     const outcome = await options.state.setPublicProfile(
       principal.account_id,
-      body.enabled,
+      true,
       slug,
       now().toISOString(),
     );
@@ -567,7 +567,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     return context.json(
       PublicProfileSettingsSchema.parse({
         protocol_version: PROTOCOL_VERSION,
-        enabled: body.enabled,
+        enabled: true,
         slug,
       }),
     );
