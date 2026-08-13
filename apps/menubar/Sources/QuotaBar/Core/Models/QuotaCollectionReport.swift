@@ -91,23 +91,45 @@ extension QuotaWindow {
     !isBalanceOnly
   }
 
-  /// e.g. "$4.61 left" when value_unit/remaining_value are present.
-  /// Balance-only rows without a unit (e.g. DeepSeek CNY) still show the absolute remaining.
+  /// Absolute remaining when `value_unit`/`remaining_value` are present.
+  /// Balance-only rows without a unit (e.g. DeepSeek CNY) still show the number.
   var absoluteRemainingLabel: String? {
     guard let remainingValue else { return nil }
     if let valueUnit {
       switch valueUnit {
       case .usd:
-        return String(format: "$%.2f left", remainingValue)
+        return String(format: "$%.2f", remainingValue)
       case .credits:
-        return String(format: "%.2f credits left", remainingValue)
+        return String(format: "%.2f credits", remainingValue)
       case .count:
-        return String(format: "%.0f left", remainingValue)
+        return String(format: "%.0f", remainingValue)
       }
     }
     if isBalanceOnly {
-      return String(format: "%.2f left", remainingValue)
+      return String(format: "%.2f", remainingValue)
     }
     return nil
+  }
+
+  /// Overview remaining copy. No "left" suffix; the value is remaining by product rule.
+  /// Budget windows with an amount show `71% · $3.75`.
+  var remainingDisplayLabel: String {
+    let percent = formattedRemainingPercent
+    guard let absolute = absoluteRemainingLabel else { return percent }
+    if isBalanceOnly || !showsPercentMeter {
+      return absolute
+    }
+    return "\(percent) · \(absolute)"
+  }
+
+  var formattedRemainingPercent: String {
+    Self.formattedPercent(remainingPercent)
+  }
+
+  static func formattedPercent(_ value: Double) -> String {
+    if abs(value.rounded() - value) < 0.05 {
+      return "\(Int(value.rounded()))%"
+    }
+    return String(format: "%.1f%%", value)
   }
 }

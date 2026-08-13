@@ -15,14 +15,17 @@ import {
   LogoutResponseSchema,
   MAXIMUM_USAGE_READ_ROWS,
   MAXIMUM_USAGE_SUBMISSION_BYTES,
+  MODEL_CATALOG,
+  type ModelCatalog,
+  ModelCatalogSchema,
   OAuthTokenRequestSchema,
   OAuthTokenResponseSchema,
   PROTOCOL_VERSION,
   type PricingCatalog,
   PricingCatalogSchema,
-  MODEL_CATALOG,
-  type ModelCatalog,
-  ModelCatalogSchema,
+  PublicProfileSchema,
+  PublicProfileSettingsSchema,
+  PublicProfileUpdateRequestSchema,
   QuotaSnapshotEnvelopeSchema,
   QuotaSnapshotUploadResponseSchema,
   type RelayErrorCode,
@@ -50,6 +53,7 @@ import type { WebAccountAuth } from "./account/better-auth.ts";
 import { AccountFlowError, type AccountService, isLoopbackRedirect } from "./account/service.ts";
 import { managedServiceInfo } from "./config.ts";
 import { PRICING_CATALOG, PRICING_CATALOG_ETAG } from "./pricing-catalog.ts";
+import { normalizePublicSlug, publicProfileFromAccount } from "./public-profile.ts";
 import { bearerToken, type SecretHasher } from "./security.ts";
 import { buildUsageCost, buildUsageSummary, UsageSummaryLimitError } from "./usage-summary.ts";
 
@@ -69,6 +73,7 @@ const rateLimits = {
   token: { limit: 180, windowSeconds: 10 * 60 },
   sessionMutation: { limit: 60, windowSeconds: 10 * 60 },
   destructiveMutation: { limit: 10, windowSeconds: 60 * 60 },
+  publicProfile: { limit: 120, windowSeconds: 10 * 60 },
 } as const;
 
 interface StrictSchema<Output> {
@@ -510,6 +515,116 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     );
   });
 
+  app.get("/api/v2/account/public-profile", async (context) => {
+    const principal = await accountReader(context, options, now());
+    if (principal instanceof Response) {
+      return principal;
+    }
+    const account = await options.state.getAccount(principal.account_id);
+    if (!account) {
+      return unauthorized(context);
+    }
+    return context.json(
+      PublicProfileSettingsSchema.parse({
+        protocol_version: PROTOCOL_VERSION,
+        enabled: account.public_profile_enabled === 1,
+        slug: account.public_profile_slug ?? null,
+      }),
+    );
+  });
+
+  app.put("/api/v2/account/public-profile", async (context) => {
+    const principal = await authorizeAccount(context, options, "account:manage", now());
+    if (principal instanceof Response) {
+      return principal;
+    }
+    const originError = requireWebOrigin(context, principal);
+    if (originError) {
+      return originError;
+    }
+    const body = await parseJSON(context, PublicProfileUpdateRequestSchema);
+    if (body instanceof Response) {
+      return body;
+    }
+    const account = await options.state.getAccount(principal.account_id);
+    if (!account) {
+      return unauthorized(context);
+    }
+    const slug = body.enabled
+      ? (body.slug ??
+        normalizePublicSlug(account.public_profile_slug ?? account.display_label ?? ""))
+      : (account.public_profile_slug ?? body.slug ?? null);
+    if (body.enabled && !slug) {
+      return invalidRequest(context);
+    }
+    const outcome = await options.state.setPublicProfile(
+      principal.account_id,
+      body.enabled,
+      slug,
+      now().toISOString(),
+    );
+    if (outcome === "conflict") {
+      return relayError(context, 409, "conflict", "That public username is already in use.");
+    }
+    return context.json(
+      PublicProfileSettingsSchema.parse({
+        protocol_version: PROTOCOL_VERSION,
+        enabled: body.enabled,
+        slug,
+      }),
+    );
+  });
+
+  app.get("/api/v2/public/profiles/:username", async (context) => {
+    const username = context.req.param("username");
+    const slug = normalizePublicSlug(username ?? "");
+    if (!slug || slug !== username) {
+      return notFound(context);
+    }
+    const limited = await enforceRateLimit(
+      context,
+      options.state,
+      options.hasher,
+      "public-profile",
+      slug,
+      rateLimits.publicProfile,
+      now(),
+    );
+    if (limited) {
+      return limited;
+    }
+    const account = await options.state.getAccountByPublicSlug(slug);
+    if (!account) {
+      return notFound(context);
+    }
+    const snapshots = await options.state.listLatestSnapshots(account.id);
+    const usageRows = await options.usageState.queryAccountUsage(account.id, {
+      agents: BILLING_AGENTS,
+      limit: maximumAccountUsageSummaryRows,
+    });
+    if (usageRows.truncated) {
+      return resultLimit(context);
+    }
+    const today = now().toISOString().slice(0, 10);
+    const usage = buildUsageSummary(
+      usageRows,
+      retainedUsageRange(usageRows.rows, today),
+      "calculate",
+      catalog,
+      false,
+    );
+    return context.json(
+      PublicProfileSchema.parse(
+        publicProfileFromAccount({
+          slug,
+          displayLabel: account.display_label,
+          snapshots,
+          usage,
+        }),
+      ),
+    );
+  });
+
   for (const path of ["/api/v2/account/usage", "/api/v2/account/usage/summary"]) {
     app.get(path, async (context) => {
       const principal = await accountReader(context, options, now());
@@ -834,7 +949,7 @@ async function accountUsageQuery(
   checkedAt: Date,
   summaryOptions: { allByDefault: boolean; includeHourlyBreakdowns: boolean } = {
     allByDefault: false,
-    includeHourlyBreakdowns: true,
+    includeHourlyBreakdowns: false,
   },
 ) {
   if (

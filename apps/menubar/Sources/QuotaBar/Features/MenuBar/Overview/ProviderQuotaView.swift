@@ -185,13 +185,6 @@ private struct QuotaWindowRow: View {
     isStale ? QuotaPalette.mute : QuotaPalette.ink
   }
 
-  private var remainingLabel: String {
-    if let absolute = window.absoluteRemainingLabel {
-      return absolute
-    }
-    return "\(percent(window.remainingPercent)) left"
-  }
-
   var body: some View {
     VStack(alignment: .leading, spacing: QuotaDesign.Spacing.meta) {
       HStack(alignment: .firstTextBaseline, spacing: QuotaDesign.Spacing.inline) {
@@ -199,11 +192,11 @@ private struct QuotaWindowRow: View {
           .quotaFont(.quotaLabel)
           .foregroundStyle(QuotaPalette.body)
         Spacer(minLength: 8)
-        Text(remainingLabel)
+        Text(window.remainingDisplayLabel)
           .quotaFont(.remainingValue)
           .monospacedDigit()
           .foregroundStyle(valueColor)
-          .accessibilityLabel(remainingLabel)
+          .accessibilityLabel(window.remainingDisplayLabel)
       }
 
       if window.showsPercentMeter {
@@ -211,7 +204,7 @@ private struct QuotaWindowRow: View {
       }
 
       if let resetsAt = window.resetsAt {
-        Text("Resets \(formatResetDate(resetsAt))")
+        Text("Resets \(ResetDateFormatter.string(from: resetsAt))")
           .quotaMetaStyle()
       } else if window.showsPercentMeter {
         Text("Reset time unavailable")
@@ -258,22 +251,36 @@ private struct QuotaProgressBar: View {
     }
     .frame(height: QuotaDesign.Layout.progressHeight)
     .accessibilityLabel("Remaining quota")
-    .accessibilityValue(percent(value))
+    .accessibilityValue(QuotaWindow.formattedPercent(value))
   }
 }
 
-private func percent(_ value: Double) -> String {
-  if abs(value.rounded() - value) < 0.05 {
-    return "\(Int(value.rounded()))%"
+enum ResetDateFormatter {
+  /// Near resets keep weekday + time (5-hour / weekly windows). Monthly horizons use month + day.
+  static func string(
+    from date: Date,
+    now: Date = Date(),
+    calendar: Calendar = .current,
+    locale: Locale = .current
+  ) -> String {
+    let days = calendar.dateComponents(
+      [.day],
+      from: calendar.startOfDay(for: now),
+      to: calendar.startOfDay(for: date)
+    ).day ?? 0
+    let style = Date.FormatStyle(
+      date: .omitted,
+      time: .omitted,
+      locale: locale,
+      calendar: calendar,
+      timeZone: calendar.timeZone
+    )
+    if abs(days) <= 6 {
+      return date.formatted(style.weekday(.abbreviated).hour().minute())
+    }
+    if calendar.component(.year, from: now) == calendar.component(.year, from: date) {
+      return date.formatted(style.month(.abbreviated).day())
+    }
+    return date.formatted(style.month(.abbreviated).day().year())
   }
-  return String(format: "%.1f%%", value)
-}
-
-private func formatResetDate(_ date: Date) -> String {
-  date.formatted(
-    .dateTime
-      .weekday(.abbreviated)
-      .hour()
-      .minute()
-  )
 }

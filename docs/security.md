@@ -26,7 +26,18 @@ data requirements. Architecture and product behavior are defined in
   raw paths, filesystem errors, or diagnostic stderr to Swift. Each Swift request has a fixed
   fifteen-second deadline; timeout closes the child and all pending continuations so a later request can
   start a fresh helper.
+- The deliberate macOS browser-session exception is acquisition only. SweetCookieKit briefly reads
+  catalog-allowlisted Cookie names from catalog-declared exact hosts in the one browser selected for
+  login. Its logger is disabled; profile paths/store IDs and unrelated Cookies never cross private
+  stdin or enter logs, diagnostics, UserDefaults, or Relay. Swift retains candidates only in memory.
+  Rust validates Cookie syntax and the provider account over fixed HTTPS, revalidates on commit,
+  and persists only the accepted header plus an irreversible fingerprint and bounded masked label
+  in owner-only SQLite. Failed validation/commit preserves the old session; disconnect removes it
+  transactionally.
 - Quota Web receives normalized account data only. It does not discover local credentials or logs.
+  Public `/u/{username}` pages exist only after an explicit owner choice and expose remaining quota
+  windows plus aggregated usage totals. They never include device ids, fingerprints, credentials,
+  cookies, raw logs, prompts, or paths. Private or unknown slugs return not found.
 
 ## Local credentials and identity
 
@@ -152,12 +163,15 @@ data requirements. Architecture and product behavior are defined in
 ## Network, subprocesses, and diagnostics
 
 - Provider credentials go only to the fixed official endpoints and documented provider-owned
-  variants in [`provider-collection.md`](provider-collection.md). Do not import browser cookies or
-  hidden WebView state.
+  variants in [`provider-collection.md`](provider-collection.md). Except for the explicit
+  catalog-allowlisted browser-session acquisition above, do not import browser Cookies. Hidden
+  WebView state is never an authentication source.
 - Spawn explicit executables with argument arrays. Never interpolate provider or user data into a
   shell command. Respect cancellation and terminate subprocesses on success, failure, timeout, and
   cancellation.
-- Provider HTTP requests use a 20-second timeout and 1 MiB response-body limit. Provider JSON-RPC
+- Provider HTTP requests use a 20-second timeout and 1 MiB response-body limit; browser-session
+  account validation tightens that timeout to ten seconds so it completes inside private IPC.
+  Provider JSON-RPC
   uses a 1 MiB stdout-line limit and 64 KiB stderr-capture limit. Private IPC limits every line to
   1 MiB, rejects malformed envelopes, exposes only stable error/recovery codes, and closes a corrupt
   connection. stdin EOF cancels service work and ends the child.

@@ -79,6 +79,7 @@ func consumesServiceMergedOverviewWithoutReprocessingObservations() async throws
         baseURL: nil
       )
     ],
+    providerBrowserSessions: [],
     overview: [
       LocalServiceOverviewItem(
         identity: LocalServiceOverviewIdentity(
@@ -113,6 +114,46 @@ func consumesServiceMergedOverviewWithoutReprocessingObservations() async throws
   #expect(
     model.accountErrorMessage == "This device was removed. Sign in again to reconnect it."
   )
+}
+
+@Test @MainActor
+func emptyUsageCacheWhileRefreshingIsPreparingNotMissing() async throws {
+  let state = LocalServiceState(
+    ipcVersion: 1,
+    revision: 1,
+    usageUploadEnabled: true,
+    usagePeriods: emptyUsagePeriods(),
+    quota: emptyComponent(),
+    usage: LocalServiceComponent(
+      status: .unavailable,
+      value: nil,
+      updatedAt: nil,
+      lastError: nil,
+      refreshing: true
+    ),
+    account: LocalServiceComponent(
+      status: .signedOut,
+      value: LocalServiceAccountState(
+        authStatus: .signedOut,
+        accountID: nil,
+        deviceID: nil,
+        deviceGeneration: nil,
+        accountSummary: nil
+      ),
+      updatedAt: nil,
+      lastError: nil,
+      refreshing: false
+    ),
+    pricing: emptyComponent(),
+    providers: [],
+    providerBrowserSessions: [],
+    overview: []
+  )
+  let model = MenuBarViewModel(client: StubLocalService(state: state))
+  await model.refreshIfNeeded()
+  #expect(model.usageDetail(source: .local, period: .today) == nil)
+  #expect(model.isPreparingUsage(source: .local))
+  #expect(!model.isPreparingUsage(source: .account))
 }
 
 @Test @MainActor
@@ -174,6 +215,7 @@ private func loggingInState() -> LocalServiceState {
     ),
     pricing: emptyComponent(),
     providers: [],
+    providerBrowserSessions: [],
     overview: []
   )
 }
@@ -304,6 +346,24 @@ private struct StubLocalService: LocalServiceServing {
       maskedAPIKey: nil,
       baseURL: nil
     )
+  }
+
+  func validateProviderBrowserSession(
+    _ provider: ProviderID, cookieHeader: String
+  ) async throws -> LocalServiceProviderBrowserSessionCandidate {
+    throw LocalServiceClientError.serviceMissing
+  }
+
+  func commitProviderBrowserSession(
+    _ provider: ProviderID, cookieHeader: String
+  ) async throws -> LocalServiceProviderBrowserSession {
+    throw LocalServiceClientError.serviceMissing
+  }
+
+  func removeProviderBrowserSession(
+    _ provider: ProviderID
+  ) async throws -> LocalServiceProviderBrowserSession {
+    throw LocalServiceClientError.serviceMissing
   }
   func shutdown() async {}
 }

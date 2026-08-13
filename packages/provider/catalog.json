@@ -8,8 +8,10 @@
       "default_visible": true,
       "setup_action": "codex login",
       "brand_icon_asset": "openai",
+      "account_sync": true,
       "environment_keys": ["CODEX_HOME"],
       "credential_config": null,
+      "browser_session": null,
       "default_base_url": null,
       "base_url_environment_key": null
     },
@@ -20,8 +22,10 @@
       "default_visible": true,
       "setup_action": "claude auth login",
       "brand_icon_asset": "claude",
+      "account_sync": true,
       "environment_keys": ["CLAUDE_CONFIG_DIR"],
       "credential_config": null,
+      "browser_session": null,
       "default_base_url": null,
       "base_url_environment_key": null
     },
@@ -32,8 +36,10 @@
       "default_visible": true,
       "setup_action": "grok login",
       "brand_icon_asset": "grok",
+      "account_sync": true,
       "environment_keys": ["GROK_HOME"],
       "credential_config": null,
+      "browser_session": null,
       "default_base_url": null,
       "base_url_environment_key": null
     },
@@ -44,6 +50,7 @@
       "default_visible": false,
       "setup_action": "Configure in QuotaBar",
       "brand_icon_asset": "openrouter",
+      "account_sync": true,
       "environment_keys": ["OPENROUTER_API_KEY"],
       "credential_config": {
         "kind": "api_key",
@@ -52,6 +59,7 @@
         "allow_private_http": false,
         "mask_label": "OpenRouter"
       },
+      "browser_session": null,
       "default_base_url": "https://openrouter.ai/api/v1",
       "base_url_environment_key": null
     },
@@ -62,6 +70,7 @@
       "default_visible": false,
       "setup_action": "Configure in QuotaBar",
       "brand_icon_asset": "deepseek",
+      "account_sync": true,
       "environment_keys": ["DEEPSEEK_API_KEY", "DEEPSEEK_KEY"],
       "credential_config": {
         "kind": "api_key",
@@ -70,6 +79,7 @@
         "allow_private_http": false,
         "mask_label": "DeepSeek"
       },
+      "browser_session": null,
       "default_base_url": "https://api.deepseek.com",
       "base_url_environment_key": null
     },
@@ -80,6 +90,7 @@
       "default_visible": false,
       "setup_action": "Configure in QuotaBar",
       "brand_icon_asset": "kimi",
+      "account_sync": true,
       "environment_keys": ["KIMI_CODE_API_KEY", "KIMI_API_KEY"],
       "credential_config": {
         "kind": "api_key",
@@ -88,6 +99,7 @@
         "allow_private_http": false,
         "mask_label": "Kimi"
       },
+      "browser_session": null,
       "default_base_url": "https://api.kimi.com",
       "base_url_environment_key": null
     },
@@ -98,6 +110,7 @@
       "default_visible": false,
       "setup_action": "Configure in QuotaBar",
       "brand_icon_asset": "litellm",
+      "account_sync": true,
       "environment_keys": ["LITELLM_API_KEY", "LITELLM_BASE_URL"],
       "credential_config": {
         "kind": "api_key",
@@ -106,8 +119,45 @@
         "allow_private_http": true,
         "mask_label": "LiteLLM"
       },
+      "browser_session": null,
       "default_base_url": null,
       "base_url_environment_key": "LITELLM_BASE_URL"
+    },
+    {
+      "id": "cursor",
+      "display_name": "Cursor",
+      "order": 7,
+      "default_visible": false,
+      "setup_action": "Sign in with browser",
+      "brand_icon_asset": "cursor",
+      "account_sync": false,
+      "environment_keys": [],
+      "credential_config": null,
+      "browser_session": {
+        "login_url": "https://authenticator.cursor.sh/",
+        "cookie_hosts": ["cursor.com", "www.cursor.com", "cursor.sh", "authenticator.cursor.sh"],
+        "cookie_names": [
+          "WorkosCursorSessionToken",
+          "__Secure-next-auth.session-token",
+          "next-auth.session-token",
+          "wos-session",
+          "__Secure-wos-session",
+          "authjs.session-token",
+          "__Secure-authjs.session-token"
+        ],
+        "browser_priority": [
+          "safari",
+          "chrome",
+          "edge",
+          "brave",
+          "arc",
+          "dia",
+          "chromium",
+          "firefox"
+        ]
+      },
+      "default_base_url": null,
+      "base_url_environment_key": null
     }
   ]
 }

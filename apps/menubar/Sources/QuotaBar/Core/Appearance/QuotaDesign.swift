@@ -280,3 +280,35 @@ struct QuotaPrimaryButtonStyle: ButtonStyle {
       .scaleEffect(configuration.isPressed && isEnabled && !reduceMotion ? 0.98 : 1)
   }
 }
+
+/// Quiet compact control for secondary or destructive in-section actions.
+struct QuotaSecondaryButtonStyle: ButtonStyle {
+  var isDestructive = false
+
+  @Environment(\.isEnabled) private var isEnabled
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+  func makeBody(configuration: Configuration) -> some View {
+    configuration.label
+      .quotaFont(.settingsLabel)
+      .foregroundStyle(labelColor)
+      .padding(.horizontal, 10)
+      .frame(minHeight: QuotaDesign.Layout.minimumInteractiveDimension)
+      .background(surfaceFill(isPressed: configuration.isPressed))
+      .clipShape(
+        RoundedRectangle(cornerRadius: QuotaDesign.Layout.fieldCornerRadius, style: .continuous)
+      )
+      .scaleEffect(configuration.isPressed && isEnabled && !reduceMotion ? 0.98 : 1)
+  }
+
+  private var labelColor: Color {
+    if !isEnabled { return QuotaPalette.body }
+    return isDestructive ? QuotaPalette.critical : QuotaPalette.ink
+  }
+
+  private func surfaceFill(isPressed: Bool) -> Color {
+    if !isEnabled { return QuotaPalette.soft }
+    if isPressed { return QuotaPalette.rowPressedFill }
+    return QuotaPalette.fieldFill
+  }
+}

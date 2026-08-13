@@ -1270,11 +1270,11 @@ fn validate_quota_snapshot(value: &Value) -> Result<(), RelayError> {
     {
         return Err(RelayError::InvalidResponse);
     }
-    if object
+    if !object
         .get("provider")
         .and_then(Value::as_str)
         .and_then(crate::catalog::ProviderId::parse)
-        .is_none()
+        .is_some_and(|provider| provider.metadata().account_sync)
         || !object
             .get("source")
             .and_then(Value::as_str)
@@ -2121,42 +2121,13 @@ impl AccountManager {
     }
 
     pub fn account_usage(&self, query: &str, cancel: &AtomicBool) -> Result<Value, BackendError> {
-        let (mut session, mut session_epoch) = self
-            .state
-            .session_snapshot()
-            .map_err(|_| BackendError::unavailable())?
-            .ok_or_else(session_changed_error)?;
-        if !is_active_session(&session) {
-            return Err(session_changed_error());
-        }
-        if cancel.load(Ordering::Acquire) {
-            return Err(BackendError::cancelled());
-        }
-        let account_token =
-            self.ensure_fresh_session(&mut session, &mut session_epoch, "account")?;
-        let usage = self
-            .client
-            .account_usage_summary(&account_token, query)
-            .map_err(|error| BackendError {
-                error: relay_error_for_backend(error),
-            })?;
-        if !self
-            .state
-            .active_session_at_epoch(session_epoch)
-            .map_err(|_| BackendError::unavailable())?
-        {
-            return Err(session_changed_error());
-        }
-        session["account"]["last_refreshed_at"] = Value::String(crate::state::now_rfc3339());
-        if self
-            .state
-            .write_session_json_if_epoch(&session, session_epoch)
-            .map_err(|_| BackendError::unavailable())?
-            .is_none()
-        {
-            return Err(session_changed_error());
-        }
-        Ok(usage)
+        // Shipped /api/v2/account/usage/summary still materializes hourly facts with a 1_000-row
+        // cap and returns 413 for a 30-day window. Account summary uses the 100_000-row path.
+        let (summary, _) = self.read_account_summary(query, cancel)?;
+        summary
+            .get("usage")
+            .cloned()
+            .ok_or_else(BackendError::unavailable)
     }
 
     fn read_account_summary(
@@ -2601,7 +2572,16 @@ fn snapshot_payload_from_quota_report(report: &Value) -> Result<(&str, Vec<Value
             .get("snapshots")
             .and_then(Value::as_array)
             .ok_or_else(BackendError::unavailable)?;
-        snapshots.extend(values.iter().cloned());
+        for snapshot in values {
+            let provider = snapshot
+                .get("provider")
+                .and_then(Value::as_str)
+                .and_then(crate::catalog::ProviderId::parse)
+                .ok_or_else(BackendError::unavailable)?;
+            if provider.metadata().account_sync {
+                snapshots.push(snapshot.clone());
+            }
+        }
     }
     Ok((captured_at, snapshots))
 }
@@ -3023,16 +3003,74 @@ fn invalid_response_backend() -> BackendError {
     }
 }
 
-fn sanitize_device_name(value: &str) -> String {
+/// Host computer name for `device_display_name`. Never the product name unless no host name exists.
+pub fn local_device_display_name(fallback: &str) -> String {
+    resolve_device_display_name(
+        [macos_computer_name(), env_hostname(), posix_hostname()],
+        fallback,
+    )
+}
+
+fn resolve_device_display_name(
+    sources: impl IntoIterator<Item = Option<String>>,
+    fallback: &str,
+) -> String {
+    sources
+        .into_iter()
+        .flatten()
+        .chain(std::iter::once(fallback.to_owned()))
+        .find_map(|value| cleaned_device_name(&value))
+        .unwrap_or_else(|| "Quota".to_owned())
+}
+
+fn cleaned_device_name(value: &str) -> Option<String> {
     let value = value.trim();
     if value.is_empty() {
-        return "Quota".to_owned();
+        return None;
     }
-    value
+    let cleaned: String = value
         .chars()
         .filter(|character| !character.is_control())
         .take(128)
-        .collect()
+        .collect();
+    (!cleaned.is_empty()).then_some(cleaned)
+}
+
+fn sanitize_device_name(value: &str) -> String {
+    cleaned_device_name(value).unwrap_or_else(|| "Quota".to_owned())
+}
+
+#[cfg(target_os = "macos")]
+fn macos_computer_name() -> Option<String> {
+    let output = Command::new("/usr/bin/scutil")
+        .args(["--get", "ComputerName"])
+        .output()
+        .ok()?;
+    output.status.success().then(|| ())?;
+    String::from_utf8(output.stdout).ok()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn macos_computer_name() -> Option<String> {
+    None
+}
+
+fn env_hostname() -> Option<String> {
+    std::env::var("HOSTNAME").ok()
+}
+
+fn posix_hostname() -> Option<String> {
+    let mut buffer = [0_u8; 256];
+    let result = unsafe { libc::gethostname(buffer.as_mut_ptr().cast(), buffer.len()) };
+    if result != 0 {
+        return None;
+    }
+    let end = buffer
+        .iter()
+        .position(|&byte| byte == 0)
+        .unwrap_or(buffer.len());
+    let name = std::str::from_utf8(&buffer[..end]).ok()?;
+    Some(name.trim_end_matches(".local").to_owned())
 }
 
 fn random_secret(bytes: usize) -> String {
@@ -3071,6 +3109,44 @@ mod tests {
                 crate::protocol::RecoveryAction::Login
             );
         }
+    }
+
+    #[test]
+    fn device_display_name_uses_first_usable_host_name() {
+        assert_eq!(
+            resolve_device_display_name(
+                [Some("  Studio Mac\n".to_owned()), Some("host".to_owned())],
+                "QuotaBar"
+            ),
+            "Studio Mac"
+        );
+        assert_eq!(
+            resolve_device_display_name([Some(String::new()), None], "QuotaBar"),
+            "QuotaBar"
+        );
+        assert_eq!(
+            resolve_device_display_name([Some("\u{0007}Kitchen Mac".to_owned())], "QuotaCLI"),
+            "Kitchen Mac"
+        );
+    }
+
+    #[test]
+    fn local_device_display_name_is_a_bounded_host_label() {
+        let name = local_device_display_name("QuotaBar");
+        assert!(!name.is_empty());
+        assert!(name.len() <= 128);
+        assert!(!name.chars().any(char::is_control));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_prefers_computer_name_over_product_fallback() {
+        let Some(computer_name) =
+            macos_computer_name().and_then(|value| cleaned_device_name(&value))
+        else {
+            return;
+        };
+        assert_eq!(local_device_display_name("QuotaBar"), computer_name);
     }
 
     #[test]
@@ -3500,7 +3576,35 @@ mod tests {
         let (captured_at, snapshots) =
             snapshot_payload_from_quota_report(&report).expect("quota report");
         assert_eq!(captured_at, "2026-08-10T00:00:00Z");
-        assert_eq!(snapshots, [snapshot]);
+        assert_eq!(snapshots, [snapshot.clone()]);
+
+        let mut cursor = snapshot.clone();
+        cursor["provider"] = serde_json::json!("cursor");
+        let (_, mixed) = snapshot_payload_from_quota_report(&serde_json::json!({
+            "protocol_version": 2,
+            "captured_at": "2026-08-10T00:00:00Z",
+            "results": [{"snapshots": [snapshot.clone(), cursor.clone()]}]
+        }))
+        .expect("mixed local report");
+        assert_eq!(mixed, [snapshot]);
+        let (_, local_only) = snapshot_payload_from_quota_report(&serde_json::json!({
+            "protocol_version": 2,
+            "captured_at": "2026-08-10T00:00:00Z",
+            "results": [{"snapshots": [cursor.clone()]}]
+        }))
+        .expect("local only report");
+        assert!(local_only.is_empty());
+        let mut unknown = cursor.clone();
+        unknown["provider"] = serde_json::json!("unknown-provider");
+        assert!(
+            snapshot_payload_from_quota_report(&serde_json::json!({
+                "protocol_version": 2,
+                "captured_at": "2026-08-10T00:00:00Z",
+                "results": [{"snapshots": [unknown]}]
+            }))
+            .is_err()
+        );
+        assert!(validate_quota_snapshot(&cursor).is_err());
 
         assert!(
             snapshot_payload_from_quota_report(&serde_json::json!({

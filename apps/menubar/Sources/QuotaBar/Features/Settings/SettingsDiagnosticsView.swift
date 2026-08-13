@@ -77,8 +77,7 @@ struct SettingsDiagnosticsView: View {
       Button(copiedFormat == .json ? "Copied" : "Copy JSON") {
         copy(report.jsonReport, format: .json)
       }
-      .buttonStyle(.bordered)
-      .controlSize(.small)
+      .buttonStyle(QuotaSecondaryButtonStyle())
     }
     .accessibilityElement(children: .contain)
   }

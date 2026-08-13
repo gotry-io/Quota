@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Observation
 
@@ -62,6 +63,25 @@ struct ProviderReportingSourcePresentation: Equatable, Identifiable {
   }
 }
 
+struct BrowserSessionAccountChoice: Identifiable, Equatable, Sendable {
+  let provider: ProviderID
+  let accountFingerprint: String
+  let accountLabel: String?
+  let browserName: String
+  let profileName: String
+  let cookieHeader: String
+
+  var id: String { accountFingerprint }
+  var title: String { accountLabel ?? "Account" }
+  var subtitle: String { "\(browserName) · \(profileName)" }
+}
+
+enum ProviderBrowserSessionPopup: Equatable, Sendable {
+  case browser(provider: ProviderID, choices: [BrowserApplicationChoice])
+  case account(provider: ProviderID, choices: [BrowserSessionAccountChoice])
+  case confirmDisconnect(provider: ProviderID)
+}
+
 enum AccountViewState: Equatable {
   case notChecked
   case signedOut
@@ -94,6 +114,8 @@ final class MenuBarViewModel {
   private(set) var errorMessage: String?
   private(set) var accountErrorMessage: String?
   private(set) var isRefreshing = false
+  private(set) var usageRefreshing = false
+  private(set) var accountRefreshing = false
   private(set) var isLoggingIn = false
   private(set) var isLoggingOut = false
   private(set) var isUpdatingUsageUpload = false
@@ -101,10 +123,21 @@ final class MenuBarViewModel {
   private(set) var accountDisconnectReason: AccountDisconnectReason?
   private(set) var lastCheckedAt: Date?
   private(set) var providerConfigurations: [ProviderID: LocalServiceProviderConfig] = [:]
+  private(set) var providerBrowserSessions: [ProviderID: LocalServiceProviderBrowserSession] = [:]
+  private(set) var browserSessionPopup: ProviderBrowserSessionPopup?
+  private(set) var browserSessionErrorMessages: [ProviderID: String] = [:]
+  private(set) var browserSessionWaitingProvider: ProviderID?
+  private(set) var canCancelBrowserSessionLogin = false
+  private(set) var browserSessionActivityText: String?
+  private(set) var availableUpdate: AppUpdateOffer?
+  private(set) var updateStatus: AppUpdateStatus = .idle
+  private(set) var updateMessage: String?
 
   private var authStatus: LocalServiceAuthStatus?
   private var overview: [LocalServiceOverviewItem] = []
   private var revision = 0
+  private var updateService = AppUpdateService()
+  private var updateTask: Task<Void, Never>?
 
   var accountState: AccountViewState {
     switch authStatus {
@@ -142,9 +175,24 @@ final class MenuBarViewModel {
   private var loginTask: Task<Void, Never>?
 
   @ObservationIgnored
+  private var browserSessionTask: Task<Void, Never>?
+
+  @ObservationIgnored
+  private let browserSessionImporter: any BrowserSessionImporting
+
+  @ObservationIgnored
+  private let browserApplicationRouter: any BrowserApplicationRouting
+
+  @ObservationIgnored
   private var accountActionErrorMessage: String?
 
-  init(client: (any LocalServiceServing)? = nil) {
+  init(
+    client: (any LocalServiceServing)? = nil,
+    browserSessionImporter: any BrowserSessionImporting = BrowserSessionImporter(),
+    browserApplicationRouter: any BrowserApplicationRouting = WorkspaceBrowserApplicationRouter()
+  ) {
+    self.browserSessionImporter = browserSessionImporter
+    self.browserApplicationRouter = browserApplicationRouter
     if let client {
       self.client = client
       initializationError = nil
@@ -152,6 +200,7 @@ final class MenuBarViewModel {
       do {
         self.client = try LocalServiceClient()
         initializationError = nil
+        startAutomaticUpdateCheck()
       } catch {
         self.client = nil
         initializationError = Self.message(for: error)
@@ -165,6 +214,8 @@ final class MenuBarViewModel {
       errorMessage: String?,
       lastCheckedAt: Date?
     ) {
+      browserSessionImporter = BrowserSessionImporter()
+      browserApplicationRouter = WorkspaceBrowserApplicationRouter()
       client = nil
       initializationError = nil
       self.errorMessage = errorMessage
@@ -210,6 +261,7 @@ final class MenuBarViewModel {
   deinit {
     eventTask?.cancel()
     loginTask?.cancel()
+    browserSessionTask?.cancel()
   }
 
   func start() {
@@ -258,6 +310,10 @@ final class MenuBarViewModel {
 
   func usageDetail(source: UsageSource, period: UsagePeriod) -> LocalServiceUsageDetail? {
     usagePeriods?.detail(source: source, period: period)
+  }
+
+  func isPreparingUsage(source: UsageSource) -> Bool {
+    source == .local ? usageRefreshing : accountRefreshing
   }
 
   func startLogin() {
@@ -363,6 +419,211 @@ final class MenuBarViewModel {
     await reloadState()
   }
 
+  func startProviderBrowserSessionLogin(_ provider: ProviderID) {
+    guard
+      browserSessionTask == nil,
+      let spec = provider.browserSession,
+      let loginURL = URL(string: spec.loginURL)
+    else { return }
+    browserSessionErrorMessages[provider] = nil
+    let browsers = BrowserSessionImporter.orderedBrowsers(for: spec)
+    if let applicationURL = browserApplicationRouter.defaultApplication(for: loginURL),
+      let choice = BrowserApplicationCatalog.choice(
+        for: applicationURL, allowed: browsers)
+    {
+      beginBrowserSessionPolling(provider, choice: choice)
+      return
+    }
+    var seen = Set<String>()
+    let choices = browserApplicationRouter.applications(for: loginURL)
+      .compactMap { BrowserApplicationCatalog.choice(for: $0, allowed: browsers) }
+      .filter { seen.insert($0.browser.rawValue).inserted }
+      .sorted {
+        guard
+          let left = browsers.firstIndex(of: $0.browser),
+          let right = browsers.firstIndex(of: $1.browser)
+        else { return $0.title < $1.title }
+        return left < right
+      }
+    guard !choices.isEmpty else {
+      browserSessionErrorMessages[provider] = "No supported browser is available."
+      return
+    }
+    browserSessionPopup = .browser(provider: provider, choices: choices)
+  }
+
+  func selectBrowserApplication(_ id: String, provider: ProviderID) {
+    guard
+      case .browser(let popupProvider, let choices) = browserSessionPopup,
+      popupProvider == provider,
+      let choice = choices.first(where: { $0.id == id })
+    else { return }
+    browserSessionPopup = nil
+    beginBrowserSessionPolling(provider, choice: choice)
+  }
+
+  func selectBrowserSessionAccount(_ id: String) {
+    guard
+      case .account(_, let choices) = browserSessionPopup,
+      let choice = choices.first(where: { $0.id == id })
+    else { return }
+    browserSessionPopup = nil
+    startBrowserSessionCommit(choice)
+  }
+
+  func requestProviderBrowserSessionDisconnect(_ provider: ProviderID) {
+    browserSessionPopup = .confirmDisconnect(provider: provider)
+  }
+
+  func confirmProviderBrowserSessionDisconnect() {
+    guard
+      case .confirmDisconnect(let provider) = browserSessionPopup,
+      let client,
+      browserSessionTask == nil
+    else { return }
+    browserSessionPopup = nil
+    browserSessionWaitingProvider = provider
+    canCancelBrowserSessionLogin = false
+    browserSessionActivityText = "Disconnecting…"
+    browserSessionTask = Task { @MainActor [weak self] in
+      defer {
+        self?.browserSessionTask = nil
+        self?.browserSessionWaitingProvider = nil
+        self?.browserSessionActivityText = nil
+      }
+      do {
+        _ = try await client.removeProviderBrowserSession(provider)
+        await self?.reloadState()
+      } catch {
+        self?.browserSessionErrorMessages[provider] = Self.message(for: error)
+      }
+    }
+  }
+
+  func cancelProviderBrowserSessionFlow() {
+    if canCancelBrowserSessionLogin {
+      browserSessionTask?.cancel()
+      canCancelBrowserSessionLogin = false
+      browserSessionActivityText = "Cancelling…"
+    }
+    browserSessionPopup = nil
+  }
+
+  private func beginBrowserSessionPolling(
+    _ provider: ProviderID,
+    choice: BrowserApplicationChoice
+  ) {
+    guard let client, let spec = provider.browserSession,
+      let loginURL = URL(string: spec.loginURL)
+    else {
+      browserSessionErrorMessages[provider] = "Could not open the browser."
+      return
+    }
+    browserSessionWaitingProvider = provider
+    canCancelBrowserSessionLogin = true
+    browserSessionActivityText = "Waiting for browser sign-in…"
+    let currentFingerprint = providerBrowserSessions[provider]?.accountFingerprint
+    browserSessionTask = Task { @MainActor [weak self] in
+      guard let self else { return }
+      defer {
+        browserSessionTask = nil
+        browserSessionWaitingProvider = nil
+        canCancelBrowserSessionLogin = false
+        browserSessionActivityText = nil
+      }
+      guard await browserApplicationRouter.open(loginURL, with: choice.applicationURL) else {
+        if !Task.isCancelled {
+          browserSessionErrorMessages[provider] = "Could not open the browser."
+        }
+        return
+      }
+      guard !Task.isCancelled else { return }
+      let deadline = Date().addingTimeInterval(120)
+      var seenHeaders = Set<String>()
+      while !Task.isCancelled, Date() < deadline {
+        let candidates = await browserSessionImporter.candidates(
+          spec: spec, browser: choice.browser, now: Date(), deadline: deadline)
+        var accounts: [String: BrowserSessionAccountChoice] = [:]
+        for candidate in candidates where !Task.isCancelled && Date() < deadline {
+          guard seenHeaders.insert(candidate.headerFingerprint).inserted else { continue }
+          do {
+            let validated = try await client.validateProviderBrowserSession(
+              provider, cookieHeader: candidate.cookieHeader)
+            guard !Task.isCancelled, Date() < deadline else { return }
+            guard validated.accountFingerprint != currentFingerprint else { continue }
+            accounts[validated.accountFingerprint] = BrowserSessionAccountChoice(
+              provider: provider,
+              accountFingerprint: validated.accountFingerprint,
+              accountLabel: validated.accountLabel,
+              browserName: candidate.browserName,
+              profileName: candidate.profileName,
+              cookieHeader: candidate.cookieHeader
+            )
+          } catch is CancellationError {
+            return
+          } catch {
+            continue
+          }
+        }
+        let choices = accounts.values.sorted {
+          ($0.accountLabel ?? $0.accountFingerprint)
+            .localizedStandardCompare($1.accountLabel ?? $1.accountFingerprint)
+            == .orderedAscending
+        }
+        if choices.count == 1, let candidate = choices.first {
+          canCancelBrowserSessionLogin = false
+          await commitBrowserSession(candidate)
+          return
+        }
+        if choices.count > 1 {
+          browserSessionPopup = .account(provider: provider, choices: choices)
+          return
+        }
+        do {
+          try await Task.sleep(for: .seconds(2))
+        } catch { return }
+      }
+      if !Task.isCancelled {
+        browserSessionErrorMessages[provider] =
+          "No signed-in browser session was found before the request timed out."
+      }
+    }
+  }
+
+  private func startBrowserSessionCommit(_ choice: BrowserSessionAccountChoice) {
+    guard browserSessionTask == nil else { return }
+    canCancelBrowserSessionLogin = false
+    browserSessionTask = Task { @MainActor [weak self] in
+      guard let self else { return }
+      defer {
+        browserSessionTask = nil
+        browserSessionActivityText = nil
+      }
+      await commitBrowserSession(choice)
+    }
+  }
+
+  private func commitBrowserSession(_ choice: BrowserSessionAccountChoice) async {
+    guard let client else { return }
+    browserSessionWaitingProvider = choice.provider
+    browserSessionActivityText = "Connecting…"
+    defer {
+      browserSessionWaitingProvider = nil
+      browserSessionActivityText = nil
+    }
+    do {
+      guard !Task.isCancelled else { return }
+      _ = try await client.commitProviderBrowserSession(
+        choice.provider, cookieHeader: choice.cookieHeader)
+      guard !Task.isCancelled else { return }
+      await reloadState()
+    } catch is CancellationError {
+      return
+    } catch {
+      browserSessionErrorMessages[choice.provider] = Self.message(for: error)
+    }
+  }
+
   func result(for provider: ProviderID) -> QuotaCollectionResult? {
     report?.results.first { $0.provider == provider }
   }
@@ -462,7 +723,12 @@ final class MenuBarViewModel {
     providerConfigurations = Dictionary(
       uniqueKeysWithValues: state.providers.map { ($0.provider, $0) }
     )
-    isRefreshing = state.quota.refreshing || state.usage.refreshing || state.account.refreshing
+    providerBrowserSessions = Dictionary(
+      uniqueKeysWithValues: state.providerBrowserSessions.map { ($0.provider, $0) }
+    )
+    usageRefreshing = state.usage.refreshing
+    accountRefreshing = state.account.refreshing
+    isRefreshing = state.quota.refreshing || usageRefreshing || accountRefreshing
     isLoggingIn = authStatus == .loggingIn || loginTask != nil
     isLoggingOut = authStatus == .logoutPending
     lastCheckedAt = [state.quota.updatedAt, state.usage.updatedAt].compactMap { $0 }.max()
@@ -519,6 +785,57 @@ final class MenuBarViewModel {
       selectedSource: selectedSource,
       selectedSourceDisplayName: item.selectedSourceDisplayName
     )
+  }
+
+  func checkForUpdates() {
+    updateTask?.cancel()
+    updateTask = Task { await performUpdateCheck() }
+  }
+
+  func applyAvailableUpdate() {
+    guard let offer = availableUpdate, updateStatus != .applying else { return }
+    updateTask?.cancel()
+    updateTask = Task { await performUpdateApply(offer) }
+  }
+
+  private func startAutomaticUpdateCheck() {
+    updateTask = Task { await performUpdateCheck() }
+  }
+
+  private func performUpdateCheck() async {
+    updateStatus = .checking
+    updateMessage = nil
+    let offer = await updateService.check(currentVersion: AppMetadata.version)
+    guard !Task.isCancelled else { return }
+    if AppMetadata.version == "Development" || AppUpdateDecision.parseVersion(AppMetadata.version) == nil {
+      updateStatus = .current
+      updateMessage = "This build cannot check packaged releases."
+      availableUpdate = nil
+      return
+    }
+    if let offer {
+      availableUpdate = offer
+      updateStatus = .available
+      updateMessage = "QuotaBar \(offer.version) is available."
+    } else {
+      availableUpdate = nil
+      updateStatus = .current
+      updateMessage = "QuotaBar is up to date."
+    }
+  }
+
+  private func performUpdateApply(_ offer: AppUpdateOffer) async {
+    updateStatus = .applying
+    updateMessage = "Downloading QuotaBar \(offer.version)…"
+    do {
+      try await updateService.apply(offer)
+      updateMessage = "Installing QuotaBar \(offer.version)…"
+      NSApplication.shared.terminate(nil)
+    } catch {
+      guard !Task.isCancelled else { return }
+      updateStatus = .failed
+      updateMessage = "QuotaBar could not install the update."
+    }
   }
 
   private static func message(for error: Error) -> String {

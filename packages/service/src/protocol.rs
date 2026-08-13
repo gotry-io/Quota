@@ -24,6 +24,9 @@ pub enum Operation {
     SetUsageUpload,
     SetProviderConfig,
     RemoveProviderConfig,
+    ValidateProviderBrowserSession,
+    CommitProviderBrowserSession,
+    RemoveProviderBrowserSession,
     Shutdown,
 }
 
@@ -256,6 +259,13 @@ pub struct SetProviderConfigPayload {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct ProviderBrowserSessionPayload {
+    pub provider: String,
+    pub cookie_header: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SetUsageUploadPayload {
     pub enabled: bool,
 }
@@ -300,6 +310,23 @@ pub struct ProviderConfigView {
     pub configured: bool,
     pub masked_api_key: Option<String>,
     pub base_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderBrowserSessionView {
+    pub provider: String,
+    pub configured: bool,
+    pub account_fingerprint: Option<String>,
+    pub account_label: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderBrowserSessionCandidate {
+    pub provider: String,
+    pub account_fingerprint: String,
+    pub account_label: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -377,6 +404,7 @@ pub struct StateSnapshot {
     pub account: ComponentState,
     pub pricing: ComponentState,
     pub providers: Vec<ProviderConfigView>,
+    pub provider_browser_sessions: Vec<ProviderBrowserSessionView>,
     pub overview: Vec<QuotaOverviewItem>,
 }
 
@@ -478,6 +506,16 @@ mod tests {
         .expect("request envelope remains valid");
         assert!(request_with_extra.decode_payload::<EmptyPayload>().is_err());
         assert!(request.decode_payload::<EmptyPayload>().is_ok());
+
+        let browser_session = serde_json::from_str::<IpcRequest>(
+            r#"{"type":"request","request_id":"r2","operation":"validate_provider_browser_session","payload":{"provider":"cursor","cookie_header":"wos-session=secret","source_path":"/private"}}"#,
+        )
+        .expect("browser-session request envelope");
+        assert!(
+            browser_session
+                .decode_payload::<ProviderBrowserSessionPayload>()
+                .is_err()
+        );
     }
 
     #[test]

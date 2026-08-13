@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use crate::state::StateError;
 
-const CURRENT_SCHEMA: i64 = 4;
+const CURRENT_SCHEMA: i64 = 5;
 
 pub fn apply(conn: &mut Connection) -> Result<(), StateError> {
     conn.execute_batch(
@@ -29,6 +29,7 @@ pub fn apply(conn: &mut Connection) -> Result<(), StateError> {
             2 => migration_v2(&tx)?,
             3 => migration_v3(&tx)?,
             4 => migration_v4(&tx)?,
+            5 => migration_v5(&tx)?,
             _ => return Err(StateError::InvalidState),
         }
         tx.execute(
@@ -186,6 +187,19 @@ fn migration_v4(tx: &Transaction<'_>) -> Result<(), StateError> {
     Ok(())
 }
 
+fn migration_v5(tx: &Transaction<'_>) -> Result<(), StateError> {
+    tx.execute_batch(
+        "CREATE TABLE provider_browser_sessions (
+            provider TEXT PRIMARY KEY NOT NULL,
+            cookie_header TEXT NOT NULL,
+            account_fingerprint TEXT NOT NULL,
+            account_label TEXT,
+            updated_at TEXT NOT NULL
+        );",
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -245,11 +259,21 @@ mod tests {
             .expect("v1 rows")
             .collect::<Result<Vec<_>, _>>()
             .expect("v1 values");
-        assert_eq!(fresh_versions, vec![1, 2, 3, 4]);
+        assert_eq!(fresh_versions, vec![1, 2, 3, 4, 5]);
         assert_eq!(fresh_versions, v1_versions);
         assert_eq!(
             columns(&fresh, "usage_period_cache"),
             ["source", "period", "value_json"]
+        );
+        assert_eq!(
+            columns(&fresh, "provider_browser_sessions"),
+            [
+                "provider",
+                "cookie_header",
+                "account_fingerprint",
+                "account_label",
+                "updated_at"
+            ]
         );
         assert_eq!(
             fresh
@@ -293,12 +317,14 @@ mod tests {
             [],
         )
         .expect("quota component");
-        conn.execute("DELETE FROM schema_migrations WHERE version = 4", [])
+        conn.execute("DELETE FROM schema_migrations WHERE version >= 4", [])
             .expect("rewind migration marker");
         conn.execute("DROP TABLE model_catalog_cache", [])
             .expect("rewind catalog cache");
         conn.execute("DROP TABLE usage_period_cache", [])
             .expect("rewind period cache");
+        conn.execute("DROP TABLE provider_browser_sessions", [])
+            .expect("rewind browser sessions");
         conn.execute(
             "DELETE FROM metadata WHERE key = 'usage_upload_enabled'",
             [],

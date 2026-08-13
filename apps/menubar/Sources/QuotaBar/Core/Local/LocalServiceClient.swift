@@ -59,6 +59,15 @@ protocol LocalServiceServing: Sendable {
     baseURL: String?
   ) async throws -> LocalServiceProviderConfig
   func removeProviderConfig(_ provider: ProviderID) async throws -> LocalServiceProviderConfig
+  func validateProviderBrowserSession(
+    _ provider: ProviderID, cookieHeader: String
+  ) async throws -> LocalServiceProviderBrowserSessionCandidate
+  func commitProviderBrowserSession(
+    _ provider: ProviderID, cookieHeader: String
+  ) async throws -> LocalServiceProviderBrowserSession
+  func removeProviderBrowserSession(
+    _ provider: ProviderID
+  ) async throws -> LocalServiceProviderBrowserSession
   func shutdown() async
 }
 
@@ -178,6 +187,39 @@ actor LocalServiceClient: LocalServiceServing {
       operation: "remove_provider_config",
       payload: ProviderPayload(provider: provider.rawValue)
     )
+  }
+
+  func validateProviderBrowserSession(
+    _ provider: ProviderID, cookieHeader: String
+  ) async throws -> LocalServiceProviderBrowserSessionCandidate {
+    let candidate: LocalServiceProviderBrowserSessionCandidate = try await request(
+      operation: "validate_provider_browser_session",
+      payload: ProviderBrowserSessionPayload(provider: provider.rawValue, cookieHeader: cookieHeader)
+    )
+    guard candidate.isValid else { throw LocalServiceClientError.invalidMessage }
+    return candidate
+  }
+
+  func commitProviderBrowserSession(
+    _ provider: ProviderID, cookieHeader: String
+  ) async throws -> LocalServiceProviderBrowserSession {
+    let session: LocalServiceProviderBrowserSession = try await request(
+      operation: "commit_provider_browser_session",
+      payload: ProviderBrowserSessionPayload(provider: provider.rawValue, cookieHeader: cookieHeader)
+    )
+    guard session.isValid, session.configured else { throw LocalServiceClientError.invalidMessage }
+    return session
+  }
+
+  func removeProviderBrowserSession(
+    _ provider: ProviderID
+  ) async throws -> LocalServiceProviderBrowserSession {
+    let session: LocalServiceProviderBrowserSession = try await request(
+      operation: "remove_provider_browser_session",
+      payload: ProviderPayload(provider: provider.rawValue)
+    )
+    guard session.isValid, !session.configured else { throw LocalServiceClientError.invalidMessage }
+    return session
   }
 
   func shutdown() async {
@@ -413,4 +455,8 @@ private struct SetProviderConfigPayload: Encodable {
   let provider: String
   let apiKey: String
   let baseURL: String?
+}
+private struct ProviderBrowserSessionPayload: Encodable {
+  let provider: String
+  let cookieHeader: String
 }

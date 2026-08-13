@@ -280,6 +280,7 @@ func rejectsUnknownNestedLocalServiceStateFields() throws {
         "refreshing": false
       },
       "providers": [],
+      "provider_browser_sessions": [],
       "overview": []
     }
     """#.utf8
@@ -668,6 +669,22 @@ func rejectsQuotaSnapshotWithoutFingerprintScope() {
   #expect(throws: DecodingError.self) {
     _ = try QuotaWireCodec.makeDecoder().decode(QuotaSnapshotEnvelope.self, from: data)
   }
+}
+
+@Test
+func keepsCursorLocalOnlyAtTheSwiftV2Boundary() throws {
+  let snapshot = #"{"provider":"cursor","account":{"fingerprint":"account_01","fingerprint_scope":"global"},"windows":[],"source":"cursor_dashboard_api","status":"available","observed_at":"2026-08-02T01:00:00Z"}"#
+  let envelope = Data(
+    #"{"protocol_version":2,"device_id":"device_01","generation":1,"sequence":0,"captured_at":"2026-08-02T01:00:00Z","snapshots":[\#(snapshot)]}"#.utf8)
+  #expect(throws: DecodingError.self) {
+    _ = try QuotaWireCodec.makeDecoder().decode(QuotaSnapshotEnvelope.self, from: envelope)
+  }
+
+  let localReport = Data(
+    #"{"protocol_version":2,"captured_at":"2026-08-02T01:00:00Z","results":[{"provider":"cursor","outcome":"success","snapshots":[\#(snapshot)],"source":"cursor_dashboard_api"}]}"#.utf8)
+  let decoded = try QuotaWireCodec.makeDecoder().decode(
+    QuotaCollectionReport.self, from: localReport)
+  #expect(decoded.results.first?.provider == .cursor)
 }
 
 @Test

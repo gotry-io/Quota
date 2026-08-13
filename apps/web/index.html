@@ -5,13 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta
       name="description"
-      content="Quota keeps coding-agent subscription limits and API-equivalent Usage cost together across your devices."
+      content="Quota keeps remaining coding-agent quota and privacy-preserving Usage together. Install QuotaBar on macOS from a .dmg or Homebrew."
     />
     <meta name="theme-color" content="#f2f8f5" />
     <meta property="og:title" content="Quota — Know what you have left" />
     <meta
       property="og:description"
-      content="Private local collection, account-wide quota, and transparent API-equivalent Usage cost."
+      content="See remaining quota in the menu bar, export shareable usage, and optionally publish /u/your-name."
     />
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://quota.gotry.io" />
@@ -41,19 +41,31 @@
       <div id="landing-view">
         <section class="hero" aria-labelledby="hero-title">
           <div class="hero-copy">
-            <p class="eyebrow">Five coding agents · Your devices</p>
+            <p class="eyebrow">macOS menu bar · Your devices</p>
             <h1 id="hero-title">Know what you have left.</h1>
             <p class="hero-summary">
-              Quota keeps subscription limits and privacy-preserving Usage in one account, while
-              provider credentials and agent logs stay on your machines.
+              QuotaBar shows remaining Codex, Claude, Grok, Cursor, and API-key quota from the menu
+              bar. Usage stays on your machines unless you sync an account. Share a card, or publish
+              an optional public page at /u/your-name.
             </p>
             <div class="hero-actions">
-              <button class="button button-primary" type="button" data-web-login>
+              <a
+                class="button button-primary"
+                href="https://github.com/gotry-io/Quota/releases/latest/download/QuotaBar-macos-arm64.dmg"
+                >Download QuotaBar .dmg</a
+              >
+              <button class="button button-secondary" type="button" data-web-login>
                 Continue with GitHub
               </button>
-              <a class="button button-secondary" href="#product">How it works</a>
             </div>
-            <p class="release-note">Open source · GitHub is the only sign-in provider</p>
+            <div class="install-panel">
+              <p class="install-label">Homebrew</p>
+              <div class="brew-row">
+                <code id="brew-install">brew install gotry-io/tap/quotabar</code>
+                <button class="text-button" type="button" data-copy-brew>Copy</button>
+              </div>
+            </div>
+            <p class="release-note">Apple Silicon · Open source · GitHub is the only sign-in</p>
           </div>
 
           <figure class="product-preview account-preview">
@@ -90,7 +102,7 @@
             <article>
               <span class="index">01</span>
               <h3>Local collection</h3>
-              <p>QuotaBar reads provider sessions and agent logs locally through its private service. Credentials, prompts, paths, and raw events never upload.</p>
+              <p>Install QuotaBar from the .dmg or <code>brew install gotry-io/tap/quotabar</code>. It reads provider sessions and agent logs locally. Credentials, prompts, paths, and raw events never upload.</p>
             </article>
             <article>
               <span class="index">02</span>
@@ -146,6 +158,27 @@
           </details>
         </div>
         <div id="account-error" class="notice" role="alert" hidden></div>
+        <section class="dashboard-section" aria-labelledby="share-title">
+          <div class="dashboard-section-heading">
+            <div><p class="eyebrow">Share</p><h2 id="share-title">Export and public page</h2></div>
+          </div>
+          <div class="share-actions">
+            <button id="export-quota" class="button button-secondary" type="button">Export remaining quota</button>
+            <button id="export-usage" class="button button-secondary" type="button">Export usage</button>
+          </div>
+          <form id="public-profile-form" class="public-profile-form">
+            <label class="public-profile-toggle">
+              <input id="public-profile-enabled" type="checkbox" />
+              Make my remaining quota and usage public at /u/
+            </label>
+            <label for="public-profile-slug">Public username</label>
+            <div class="brew-row">
+              <input id="public-profile-slug" name="slug" maxlength="39" autocomplete="username" />
+              <button class="button button-secondary" type="submit">Save visibility</button>
+            </div>
+            <p id="public-profile-status" class="notice" role="status" hidden></p>
+          </form>
+        </section>
         <div class="summary-grid">
           <article><span>Input tokens</span><strong id="input-total">—</strong></article>
           <article><span>Output tokens</span><strong id="output-total">—</strong></article>
@@ -178,6 +211,28 @@
           <div><p class="eyebrow">Danger zone</p><h2 id="account-actions-title">Delete Account</h2><p>Remove this Account, every Device, all Quota and Usage data, sessions, and deletion controls.</p></div>
           <button id="delete-account" class="button button-danger" type="button">Delete Account and data</button>
         </section>
+      </section>
+
+      <section id="public-view" class="dashboard" aria-labelledby="public-title" hidden>
+        <div class="dashboard-heading">
+          <div><p class="eyebrow">Public profile</p><h1 id="public-title">Public quota</h1></div>
+        </div>
+        <div id="public-error" class="notice" role="alert" hidden></div>
+        <div id="public-body" hidden>
+          <div class="summary-grid">
+            <article><span>Input tokens</span><strong id="public-input-total">—</strong></article>
+            <article><span>Output tokens</span><strong id="public-output-total">—</strong></article>
+            <article><span>API-equivalent cost</span><strong id="public-cost-total">—</strong></article>
+          </div>
+          <section class="dashboard-section" aria-labelledby="public-quota-title">
+            <div class="dashboard-section-heading"><div><p class="eyebrow">Plan limits</p><h2 id="public-quota-title">Quota</h2></div></div>
+            <div id="public-quota-list" class="quota-grid"></div>
+          </section>
+          <section class="dashboard-section" aria-labelledby="public-models-title">
+            <div class="dashboard-section-heading"><div><p class="eyebrow">Usage</p><h2 id="public-models-title">Models</h2></div></div>
+            <div class="table-wrap"><table><thead><tr><th scope="col">Model</th><th scope="col">Tokens</th></tr></thead><tbody id="public-model-breakdown"></tbody></table></div>
+          </section>
+        </div>
       </section>
 
       <section id="activate-view" class="activate" aria-labelledby="activate-title" hidden>

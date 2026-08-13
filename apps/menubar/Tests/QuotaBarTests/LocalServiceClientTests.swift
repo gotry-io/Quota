@@ -49,6 +49,7 @@ struct LocalServiceClientTests {
                     }),
                     "pricing": component("unavailable"),
                     "providers": [],
+                    "provider_browser_sessions": [],
                     "overview": [],
                 }
             elif operation == "refresh":
@@ -282,6 +283,7 @@ struct LocalServiceClientTests {
                     }),
                     "pricing": component("unavailable"),
                     "providers": [],
+                    "provider_browser_sessions": [],
                     "overview": [],
                 },
             }), flush=True)

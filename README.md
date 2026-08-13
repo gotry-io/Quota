@@ -10,7 +10,8 @@ subscription quota and privacy-preserving Usage together across a user's devices
 - **QuotaRelay** — managed account/device service on Cloudflare Workers and D1.
 - **Quota Web** — public site, GitHub login, device authorization, and account dashboard.
 
-Quota collection supports Codex, Claude Code, Grok, OpenRouter, DeepSeek, Kimi Code, and LiteLLM.
+Quota collection supports Codex, Claude Code, Grok, OpenRouter, DeepSeek, Kimi Code, LiteLLM, and
+local-only Cursor browser sessions on macOS.
 Local Usage analytics supports Codex, Claude Code, Grok, OpenCode, and Pi logs. Provider credentials,
 prompts, completions, raw events, local paths, and conversation identifiers never upload.
 
@@ -40,7 +41,9 @@ remain TypeScript. See the canonical
 [provider strategies](docs/provider-collection.md), [native service decision](docs/decisions/0007-rust-native-local-service.md),
 and [managed account decision](docs/decisions/0006-managed-account-device-usage.md). The data
 integrity and diagnostic contract is [ADR 0008](docs/decisions/0008-data-integrity-and-diagnostics.md),
-and report-time model identity is [ADR 0009](docs/decisions/0009-versioned-model-catalog.md).
+report-time model identity is [ADR 0009](docs/decisions/0009-versioned-model-catalog.md), and
+provider browser-session authentication is
+[ADR 0010](docs/decisions/0010-provider-browser-session-auth.md).
 
 ## Repository layout
 
@@ -67,6 +70,9 @@ output, cache-read input, cache-write input, reasoning, and usage-bearing output
 are not collected.
 The service precomputes Today, 7 Days, 30 Days, and All detail for This Mac and the signed-in Account,
 so QuotaBar switches periods without collection or network work; Overview remains quota-only.
+Catalog `account_sync` distinguishes the released network-v2 provider set from local-only
+providers. menubar-v0.0.9 shipped strict decoding for the closed v2 provider enum, so Cursor never
+enters v2 upload envelopes or managed Account summaries.
 
 ## Development
 
@@ -107,10 +113,11 @@ remote migrations or deploy manually without explicit authorization.
 ## Distribution
 
 QuotaBar and QuotaCLI release independently. A `menubar-vX.Y.Z` tag builds one signed and notarized
-Apple Silicon app and updates the Homebrew Cask. The Cask installs only `QuotaBar.app`; it does not
-expose the private service as a command. A `cli-vX.Y.Z` tag publishes a static x86_64 Linux binary
-and checksum to GitHub Releases. QuotaCLI is not published to npm or Homebrew; Windows is not built
-or released.
+Apple Silicon app, a drag-install `.dmg`, a `menubar-update.json` feed for in-app updates, and
+updates the Homebrew Cask. The Cask installs only `QuotaBar.app`; it does not expose the private
+service as a command. Install with `brew install gotry-io/tap/quotabar` or the website `.dmg`. A
+`cli-vX.Y.Z` tag publishes a static x86_64 Linux binary and checksum to GitHub Releases. QuotaCLI is
+not published to npm or Homebrew; Windows is not built or released.
 
 ```bash
 pnpm version:bump:cli patch      # or minor | major | explicit semver
@@ -122,10 +129,12 @@ The marketing version lives in `apps/menubar/Support/Info.plist`.
 ## Current status
 
 The repository implements protocol v2 account/device authentication, independent quota and Usage
-upload sequencing, D1 persistence and deletion watermarks, seven Rust quota collectors, five Rust
+upload sequencing, D1 persistence and deletion watermarks, eight Rust quota collectors, five Rust
 Usage parsers with file-level incremental indexing, effective-dated cost calculation, owner-only
 local SQLite state and provider configuration, persistent private IPC, QuotaBar account/provider
-configuration UI, fixed-window client-scoped account-or-local Usage detail, and the Web account dashboard. Raw model
+configuration UI, in-app QuotaBar update checks, fixed-window client-scoped account-or-local Usage
+detail, shareable remaining-quota/usage exports, opt-in public `/u/{username}` pages, and the Web
+account dashboard. Raw model
 identifiers remain opaque bounded provider text; a separately versioned catalog derives stable
 report keys without rewriting facts or changing pricing. Valid facts remain usable when pricing or
 model aliases are unknown. Record/file failures are isolated and complete uploads are partitioned

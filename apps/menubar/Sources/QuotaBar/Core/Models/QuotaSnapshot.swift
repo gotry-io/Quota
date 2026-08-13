@@ -206,7 +206,8 @@ extension QuotaSnapshotEnvelope {
       isQuotaOpaqueID(deviceID),
       (1...quotaJSONSafeIntegerMaximum).contains(generation),
       (0...quotaJSONSafeIntegerMaximum).contains(sequence),
-      snapshots.count <= 32
+      snapshots.count <= 32,
+      snapshots.allSatisfy({ $0.provider.syncsToAccount })
     else {
       throw DecodingError.dataCorruptedError(
         forKey: .protocolVersion,

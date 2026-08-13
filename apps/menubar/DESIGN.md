@@ -90,9 +90,10 @@ The header shows:
   trailing edge because the choice changes the whole page.
 - Settings root: Back, **Settings**, and an overflow menu containing **Quit QuotaBar**.
 
-The footer is a single quiet button: **Last checked HH:MM**, or **Not checked** before any sync. It is
-the sync completion clock, not the age of every provider observation. Selecting it runs one sync;
-clicks while a sync is active are ignored.
+The footer is a single quiet button showing the sync-completion clock as locale-shortened time only
+(`15:40` / `3:40 PM`), or **—** before any sync. VoiceOver still says **Last checked** plus that
+time. It is not the age of every provider observation. Selecting it runs one sync; clicks while a
+sync is active are ignored.
 
 Navigation transitions move horizontally by direction and combine with opacity. Reduce Motion uses
 opacity only. A page change clears transient focus/menu state. Escape dismisses a transient menu;
@@ -123,9 +124,13 @@ Each quota observation shows:
 
 - provider brand and name;
 - optional masked account label and normalized plan badge;
-- remaining value as the strongest number;
+- remaining value as the strongest number, with no "left" or "remaining" suffix;
+- budget windows that also have an absolute remaining amount as `71% · $3.75`;
+- percent-only windows as `71%`;
+- balance-only windows as `$12.34` (or the unit amount) under a **Balance** title;
 - one meter per quota window when a percent is meaningful;
-- reset time, stale state, and selected source display name as quiet metadata;
+- reset time, stale state, and selected source display name as quiet metadata. Reset copy uses
+  weekday and time within six days, otherwise month and day; it does not imply the window period;
 - **Local** for signed-out local collection or **Device** for an account observation.
 
 Expired `valid_until` and explicit stale status use stale presentation. A provider authentication
@@ -163,10 +168,11 @@ Do not add a separate account-management row; the signed-in account label is tha
 Quota contains the **Usage** and **Agents** destinations. The Usage root summary uses account-wide
 totals while signed in with Usage sync enabled, and local totals otherwise. General contains the
 native mini **Launch at Login** and **Sync Usage** switches followed by the **Support** destination.
-Support contains Diagnostics, Feedback, Website, and version; Diagnostics remains backed by the
-private `diagnose` operation and shows one bounded status for Providers, Quota, Usage, Pricing,
-Account, and Sync, plus safe issue counts and **Copy Text** and **Copy JSON** actions. The Usage source
-control is not repeated in Settings.
+Support contains Diagnostics, Feedback, Website, version, and **Check for Updates**. When a newer
+released feed version is available, that row becomes **Install Update** and applies the signed
+archive in-app. Diagnostics remains backed by the private `diagnose` operation and shows one bounded
+status for Providers, Quota, Usage, Pricing, Account, and Sync, plus safe issue counts and **Copy
+Text** and **Copy JSON** actions. The Usage source control is not repeated in Settings.
 
 ### Devices
 
@@ -187,7 +193,10 @@ A four-item 28pt tab control selects Today, 7 Days, 30 Days, or All; Today is th
 labels use the regular 10.5pt list-secondary type size. The control owns one overall neutral
 background, with the selected item highlighted inside it; do not wrap it in another group surface.
 The selection is one inclusive date window from the service's precomputed snapshot. Opening Usage
-and changing either selector never introduces a loading state or starts collection/network work.
+and changing either selector never starts collection or network work and never shows a loading
+state when a snapshot already exists. If the selected source has no snapshot yet and that
+component is still refreshing, the page says **Preparing Usage…** instead of implying Usage is
+absent. After refresh finishes with no snapshot, it says **No Usage is available for this period.**
 The default page contains:
 
 - Summary: a titled group with separate Tokens and Cost headline metrics followed by the six token
@@ -238,7 +247,17 @@ Provider detail contains:
   and compact observation age;
 - **This Mac Sign-in**: the catalog-provided copyable official-provider command; or
 - **This Mac Configuration**: native secure API-key entry, optional base URL when catalog-enabled,
-  masked saved state, Save, and Remove.
+  masked saved state, Save, and Remove; and
+- **Browser Session** when catalog-enabled: disconnected **Sign In**, bounded **Waiting / Cancel**,
+  non-cancellable **Connecting** after commit begins, or a connected masked account with only
+  **Disconnect**. Confirmed disconnect is likewise non-cancellable. There is no switch-account
+  action; a different account is disconnect, then sign in.
+
+Browser-session login uses app-owned selection/confirmation popups at the panel root, never system
+alerts or sheets. Login is pinned to one supported browser; an unsupported default HTTPS handler
+requires a browser selection before opening the URL. One unambiguous new account may commit
+automatically; multiple accounts require selection. Lists scroll within the panel; the popup owns
+focus, Escape, keyboard, and VoiceOver while the underlying page is disabled and accessibility-hidden.
 
 QuotaBar never reads provider credential files. New values travel only over private child stdin and
 Swift clears the field after Save; the service owns validation, owner-only persistence, and masking.
@@ -253,12 +272,18 @@ Swift clears the field after Save; the service owns validation, owner-only persi
 | `SettingsListRow` | Shared icon/title/subtitle/trailing alignment |
 | `QuotaCommandRow` | Selectable official-provider sign-in command and Copy/Copied feedback |
 | `QuotaConfirmationPopup` | Scrimmed app-owned confirmation with cancel and destructive actions |
-| `QuotaPrimaryButtonStyle` | Accent capsule for the primary task |
+| `QuotaPrimaryButtonStyle` | Accent capsule for the one primary task on a surface |
+| `QuotaSecondaryButtonStyle` | Compact field-height control for secondary or destructive in-section actions |
 | `QuotaListRowButtonStyle` | Nested hover/press feedback with full-row hit target |
 | `ProviderBrandIcon` | Catalog brand resource with stable optical sizing |
 
-Prefer these components over page-local replicas. Provider assets remain in
-`Resources/BrandIcons`; do not copy their geometry into SwiftUI paths.
+Prefer these components over page-local replicas. In-section actions never mix an accent capsule
+with a system or bordered control. **Sign In**, **Save**, and empty-state **Retry** use compact
+primary. **Cancel**, **Remove**, **Disconnect**, and the second Diagnostics copy action use
+secondary; destructive labels use the destructive variant. Full-width Settings rows such as **Log
+Out** stay list rows. Do not use `ButtonStyle.bordered` or an unstyled system button inside the
+panel. Provider assets remain in `Resources/BrandIcons`; do not copy their geometry into SwiftUI
+paths.
 
 ## Accessibility and input
 

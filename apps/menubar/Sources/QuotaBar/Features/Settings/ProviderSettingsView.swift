@@ -54,12 +54,18 @@ struct ProviderSettingsView: View {
           reportingSourcesContent
         }
 
-        SettingsSection(
-          title: provider.isConfigurable ? "This Mac Configuration" : "This Mac Sign-in"
-        ) {
-          if provider.isConfigurable {
+        if provider.browserSession != nil {
+          SettingsSection(title: "Browser Session") {
+            browserSessionConfiguration
+          }
+        }
+
+        if provider.isConfigurable {
+          SettingsSection(title: "This Mac Configuration") {
             providerConfiguration
-          } else {
+          }
+        } else if provider.browserSession == nil {
+          SettingsSection(title: "This Mac Sign-in") {
             QuotaCommandRow(command: provider.setupAction, copyLabel: "Copy sign-in command")
           }
         }
@@ -139,12 +145,58 @@ struct ProviderSettingsView: View {
           Button("Remove") {
             removeConfiguration()
           }
+          .buttonStyle(QuotaSecondaryButtonStyle(isDestructive: true))
           .disabled(isSaving)
         }
       }
 
       if let configurationError {
         Label(configurationError, systemImage: "exclamationmark.circle")
+          .quotaMetaStyle()
+          .fixedSize(horizontal: false, vertical: true)
+      }
+    }
+    .padding(QuotaDesign.Layout.groupContentInset)
+    .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  private var browserSessionConfiguration: some View {
+    let session = model.providerBrowserSessions[provider]
+    let waiting = model.browserSessionWaitingProvider == provider
+    return VStack(alignment: .leading, spacing: QuotaDesign.Spacing.sm) {
+      if session?.configured == true {
+        Text("Connected as \(session?.accountLabel ?? "account")")
+          .quotaSecondaryStyle()
+      } else {
+        Text("Sign in in a supported browser. QuotaBar reads only the provider's session cookie.")
+          .quotaSecondaryStyle()
+          .fixedSize(horizontal: false, vertical: true)
+      }
+
+      HStack(spacing: QuotaDesign.Spacing.sm) {
+        if waiting {
+          if model.canCancelBrowserSessionLogin {
+            Button("Cancel", action: model.cancelProviderBrowserSessionFlow)
+              .buttonStyle(QuotaSecondaryButtonStyle())
+          }
+          Text(model.browserSessionActivityText ?? "Connecting…")
+            .quotaMetaStyle()
+        } else if session?.configured == true {
+          Button("Disconnect") {
+            model.requestProviderBrowserSessionDisconnect(provider)
+          }
+          .buttonStyle(QuotaSecondaryButtonStyle(isDestructive: true))
+        } else {
+          Button("Sign In") {
+            model.startProviderBrowserSessionLogin(provider)
+          }
+          .buttonStyle(QuotaPrimaryButtonStyle(isCompact: true))
+        }
+      }
+      .frame(minHeight: QuotaDesign.Layout.fieldMinHeight)
+
+      if let message = model.browserSessionErrorMessages[provider] {
+        Label(message, systemImage: "exclamationmark.circle")
           .quotaMetaStyle()
           .fixedSize(horizontal: false, vertical: true)
       }

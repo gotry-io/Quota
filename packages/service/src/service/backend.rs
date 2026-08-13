@@ -239,10 +239,7 @@ impl NativeBackend {
         let home = std::env::var_os("HOME")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("/"));
-        let device_name = std::env::var("HOSTNAME")
-            .ok()
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or_else(|| client_name.to_owned());
+        let device_name = crate::relay::local_device_display_name(client_name);
         let account = AccountManager::new(relay.clone(), state.clone(), device_name);
         Self {
             state,
@@ -265,13 +262,13 @@ impl NativeBackend {
 
     /// Discover providers through the same provider-owned credential paths used for collection.
     /// No account or Relay state is read or changed.
-    pub fn configured_providers(&self) -> Vec<ProviderId> {
-        let context = self.collection_context(Arc::new(AtomicBool::new(false)));
-        ProviderId::ALL
+    pub fn configured_providers(&self) -> Result<Vec<ProviderId>, BackendError> {
+        let context = self.collection_context(Arc::new(AtomicBool::new(false)))?;
+        Ok(ProviderId::ALL
             .iter()
             .copied()
             .filter(|provider| !providers::discover(*provider, &context).is_empty())
-            .collect()
+            .collect())
     }
 
     pub fn diagnostic_report(&self) -> Result<DiagnosticReport, BackendError> {
@@ -280,14 +277,34 @@ impl NativeBackend {
         let mut degraded = false;
         let mut blocked = false;
 
-        let discovered = self.configured_providers().len() as i64;
+        let discovered = match self.configured_providers() {
+            Ok(providers) => providers.len() as i64,
+            Err(_) => {
+                degraded = true;
+                issues.push(DiagnosticIssue {
+                    component: "providers".into(),
+                    code: "state_unavailable".into(),
+                    severity: DiagnosticSeverity::Error,
+                    count: 1,
+                    message: "provider browser session state could not be read".into(),
+                });
+                0
+            }
+        };
         let (config_present, config_readable) = config_file_diagnostic(self.state.root());
         let configured = match self.state.snapshot() {
-            Ok(snapshot) => snapshot
-                .providers
-                .iter()
-                .filter(|provider| provider.configured)
-                .count() as i64,
+            Ok(snapshot) => {
+                (snapshot
+                    .providers
+                    .iter()
+                    .filter(|provider| provider.configured)
+                    .count()
+                    + snapshot
+                        .provider_browser_sessions
+                        .iter()
+                        .filter(|session| session.configured)
+                        .count()) as i64
+            }
             Err(_) => {
                 degraded = true;
                 issues.push(DiagnosticIssue {
@@ -849,7 +866,7 @@ impl NativeBackend {
         provider_ids: &[ProviderId],
         cancel: Arc<AtomicBool>,
     ) -> Result<Value, BackendError> {
-        let context = self.collection_context(cancel.clone());
+        let context = self.collection_context(cancel.clone())?;
         let captured_at = context.observed_at();
         let results = thread::scope(|scope| {
             let jobs = provider_ids.iter().copied().map(|provider| {
@@ -881,16 +898,27 @@ impl NativeBackend {
         }))
     }
 
-    fn collection_context(&self, cancel: Arc<AtomicBool>) -> CollectionContext {
-        CollectionContext {
+    fn collection_context(
+        &self,
+        cancel: Arc<AtomicBool>,
+    ) -> Result<CollectionContext, BackendError> {
+        let browser_sessions = self
+            .state
+            .provider_browser_sessions()
+            .map_err(|_| BackendError::unavailable())?
+            .into_iter()
+            .map(|(provider, session)| (provider, session.cookie_header))
+            .collect();
+        Ok(CollectionContext {
             home_directory: self.home.clone(),
             environment: self.environment.clone(),
             config_path: Some(self.state.root().join("providers.json")),
+            browser_sessions,
             client_name: self.client_name.clone(),
             client_version: self.client_version.clone(),
             now: Some(now_rfc3339()),
             cancel: Some(cancel),
-        }
+        })
     }
 
     fn collect_usage(&self, cancel: Arc<AtomicBool>) -> Result<UsageCollection, BackendError> {
@@ -1510,12 +1538,14 @@ impl NativeBackend {
         account_value: &Value,
         cancel: &AtomicBool,
     ) -> Result<(), BackendError> {
-        let all = account_value
+        let mut periods = Vec::new();
+        if let Some(all) = account_value
             .get("account_summary")
             .and_then(|summary| summary.get("usage"))
             .cloned()
-            .ok_or_else(BackendError::unavailable)?;
-        let mut periods = vec![(UsagePeriod::All, account_usage_detail(all)?)];
+        {
+            push_account_usage_period(&mut periods, UsagePeriod::All, all);
+        }
         for period in [
             UsagePeriod::Today,
             UsagePeriod::Last7Days,
@@ -1524,10 +1554,14 @@ impl NativeBackend {
             let (_, range) = usage_period_range(period, &self.timezone(), Utc::now())?;
             let (from, to) = range.ok_or_else(BackendError::unavailable)?;
             let query = format!("cost_mode=calculate&from={from}&to={to}");
-            periods.push((
-                period,
-                account_usage_detail(self.account.account_usage(&query, cancel)?)?,
-            ));
+            match self.account.account_usage(&query, cancel) {
+                Ok(usage) => push_account_usage_period(&mut periods, period, usage),
+                Err(error) if error.error.code.requires_login() => return Err(error),
+                Err(_) => {}
+            }
+        }
+        if periods.is_empty() {
+            return Err(BackendError::unavailable());
         }
         self.state
             .replace_usage_periods(UsageSource::Account, &periods)
@@ -1577,6 +1611,14 @@ impl NativeBackend {
                     let Some(snapshot) = observation.get("snapshot") else {
                         continue;
                     };
+                    if !snapshot
+                        .get("provider")
+                        .and_then(Value::as_str)
+                        .and_then(ProviderId::parse)
+                        .is_some_and(|provider| provider.metadata().account_sync)
+                    {
+                        continue;
+                    }
                     let display_name = display_names
                         .get(device_id)
                         .map(String::as_str)
@@ -1661,6 +1703,33 @@ fn collect_one_provider(provider: ProviderId, context: &CollectionContext) -> Va
 impl LocalBackend for NativeBackend {
     fn diagnose(&self) -> Result<DiagnosticReport, BackendError> {
         self.diagnostic_report()
+    }
+
+    fn validate_provider_browser_session(
+        &self,
+        provider: ProviderId,
+        cookie_header: &str,
+    ) -> Result<crate::providers::ValidatedBrowserSession, BackendError> {
+        let context = self.collection_context(Arc::new(AtomicBool::new(false)))?;
+        providers::validate_browser_session(provider, cookie_header, &context).map_err(|error| {
+            BackendError {
+                error: match error.category {
+                    ErrorCategory::AuthRequired => IpcError::new(
+                        ErrorCode::AuthenticationRequired,
+                        RecoveryAction::ConfigureProvider,
+                    ),
+                    ErrorCategory::Unavailable => {
+                        IpcError::new(ErrorCode::NetworkError, RecoveryAction::Retry)
+                    }
+                    ErrorCategory::Unsupported => {
+                        IpcError::new(ErrorCode::UnsupportedOperation, RecoveryAction::None)
+                    }
+                    ErrorCategory::Error => {
+                        IpcError::new(ErrorCode::ProviderError, RecoveryAction::Retry)
+                    }
+                },
+            }
+        })
     }
 
     fn refresh(&self, cancel: Arc<AtomicBool>) -> RefreshOutcome {
@@ -2008,6 +2077,16 @@ fn local_usage_detail(
         "incomplete": incomplete,
         "details_truncated": details_truncated
     }))
+}
+
+fn push_account_usage_period(
+    periods: &mut Vec<(UsagePeriod, Value)>,
+    period: UsagePeriod,
+    value: Value,
+) {
+    if let Ok(detail) = account_usage_detail(value) {
+        periods.push((period, detail));
+    }
 }
 
 fn account_usage_detail(value: Value) -> Result<Value, BackendError> {
@@ -2641,6 +2720,67 @@ mod tests {
     }
 
     #[test]
+    fn account_usage_detail_keeps_structured_clients() {
+        let cost = json!({
+            "mode": "calculate",
+            "basis": "calculated",
+            "status": "complete",
+            "amount_microusd": "1",
+            "catalog_revision": "official-2026-08-10-4",
+            "calculated_rows": 1,
+            "reported_rows": 0,
+            "unpriced_rows": 0,
+            "assumptions": [],
+            "unpriced": []
+        });
+        let summary_totals = json!({
+            "total_tokens": 13,
+            "input_tokens": 8,
+            "output_tokens": 5,
+            "cache_read_input_tokens": 2,
+            "cache_write_input_tokens": 1,
+            "reasoning_tokens": 3,
+            "messages": 2
+        });
+        let relay_totals = json!({
+            "input_tokens": 8,
+            "cache_read_tokens": 2,
+            "cache_write_5m_tokens": 1,
+            "cache_write_1h_tokens": 0,
+            "cache_write_inferred_tokens": 0,
+            "output_tokens": 5,
+            "reasoning_tokens": 3,
+            "requests": 2,
+            "web_search_requests": 0,
+            "web_fetch_requests": 0,
+            "source_cost_microusd": null,
+            "source_cost_covered_requests": 0
+        });
+        let detail = account_usage_detail(json!({
+            "range": {"from": "2026-08-13", "to": "2026-08-13"},
+            "totals": relay_totals,
+            "cost": cost,
+            "coverage": [],
+            "breakdowns": [],
+            "clients": [{
+                "client": "codex",
+                "totals": summary_totals,
+                "cost": cost,
+                "providers": [{
+                    "provider": "openai",
+                    "totals": summary_totals,
+                    "cost": cost,
+                    "models": [{"model": "gpt-5.4", "totals": summary_totals, "cost": cost}]
+                }]
+            }]
+        }))
+        .expect("detail");
+        assert_eq!(detail["usage"]["clients"][0]["client"], "codex");
+        assert_eq!(detail["usage"]["totals"]["messages"], 2);
+        assert_eq!(detail["fallback_models"], json!([]));
+    }
+
+    #[test]
     fn native_backend_collects_empty_home_without_unavailable_fallback() {
         let root = std::env::temp_dir().join(format!("quota-backend-{}", uuid::Uuid::new_v4()));
         let home = root.join("home");
@@ -2669,7 +2809,12 @@ mod tests {
         let mut backend = NativeBackend::new(state.clone(), relay, "QuotaTest", "test");
         backend.home = home;
         backend.environment.clear();
-        assert!(backend.configured_providers().is_empty());
+        assert!(
+            backend
+                .configured_providers()
+                .expect("providers")
+                .is_empty()
+        );
         let report = backend
             .collect_quota(Arc::new(AtomicBool::new(false)))
             .expect("local quota report");

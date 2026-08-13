@@ -21,8 +21,8 @@ use uuid::Uuid;
 use crate::migration;
 use crate::protocol::{
     ComponentName, ComponentState, ComponentStatus, ErrorCode, IPC_VERSION, IpcError,
-    ProviderConfigView, QuotaOverviewItem, RecoveryAction, StateSnapshot, UsagePeriod,
-    UsagePeriodCache, UsageSource,
+    ProviderBrowserSessionView, ProviderConfigView, QuotaOverviewItem, RecoveryAction,
+    StateSnapshot, UsagePeriod, UsagePeriodCache, UsageSource,
 };
 use crate::usage::{NormalizedUsageEvent, UsageAgent, UsageFileIndex, UsageScanResult};
 
@@ -52,6 +52,13 @@ pub struct ProviderSecret {
     pub api_key: String,
     #[serde(default)]
     pub base_url: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderBrowserSession {
+    pub cookie_header: String,
+    pub account_fingerprint: String,
+    pub account_label: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -338,6 +345,7 @@ impl StateStore {
         }
         let pricing = read_component(&conn, ComponentName::Pricing)?;
         let providers = read_provider_views(&self.root)?;
+        let provider_browser_sessions = read_provider_browser_session_views(&conn)?;
         let overview = read_overview(&conn)?;
         Ok(StateSnapshot {
             ipc_version: IPC_VERSION,
@@ -355,6 +363,7 @@ impl StateStore {
                 .unwrap_or_else(|| ComponentRecord::empty(ComponentStatus::Unavailable))
                 .to_wire(),
             providers,
+            provider_browser_sessions,
             overview,
         })
     }
@@ -369,13 +378,14 @@ impl StateStore {
         source: UsageSource,
         values: &[(UsagePeriod, Value)],
     ) -> Result<u64, StateError> {
-        if values.len() != 4
+        if values.is_empty()
+            || values.len() > 4
             || values
                 .iter()
                 .map(|(period, _)| period)
                 .collect::<HashSet<_>>()
                 .len()
-                != 4
+                != values.len()
         {
             return Err(StateError::InvalidState);
         }
@@ -927,6 +937,84 @@ impl StateStore {
             return bump_revision(&conn);
         }
         self.current_revision()
+    }
+
+    pub fn provider_browser_session(
+        &self,
+        provider: &str,
+    ) -> Result<Option<ProviderBrowserSession>, StateError> {
+        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        let session = conn
+            .query_row(
+                "SELECT cookie_header, account_fingerprint, account_label
+             FROM provider_browser_sessions WHERE provider = ?1",
+                [provider],
+                |row| {
+                    Ok(ProviderBrowserSession {
+                        cookie_header: row.get(0)?,
+                        account_fingerprint: row.get(1)?,
+                        account_label: row.get(2)?,
+                    })
+                },
+            )
+            .optional()?;
+        session
+            .map(|session| validate_browser_session(provider, session))
+            .transpose()
+    }
+
+    pub fn provider_browser_sessions(
+        &self,
+    ) -> Result<Vec<(crate::catalog::ProviderId, ProviderBrowserSession)>, StateError> {
+        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        read_provider_browser_sessions(&conn)
+    }
+
+    pub fn set_provider_browser_session(
+        &self,
+        provider: &str,
+        session: &ProviderBrowserSession,
+    ) -> Result<u64, StateError> {
+        validate_browser_session(provider, session.clone())?;
+        let mut conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        let tx = conn.transaction()?;
+        tx.execute(
+            "INSERT INTO provider_browser_sessions(
+                provider, cookie_header,
+                account_fingerprint, account_label, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(provider) DO UPDATE SET
+                cookie_header = excluded.cookie_header,
+                account_fingerprint = excluded.account_fingerprint,
+                account_label = excluded.account_label,
+                updated_at = excluded.updated_at",
+            params![
+                provider,
+                session.cookie_header,
+                session.account_fingerprint,
+                session.account_label,
+                now_rfc3339()
+            ],
+        )?;
+        let revision = bump_revision(&tx)?;
+        tx.commit()?;
+        Ok(revision)
+    }
+
+    pub fn remove_provider_browser_session(&self, provider: &str) -> Result<u64, StateError> {
+        let mut conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        let tx = conn.transaction()?;
+        let removed = tx.execute(
+            "DELETE FROM provider_browser_sessions WHERE provider = ?1",
+            [provider],
+        )?;
+        let revision = if removed == 0 {
+            metadata_u64(&tx, "revision")?
+        } else {
+            bump_revision(&tx)?
+        };
+        tx.commit()?;
+        Ok(revision)
     }
 
     pub fn outbox_entries(&self) -> Result<Vec<Value>, StateError> {
@@ -1637,6 +1725,35 @@ impl StateStore {
     }
 }
 
+fn validate_browser_session(
+    provider: &str,
+    session: ProviderBrowserSession,
+) -> Result<ProviderBrowserSession, StateError> {
+    let provider_id = crate::catalog::ProviderId::parse(provider)
+        .filter(|id| id.metadata().browser_session.is_some())
+        .ok_or(StateError::InvalidState)?;
+    if !crate::providers::common::normalize_browser_cookie_header(
+        provider_id,
+        &session.cookie_header,
+    )
+    .is_ok_and(|value| value == session.cookie_header)
+        || session.cookie_header.is_empty()
+        || session.cookie_header.len() > crate::providers::common::BROWSER_COOKIE_HEADER_LIMIT
+        || session.cookie_header.chars().any(char::is_control)
+        || session.account_fingerprint.len() != 64
+        || !session
+            .account_fingerprint
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        || session.account_label.as_ref().is_some_and(|label| {
+            label.is_empty() || label.len() > 128 || label.chars().any(char::is_control)
+        })
+    {
+        return Err(StateError::InvalidState);
+    }
+    Ok(session)
+}
+
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct UsageDirtyRange {
     pub agent: UsageAgent,
@@ -2075,6 +2192,52 @@ fn read_provider_views(root: &Path) -> Result<Vec<ProviderConfigView>, StateErro
         .collect())
 }
 
+fn read_provider_browser_session_views(
+    conn: &Connection,
+) -> Result<Vec<ProviderBrowserSessionView>, StateError> {
+    Ok(read_provider_browser_sessions(conn)?
+        .into_iter()
+        .map(|(provider, session)| ProviderBrowserSessionView {
+            provider: provider.as_str().to_owned(),
+            configured: true,
+            account_fingerprint: Some(session.account_fingerprint),
+            account_label: session.account_label,
+        })
+        .collect())
+}
+
+fn read_provider_browser_sessions(
+    conn: &Connection,
+) -> Result<Vec<(crate::catalog::ProviderId, ProviderBrowserSession)>, StateError> {
+    let mut statement = conn.prepare(
+        "SELECT provider, cookie_header, account_fingerprint, account_label
+         FROM provider_browser_sessions ORDER BY provider",
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, Option<String>>(3)?,
+        ))
+    })?;
+    let mut sessions = Vec::new();
+    for row in rows {
+        let (provider, cookie_header, account_fingerprint, account_label) = row?;
+        let session = validate_browser_session(
+            &provider,
+            ProviderBrowserSession {
+                cookie_header,
+                account_fingerprint,
+                account_label,
+            },
+        )?;
+        let id = crate::catalog::ProviderId::parse(&provider).ok_or(StateError::InvalidState)?;
+        sessions.push((id, session));
+    }
+    Ok(sessions)
+}
+
 fn read_provider_file(root: &Path) -> Result<ProviderFile, StateError> {
     let path = root.join(PROVIDER_CONFIG_NAME);
     let mut options = OpenOptions::new();
@@ -2448,6 +2611,107 @@ mod tests {
     }
 
     #[test]
+    fn browser_session_replace_remove_and_wire_redaction_are_atomic() {
+        let root = std::env::temp_dir().join(format!("quota-browser-session-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let store = StateStore::open(&root).expect("state");
+        let original = ProviderBrowserSession {
+            cookie_header: "wos-session=first-secret".into(),
+            account_fingerprint: "a".repeat(64),
+            account_label: Some("ad***@example.com".into()),
+        };
+        store
+            .set_provider_browser_session("cursor", &original)
+            .expect("store session");
+        let snapshot = serde_json::to_string(&store.snapshot().expect("snapshot")).expect("wire");
+        assert!(!snapshot.contains("first-secret"));
+        assert!(!snapshot.contains("cookie_header"));
+        assert!(snapshot.contains("ad***@example.com"));
+
+        let invalid = ProviderBrowserSession {
+            cookie_header: "wos-session=bad value".into(),
+            account_fingerprint: "b".repeat(64),
+            account_label: None,
+        };
+        assert!(
+            store
+                .set_provider_browser_session("cursor", &invalid)
+                .is_err()
+        );
+        assert_eq!(
+            store
+                .provider_browser_session("cursor")
+                .expect("read")
+                .expect("retained"),
+            original
+        );
+
+        store
+            .remove_provider_browser_session("cursor")
+            .expect("remove");
+        assert!(
+            store
+                .provider_browser_session("cursor")
+                .expect("read")
+                .is_none()
+        );
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn malformed_browser_session_rows_fail_closed() {
+        let root = std::env::temp_dir().join(format!("quota-browser-invalid-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let store = StateStore::open(&root).expect("state");
+        {
+            let conn = store.db.lock().expect("db");
+            conn.execute(
+                "INSERT INTO provider_browser_sessions(
+                    provider, cookie_header, account_fingerprint, account_label, updated_at
+                 ) VALUES ('cursor', 'wos-session=secret', 'raw-user-id', 'raw@example.com', ?1)",
+                [now_rfc3339()],
+            )
+            .expect("invalid row");
+        }
+        assert!(matches!(store.snapshot(), Err(StateError::InvalidState)));
+        assert!(matches!(
+            store.provider_browser_session("cursor"),
+            Err(StateError::InvalidState)
+        ));
+
+        {
+            let conn = store.db.lock().expect("db");
+            conn.execute("DELETE FROM provider_browser_sessions", [])
+                .expect("clear invalid row");
+            conn.execute(
+                "INSERT INTO provider_browser_sessions(
+                    provider, cookie_header, account_fingerprint, account_label, updated_at
+                 ) VALUES ('cursor', ' wos-session=secret ', ?1, NULL, ?2)",
+                ["a".repeat(64), now_rfc3339()],
+            )
+            .expect("noncanonical row");
+        }
+        assert!(matches!(store.snapshot(), Err(StateError::InvalidState)));
+
+        {
+            let conn = store.db.lock().expect("db");
+            conn.execute("DELETE FROM provider_browser_sessions", [])
+                .expect("clear noncanonical row");
+            conn.execute(
+                "INSERT INTO provider_browser_sessions(
+                    provider, cookie_header, account_fingerprint, account_label, updated_at
+                 ) VALUES ('unknown', 'wos-session=secret', ?1, NULL, ?2)",
+                ["a".repeat(64), now_rfc3339()],
+            )
+            .expect("unknown provider row");
+        }
+        assert!(matches!(store.snapshot(), Err(StateError::InvalidState)));
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
     fn session_epoch_cas_blocks_refresh_after_logout_pending() {
         let root = std::env::temp_dir().join(format!("quota-session-cas-{}", Uuid::new_v4()));
         fs::create_dir_all(&root).expect("root");
@@ -2530,6 +2794,58 @@ mod tests {
             2
         );
         assert_eq!(store.pricing_etag().expect("cleared etag"), None);
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn account_usage_period_cache_keeps_available_windows_without_all_four() {
+        let root = std::env::temp_dir().join(format!("quota-account-usage-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let store = StateStore::open(&root).expect("state");
+        store
+            .set_component(
+                ComponentName::Account,
+                ComponentStatus::Ready,
+                Some(serde_json::json!({
+                    "auth_status": "signed_in",
+                    "account_id": "account_test",
+                    "device_id": "device_test",
+                    "device_generation": 1,
+                    "account_summary": null
+                })),
+                Some("2026-08-13T00:00:00Z".into()),
+                None,
+                false,
+            )
+            .expect("signed in");
+        let detail = serde_json::json!({
+            "range": {"from": "2026-08-13", "to": "2026-08-13"},
+            "usage": {"totals": {"total_tokens": 1}, "cost": {"status": "unavailable"}, "clients": []},
+            "fallback_models": [],
+            "incomplete": false,
+            "details_truncated": false
+        });
+        store
+            .replace_usage_periods(
+                crate::protocol::UsageSource::Account,
+                &[
+                    (UsagePeriod::Today, detail.clone()),
+                    (UsagePeriod::Last7Days, detail.clone()),
+                    (UsagePeriod::All, detail),
+                ],
+            )
+            .expect("partial account windows");
+        let account = store.snapshot().expect("snapshot").usage_periods.account;
+        assert!(account.today.is_some());
+        assert!(account.last_7_days.is_some());
+        assert!(account.last_30_days.is_none());
+        assert!(account.all.is_some());
+        assert!(
+            store
+                .replace_usage_periods(crate::protocol::UsageSource::Account, &[])
+                .is_err()
+        );
         drop(store);
         fs::remove_dir_all(root).expect("cleanup");
     }

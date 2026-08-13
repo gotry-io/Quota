@@ -48,8 +48,8 @@ struct MenuBarContentView: View {
       await model.refreshIfNeeded()
     }
     .focusEffectDisabled()
-    .disabled(isLogoutConfirmationPresented)
-    .accessibilityHidden(isLogoutConfirmationPresented)
+    .disabled(isLogoutConfirmationPresented || model.browserSessionPopup != nil)
+    .accessibilityHidden(isLogoutConfirmationPresented || model.browserSessionPopup != nil)
     .overlay {
       if isLogoutConfirmationPresented {
         QuotaConfirmationPopup(
@@ -62,7 +62,43 @@ struct MenuBarContentView: View {
           isLogoutConfirmationPresented = false
           Task { await model.logout() }
         }
+      } else if let popup = model.browserSessionPopup {
+        providerBrowserSessionPopup(popup)
       }
+    }
+  }
+
+  @ViewBuilder
+  private func providerBrowserSessionPopup(_ popup: ProviderBrowserSessionPopup) -> some View {
+    switch popup {
+    case .browser(let provider, let choices):
+      QuotaSelectionPopup(
+        title: "Choose Browser",
+        message: "QuotaBar will open \(provider.displayName) and read only that browser's matching session cookies.",
+        choices: choices.map {
+          QuotaSelectionChoice(id: $0.id, title: $0.title, subtitle: nil)
+        },
+        onCancel: model.cancelProviderBrowserSessionFlow,
+        onSelect: { model.selectBrowserApplication($0, provider: provider) }
+      )
+    case .account(let provider, let choices):
+      QuotaSelectionPopup(
+        title: "Choose \(provider.displayName) Account",
+        message: "Choose the browser account to connect on this Mac.",
+        choices: choices.map {
+          QuotaSelectionChoice(id: $0.id, title: $0.title, subtitle: $0.subtitle)
+        },
+        onCancel: model.cancelProviderBrowserSessionFlow,
+        onSelect: model.selectBrowserSessionAccount
+      )
+    case .confirmDisconnect(let provider):
+      QuotaConfirmationPopup(
+        title: "Disconnect \(provider.displayName)?",
+        message: "Remove this browser session from QuotaBar on this Mac.",
+        confirmTitle: "Disconnect",
+        onCancel: model.cancelProviderBrowserSessionFlow,
+        onConfirm: model.confirmProviderBrowserSessionDisconnect
+      )
     }
   }
 
@@ -134,7 +170,7 @@ struct MenuBarContentView: View {
     case .usage:
       AccountUsageView(model: model, source: $usageSource, period: $usagePeriod)
     case .support:
-      SettingsSupportView(onOpenDiagnostics: { navigate(to: .diagnostics) })
+      SettingsSupportView(model: model, onOpenDiagnostics: { navigate(to: .diagnostics) })
     case .diagnostics:
       SettingsDiagnosticsView(model: model)
     }

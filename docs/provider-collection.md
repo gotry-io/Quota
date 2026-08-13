@@ -24,9 +24,10 @@ To add a provider:
 6. Optional QuotaBar brand SVG named by `brand_icon_asset`.
 
 API-key providers declare credential and base-URL capabilities so QuotaBar Settings can render the
-correct native fields. Ambient-session providers omit credential configuration.
+correct native fields. Browser-session capability separately declares its HTTPS login URL, exact
+Cookie hosts/names, and browser-priority prefix; capabilities may coexist.
 
-Supported order today: Codex, Claude Code, Grok, OpenRouter, DeepSeek, Kimi Code, LiteLLM.
+Supported order today: Codex, Claude Code, Grok, OpenRouter, DeepSeek, Kimi Code, LiteLLM, Cursor.
 
 API-key HTTPS providers share the bounded request, credential resolution, URL validation, and
 snapshot helpers in `packages/service/src/providers/common.rs`.
@@ -192,7 +193,8 @@ upload partitions are summarized by the unified `quotacli doctor`/QuotaBar diagn
    then retry once. A failed/no-op refresh must not suppress that retry. A valid cached token works
    without the `grok` executable.
 5. Prefer `config.creditUsagePercent` and `config.currentPeriod`. For non-unified accounts, retain the
-   deprecated `config.used.val / config.monthlyLimit.val * 100` fields documented by Grok Build.
+   deprecated `config.used.val / config.monthlyLimit.val * 100` fields documented by Grok Build. A
+   new period that omits those usage fields is 0% used, not malformed.
 6. Billing does not expose a subscription plan field. Infer a CodexBar-compatible plan hint from local
    credentials only: OIDC scopes under `https://auth.x.ai::` (and `auth_mode: oidc`) map to
    `supergrok`; other `auth_mode` values may be kept as a weak plan slug when they look like a plan
@@ -231,9 +233,10 @@ Aligned with CodexBar's OpenRouter provider (credits + API-key limit meters).
      `limit - clamp(limit_remaining)`, else the spend field matching `limit_reset`
      (`usage_daily` / `usage_weekly` / `usage_monthly`), else cumulative `usage`. Emit
      `remaining_value` / `limit_value` / `value_unit: "usd"` alongside `used_percent`.
-   - **Credits**: when `total_credits > 0`, emit a balance-only window using
+   - **Balance**: when `total_credits > 0`, emit a balance-only window titled **Balance (USD)** using
      `remaining_value: total_credits - total_usage` and `value_unit: "usd"`; values may be up to ~60s
-     stale. Do not treat rechargeable credits as a fixed limit or show a percentage meter.
+     stale. Do not treat rechargeable credits as a fixed limit or show a percentage meter. The title
+     matches DeepSeek's USD wallet; consumers may collapse every balance-only window to **Balance**.
    The snapshot plan badge is **Credits**; the provider header already identifies OpenRouter, so the
    channel name is not repeated in the plan position.
 4. Absent key → `auth_required` with guidance to configure QuotaBar (or set
@@ -303,20 +306,49 @@ Aligned with CodexBar's LiteLLM virtual-key budget path.
 
 OpenRouter, DeepSeek, and Kimi always use their fixed official origins; custom base URLs are rejected.
 
+## Cursor
+
+Cursor is the first generic browser-session adapter and is local-only in this release.
+
+1. QuotaBar opens `https://authenticator.cursor.sh/` in one explicit supported browser and polls
+   only that browser's profiles. If the default HTTPS handler is unsupported, the user chooses a
+   supported browser before any URL opens. Linux QuotaCLI does not acquire browser sessions.
+2. SweetCookieKit queries the catalog's four exact hosts (`cursor.com`, `www.cursor.com`,
+   `cursor.sh`, `authenticator.cursor.sh`) and seven exact session Cookie names. Expired/unrelated
+   records are discarded, logging is disabled, and each record becomes one bounded minimal header
+   candidate; Cookies from hosts/profiles are never combined.
+3. Rust validates header syntax and the catalog allowlist, then calls fixed
+   `GET https://cursor.com/api/auth/me` with no redirects and a ten-second timeout. Stable `sub` is
+   the preferred namespaced fingerprint input; normalized email is the fallback. Only the hash and
+   masked email return to Swift. Validate does not persist; commit repeats validation before an
+   atomic SQLite replacement, so failures keep the old session.
+4. Routine refresh reads only the Rust-owned stored session and calls
+   `GET https://cursor.com/api/usage-summary`. The official Cursor Models and Other Models windows
+   map from `individualUsage.plan.autoPercentUsed` and `apiPercentUsed`. Other Models also carries
+   the included API dollar remaining from `plan.used` / `limit` / `remaining` (cents). Cursor Models
+   is percent-only. `totalPercentUsed` is not a third quota. Individual, on-demand, team pool, and
+   team on-demand cents-based limits map to remaining USD windows. HTTP 401/403 is `auth_required`;
+   malformed/partial payloads do not expose provider response data.
+5. Catalog `account_sync: false` keeps Cursor out of released network-v2 snapshot envelopes and
+   Account summaries. menubar-v0.0.9 shipped a closed provider enum; local collection and Overview
+   may show Cursor, while Relay validators reject it.
+
 ## Identity and normalization
 
 - A global `account.fingerprint` is SHA-256 over the provider, the identifier namespace, and the
   stable quota-owner identifier: Codex uses account ID; Claude Code uses organization ID; Grok uses
-  team ID when present and otherwise user ID; OpenRouter, DeepSeek, Kimi Code, and LiteLLM use a
+  team ID when present and otherwise user ID; Cursor uses its stable user `sub` and falls back to a
+  normalized email; OpenRouter, DeepSeek, Kimi Code, and LiteLLM use a
   SHA-256 of the API key under the `api_key` namespace (never the raw key).
-- Email is display enrichment only and never a global deduplication identity. If the provider does
-  not expose its quota-owner identifier, collection still succeeds with a stable source-scoped
-  fingerprint. Every normalized account declares its fingerprint scope.
+- Cursor explicitly uses normalized email as a fingerprint fallback only when `/api/auth/me` omits
+  `sub`. For every other provider, email is display enrichment only and never a global identity; a
+  missing quota-owner identifier uses a stable source-scoped fingerprint. Every normalized account
+  declares its fingerprint scope.
 - Account labels use a masked email or a non-sensitive display name.
 - A collection attempt records its stable source identifier and an explicit outcome.
 - One provider failure does not discard successful results from other requested providers.
 - Requested providers collect concurrently while the report preserves catalog order
-  (`PROVIDER_ORDER`): Codex, Claude Code, Grok, OpenRouter, DeepSeek, Kimi Code, then LiteLLM.
+  (`PROVIDER_ORDER`): Codex, Claude Code, Grok, OpenRouter, DeepSeek, Kimi Code, LiteLLM, then Cursor.
   Multiple sessions within one provider remain sequential so provider-owned credential refreshes do
   not race. A provider result with both successful and failed sessions remains explicitly partial in
   component state.

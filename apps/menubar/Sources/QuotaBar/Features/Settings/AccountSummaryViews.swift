@@ -113,7 +113,11 @@ struct AccountUsageView: View {
           }
 
         } else {
-          settingsEmptyCopy("No Usage is available for this period.")
+          settingsEmptyCopy(
+            model.isPreparingUsage(source: effectiveSource)
+              ? "Preparing Usage…"
+              : "No Usage is available for this period."
+          )
         }
       }
       .frame(maxWidth: .infinity, alignment: .topLeading)

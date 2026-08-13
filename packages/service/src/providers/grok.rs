@@ -456,14 +456,19 @@ fn collect_with_credentials(
 fn map_billing(value: &Value) -> Result<QuotaWindow, ProviderError> {
     let config =
         obj_get(value, "config").ok_or_else(|| ProviderError::new(ErrorCategory::Error, SOURCE))?;
+    let current = obj_get(config, "currentPeriod");
     let used = number(obj_get(config, "creditUsagePercent"))
         .or_else(|| {
             let limit = money(obj_get(config, "monthlyLimit"))?;
             let total = money(obj_get(config, "used"))?;
             (limit > 0.0).then_some(total / limit * 100.0)
         })
+        .or_else(|| {
+            current
+                .or_else(|| obj_get(config, "billingPeriodEnd"))
+                .map(|_| 0.0)
+        })
         .ok_or_else(|| ProviderError::new(ErrorCategory::Error, SOURCE))?;
-    let current = obj_get(config, "currentPeriod");
     let cycle = current.unwrap_or(config);
     let start = parse_date(obj_get_any(cycle, &["start", "billingPeriodStart"]));
     let end = parse_date(obj_get_any(cycle, &["end", "billingPeriodEnd"]));
@@ -542,6 +547,25 @@ mod tests {
         assert_eq!(window.used_percent, 8.0);
         assert_eq!(window.duration_seconds, Some(604800));
         assert_eq!(window.resets_at.as_deref(), Some("2026-08-06T07:33:06Z"));
+    }
+
+    #[test]
+    fn maps_new_weekly_period_without_usage_percent() {
+        let value = serde_json::json!({
+            "config": {
+                "currentPeriod": {
+                    "type": "USAGE_PERIOD_TYPE_WEEKLY",
+                    "start": "2026-08-13T07:33:06.406166+00:00",
+                    "end": "2026-08-20T07:33:06.406166+00:00"
+                },
+                "billingPeriodStart": "2026-08-13T07:33:06.406166+00:00",
+                "billingPeriodEnd": "2026-08-20T07:33:06.406166+00:00"
+            }
+        });
+        let window = map_billing(&value).unwrap();
+        assert_eq!(window.title, "Weekly");
+        assert_eq!(window.used_percent, 0.0);
+        assert_eq!(window.resets_at.as_deref(), Some("2026-08-20T07:33:06Z"));
     }
 
     #[test]

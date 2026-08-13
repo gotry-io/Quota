@@ -12,12 +12,19 @@ import {
   DeviceAuthorizationRequestSchema,
   DeviceAuthorizationResponseSchema,
   DeviceSyncResponseSchema,
+  LOCAL_PROVIDER_IDS,
   LOCAL_USAGE_PROTOCOL_VERSION,
+  LocalProviderIdSchema,
   LocalUsageReportSchema,
   MAXIMUM_SNAPSHOTS_PER_ENVELOPE,
   OAuthTokenRequestSchema,
   OAuthTokenResponseSchema,
   PROTOCOL_VERSION,
+  PublicProfileSchema,
+  PublicProfileSettingsSchema,
+  PublicProfileUpdateRequestSchema,
+  PROVIDER_IDS,
+  ProviderIdSchema,
   PricingCatalogSchema,
   QuotaCollectionReportSchema,
   QuotaSnapshotEnvelopeSchema,
@@ -29,6 +36,13 @@ import {
 } from "../src/index.ts";
 
 describe("quota protocol v2", () => {
+  it("keeps local-only providers out of the released managed-account enum", () => {
+    expect(PROVIDER_IDS).not.toContain("cursor");
+    expect(ProviderIdSchema.safeParse("cursor").success).toBe(false);
+    expect(LOCAL_PROVIDER_IDS).toContain("cursor");
+    expect(LocalProviderIdSchema.safeParse("cursor").success).toBe(true);
+  });
+
   it("accepts the sole quota upload contract with device generation", () => {
     const envelope = quotaEnvelope();
     expect(QuotaSnapshotEnvelopeSchema.parse(envelope)).toEqual(envelope);
@@ -123,6 +137,44 @@ describe("quota protocol v2", () => {
     ).toBe(true);
   });
 
+  it("keeps public profiles opted-in and free of device identifiers", () => {
+    const profile = {
+      protocol_version: 2,
+      username: "octocat",
+      display_label: "octocat",
+      quota: [
+        {
+          provider: "codex",
+          plan: "Plus",
+          windows: [{ title: "Weekly", used_percent: 25 }],
+        },
+      ],
+      usage: {
+        range: { from: "2026-08-01", to: "2026-08-13" },
+        input_tokens: 10,
+        output_tokens: 4,
+        cost_status: "complete",
+        amount_microusd: "1000",
+        models: [{ name: "gpt-5", tokens: 14 }],
+      },
+    };
+    expect(PublicProfileSchema.safeParse(profile).success).toBe(true);
+    expect(
+      PublicProfileSettingsSchema.safeParse({
+        protocol_version: 2,
+        enabled: false,
+        slug: null,
+      }).success,
+    ).toBe(true);
+    expect(
+      PublicProfileUpdateRequestSchema.safeParse({
+        protocol_version: 2,
+        enabled: true,
+        slug: "Octocat",
+      }).success,
+    ).toBe(false);
+  });
+
   it("keeps local collection reports versioned, strict, and provider-consistent", () => {
     const report = {
       protocol_version: 2,
@@ -138,6 +190,11 @@ describe("quota protocol v2", () => {
           outcome: "auth_required",
           snapshots: [],
           message: "Sign in again",
+        },
+        {
+          provider: "cursor",
+          outcome: "success",
+          snapshots: [snapshot("cursor")],
         },
       ],
     };
@@ -613,7 +670,7 @@ describe("quota protocol v2", () => {
   });
 });
 
-function snapshot(provider: "codex" | "claude") {
+function snapshot(provider: "codex" | "claude" | "cursor") {
   return {
     provider,
     account: { fingerprint: `${provider}-fixture`, fingerprint_scope: "source" as const },
