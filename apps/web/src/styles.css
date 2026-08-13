@@ -118,6 +118,10 @@ nav {
   gap: 4px;
 }
 
+.header-session [hidden] {
+  display: none !important;
+}
+
 .header-account-name {
   display: inline-flex;
   align-items: center;

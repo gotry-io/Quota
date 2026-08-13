@@ -17,6 +17,7 @@ test("homepage introduces QuotaBar and both install paths", () => {
   assert.match(html, /Continue with GitHub/);
   assert.doesNotMatch(html, /Open Quota/);
   assert.equal((html.match(/data-web-login/g) ?? []).length, 1);
+  assert.match(html, /id="header-account" class="header-account" hidden/);
   assert.doesNotMatch(html, /id="export-quota"/);
   assert.doesNotMatch(html, /id="public-profile-slug"/);
 });
