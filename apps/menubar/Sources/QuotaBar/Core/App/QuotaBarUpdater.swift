@@ -11,25 +11,57 @@ enum QuotaBarUpdater {
     static func checkForUpdates() {}
   #else
     @MainActor
-    private static let controller = SPUStandardUpdaterController(
-      startingUpdater: false,
-      updaterDelegate: nil,
-      userDriverDelegate: nil
-    )
+    private static let owner = Owner()
 
     @MainActor
     static func start() {
-      guard Bundle.main.object(forInfoDictionaryKey: "SUPublicEDKey") as? String != nil else {
-        return
-      }
-      try? controller.updater.start()
+      owner.startIfNeeded()
     }
 
     @MainActor
     static func checkForUpdates() {
       NSApp.activate(ignoringOtherApps: true)
-      try? controller.updater.start()
-      controller.checkForUpdates(nil)
+      owner.startIfNeeded()
+      owner.controller.checkForUpdates(nil)
+    }
+
+    @MainActor
+    private final class Owner {
+      let driver = QuotaBarSparkleDriver()
+      let controller: SPUStandardUpdaterController
+      private var started = false
+
+      init() {
+        controller = SPUStandardUpdaterController(
+          startingUpdater: false,
+          updaterDelegate: nil,
+          userDriverDelegate: driver
+        )
+      }
+
+      func startIfNeeded() {
+        guard !started else { return }
+        guard Bundle.main.object(forInfoDictionaryKey: "SUPublicEDKey") as? String != nil else {
+          return
+        }
+        do {
+          try controller.updater.start()
+          started = true
+        } catch {
+          return
+        }
+      }
+    }
+
+    private final class QuotaBarSparkleDriver: NSObject, SPUStandardUserDriverDelegate {
+      @MainActor
+      func standardUserDriverWillHandleShowingUpdate(
+        _ handleShowingUpdate: Bool,
+        forUpdate update: SUAppcastItem,
+        state: SPUUserUpdateState
+      ) {
+        NSApp.activate(ignoringOtherApps: true)
+      }
     }
   #endif
 }
