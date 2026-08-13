@@ -5,6 +5,8 @@ name: release-menubar
 # Prerelease tags (menubar-v0.0.2-beta.1) create a GitHub prerelease only and skip Homebrew.
 # A manual run may only republish an existing tag; it never builds an untagged main commit.
 # The bundled private Rust service follows the QuotaBar release version.
+# Sparkle appcast signing requires repository secret SPARKLE_ED_PRIVATE_KEY
+# (base64 Ed25519 seed matching Info.plist SUPublicEDKey).
 on:
   push:
     tags: ["menubar-v*"]
@@ -138,6 +140,8 @@ jobs:
           APP="dist/menubar/QuotaBar.app"
           test "$(lipo -archs "$APP/Contents/MacOS/QuotaBar")" = arm64
           test "$(lipo -archs "$APP/Contents/Helpers/quota-service")" = arm64
+          chmod +x ./scripts/sign-sparkle-framework.sh
+          ./scripts/sign-sparkle-framework.sh "$APP" "$SIGNING_IDENTITY"
           codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" \
             "$APP/Contents/Helpers/quota-service"
           codesign --verify --strict --verbose=2 "$APP/Contents/Helpers/quota-service"
@@ -151,6 +155,7 @@ jobs:
           NOTARY_KEY_BASE64: ${{ secrets.APPLE_NOTARY_KEY_P8_BASE64 }}
           NOTARY_KEY_ID: ${{ vars.APPLE_NOTARY_KEY_ID }}
           NOTARY_ISSUER_ID: ${{ vars.APPLE_NOTARY_ISSUER_ID }}
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
@@ -205,6 +210,22 @@ jobs:
               json.dump(feed, handle, indent=2)
               handle.write("\\n")
           PY
+          test -n "$SPARKLE_ED_PRIVATE_KEY"
+          SPARKLE_DIST="$RUNNER_TEMP/sparkle-2.9.5"
+          mkdir -p "$SPARKLE_DIST"
+          curl -fsSL -o "$RUNNER_TEMP/Sparkle-2.9.5.tar.xz" \
+            "https://github.com/sparkle-project/Sparkle/releases/download/2.9.5/Sparkle-2.9.5.tar.xz"
+          tar -xJf "$RUNNER_TEMP/Sparkle-2.9.5.tar.xz" -C "$SPARKLE_DIST" bin/sign_update
+          BUILD_VERSION="$(plutil -extract CFBundleVersion raw "$APP/Contents/Info.plist")"
+          SPARKLE_SIGNATURE="$(
+            printf '%s' "$SPARKLE_ED_PRIVATE_KEY" \
+              | "$SPARKLE_DIST/bin/sign_update" --ed-key-file - -p "$RELEASE_DIR/$DMG"
+          )"
+          DMG_LENGTH="$(stat -f%z "$RELEASE_DIR/$DMG")"
+          chmod +x ./scripts/write-sparkle-appcast.sh
+          ./scripts/write-sparkle-appcast.sh \
+            "$VERSION" "$BUILD_VERSION" "$DMG" "$SPARKLE_SIGNATURE" "$DMG_LENGTH" \
+            "$RELEASE_DIR/appcast.xml"
           echo "archive=$ARCHIVE" >> "$GITHUB_OUTPUT"
           echo "sha256=$SHA256" >> "$GITHUB_OUTPUT"
           echo "dmg=$DMG" >> "$GITHUB_OUTPUT"
@@ -234,6 +255,7 @@ jobs:
             "dist/release/${{ steps.artifact.outputs.dmg }}.sha256" \
             "dist/release/${{ steps.artifact.outputs.latest_dmg }}" \
             "dist/release/menubar-update.json" \
+            "dist/release/appcast.xml" \
             --repo "$GITHUB_REPOSITORY" \
             --clobber
 
