@@ -48,6 +48,8 @@ mkdir -p \
 
 cp "$APP_BINARY" "$APP_PATH/Contents/MacOS/QuotaBar"
 cp "$HELPER_BINARY" "$APP_PATH/Contents/Helpers/quota-service"
+chmod +x "${ROOT_DIR}/scripts/embed-sparkle-framework.sh"
+"${ROOT_DIR}/scripts/embed-sparkle-framework.sh" "$APP_PATH"
 cp apps/menubar/Support/Info.plist "$APP_PATH/Contents/Info.plist"
 cp apps/menubar/Support/QuotaBar.icns "$APP_PATH/Contents/Resources/QuotaBar.icns"
 cp apps/menubar/Sources/QuotaBar/Resources/BrandIcons/*.svg \
@@ -65,6 +67,8 @@ plutil -replace CFBundleVersion -string "1" "$APP_PATH/Contents/Info.plist"
 plutil -replace LSUIElement -bool false "$APP_PATH/Contents/Info.plist"
 
 chmod 755 "$APP_PATH/Contents/MacOS/QuotaBar" "$APP_PATH/Contents/Helpers/quota-service"
+chmod +x "${ROOT_DIR}/scripts/sign-sparkle-framework.sh"
+"${ROOT_DIR}/scripts/sign-sparkle-framework.sh" "$APP_PATH" "-"
 codesign --force --sign - "$APP_PATH/Contents/Helpers/quota-service"
 codesign --verify --strict --verbose=2 "$APP_PATH/Contents/Helpers/quota-service"
 codesign --force --sign - "$APP_PATH"

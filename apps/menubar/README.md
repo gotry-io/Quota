@@ -30,6 +30,10 @@ Each background refresh precomputes Today, 7 Days, 30 Days, and All for This Mac
 the signed-in Account. The four values are persisted and returned by `get_state`; Swift only selects
 among them and never slices totals or infers client/provider/model ownership.
 
+Packaged builds embed Sparkle 2. Support's **Check for Updates** action, and Sparkle's daily
+schedule, read the GitHub Releases appcast. Local `swift run` binaries are not packaged and do not
+check for updates.
+
 Settings includes a **Diagnostics** action backed by the private `diagnose` IPC operation. It copies
 the same bounded, redacted report consumed by Linux `quotacli doctor`, covering provider/quota
 collection, Usage, pricing, account state, and synchronization. Swift strictly decodes the fixed

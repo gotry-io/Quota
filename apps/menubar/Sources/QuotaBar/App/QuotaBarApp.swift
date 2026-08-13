@@ -55,6 +55,9 @@ struct QuotaBarApp: App {
       let model = MenuBarViewModel()
       model.start()
       _model = State(initialValue: model)
+      Task { @MainActor in
+        QuotaBarUpdater.start()
+      }
     }
 
     var body: some Scene {

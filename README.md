@@ -113,7 +113,7 @@ remote migrations or deploy manually without explicit authorization.
 ## Distribution
 
 QuotaBar and QuotaCLI release independently. A `menubar-vX.Y.Z` tag builds one signed and notarized
-Apple Silicon app, a drag-install `.dmg`, a `menubar-update.json` feed for in-app updates, and
+Apple Silicon app, a drag-install `.dmg`, a Sparkle `appcast.xml` for in-app updates, and
 updates the Homebrew Cask. The Cask installs only `QuotaBar.app`; it does not expose the private
 service as a command. Install with `brew install gotry-io/tap/quotabar` or the website `.dmg`. A
 `cli-vX.Y.Z` tag publishes a static x86_64 Linux binary and checksum to GitHub Releases. QuotaCLI is
@@ -132,7 +132,7 @@ The repository implements protocol v2 account/device authentication, independent
 upload sequencing, D1 persistence and deletion watermarks, eight Rust quota collectors, five Rust
 Usage parsers with file-level incremental indexing, effective-dated cost calculation, owner-only
 local SQLite state and provider configuration, persistent private IPC, QuotaBar account/provider
-configuration UI, in-app QuotaBar update checks, fixed-window client-scoped account-or-local Usage
+configuration UI, Sparkle in-app updates, fixed-window client-scoped account-or-local Usage
 detail, shareable remaining-quota/usage exports, opt-in public `/u/{username}` pages, and the Web
 account dashboard. Raw model
 identifiers remain opaque bounded provider text; a separately versioned catalog derives stable
