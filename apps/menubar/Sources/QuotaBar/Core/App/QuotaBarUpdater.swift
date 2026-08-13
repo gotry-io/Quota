@@ -54,13 +54,14 @@ enum QuotaBarUpdater {
     }
 
     private final class QuotaBarSparkleDriver: NSObject, SPUStandardUserDriverDelegate {
-      @MainActor
       func standardUserDriverWillHandleShowingUpdate(
         _ handleShowingUpdate: Bool,
         forUpdate update: SUAppcastItem,
         state: SPUUserUpdateState
       ) {
-        NSApp.activate(ignoringOtherApps: true)
+        DispatchQueue.main.async {
+          NSApp.activate(ignoringOtherApps: true)
+        }
       }
     }
   #endif
