@@ -155,7 +155,16 @@ fn run_status(options: StatusOptions, output: &mut dyn CliOutput) -> i32 {
         }
     };
     let providers = match options.providers {
-        ProviderSelection::Configured => context.backend.configured_providers(),
+        ProviderSelection::Configured => match context.backend.configured_providers() {
+            Ok(providers) => providers,
+            Err(_) => {
+                return report_failure(
+                    Failure,
+                    output,
+                    "QuotaCLI could not discover local provider credentials.",
+                );
+            }
+        },
         ProviderSelection::All => ProviderId::ALL.to_vec(),
         ProviderSelection::Explicit(providers) => providers,
     };
