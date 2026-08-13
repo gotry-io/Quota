@@ -170,7 +170,7 @@ struct MenuBarContentView: View {
     case .usage:
       AccountUsageView(model: model, source: $usageSource, period: $usagePeriod)
     case .support:
-      SettingsSupportView(onOpenDiagnostics: { navigate(to: .diagnostics) })
+      SettingsSupportView(model: model, onOpenDiagnostics: { navigate(to: .diagnostics) })
     case .diagnostics:
       SettingsDiagnosticsView(model: model)
     }

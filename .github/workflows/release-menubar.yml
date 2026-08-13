@@ -176,8 +176,39 @@ jobs:
           ditto -c -k --keepParent "$APP" "$RELEASE_DIR/$ARCHIVE"
           SHA256="$(shasum -a 256 "$RELEASE_DIR/$ARCHIVE" | cut -d' ' -f1)"
           printf '%s  %s\n' "$SHA256" "$ARCHIVE" > "$RELEASE_DIR/$ARCHIVE.sha256"
+          DMG="QuotaBar-${VERSION}-macos-arm64.dmg"
+          LATEST_DMG="QuotaBar-macos-arm64.dmg"
+          chmod +x ./scripts/package-menubar-dmg.sh
+          ./scripts/package-menubar-dmg.sh "$VERSION" "$APP" "$RELEASE_DIR/$DMG"
+          cp "$RELEASE_DIR/$DMG" "$RELEASE_DIR/$LATEST_DMG"
+          DMG_SHA256="$(shasum -a 256 "$RELEASE_DIR/$DMG" | cut -d' ' -f1)"
+          printf '%s  %s\n' "$DMG_SHA256" "$DMG" > "$RELEASE_DIR/$DMG.sha256"
+          python3 - <<PY
+          import json
+          feed = {
+            "schema_version": 1,
+            "product": "quotabar",
+            "version": "${VERSION}",
+            "notes": "QuotaBar ${VERSION}",
+            "assets": {
+              "dmg": {
+                "url": "https://github.com/gotry-io/Quota/releases/download/menubar-v${VERSION}/${LATEST_DMG}",
+                "sha256": "${DMG_SHA256}",
+              },
+              "zip": {
+                "url": "https://github.com/gotry-io/Quota/releases/download/menubar-v${VERSION}/${ARCHIVE}",
+                "sha256": "${SHA256}",
+              },
+            },
+          }
+          with open("${RELEASE_DIR}/menubar-update.json", "w", encoding="utf-8") as handle:
+              json.dump(feed, handle, indent=2)
+              handle.write("\\n")
+          PY
           echo "archive=$ARCHIVE" >> "$GITHUB_OUTPUT"
           echo "sha256=$SHA256" >> "$GITHUB_OUTPUT"
+          echo "dmg=$DMG" >> "$GITHUB_OUTPUT"
+          echo "latest_dmg=$LATEST_DMG" >> "$GITHUB_OUTPUT"
 
       - name: Publish GitHub Release
         env:
@@ -199,6 +230,10 @@ jobs:
           gh release upload "$TAG" \
             "dist/release/$ARCHIVE" \
             "dist/release/$ARCHIVE.sha256" \
+            "dist/release/${{ steps.artifact.outputs.dmg }}" \
+            "dist/release/${{ steps.artifact.outputs.dmg }}.sha256" \
+            "dist/release/${{ steps.artifact.outputs.latest_dmg }}" \
+            "dist/release/menubar-update.json" \
             --repo "$GITHUB_REPOSITORY" \
             --clobber
 

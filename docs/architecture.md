@@ -186,7 +186,8 @@ The shared Rust service is the native OAuth public client used by QuotaBar and L
 QuotaBar uses Authorization Code with PKCE and a temporary loopback callback; Linux `quotacli` uses
 the OAuth Device Authorization Grant and never opens a browser or loopback listener. Device
 `display_name` is the host computer name (macOS ComputerName, otherwise hostname), not the product
-name. Relay returns
+name. QuotaBar checks `https://quota.gotry.io/updates/menubar.json` and the GitHub release feed,
+prompts from Support, and applies a verified `.dmg` or `.zip` in-app. Relay returns
 separate account-read and current-device-write sessions; access and refresh expiry are explicit and
 refresh rotates atomically. The network `client_id` value `quotacli` remains unchanged because it is
 part of released protocol v2.
@@ -257,8 +258,10 @@ browser scope and performs Device/Account deletion, rotation/revocation, and Usa
 storage transactions. Relay serves the current Usage agents and pricing catalog without the ended
 0.0.5 response variant; current clients explicitly send `usage_agents=all`.
 
-Quota Web builds static Vite assets independently. `/my` reads account summaries and manages
-Devices and deletion; `/activate` approves or denies native authorization. Better Auth owns GitHub
+Quota Web builds static Vite assets independently. `/` offers the QuotaBar `.dmg` and Homebrew
+install command. `/my` reads account summaries, exports shareable remaining-quota and usage cards,
+and manages Devices, deletion, and an explicit public-profile choice. `/u/{username}` is the opted-in
+public projection. `/activate` approves or denies native authorization. Better Auth owns GitHub
 login and browser sessions. Production Web and Worker deploy together only through
 `.github/workflows/deploy-cloudflare.yml`.
 

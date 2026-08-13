@@ -19,6 +19,8 @@ export interface AccountRecord {
   display_label: string | null;
   created_at: string;
   updated_at: string;
+  public_profile_enabled?: number | null;
+  public_profile_slug?: string | null;
 }
 
 export interface DeviceRecord {
@@ -256,6 +258,13 @@ export interface AccountState {
     signOutDevice: boolean,
   ): Promise<void>;
   getAccount(accountId: string): Promise<AccountRecord | null>;
+  getAccountByPublicSlug(slug: string): Promise<AccountRecord | null>;
+  setPublicProfile(
+    accountId: string,
+    enabled: boolean,
+    slug: string | null,
+    updatedAt: string,
+  ): Promise<"ok" | "conflict">;
   listAccountDevices(accountId: string): Promise<DeviceRecord[]>;
   accountOwnsVisibleDevice(accountId: string, deviceId: string): Promise<boolean>;
   getDeviceSyncControl(deviceId: string, generation: number): Promise<DeviceSyncControl | null>;

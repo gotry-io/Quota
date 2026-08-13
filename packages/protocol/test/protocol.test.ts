@@ -20,6 +20,9 @@ import {
   OAuthTokenRequestSchema,
   OAuthTokenResponseSchema,
   PROTOCOL_VERSION,
+  PublicProfileSchema,
+  PublicProfileSettingsSchema,
+  PublicProfileUpdateRequestSchema,
   PROVIDER_IDS,
   ProviderIdSchema,
   PricingCatalogSchema,
@@ -132,6 +135,44 @@ describe("quota protocol v2", () => {
         ],
       }).success,
     ).toBe(true);
+  });
+
+  it("keeps public profiles opted-in and free of device identifiers", () => {
+    const profile = {
+      protocol_version: 2,
+      username: "octocat",
+      display_label: "octocat",
+      quota: [
+        {
+          provider: "codex",
+          plan: "Plus",
+          windows: [{ title: "Weekly", used_percent: 25 }],
+        },
+      ],
+      usage: {
+        range: { from: "2026-08-01", to: "2026-08-13" },
+        input_tokens: 10,
+        output_tokens: 4,
+        cost_status: "complete",
+        amount_microusd: "1000",
+        models: [{ name: "gpt-5", tokens: 14 }],
+      },
+    };
+    expect(PublicProfileSchema.safeParse(profile).success).toBe(true);
+    expect(
+      PublicProfileSettingsSchema.safeParse({
+        protocol_version: 2,
+        enabled: false,
+        slug: null,
+      }).success,
+    ).toBe(true);
+    expect(
+      PublicProfileUpdateRequestSchema.safeParse({
+        protocol_version: 2,
+        enabled: true,
+        slug: "Octocat",
+      }).success,
+    ).toBe(false);
   });
 
   it("keeps local collection reports versioned, strict, and provider-consistent", () => {

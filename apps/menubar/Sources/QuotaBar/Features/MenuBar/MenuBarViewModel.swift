@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Observation
 
@@ -126,10 +127,15 @@ final class MenuBarViewModel {
   private(set) var browserSessionWaitingProvider: ProviderID?
   private(set) var canCancelBrowserSessionLogin = false
   private(set) var browserSessionActivityText: String?
+  private(set) var availableUpdate: AppUpdateOffer?
+  private(set) var updateStatus: AppUpdateStatus = .idle
+  private(set) var updateMessage: String?
 
   private var authStatus: LocalServiceAuthStatus?
   private var overview: [LocalServiceOverviewItem] = []
   private var revision = 0
+  private var updateService = AppUpdateService()
+  private var updateTask: Task<Void, Never>?
 
   var accountState: AccountViewState {
     switch authStatus {
@@ -192,6 +198,7 @@ final class MenuBarViewModel {
       do {
         self.client = try LocalServiceClient()
         initializationError = nil
+        startAutomaticUpdateCheck()
       } catch {
         self.client = nil
         initializationError = Self.message(for: error)
@@ -770,6 +777,57 @@ final class MenuBarViewModel {
       selectedSource: selectedSource,
       selectedSourceDisplayName: item.selectedSourceDisplayName
     )
+  }
+
+  func checkForUpdates() {
+    updateTask?.cancel()
+    updateTask = Task { await performUpdateCheck() }
+  }
+
+  func applyAvailableUpdate() {
+    guard let offer = availableUpdate, updateStatus != .applying else { return }
+    updateTask?.cancel()
+    updateTask = Task { await performUpdateApply(offer) }
+  }
+
+  private func startAutomaticUpdateCheck() {
+    updateTask = Task { await performUpdateCheck() }
+  }
+
+  private func performUpdateCheck() async {
+    updateStatus = .checking
+    updateMessage = nil
+    let offer = await updateService.check(currentVersion: AppMetadata.version)
+    guard !Task.isCancelled else { return }
+    if AppMetadata.version == "Development" || AppUpdateDecision.parseVersion(AppMetadata.version) == nil {
+      updateStatus = .current
+      updateMessage = "This build cannot check packaged releases."
+      availableUpdate = nil
+      return
+    }
+    if let offer {
+      availableUpdate = offer
+      updateStatus = .available
+      updateMessage = "QuotaBar \(offer.version) is available."
+    } else {
+      availableUpdate = nil
+      updateStatus = .current
+      updateMessage = "QuotaBar is up to date."
+    }
+  }
+
+  private func performUpdateApply(_ offer: AppUpdateOffer) async {
+    updateStatus = .applying
+    updateMessage = "Downloading QuotaBar \(offer.version)…"
+    do {
+      try await updateService.apply(offer)
+      updateMessage = "Installing QuotaBar \(offer.version)…"
+      NSApplication.shared.terminate(nil)
+    } catch {
+      guard !Task.isCancelled else { return }
+      updateStatus = .failed
+      updateMessage = "QuotaBar could not install the update."
+    }
   }
 
   private static func message(for error: Error) -> String {

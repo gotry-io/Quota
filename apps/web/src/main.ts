@@ -9,11 +9,18 @@ import {
   type UsageCostOutcome,
 } from "@gotry-io/quota-protocol";
 import "./styles.css";
+import { PublicProfileSchema, PublicProfileSettingsSchema } from "@gotry-io/quota-protocol";
+import {
+  buildShareExport,
+  downloadShareFile,
+  shareInputFromAccountSummary,
+} from "./share-export.ts";
 import {
   accountEntryAction,
   DASHBOARD_PATH,
   legacyDashboardRedirect,
   planDisplayName,
+  publicProfileUsername,
 } from "./routes.ts";
 
 const WEB_LOCALE = "en-US";
@@ -25,6 +32,10 @@ for (const button of document.querySelectorAll<HTMLButtonElement>("[data-web-log
     void openAccountOrLogin();
   });
 }
+document.querySelector<HTMLButtonElement>("[data-copy-brew]")?.addEventListener("click", () => {
+  const command = document.querySelector("#brew-install")?.textContent?.trim();
+  if (command) void navigator.clipboard.writeText(command);
+});
 document.querySelector<HTMLFormElement>("#logout-form")?.addEventListener("submit", (event) => {
   event.preventDefault();
   void logout();
@@ -41,10 +52,13 @@ document.addEventListener("pointerdown", (event) => {
 
 const path = window.location.pathname;
 const legacyPath = legacyDashboardRedirect(path);
+const publicUsername = publicProfileUsername(path);
 if (legacyPath) {
   window.location.replace(legacyPath);
 } else if (path === DASHBOARD_PATH) {
   void showDashboard();
+} else if (publicUsername) {
+  void showPublicProfile(publicUsername);
 } else if (path === "/activate") {
   showActivation();
 }
@@ -70,6 +84,7 @@ async function showDashboard(): Promise<void> {
     const parsed = AccountSummarySchema.safeParse(await response.json());
     if (!parsed.success) throw new Error("invalid_account_summary");
     renderDashboard(parsed.data);
+    await loadPublicProfileSettings(parsed.data.account.display_label);
   } catch {
     showAccountError("Quota could not load this account. Refresh to try again.");
     showUsageActivityMessage("Usage activity is unavailable.");
@@ -114,6 +129,7 @@ function renderDashboard(summary: AccountSummary): void {
     summary.usage.breakdowns.filter((item) => item.dimension === "usage_date"),
     summary.usage.range,
   );
+  bindShareExports(summary);
 }
 
 function renderQuotaObservation(
@@ -490,11 +506,163 @@ async function logout(): Promise<void> {
   }
 }
 
-function setView(id: "dashboard-view" | "activate-view"): void {
+function setView(id: "dashboard-view" | "activate-view" | "public-view"): void {
   requiredElement("landing-view").hidden = true;
   requiredElement("dashboard-view").hidden = id !== "dashboard-view";
   requiredElement("activate-view").hidden = id !== "activate-view";
+  requiredElement("public-view").hidden = id !== "public-view";
   requiredElement("route-loading").hidden = true;
+}
+
+function bindShareExports(summary: AccountSummary): void {
+  const exported = buildShareExport(shareInputFromAccountSummary(summary));
+  requiredElement<HTMLButtonElement>("export-quota").onclick = () => {
+    downloadShareFile("quota-remaining.svg", exported.quota_svg, "image/svg+xml");
+    void navigator.clipboard.writeText(exported.quota_text);
+  };
+  requiredElement<HTMLButtonElement>("export-usage").onclick = () => {
+    downloadShareFile("quota-usage.svg", exported.usage_svg, "image/svg+xml");
+    void navigator.clipboard.writeText(exported.usage_text);
+  };
+}
+
+async function loadPublicProfileSettings(displayLabel: string | null): Promise<void> {
+  const enabled = requiredElement<HTMLInputElement>("public-profile-enabled");
+  const slug = requiredElement<HTMLInputElement>("public-profile-slug");
+  const form = requiredElement<HTMLFormElement>("public-profile-form");
+  const status = requiredElement("public-profile-status");
+  const response = await fetch("/api/v2/account/public-profile", {
+    credentials: "same-origin",
+    redirect: "error",
+    headers: { Accept: "application/json" },
+  });
+  if (!response.ok) return;
+  const parsed = PublicProfileSettingsSchema.safeParse(await response.json());
+  if (!parsed.success) return;
+  enabled.checked = parsed.data.enabled;
+  slug.value = parsed.data.slug ?? displayLabel?.toLowerCase().replaceAll(/[^a-z0-9]+/g, "-") ?? "";
+  form.onsubmit = (event) => {
+    event.preventDefault();
+    void savePublicProfile();
+  };
+  status.hidden = !parsed.data.enabled || !parsed.data.slug;
+  if (parsed.data.enabled && parsed.data.slug) {
+    status.hidden = false;
+    status.textContent = `Public at /u/${parsed.data.slug}`;
+  }
+}
+
+async function savePublicProfile(): Promise<void> {
+  const enabled = requiredElement<HTMLInputElement>("public-profile-enabled").checked;
+  const slug = requiredElement<HTMLInputElement>("public-profile-slug").value.trim();
+  const status = requiredElement("public-profile-status");
+  const response = await fetch("/api/v2/account/public-profile", {
+    method: "PUT",
+    credentials: "same-origin",
+    redirect: "error",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      protocol_version: PROTOCOL_VERSION,
+      enabled,
+      ...(slug ? { slug } : {}),
+    }),
+  });
+  status.hidden = false;
+  if (response.status === 409) {
+    status.textContent = "That public username is already in use.";
+    return;
+  }
+  if (!response.ok) {
+    status.textContent = "Quota could not update public visibility.";
+    return;
+  }
+  const parsed = PublicProfileSettingsSchema.safeParse(await response.json());
+  if (!parsed.success) {
+    status.textContent = "Quota could not update public visibility.";
+    return;
+  }
+  status.textContent = parsed.data.enabled
+    ? `Public at /u/${parsed.data.slug}`
+    : "This profile is private.";
+}
+
+async function showPublicProfile(username: string): Promise<void> {
+  setView("public-view");
+  text("public-title", `@${username}`);
+  const error = requiredElement("public-error");
+  const body = requiredElement("public-body");
+  error.hidden = true;
+  body.hidden = true;
+  const response = await fetch(`/api/v2/public/profiles/${encodeURIComponent(username)}`, {
+    redirect: "error",
+    headers: { Accept: "application/json" },
+  });
+  if (response.status === 404) {
+    error.hidden = false;
+    error.textContent = "This profile is private or does not exist.";
+    return;
+  }
+  const parsed = PublicProfileSchema.safeParse(await response.json());
+  if (!parsed.success) {
+    error.hidden = false;
+    error.textContent = "Quota could not load this public profile.";
+    return;
+  }
+  body.hidden = false;
+  text("public-input-total", formatCount(parsed.data.usage.input_tokens));
+  text("public-output-total", formatCount(parsed.data.usage.output_tokens));
+  text(
+    "public-cost-total",
+    parsed.data.usage.cost_status === "unavailable" || parsed.data.usage.amount_microusd === null
+      ? "— unpriced"
+      : new Intl.NumberFormat(WEB_LOCALE, {
+          style: "currency",
+          currency: "USD",
+          maximumFractionDigits: 2,
+        }).format(Number(parsed.data.usage.amount_microusd) / 1_000_000),
+  );
+  const quotas = requiredElement("public-quota-list");
+  quotas.replaceChildren(
+    ...parsed.data.quota.map((provider) => {
+      const card = document.createElement("article");
+      card.className = "quota-card";
+      const heading = document.createElement("h3");
+      heading.textContent = `${titleCase(provider.provider)}${provider.plan ? ` · ${provider.plan}` : ""}`;
+      const list = document.createElement("div");
+      list.className = "quota-window-list";
+      for (const window of provider.windows) {
+        const row = document.createElement("div");
+        row.className = "quota-window-heading";
+        const title = document.createElement("span");
+        title.textContent = window.title;
+        const value = document.createElement("strong");
+        value.textContent = formatQuotaRemaining({
+          ...window,
+          id: window.title,
+          used_percent: window.used_percent,
+        });
+        row.append(title, value);
+        list.append(row);
+      }
+      card.append(heading, list);
+      return card;
+    }),
+  );
+  const models = requiredElement("public-model-breakdown");
+  models.replaceChildren();
+  for (const model of parsed.data.usage.models) {
+    const row = document.createElement("tr");
+    const name = document.createElement("th");
+    name.scope = "row";
+    name.textContent = model.name;
+    const tokens = document.createElement("td");
+    tokens.textContent = formatCount(model.tokens);
+    row.append(name, tokens);
+    models.append(row);
+  }
 }
 
 function showAccountError(message: string, action?: string): void {

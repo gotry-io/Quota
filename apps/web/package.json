@@ -10,7 +10,7 @@
     "check": "tsc -p tsconfig.json",
     "dev": "vite",
     "preview": "vite preview",
-    "test": "node --test test/routes.test.ts"
+    "test": "node --test test/routes.test.ts test/share-export.test.ts test/landing.test.ts"
   },
   "devDependencies": {
     "@gotry-io/quota-protocol": "workspace:*",

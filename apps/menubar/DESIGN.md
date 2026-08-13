@@ -167,10 +167,11 @@ Do not add a separate account-management row; the signed-in account label is tha
 Quota contains the **Usage** and **Agents** destinations. The Usage root summary uses account-wide
 totals while signed in with Usage sync enabled, and local totals otherwise. General contains the
 native mini **Launch at Login** and **Sync Usage** switches followed by the **Support** destination.
-Support contains Diagnostics, Feedback, Website, and version; Diagnostics remains backed by the
-private `diagnose` operation and shows one bounded status for Providers, Quota, Usage, Pricing,
-Account, and Sync, plus safe issue counts and **Copy Text** and **Copy JSON** actions. The Usage source
-control is not repeated in Settings.
+Support contains Diagnostics, Feedback, Website, version, and **Check for Updates**. When a newer
+released feed version is available, that row becomes **Install Update** and applies the signed
+archive in-app. Diagnostics remains backed by the private `diagnose` operation and shows one bounded
+status for Providers, Quota, Usage, Pricing, Account, and Sync, plus safe issue counts and **Copy
+Text** and **Copy JSON** actions. The Usage source control is not repeated in Settings.
 
 ### Devices
 

@@ -113,10 +113,11 @@ remote migrations or deploy manually without explicit authorization.
 ## Distribution
 
 QuotaBar and QuotaCLI release independently. A `menubar-vX.Y.Z` tag builds one signed and notarized
-Apple Silicon app and updates the Homebrew Cask. The Cask installs only `QuotaBar.app`; it does not
-expose the private service as a command. A `cli-vX.Y.Z` tag publishes a static x86_64 Linux binary
-and checksum to GitHub Releases. QuotaCLI is not published to npm or Homebrew; Windows is not built
-or released.
+Apple Silicon app, a drag-install `.dmg`, a `menubar-update.json` feed for in-app updates, and
+updates the Homebrew Cask. The Cask installs only `QuotaBar.app`; it does not expose the private
+service as a command. Install with `brew install gotry-io/tap/quotabar` or the website `.dmg`. A
+`cli-vX.Y.Z` tag publishes a static x86_64 Linux binary and checksum to GitHub Releases. QuotaCLI is
+not published to npm or Homebrew; Windows is not built or released.
 
 ```bash
 pnpm version:bump:cli patch      # or minor | major | explicit semver
@@ -128,10 +129,12 @@ The marketing version lives in `apps/menubar/Support/Info.plist`.
 ## Current status
 
 The repository implements protocol v2 account/device authentication, independent quota and Usage
-upload sequencing, D1 persistence and deletion watermarks, seven Rust quota collectors, five Rust
+upload sequencing, D1 persistence and deletion watermarks, eight Rust quota collectors, five Rust
 Usage parsers with file-level incremental indexing, effective-dated cost calculation, owner-only
 local SQLite state and provider configuration, persistent private IPC, QuotaBar account/provider
-configuration UI, fixed-window client-scoped account-or-local Usage detail, and the Web account dashboard. Raw model
+configuration UI, in-app QuotaBar update checks, fixed-window client-scoped account-or-local Usage
+detail, shareable remaining-quota/usage exports, opt-in public `/u/{username}` pages, and the Web
+account dashboard. Raw model
 identifiers remain opaque bounded provider text; a separately versioned catalog derives stable
 report keys without rewriting facts or changing pricing. Valid facts remain usable when pricing or
 model aliases are unknown. Record/file failures are isolated and complete uploads are partitioned

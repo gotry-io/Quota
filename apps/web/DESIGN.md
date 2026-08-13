@@ -18,16 +18,22 @@ open-source tool, not a hosting console or a promotional SaaS dashboard.
 
 ## Information architecture
 
-The site has three surfaces:
+The site has four surfaces:
 
 1. `/` explains local collection, one GitHub-backed Account, Devices, and API-equivalent Usage cost.
+   The hero offers a QuotaBar `.dmg` download and a copyable `brew install gotry-io/tap/quotabar`
+   command.
 2. `/my` shows the signed-in user's name, quota snapshots, account totals, cost coverage, Usage
    activity, model/agent breakdowns, Devices, and explicit Device deletion. Quota remaining has no
    "left"/"remaining" suffix; budget windows with an amount use `71% · $3.75`, percent-only windows
    use `71%`, and balance-only windows use **Balance** plus `$12.34`. Account actions live in
    the account menu, whose trigger is the signed-in GitHub username. The shipped `/app` bookmark
-   is a single redirect to `/my`.
-3. `/activate` approves or denies a released native-client device authorization code.
+   is a single redirect to `/my`. Signed-in users can export remaining-quota and usage share cards
+   and explicitly choose a public `/u/{username}` page. Profiles stay private until that choice.
+3. `/u/{username}` is the opted-in public remaining-quota and usage view. It never includes device
+   ids, fingerprints, credentials, or private identifiers. Unknown or private slugs show a plain
+   private/unavailable state.
+4. `/activate` approves or denies a released native-client device authorization code.
 
 GitHub is the only sign-in action. There is no Relay selection, pairing group, owner capability,
 provider-secret form, server administration, or self-hosted setup in the Web UI.
@@ -87,7 +93,8 @@ The explanation follows this order:
 - the direct local agent logs → QuotaBar local service → Account data path;
 - a final GitHub sign-in action.
 
-Do not present unavailable downloads or documentation as active destinations.
+The hero also presents the live GitHub Releases `.dmg` and the Homebrew tap command. Do not present
+unavailable downloads or documentation as active destinations.
 
 ## Account dashboard
 

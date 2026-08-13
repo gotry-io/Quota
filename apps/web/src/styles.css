@@ -209,6 +209,65 @@ h1 {
   font-size: 12px;
 }
 
+.install-panel {
+  margin-top: 20px;
+  padding: 14px 16px;
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  background: var(--brand-surface);
+}
+
+.install-label {
+  margin: 0 0 8px;
+  color: var(--charcoal);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.brew-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.brew-row code,
+.brew-row input {
+  flex: 1 1 16rem;
+  min-height: 42px;
+  padding: 8px 12px;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: var(--canvas);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+}
+
+.share-actions,
+.public-profile-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.share-actions {
+  flex-direction: row;
+  flex-wrap: wrap;
+}
+
+.public-profile-toggle {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  color: var(--charcoal);
+}
+
+.public-profile-form label[for="public-profile-slug"] {
+  color: var(--body);
+  font-size: 13px;
+}
+
 .product-preview {
   overflow: hidden;
   margin: 0;

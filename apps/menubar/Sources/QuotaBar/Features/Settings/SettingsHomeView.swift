@@ -258,6 +258,7 @@ struct SettingsHomeView: View {
 }
 
 struct SettingsSupportView: View {
+  @Bindable var model: MenuBarViewModel
   let onOpenDiagnostics: () -> Void
 
   var body: some View {
@@ -296,12 +297,51 @@ struct SettingsSupportView: View {
             }
             .accessibilityElement(children: .combine)
             .accessibilityLabel("Version \(AppMetadata.versionLabel)")
+
+            updateRow
           }
+        }
+
+        if let updateMessage = model.updateMessage, model.updateStatus != .idle {
+          Text(updateMessage)
+            .quotaMetaStyle()
+            .fixedSize(horizontal: false, vertical: true)
         }
       }
       .frame(maxWidth: .infinity, alignment: .topLeading)
       .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
       .padding(.vertical, QuotaDesign.Layout.pageVerticalPadding)
+    }
+  }
+
+  @ViewBuilder
+  private var updateRow: some View {
+    switch model.updateStatus {
+    case .available:
+      Button(action: model.applyAvailableUpdate) {
+        SettingsListRow(title: "Install Update", systemImage: "arrow.down.app") {
+          Text(model.availableUpdate.map { "v\($0.version)" } ?? "")
+            .quotaListSecondaryStyle()
+        }
+      }
+      .buttonStyle(QuotaListRowButtonStyle())
+      .accessibilityLabel("Install QuotaBar update")
+    case .applying:
+      SettingsListRow(title: "Installing Update…", systemImage: "arrow.down.app") {
+        ProgressView().controlSize(.small)
+      }
+    default:
+      Button(action: model.checkForUpdates) {
+        SettingsListRow(
+          title: model.updateStatus == .checking ? "Checking…" : "Check for Updates",
+          systemImage: "arrow.triangle.2.circlepath"
+        ) {
+          EmptyView()
+        }
+      }
+      .buttonStyle(QuotaListRowButtonStyle())
+      .disabled(model.updateStatus == .checking)
+      .accessibilityLabel("Check for Updates")
     }
   }
 }
