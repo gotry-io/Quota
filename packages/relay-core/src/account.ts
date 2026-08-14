@@ -271,6 +271,13 @@ export interface AccountState {
   listAccountDevices(accountId: string): Promise<DeviceRecord[]>;
   accountOwnsVisibleDevice(accountId: string, deviceId: string): Promise<boolean>;
   getDeviceSyncControl(deviceId: string, generation: number): Promise<DeviceSyncControl | null>;
+  updateDeviceProfile(
+    deviceId: string,
+    generation: number,
+    displayName: string,
+    platform: string,
+    updatedAt: string,
+  ): Promise<boolean>;
   deleteDeviceData(
     accountId: string,
     deviceId: string,

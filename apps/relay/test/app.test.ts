@@ -1017,6 +1017,27 @@ describe("managed Relay on real Workers and D1", () => {
     });
     expect(
       (
+        await app.request("https://quota.gotry.io/api/v2/device/profile", {
+          method: "PUT",
+          headers: {
+            Authorization: `Bearer ${tokens.device_session.access_token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            protocol_version: 2,
+            display_name: "Kyle's Mac mini",
+            platform: "macos",
+          }),
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      await env.DB.prepare("SELECT display_name FROM devices WHERE id = ?1")
+        .bind(tokens.device_id)
+        .first("display_name"),
+    ).toBe("Kyle's Mac mini");
+    expect(
+      (
         await app.request("https://quota.gotry.io/oauth/v2/revoke", {
           method: "POST",
           headers: { Authorization: `Bearer ${tokens.device_session.refresh_token}` },

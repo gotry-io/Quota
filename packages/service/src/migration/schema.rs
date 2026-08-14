@@ -1,11 +1,12 @@
 //! Durable, append-only SQLite schema migrations.
 
-use rusqlite::{Connection, Transaction, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use serde_json::Value;
 use uuid::Uuid;
 
 use crate::state::StateError;
 
-const CURRENT_SCHEMA: i64 = 5;
+const CURRENT_SCHEMA: i64 = 6;
 
 pub fn apply(conn: &mut Connection) -> Result<(), StateError> {
     conn.execute_batch(
@@ -30,6 +31,7 @@ pub fn apply(conn: &mut Connection) -> Result<(), StateError> {
             3 => migration_v3(&tx)?,
             4 => migration_v4(&tx)?,
             5 => migration_v5(&tx)?,
+            6 => migration_v6(&tx)?,
             _ => return Err(StateError::InvalidState),
         }
         tx.execute(
@@ -200,6 +202,57 @@ fn migration_v5(tx: &Transaction<'_>) -> Result<(), StateError> {
     Ok(())
 }
 
+fn migration_v6(tx: &Transaction<'_>) -> Result<(), StateError> {
+    let mut statement =
+        tx.prepare("SELECT submission_id, payload_json FROM usage_outbox ORDER BY submission_id")?;
+    let outbox = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(statement);
+
+    for (submission_id, raw) in outbox {
+        let mut payload: Value = serde_json::from_str(&raw)?;
+        if payload.get("protocol_version").and_then(Value::as_u64) != Some(2) {
+            continue;
+        }
+        payload["protocol_version"] = Value::from(3);
+        tx.execute(
+            "UPDATE usage_outbox SET payload_json = ?1 WHERE submission_id = ?2",
+            params![serde_json::to_string(&payload)?, submission_id],
+        )?;
+    }
+
+    let account = tx
+        .query_row(
+            "SELECT value_json FROM components WHERE name = 'account'",
+            [],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()?
+        .flatten();
+    if let Some(raw) = account {
+        let mut value: Value = serde_json::from_str(&raw)?;
+        let cached_version = value
+            .get("account_summary")
+            .and_then(|summary| summary.get("protocol_version"))
+            .and_then(Value::as_u64);
+        if cached_version == Some(2) {
+            value["account_summary"] = Value::Null;
+            tx.execute(
+                "UPDATE components SET value_json = ?1 WHERE name = 'account'",
+                [serde_json::to_string(&value)?],
+            )?;
+        }
+    }
+    tx.execute(
+        "DELETE FROM usage_period_cache WHERE source = 'account'",
+        [],
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -259,7 +312,7 @@ mod tests {
             .expect("v1 rows")
             .collect::<Result<Vec<_>, _>>()
             .expect("v1 values");
-        assert_eq!(fresh_versions, vec![1, 2, 3, 4, 5]);
+        assert_eq!(fresh_versions, vec![1, 2, 3, 4, 5, 6]);
         assert_eq!(fresh_versions, v1_versions);
         assert_eq!(
             columns(&fresh, "usage_period_cache"),
@@ -351,5 +404,117 @@ mod tests {
             .expect("quota count"),
             1
         );
+    }
+
+    #[test]
+    fn v6_promotes_v2_outbox_and_discards_v2_account_presentations() {
+        let mut conn = Connection::open_in_memory().expect("database");
+        apply(&mut conn).expect("current schema");
+        conn.execute(
+            "INSERT INTO usage_outbox(
+                submission_id, account_id, device_id, generation, sequence, payload_json
+             ) VALUES ('v2', 'account', 'device', 1, 0, ?1),
+                      ('v3', 'account', 'device', 1, 1, ?2)",
+            params![
+                usage_submission(2, "v2", "codex").to_string(),
+                usage_submission(3, "v3", "cursor").to_string()
+            ],
+        )
+        .expect("outbox fixtures");
+        conn.execute(
+            "INSERT INTO components(name, status, value_json)
+             VALUES ('account', 'ready', ?1)",
+            [serde_json::json!({
+                "auth_status": "signed_in",
+                "account_id": "account",
+                "device_id": "device",
+                "device_generation": 1,
+                "account_summary": {"protocol_version": 2, "quota": []}
+            })
+            .to_string()],
+        )
+        .expect("account fixture");
+        conn.execute(
+            "INSERT INTO usage_period_cache(source, period, value_json)
+             VALUES ('local', 'today', '{}'), ('account', 'today', '{}')",
+            [],
+        )
+        .expect("period fixtures");
+        conn.execute("DELETE FROM schema_migrations WHERE version = 6", [])
+            .expect("rewind migration marker");
+
+        apply(&mut conn).expect("v6 migration");
+
+        let payloads = conn
+            .prepare("SELECT payload_json FROM usage_outbox ORDER BY submission_id")
+            .expect("outbox query")
+            .query_map([], |row| row.get::<_, String>(0))
+            .expect("outbox rows")
+            .map(|row| {
+                serde_json::from_str::<Value>(&row.expect("outbox payload")).expect("outbox json")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            payloads
+                .iter()
+                .map(|payload| payload["protocol_version"].as_u64())
+                .collect::<Vec<_>>(),
+            vec![Some(3), Some(3)]
+        );
+        assert!(
+            payloads
+                .iter()
+                .all(|payload| crate::relay::validate_usage_submission(payload).is_ok())
+        );
+
+        let account: Value = serde_json::from_str(
+            &conn
+                .query_row(
+                    "SELECT value_json FROM components WHERE name = 'account'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .expect("account value"),
+        )
+        .expect("account json");
+        assert_eq!(account["account_id"], "account");
+        assert!(account["account_summary"].is_null());
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM usage_period_cache WHERE source = 'local'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("local periods"),
+            1
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM usage_period_cache WHERE source = 'account'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("account periods"),
+            0
+        );
+    }
+
+    fn usage_submission(protocol_version: u64, submission_id: &str, agent: &str) -> Value {
+        serde_json::json!({
+            "protocol_version": protocol_version,
+            "submission_id": submission_id,
+            "device_id": "device",
+            "generation": 1,
+            "sequence": 0,
+            "parser_revision": "rust-v1",
+            "aggregation_timezone": "UTC",
+            "coverage": {
+                "agent": agent,
+                "start_at": "2026-08-10T00:00:00Z",
+                "end_at": "2026-08-10T01:00:00Z",
+                "status": "complete"
+            },
+            "rows": []
+        })
     }
 }

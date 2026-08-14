@@ -16,6 +16,8 @@ import {
   DeviceAuthorizationDecisionRequestSchema,
   DeviceAuthorizationRequestSchema,
   DeviceAuthorizationResponseSchema,
+  DeviceProfileUpdateRequestSchema,
+  DeviceProfileUpdateResponseSchema,
   DeviceSyncResponseSchema,
   LogoutResponseSchema,
   MAXIMUM_USAGE_READ_ROWS,
@@ -171,6 +173,10 @@ export function createRelayApp(options: RelayAppOptions): Hono {
   app.use(
     "/api/v3/device/usage",
     bodyLimit({ maxSize: MAXIMUM_USAGE_SUBMISSION_BYTES, onError: requestBodyTooLarge }),
+  );
+  app.use(
+    "/api/v2/device/profile",
+    bodyLimit({ maxSize: maximumCredentialBodyBytes, onError: requestBodyTooLarge }),
   );
 
   app.get("/readyz", async (context) => {
@@ -851,6 +857,38 @@ export function createRelayApp(options: RelayAppOptions): Hono {
         next_usage_sequence: control.next_usage_sequence,
         usage_deleted_before: control.usage_deleted_before,
         usage_sync_revision: control.usage_sync_revision,
+      }),
+    );
+  });
+
+  app.put("/api/v2/device/profile", async (context) => {
+    const principal = await deviceWriter(context, options, "sync:read:self", now());
+    if (principal instanceof Response) {
+      return principal;
+    }
+    const raw = await parseRawJSON(context);
+    if (raw instanceof Response) {
+      return raw;
+    }
+    const parsed = DeviceProfileUpdateRequestSchema.safeParse(raw);
+    if (!parsed.success) {
+      return invalidRequest(context);
+    }
+    const updated = await options.state.updateDeviceProfile(
+      principal.device_id,
+      principal.generation,
+      parsed.data.display_name,
+      parsed.data.platform,
+      now().toISOString(),
+    );
+    if (!updated) {
+      return unauthorized(context);
+    }
+    return context.json(
+      DeviceProfileUpdateResponseSchema.parse({
+        protocol_version: PROTOCOL_VERSION,
+        status: "updated",
+        device_id: principal.device_id,
       }),
     );
   });
