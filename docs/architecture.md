@@ -275,7 +275,10 @@ request is rendered by SvelteKit `Server.respond`. The Worker reads the Better A
 cookie through `WebDocumentPort` and writes the signed-in header into the first HTML byte.
 Session cookies remain HttpOnly. `/` offers the QuotaBar `.dmg` and Homebrew install command.
 GitHub sign-in is in the header; `/my` is a server redirect when unsigned and otherwise a
-dashboard shell whose Usage summary is fetched from `GET /api/v3/account/summary`.
+streaming dashboard. Its document load starts the existing `GET /api/v3/account/summary` handler
+inside the composed Worker and reuses the request's memoized Better Auth session, so Account data
+can resolve in parallel with hydration without a second browser round trip. The API schema and
+Relay/Web source boundary remain unchanged.
 `/u/{username}` is the public projection for that GitHub username. `/activate` approves or
 denies native authorization. `/app` is a server redirect to `/my`. Better Auth owns GitHub
 login and browser sessions. Production Web and Worker deploy together only through

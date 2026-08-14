@@ -7,6 +7,7 @@ import {
   planDisplayName,
   publicProfileUsername,
 } from "../src/lib/routes.ts";
+import { formatQuotaRemaining } from "../src/lib/format.ts";
 
 test("keeps the shipped /app dashboard bookmark as a single redirect", () => {
   assert.equal(DASHBOARD_PATH, "/my");
@@ -35,4 +36,16 @@ test("matches QuotaBar plan capitalization", () => {
   assert.equal(planDisplayName("Credits"), "Credits");
   assert.equal(planDisplayName("custom_plan"), "Custom Plan");
   assert.equal(planDisplayName("Already Named"), "Already Named");
+});
+
+test("keeps Cursor included-usage money out of compact quota cards", () => {
+  const window = {
+    id: "other_models",
+    used_percent: 63.102,
+    remaining_value: 14.55,
+    limit_value: 400,
+    value_unit: "usd",
+  };
+  assert.equal(formatQuotaRemaining(window, "cursor"), "37%");
+  assert.equal(formatQuotaRemaining(window, "openrouter"), "37% · $14.55");
 });

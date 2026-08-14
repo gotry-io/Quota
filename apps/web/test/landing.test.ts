@@ -32,9 +32,13 @@ test("homepage introduces QuotaBar and both install paths", () => {
   assert.doesNotMatch(layout, /gotry-io contributors/);
   assert.match(theme, /id="theme-toggle"/);
   assert.match(theme, /quota-theme/);
+  assert.match(theme, /\["system", "light", "dark"\]/);
+  assert.match(theme, /localStorage\.removeItem/);
   assert.match(theme, /prefers-color-scheme: dark/);
   assert.match(html, /quota-theme/);
   assert.match(html, /prefers-color-scheme: dark/);
+  assert.match(styles, /color-scheme: light dark/);
+  assert.match(styles, /light-dark\(/);
   assert.match(styles, /grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/);
   assert.doesNotMatch(landing, /id="export-quota"/);
   assert.doesNotMatch(landing, /id="public-profile-form"/);

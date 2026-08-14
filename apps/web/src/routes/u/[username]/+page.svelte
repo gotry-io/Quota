@@ -75,7 +75,7 @@ async function load(username: string): Promise<void> {
                   <p class="quota-card-account">{provider.plan ?? "Account"}</p>
                 </div>
               </div>
-              <QuotaWindows windows={provider.windows} />
+              <QuotaWindows windows={provider.windows} provider={provider.provider} />
             </article>
           {/each}
         </div>

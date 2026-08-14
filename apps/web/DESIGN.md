@@ -32,12 +32,16 @@ The site has four surfaces:
    windows use `71%`, and balance-only windows use **Balance** plus `$12.34`. Quota cards follow
    the same provider / account / remaining / meter / metadata order as QuotaBar Overview, in a
    denser web layout. Quota cards share `.quota-grid`: two columns on desktop and one column
-   below 620 px. Empty quota states span the full row. Selecting an Activity day loads that
+   below 620 px. Cursor's Other Models percentage and included-usage dollar amount are separate
+   provider meters: compact Quota cards show only the percentage while retaining the amount in the
+   typed response for a future detail surface. Empty quota states span the full row. Selecting an Activity day loads that
    day's Usage under the grid. The header shows the GitHub username;
    the name opens `/my`, and its menu
    contains only **Sign out**. Session cookies stay HttpOnly. SvelteKit renders the header from
-   `WebDocumentPort.getViewer` on the first HTML byte. The dashboard still loads Usage from
-   `GET /api/v3/account/summary` after paint. Unsigned visits to `/my` are a server redirect to
+   `WebDocumentPort.getViewer` on the first HTML byte. While rendering the signed-in document, the
+   Worker starts `GET /api/v3/account/summary` internally, reuses the resolved Better Auth session,
+   and streams the typed result into the page. The browser fetch is only a development or retry
+   path; it is not the production first-load path. Unsigned visits to `/my` are a server redirect to
    `/`. A successful `/u/{slug}` page view consumes two `public-profile` limiter tokens (document
    existence plus the JSON payload); after 60 views / 10 minutes the HTML can remain 200 while the
    JSON returns 429. The shipped `/app`
@@ -71,10 +75,11 @@ Tokens are defined in `src/app.css` and must remain the source used by the imple
 | Inverted surface | `#171717` | `#f4f4f4` | Bounded opposite-tone section |
 | Hairline | `#e5e5e5` | `#2a2a2a` | Dividers and card outlines |
 
-Color never carries status alone. Every state also has a text label. The footer theme control
-toggles `light` and `dark`. First visits and any session without an explicit `quota-theme`
-value follow `prefers-color-scheme`. A click writes `light` or `dark` to local storage. Do not
-add a third visible “system” control.
+Color never carries status alone. Every state also has a text label. The footer has one conventional
+appearance control with **System**, **Light**, and **Dark** options. System is the default, leaves no
+`data-theme` override, and follows the browser's `color-scheme` immediately when the operating-system
+appearance changes. Light or Dark writes the explicit `quota-theme` override to local storage;
+choosing System removes it. Do not render three permanent footer buttons.
 
 ### Type
 

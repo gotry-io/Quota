@@ -1,4 +1,5 @@
-import { createWebAccountAuth } from "./account/better-auth.ts";
+import { AccountSummaryV3Schema } from "@gotry-io/quota-protocol";
+import { createWebAccountAuth, memoizeWebAccountAuthSession } from "./account/better-auth.ts";
 import { AccountService } from "./account/service.ts";
 import { createWebDocumentPort } from "./account/web-document-port.ts";
 import { accountMaintenanceInput, createRelayApp } from "./app.ts";
@@ -25,27 +26,50 @@ export default {
     const pathname = new URL(request.url).pathname;
     const state = new D1AccountState(environment.DB);
     const hasher = new SecretHasher(environment.QUOTA_SESSION_HASH_KEY);
-    const webAuth = createWebAccountAuth({
-      database: environment.DB,
-      githubClientId: environment.GITHUB_CLIENT_ID,
-      githubClientSecret: environment.GITHUB_CLIENT_SECRET,
-      githubSubjectKey: environment.GITHUB_SUBJECT_KEY,
-      authSecret: environment.BETTER_AUTH_SECRET,
-      origin: CANONICAL_ORIGIN,
+    const webAuth = memoizeWebAccountAuthSession(
+      createWebAccountAuth({
+        database: environment.DB,
+        githubClientId: environment.GITHUB_CLIENT_ID,
+        githubClientSecret: environment.GITHUB_CLIENT_SECRET,
+        githubSubjectKey: environment.GITHUB_SUBJECT_KEY,
+        authSecret: environment.BETTER_AUTH_SECRET,
+        origin: CANONICAL_ORIGIN,
+      }),
+    );
+    const usageState = new D1UsageState(environment.DB);
+    const relay = createRelayApp({
+      state,
+      usageState,
+      accountService: new AccountService(state, hasher, environment.QUOTA_INSTALLATION_KEY),
+      webAuth,
+      hasher,
     });
 
     if (isRelayApiPath(pathname)) {
-      return createRelayApp({
-        state,
-        usageState: new D1UsageState(environment.DB),
-        accountService: new AccountService(state, hasher, environment.QUOTA_INSTALLATION_KEY),
-        webAuth,
-        hasher,
-      }).fetch(request);
+      return relay.fetch(request);
     }
 
     return respondWithWebDocument(request, environment, context, {
-      document: createWebDocumentPort({ webAuth, state, hasher }),
+      document: createWebDocumentPort({
+        webAuth,
+        state,
+        hasher,
+        async getAccountSummary(headers) {
+          try {
+            const url = new URL(
+              "/api/v3/account/summary?cost_mode=calculate&usage_agents=all&model_catalog=1",
+              request.url,
+            );
+            const response = await relay.fetch(new Request(url, { headers }));
+            if (response.status === 401) return { status: "unauthorized" };
+            if (!response.ok) return { status: "error" };
+            const parsed = AccountSummaryV3Schema.safeParse(await response.json());
+            return parsed.success ? { status: "ok", summary: parsed.data } : { status: "error" };
+          } catch {
+            return { status: "error" };
+          }
+        },
+      }),
     });
   },
   async scheduled(_controller, environment): Promise<void> {

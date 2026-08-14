@@ -59,13 +59,18 @@ export function agentDisplayName(agent: string): string {
   }
 }
 
-export function formatQuotaRemaining(window: {
-  used_percent: number;
-  remaining_value?: number | undefined;
-  limit_value?: number | undefined;
-  value_unit?: string | undefined;
-}): string {
+export function formatQuotaRemaining(
+  window: {
+    id?: string | undefined;
+    used_percent: number;
+    remaining_value?: number | undefined;
+    limit_value?: number | undefined;
+    value_unit?: string | undefined;
+  },
+  provider?: string,
+): string {
   const percent = formatPercent(100 - window.used_percent);
+  if (provider === "cursor" && window.id === "other_models") return percent;
   const absolute = formatAbsoluteRemaining(window);
   const balanceOnly = window.remaining_value !== undefined && window.limit_value === undefined;
   if (absolute === undefined) return percent;

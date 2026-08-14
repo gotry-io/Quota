@@ -2,56 +2,79 @@
 const THEME_STORAGE_KEY = "quota-theme";
 
 type Theme = "light" | "dark";
+type ThemePreference = "system" | Theme;
 
-function preferredAppearance(): Theme {
+const options = ["system", "light", "dark"] as const satisfies readonly ThemePreference[];
+
+let menu = $state<HTMLDetailsElement | null>(null);
+let preference = $state<ThemePreference>("system");
+
+function storedPreference(): ThemePreference {
   const stored = localStorage.getItem(THEME_STORAGE_KEY);
-  if (stored === "light" || stored === "dark") return stored;
+  return stored === "light" || stored === "dark" ? stored : "system";
+}
+
+function resolvedTheme(value: ThemePreference): Theme {
+  if (value !== "system") return value;
   return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
-function applyAppearance(theme: Theme): void {
-  document.documentElement.dataset.theme = theme;
-  document.documentElement.style.colorScheme = theme;
+function label(value: ThemePreference): string {
+  return value[0]?.toUpperCase() + value.slice(1);
+}
+
+function applyAppearance(value: ThemePreference): void {
+  const theme = resolvedTheme(value);
+  if (value === "system") delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = value;
   document
     .querySelector<HTMLMetaElement>('meta[name="theme-color"]')
     ?.setAttribute("content", theme === "dark" ? "#111111" : "#f2f8f5");
-  document
-    .querySelector<HTMLButtonElement>("#theme-toggle")
-    ?.setAttribute("aria-label", theme === "dark" ? "Use light appearance" : "Use dark appearance");
 }
 
-function toggle(): void {
-  const next = preferredAppearance() === "dark" ? "light" : "dark";
-  localStorage.setItem(THEME_STORAGE_KEY, next);
-  applyAppearance(next);
+function choose(value: ThemePreference): void {
+  preference = value;
+  if (value === "system") localStorage.removeItem(THEME_STORAGE_KEY);
+  else localStorage.setItem(THEME_STORAGE_KEY, value);
+  applyAppearance(value);
+  menu?.removeAttribute("open");
 }
 
 $effect(() => {
-  applyAppearance(preferredAppearance());
+  preference = storedPreference();
+  applyAppearance(preference);
   const media = window.matchMedia("(prefers-color-scheme: dark)");
   const onChange = (): void => {
-    const stored = localStorage.getItem(THEME_STORAGE_KEY);
-    if (stored !== "light" && stored !== "dark") applyAppearance(preferredAppearance());
+    if (preference === "system") applyAppearance("system");
   };
   media.addEventListener("change", onChange);
   return () => media.removeEventListener("change", onChange);
 });
 </script>
 
-<button
-  id="theme-toggle"
-  class="theme-toggle"
-  type="button"
-  aria-label="Use dark appearance"
-  onclick={toggle}
->
-  <svg class="icon-moon" viewBox="0 0 24 24" aria-hidden="true">
-    <path d="M15 3.5A8.5 8.5 0 1 1 4.5 15 7 7 0 0 0 15 3.5z" />
-  </svg>
-  <svg class="icon-sun" viewBox="0 0 24 24" aria-hidden="true">
-    <circle cx="12" cy="12" r="4" />
-    <path
-      d="M12 3v2M12 19v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M3 12h2M19 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4"
-    />
-  </svg>
-</button>
+<details class="appearance-menu" bind:this={menu}>
+  <summary
+    id="theme-toggle"
+    class="theme-toggle"
+    aria-label={`Appearance: ${label(preference)}`}
+    title={`Appearance: ${label(preference)}`}
+  >
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M12 3.5a8.5 8.5 0 0 1 0 17z" fill="currentColor" stroke="none" />
+    </svg>
+  </summary>
+  <div class="appearance-options" role="group" aria-label="Appearance">
+    {#each options as option}
+      <button
+        type="button"
+        class:active={preference === option}
+        aria-pressed={preference === option}
+        onclick={() => choose(option)}
+      >
+        <span>{label(option)}</span>
+        <span class="appearance-check" aria-hidden="true">{preference === option ? "✓" : ""}</span>
+      </button>
+    {/each}
+  </div>
+</details>

@@ -27,6 +27,18 @@ export interface BetterAuthEnvironment {
   fetch?: typeof fetch;
 }
 
+export function memoizeWebAccountAuthSession(inner: WebAccountAuth): WebAccountAuth {
+  let session: Promise<WebAccountSession | null> | undefined;
+  return {
+    handler: (request) => inner.handler(request),
+    beginGitHubSignIn: (headers, callbackURL) => inner.beginGitHubSignIn(headers, callbackURL),
+    getSession(headers) {
+      session ??= inner.getSession(headers);
+      return session;
+    },
+  };
+}
+
 export function createWebAccountAuth(environment: BetterAuthEnvironment): WebAccountAuth {
   const origin = environment.origin ?? CANONICAL_ORIGIN;
   const githubFetch = environment.fetch ?? fetch;
