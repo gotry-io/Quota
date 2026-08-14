@@ -93,7 +93,11 @@ private struct AccountQuotaView: View {
       accountHeader
 
       ForEach(presentation.snapshot.windows) { window in
-        QuotaWindowRow(window: window, isStale: presentation.isStale)
+        QuotaWindowRow(
+          window: window,
+          provider: presentation.snapshot.provider,
+          isStale: presentation.isStale
+        )
       }
 
       accountFooter
@@ -174,7 +178,12 @@ enum CompactAgeFormatter {
 
 private struct QuotaWindowRow: View {
   let window: QuotaWindow
+  let provider: ProviderID
   let isStale: Bool
+
+  private var remainingLabel: String {
+    window.overviewRemainingDisplayLabel(provider: provider)
+  }
 
   private var meterColor: Color {
     let color = QuotaPalette.usageColor(remainingPercent: window.remainingPercent)
@@ -192,11 +201,11 @@ private struct QuotaWindowRow: View {
           .quotaFont(.quotaLabel)
           .foregroundStyle(QuotaPalette.body)
         Spacer(minLength: 8)
-        Text(window.remainingDisplayLabel)
+        Text(remainingLabel)
           .quotaFont(.remainingValue)
           .monospacedDigit()
           .foregroundStyle(valueColor)
-          .accessibilityLabel(window.remainingDisplayLabel)
+          .accessibilityLabel(remainingLabel)
       }
 
       if window.showsPercentMeter {
