@@ -122,6 +122,16 @@ extension QuotaWindow {
     return "\(percent) · \(absolute)"
   }
 
+  /// Compact Overview copy. Cursor's Other Models percentage and included-usage dollars are
+  /// different provider meters, so retain the dollars for a future detail surface without
+  /// presenting them as one value here.
+  func overviewRemainingDisplayLabel(provider: ProviderID) -> String {
+    if provider == .cursor, id == "other_models" {
+      return formattedRemainingPercent
+    }
+    return remainingDisplayLabel
+  }
+
   var formattedRemainingPercent: String {
     Self.formattedPercent(remainingPercent)
   }

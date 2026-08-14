@@ -133,6 +133,11 @@ Each quota observation shows:
   weekday and time within six days, otherwise month and day; it does not imply the window period;
 - **Local** for signed-out local collection or **Device** for an account observation.
 
+Cursor's Other Models percentage and its included-usage dollar balance are related provider data but
+not the same meter. Overview shows only the Other Models percentage. Keep the dollar remaining and
+limit in the typed snapshot for a future provider-detail design; do not append them to the Overview
+value or add a third Overview quota row.
+
 Expired `valid_until` and explicit stale status use stale presentation. A provider authentication
 failure is a setup task, not a generic network error. Never display collector raw output.
 
