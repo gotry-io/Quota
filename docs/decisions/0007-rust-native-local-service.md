@@ -38,7 +38,7 @@ unreleased private IPC change replaces both sides directly rather than adding co
 The shared Rust crate is the sole local owner of:
 
 - all seven provider quota collectors and optional provider configuration;
-- all five Usage parsers, file-level incremental indexing, normalization, aggregation, and local
+- all six Usage parsers, file-level incremental indexing, normalization, aggregation, and local
   pricing;
 - native account OAuth, Relay requests, session refresh, quota/Usage sequences, durable outbox, and
   account summary;
@@ -68,9 +68,10 @@ version-specific Relay behavior, and their focused tests. Local schema migration
 temporary imported-artifact table and marker without rewriting the already-applied v1 migration.
 The shared `providers.json`/`ProviderConfigLock` path and OAuth `client_id=quotacli` remain current
 interfaces.
-Retained managed-network protocol v2, Relay data, and already published npm artifacts remain
-compatible because they are released boundaries. There is no fallback to the deleted TypeScript/Bun
-runtime or compatibility layer for its local command surface.
+Released managed-network protocol v2, its compatible Relay routes, and already published npm
+artifacts remain supported boundaries. Current clients use the managed-data evolution documented in
+[ADR 0012](0012-managed-data-v3.md). There is no fallback to the deleted TypeScript/Bun runtime or
+compatibility layer for its local command surface.
 
 QuotaBar is distributed as a signed/notarized app and Homebrew Cask. The Cask installs no command.
 Linux `quotacli` is distributed as a static x86_64 binary through GitHub Releases; npm, Homebrew,

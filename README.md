@@ -11,8 +11,8 @@ subscription quota and privacy-preserving Usage together across a user's devices
 - **Quota Web** — public site, GitHub login, device authorization, and account dashboard.
 
 Quota collection supports Codex, Claude Code, Grok, OpenRouter, DeepSeek, Kimi Code, LiteLLM, and
-local-only Cursor browser sessions on macOS.
-Local Usage analytics supports Codex, Claude Code, Grok, OpenCode, and Pi logs. Provider credentials,
+Cursor browser sessions on macOS.
+Local Usage analytics supports Codex, Claude Code, Grok, OpenCode, Pi, and Cursor logs. Provider credentials,
 prompts, completions, raw events, local paths, and conversation identifiers never upload.
 
 Both native clients expose the same service-owned diagnostics: Linux `quotacli doctor
@@ -63,17 +63,18 @@ docs/                     Architecture, security, provider, and decision records
 
 Provider registration starts in `packages/provider/catalog.json`. Run
 `pnpm generate:provider-catalog` after a catalog change to regenerate Rust, Swift, and TypeScript
-provider IDs. Wire JSON uses `snake_case`. Managed network protocol v2 remains the released network
-boundary; completed bounded response variants are not retained. Bundled private IPC v1 changes
+provider IDs. Wire JSON uses `snake_case`. OAuth and Device control remain on released v2; quota,
+Usage, and Account summary use managed-data v3. Released v2 data routes remain compatible and never
+emit Cursor. Bundled private IPC v1 changes
 atomically with QuotaBar. Its local Usage v3 report carries scan status and coverage; state snapshots
 carry precomputed period totals grouped by client, then inference provider, then model. Summary totals are total, input,
 output, cache-read input, cache-write input, reasoning, and usage-bearing output messages; sessions
 are not collected.
 The service precomputes Today, 7 Days, 30 Days, and All detail for This Mac and the signed-in Account,
 so QuotaBar switches periods without collection or network work; Overview remains quota-only.
-Catalog `account_sync` distinguishes the released network-v2 provider set from local-only
-providers. menubar-v0.0.9 shipped strict decoding for the closed v2 provider enum, so Cursor never
-enters v2 upload envelopes or managed Account summaries.
+Catalog `account_sync` declares whether a provider synchronizes, while `account_sync_protocol`
+records the first managed-data protocol that accepts it. Cursor starts at v3; v2 remains the closed
+provider set shipped by menubar-v0.0.9.
 
 ## Development
 
@@ -129,8 +130,8 @@ The marketing version lives in `apps/menubar/Support/Info.plist`.
 
 ## Current status
 
-The repository implements protocol v2 account/device authentication, independent quota and Usage
-upload sequencing, D1 persistence and deletion watermarks, eight Rust quota collectors, five Rust
+The repository implements protocol-v2 account/device authentication, managed-data v3, independent
+quota and Usage upload sequencing, D1 persistence and deletion watermarks, eight Rust quota collectors, six Rust
 Usage parsers with file-level incremental indexing, effective-dated cost calculation, owner-only
 local SQLite state and provider configuration, persistent private IPC, QuotaBar account/provider
 configuration UI, Sparkle in-app updates, fixed-window client-scoped account-or-local Usage

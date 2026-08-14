@@ -1,9 +1,9 @@
 <script lang="ts">
 import type {
   AccountDevice,
-  AccountQuotaObservation,
-  AccountSummary,
-  AccountUsageSummary,
+  AccountQuotaObservationV3 as AccountQuotaObservation,
+  AccountSummaryV3 as AccountSummary,
+  AccountUsageSummaryV3 as AccountUsageSummary,
   UsageBreakdown,
 } from "@gotry-io/quota-protocol";
 import {

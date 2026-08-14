@@ -242,9 +242,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cursor_is_local_only_catalog_provider() {
+    fn cursor_is_an_account_sync_catalog_provider() {
         assert!(ProviderId::ALL.contains(&ProviderId::Cursor));
-        assert!(!ProviderId::Cursor.metadata().account_sync);
+        assert!(ProviderId::Cursor.metadata().account_sync);
+        assert_eq!(ProviderId::Cursor.metadata().account_sync_protocol, Some(3));
         assert!(ProviderId::Cursor.metadata().browser_session.is_some());
     }
 

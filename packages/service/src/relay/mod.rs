@@ -198,7 +198,7 @@ impl RelayClient {
 
     pub fn upload_snapshot(&self, token: &str, envelope: &Value) -> Result<Value, RelayError> {
         validate_snapshot_envelope(envelope)?;
-        let response = self.put_json("/api/v2/device/snapshots", envelope, token, 200)?;
+        let response = self.put_json("/api/v3/device/snapshots", envelope, token, 200)?;
         validate_snapshot_response(&response)?;
         Ok(response)
     }
@@ -207,7 +207,7 @@ impl RelayClient {
         validate_usage_submission(submission)?;
         let response = self.request(
             self.client
-                .put(self.url("/api/v2/device/usage"))
+                .put(self.url("/api/v3/device/usage"))
                 .header(CONTENT_TYPE, "application/json")
                 .header(ACCEPT, "application/json")
                 .header(AUTHORIZATION, bearer(token)),
@@ -226,11 +226,11 @@ impl RelayClient {
     }
 
     pub fn account_summary(&self, token: &str, query: &str) -> Result<Value, RelayError> {
-        self.account_usage_query("/api/v2/account/summary", token, query)
+        self.account_usage_query("/api/v3/account/summary", token, query)
     }
 
     pub fn account_usage_summary(&self, token: &str, query: &str) -> Result<Value, RelayError> {
-        let response = self.account_usage_query("/api/v2/account/usage/summary", token, query)?;
+        let response = self.account_usage_query("/api/v3/account/usage/summary", token, query)?;
         validate_account_usage_response(&response)?;
         response
             .get("usage")
@@ -670,7 +670,7 @@ fn validate_snapshot_envelope(value: &Value) -> Result<(), RelayError> {
     {
         return Err(RelayError::InvalidResponse);
     }
-    if object.get("protocol_version").and_then(Value::as_i64) != Some(2)
+    if object.get("protocol_version").and_then(Value::as_i64) != Some(3)
         || !object
             .get("device_id")
             .and_then(Value::as_str)
@@ -723,7 +723,7 @@ pub(crate) fn validate_usage_submission(value: &Value) -> Result<(), RelayError>
     {
         return Err(RelayError::InvalidResponse);
     }
-    if object.get("protocol_version").and_then(Value::as_i64) != Some(2) {
+    if object.get("protocol_version").and_then(Value::as_i64) != Some(3) {
         return Err(RelayError::InvalidResponse);
     }
     for key in ["submission_id", "device_id", "parser_revision"] {
@@ -802,7 +802,12 @@ pub(crate) fn validate_usage_submission(value: &Value) -> Result<(), RelayError>
     let agent = coverage
         .get("agent")
         .and_then(Value::as_str)
-        .filter(|value| matches!(*value, "codex" | "claude_code" | "grok" | "opencode" | "pi"))
+        .filter(|value| {
+            matches!(
+                *value,
+                "codex" | "claude_code" | "grok" | "opencode" | "pi" | "cursor"
+            )
+        })
         .ok_or(RelayError::InvalidResponse)?;
     let start = parse_utc_hour(coverage.get("start_at"))?;
     let end = parse_utc_hour(coverage.get("end_at"))?;
@@ -934,7 +939,7 @@ fn validate_snapshot_response(value: &Value) -> Result<(), RelayError> {
         ],
     )?;
     let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
-    if object.get("protocol_version").and_then(Value::as_i64) != Some(2)
+    if object.get("protocol_version").and_then(Value::as_i64) != Some(3)
         || !matches!(
             object.get("outcome").and_then(Value::as_str),
             Some("accepted" | "duplicate")
@@ -978,7 +983,7 @@ fn validate_usage_response(value: &Value) -> Result<(), RelayError> {
     } else {
         validate_response_object(value, &base_keys)?;
     }
-    if object.get("protocol_version").and_then(Value::as_i64) != Some(2)
+    if object.get("protocol_version").and_then(Value::as_i64) != Some(3)
         || !matches!(
             outcome,
             Some(
@@ -1099,7 +1104,7 @@ fn validate_account_summary(value: &Value) -> Result<(), RelayError> {
         ],
     )?;
     let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
-    if object.get("protocol_version").and_then(Value::as_i64) != Some(2)
+    if object.get("protocol_version").and_then(Value::as_i64) != Some(3)
         || !object
             .get("generated_at")
             .and_then(Value::as_str)
@@ -1131,7 +1136,7 @@ fn validate_account_summary(value: &Value) -> Result<(), RelayError> {
 fn validate_account_usage_response(value: &Value) -> Result<(), RelayError> {
     validate_response_object(value, &["protocol_version", "usage"])?;
     let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
-    if object.get("protocol_version").and_then(Value::as_i64) != Some(2) {
+    if object.get("protocol_version").and_then(Value::as_i64) != Some(3) {
         return Err(RelayError::InvalidResponse);
     }
     validate_usage_summary(object.get("usage").ok_or(RelayError::InvalidResponse)?)
@@ -1274,7 +1279,12 @@ fn validate_quota_snapshot(value: &Value) -> Result<(), RelayError> {
         .get("provider")
         .and_then(Value::as_str)
         .and_then(crate::catalog::ProviderId::parse)
-        .is_some_and(|provider| provider.metadata().account_sync)
+        .is_some_and(|provider| {
+            provider
+                .metadata()
+                .account_sync_protocol
+                .is_some_and(|version| version <= 3)
+        })
         || !object
             .get("source")
             .and_then(Value::as_str)
@@ -1464,14 +1474,14 @@ fn validate_usage_summary(value: &Value) -> Result<(), RelayError> {
 fn validate_usage_clients(value: &Value) -> Result<(), RelayError> {
     let clients = value
         .as_array()
-        .filter(|clients| clients.len() <= 5)
+        .filter(|clients| clients.len() <= crate::usage::UsageAgent::ALL.len())
         .ok_or(RelayError::InvalidResponse)?;
     for client in clients {
         validate_response_object(client, &["client", "totals", "cost", "providers"])?;
         let object = client.as_object().ok_or(RelayError::InvalidResponse)?;
         if !matches!(
             object.get("client").and_then(Value::as_str),
-            Some("codex" | "claude_code" | "grok" | "opencode" | "pi")
+            Some("codex" | "claude_code" | "grok" | "opencode" | "pi" | "cursor")
         ) {
             return Err(RelayError::InvalidResponse);
         }
@@ -2121,7 +2131,7 @@ impl AccountManager {
     }
 
     pub fn account_usage(&self, query: &str, cancel: &AtomicBool) -> Result<Value, BackendError> {
-        // Shipped /api/v2/account/usage/summary still materializes hourly facts with a 1_000-row
+        // /api/v3/account/usage/summary still materializes hourly facts with a 1_000-row
         // cap and returns 413 for a 30-day window. Account summary uses the 100_000-row path.
         let (summary, _) = self.read_account_summary(query, cancel)?;
         summary
@@ -2289,7 +2299,7 @@ impl AccountManager {
             .and_then(Value::as_u64)
             .ok_or_else(BackendError::unavailable)?;
         let envelope = serde_json::json!({
-            "protocol_version": 2,
+            "protocol_version": 3,
             "device_id": expected_device_id,
             "generation": expected_generation,
             "sequence": expected_sequence,
@@ -2578,7 +2588,11 @@ fn snapshot_payload_from_quota_report(report: &Value) -> Result<(&str, Vec<Value
                 .and_then(Value::as_str)
                 .and_then(crate::catalog::ProviderId::parse)
                 .ok_or_else(BackendError::unavailable)?;
-            if provider.metadata().account_sync {
+            if provider
+                .metadata()
+                .account_sync_protocol
+                .is_some_and(|version| version <= 3)
+            {
                 snapshots.push(snapshot.clone());
             }
         }
@@ -2974,7 +2988,7 @@ fn valid_decimal_integer(value: &str) -> bool {
 fn valid_billing_agent(value: Option<&str>) -> bool {
     matches!(
         value,
-        Some("codex" | "claude_code" | "grok" | "opencode" | "pi")
+        Some("codex" | "claude_code" | "grok" | "opencode" | "pi" | "cursor")
     )
 }
 
@@ -3161,7 +3175,7 @@ mod tests {
     fn usage_limits_are_enforced() {
         assert!(
             validate_usage_submission(&serde_json::json!({
-                "protocol_version": 2,
+                "protocol_version": 3,
                 "submission_id": "x",
                 "device_id": "d",
                 "generation": 1,
@@ -3181,7 +3195,7 @@ mod tests {
         assert!(validate_usage_submission(&serde_json::json!({"protocol_version": 1})).is_err());
 
         let opaque_model = serde_json::json!({
-            "protocol_version": 2,
+            "protocol_version": 3,
             "submission_id": "legacy",
             "device_id": "device",
             "generation": 1,
@@ -3225,7 +3239,7 @@ mod tests {
     #[test]
     fn multipart_and_report_truncation_markers_are_strict() {
         let mut submission = serde_json::json!({
-            "protocol_version": 2,
+            "protocol_version": 3,
             "submission_id": "x",
             "device_id": "d",
             "generation": 1,
@@ -3247,7 +3261,7 @@ mod tests {
 
         let mut snapshot = valid_snapshot();
         let mut envelope = serde_json::json!({
-            "protocol_version": 2,
+            "protocol_version": 3,
             "device_id": "device_1",
             "generation": 1,
             "sequence": 0,
@@ -3330,7 +3344,7 @@ mod tests {
     #[test]
     fn rejected_usage_response_is_terminal_and_keeps_normal_response_shape() {
         let normal = serde_json::json!({
-            "protocol_version": 2,
+            "protocol_version": 3,
             "outcome": "accepted",
             "device_id": "device_1",
             "device_generation": 1,
@@ -3342,7 +3356,7 @@ mod tests {
         assert!(validate_usage_response(&normal).is_ok());
 
         let mut rejected = serde_json::json!({
-            "protocol_version": 2,
+            "protocol_version": 3,
             "outcome": "rejected",
             "device_id": "device_1",
             "device_generation": 1,
@@ -3473,7 +3487,7 @@ mod tests {
     fn snapshot_envelope_has_strict_count_identity_and_integer_bounds() {
         let snapshot = valid_snapshot();
         let mut envelope = serde_json::json!({
-            "protocol_version": 2,
+            "protocol_version": 3,
             "device_id": "device_1",
             "generation": 1,
             "sequence": 0,
@@ -3586,14 +3600,14 @@ mod tests {
             "results": [{"snapshots": [snapshot.clone(), cursor.clone()]}]
         }))
         .expect("mixed local report");
-        assert_eq!(mixed, [snapshot]);
-        let (_, local_only) = snapshot_payload_from_quota_report(&serde_json::json!({
+        assert_eq!(mixed, [snapshot.clone(), cursor.clone()]);
+        let (_, cursor_only) = snapshot_payload_from_quota_report(&serde_json::json!({
             "protocol_version": 2,
             "captured_at": "2026-08-10T00:00:00Z",
             "results": [{"snapshots": [cursor.clone()]}]
         }))
-        .expect("local only report");
-        assert!(local_only.is_empty());
+        .expect("cursor report");
+        assert_eq!(cursor_only, [cursor.clone()]);
         let mut unknown = cursor.clone();
         unknown["provider"] = serde_json::json!("unknown-provider");
         assert!(
@@ -3604,7 +3618,7 @@ mod tests {
             }))
             .is_err()
         );
-        assert!(validate_quota_snapshot(&cursor).is_err());
+        assert!(validate_quota_snapshot(&cursor).is_ok());
 
         assert!(
             snapshot_payload_from_quota_report(&serde_json::json!({
@@ -3627,7 +3641,7 @@ mod tests {
     #[test]
     fn account_summary_nested_shape_is_checked() {
         let value = serde_json::json!({
-            "protocol_version": 2,
+            "protocol_version": 3,
             "generated_at": "2026-08-10T00:00:00Z",
             "account": {
                 "account_id": "account_1",
@@ -3712,7 +3726,7 @@ mod tests {
             http_json(
                 200,
                 None,
-                &serde_json::json!({"protocol_version": 2, "usage": usage}),
+                &serde_json::json!({"protocol_version": 3, "usage": usage}),
             ),
         ]);
         let client = RelayClient::for_test(&origin).expect("test client");

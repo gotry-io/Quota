@@ -37,7 +37,7 @@ The site has four surfaces:
    the name opens `/my`, and its menu
    contains only **Sign out**. Session cookies stay HttpOnly. SvelteKit renders the header from
    `WebDocumentPort.getViewer` on the first HTML byte. The dashboard still loads Usage from
-   `GET /api/v2/account/summary` after paint. Unsigned visits to `/my` are a server redirect to
+   `GET /api/v3/account/summary` after paint. Unsigned visits to `/my` are a server redirect to
    `/`. A successful `/u/{slug}` page view consumes two `public-profile` limiter tokens (document
    existence plus the JSON payload); after 60 views / 10 minutes the HTML can remain 200 while the
    JSON returns 429. The shipped `/app`
@@ -137,7 +137,7 @@ so weekday labels stay readable and the page does not overflow.
 
 Choosing a day opens an inline details panel under the Activity card, not a modal. The dashboard
 owns selected, loading, error, and data state and fetches
-`GET /api/v2/account/usage/summary?usage_agents=all&cost_mode=calculate&model_catalog=1&from=YYYY-MM-DD&to=YYYY-MM-DD`,
+`GET /api/v3/account/usage/summary?usage_agents=all&cost_mode=calculate&model_catalog=1&from=YYYY-MM-DD&to=YYYY-MM-DD`,
 reusing the existing `usage_date` timezone. A 401 starts GitHub sign-in. Failures stay on the
 page with a retry control. The panel can be closed. It shows that day's date, input, output,
 requests, estimated cost, coverage, and compact agent and model splits, with honest empty,

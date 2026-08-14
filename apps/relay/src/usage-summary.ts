@@ -1,28 +1,28 @@
 import {
-  AccountUsageSummarySchema,
-  MAXIMUM_USAGE_BREAKDOWNS,
-  MAXIMUM_UNPRICED_ITEMS,
-  type AccountUsageSummary,
-  type InferenceProvider,
-  type LocalUsageClientSummary,
-  type ModelCatalog,
-  type PricingCatalog,
-  type UsageBreakdownDimension,
-  type UsageCostMode,
-  type UsageCostOutcome,
-  type UsageHourlyFact,
-  type UsageTokenTotals,
-  type UsageUnpricedItem,
-  UsageCostOutcomeSchema,
-  UsageTokenTotalsSchema,
-} from "@gotry-io/quota-protocol";
-import {
   foldPreparedUsageCosts,
   inferenceProvider,
   type PreparedUsageCosts,
   prepareUsageCosts,
   resolveModel,
 } from "@gotry-io/quota-model";
+import {
+  type AccountUsageSummaryV3 as AccountUsageSummary,
+  AccountUsageSummaryV3Schema as AccountUsageSummarySchema,
+  type InferenceProvider,
+  type LocalUsageClientSummary,
+  MAXIMUM_UNPRICED_ITEMS,
+  MAXIMUM_USAGE_BREAKDOWNS,
+  type ModelCatalog,
+  type PricingCatalog,
+  type UsageBreakdownDimension,
+  type UsageCostMode,
+  type UsageCostOutcome,
+  UsageCostOutcomeSchema,
+  type UsageHourlyFactV3 as UsageHourlyFact,
+  type UsageTokenTotals,
+  UsageTokenTotalsSchema,
+  type UsageUnpricedItem,
+} from "@gotry-io/quota-protocol";
 import type {
   StoredUsageCoverage,
   StoredUsageHourlyFact,
@@ -246,7 +246,7 @@ function breakdownKey(
       return { identity: row.device_id, key: row.device_id };
     case "agent":
       return { identity: row.agent, key: row.agent };
-    case "model":
+    case "model": {
       if (!modelCatalog) return { identity: "raw:" + row.model, key: row.model };
       const resolution = resolveModel(modelCatalog, row);
       return resolution
@@ -255,6 +255,7 @@ function breakdownKey(
             key: resolution,
           }
         : { identity: "raw:" + row.model, key: row.model };
+    }
     case "billing_channel":
       return { identity: row.billing_channel, key: row.billing_channel };
     case "usage_date":

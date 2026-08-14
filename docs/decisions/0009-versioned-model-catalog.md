@@ -25,7 +25,7 @@ case, trim, or fuzzy matching are not allowed.
 The Rust service and Relay use equivalent resolvers only while constructing report summaries. Raw
 facts are priced first. Resolved model groups use `canonical_id` as their stable model key;
 unresolved groups use the raw model value. A catalog revision is included in newly opted-in
-managed-v2 account summaries and is a required nullable field in local-v3 reports. The local SQLite
+opted-in managed account summaries and is a required nullable field in local-v3 reports. The local SQLite
 v4 migration drops only the cached derived v2 report and rebuilds it from retained facts; it does
 not rewrite facts or the managed outbox.
 

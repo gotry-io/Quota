@@ -1,8 +1,8 @@
 import {
+  type PricedBillingChannel,
   type PricingCatalog,
   type PricingCatalogEntry,
   PricingCatalogSchema,
-  type PricedBillingChannel,
   type PricingRates,
 } from "@gotry-io/quota-protocol";
 

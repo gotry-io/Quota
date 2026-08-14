@@ -43,7 +43,7 @@ The installation ID is random user-level state. Relay stores only an account-sco
 the same installation restores the same Device within one Account without becoming a cross-account
 identifier. Snapshot and Usage upload sequences are independent and server-authoritative.
 
-The local service converts supported Codex, Claude Code, Grok, OpenCode, and Pi records into
+The local service converts supported Codex, Claude Code, Grok, OpenCode, Pi, and Cursor records into
 privacy-preserving hourly facts. Uploads contain no prompt, completion, path, session ID,
 conversation ID, raw event, or provider credential. Only a complete UTC-hour scan may replace a
 remote range; partial scans remain local.
@@ -57,6 +57,10 @@ behavior as defined in [ADR 0007](0007-rust-native-local-service.md). Current cl
 opaque model identifiers and request all agents and retained history with `usage_agents=all`. The
 shared `providers.json`/`ProviderConfigLock` path and OAuth `client_id=quotacli` remain current
 interfaces rather than compatibility behavior.
+
+OAuth and Device control retain their released v2 contracts. Quota, Usage, and Account summary use
+managed-data v3 from QuotaBar 0.0.12; compatible v2 data routes remain available and exclude Cursor.
+The version boundary is defined by [ADR 0012](0012-managed-data-v3.md).
 
 Logout first disables local upload and revokes sessions, but retains the remote Device and data.
 Delete Device is a distinct authenticated Web action: it revokes sessions, advances the generation,

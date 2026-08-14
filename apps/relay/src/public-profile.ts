@@ -1,8 +1,8 @@
 import {
-  type AccountUsageSummary,
+  type AccountUsageSummaryV3 as AccountUsageSummary,
+  PROTOCOL_VERSION,
   type PublicProfile,
   PublicProfileSlugSchema,
-  PROTOCOL_VERSION,
 } from "@gotry-io/quota-protocol";
 import type { StoredQuotaSnapshot as RelaySnapshot } from "@gotry-io/relay-core";
 

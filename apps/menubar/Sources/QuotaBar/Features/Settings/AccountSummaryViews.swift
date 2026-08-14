@@ -556,6 +556,7 @@ enum UsageValueFormatter {
     case .grok: "Grok"
     case .opencode: "OpenCode"
     case .pi: "Pi"
+    case .cursor: "Cursor"
     }
   }
 

@@ -1,4 +1,7 @@
-import type { QuotaSnapshot, QuotaSnapshotEnvelope } from "@gotry-io/quota-protocol";
+import type {
+  QuotaSnapshotEnvelopeV3,
+  QuotaSnapshotV3 as QuotaSnapshot,
+} from "@gotry-io/quota-protocol";
 
 export const ACCOUNT_SCOPES = ["account:read", "account:manage", "session:revoke:self"] as const;
 export type AccountScope = (typeof ACCOUNT_SCOPES)[number];
@@ -201,7 +204,7 @@ export interface AccountMaintenanceInput {
   limit: number;
 }
 
-export type QuotaSnapshotSubmission = QuotaSnapshotEnvelope;
+export type QuotaSnapshotSubmission = QuotaSnapshotEnvelopeV3;
 
 export interface StoredQuotaSnapshot {
   device_id: string;

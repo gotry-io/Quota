@@ -48,6 +48,7 @@ pub struct ProviderCatalogEntry {
     pub setup_action: &'static str,
     pub brand_icon_asset: &'static str,
     pub account_sync: bool,
+    pub account_sync_protocol: Option<u8>,
     pub environment_keys: &'static [&'static str],
     pub credential_config: Option<ApiKeyConfig>,
     pub browser_session: Option<BrowserSessionConfig>,
@@ -64,6 +65,7 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
         setup_action: "codex login",
         brand_icon_asset: "openai",
         account_sync: true,
+        account_sync_protocol: Some(2),
         environment_keys: &["CODEX_HOME"],
         credential_config: None,
         browser_session: None,
@@ -78,6 +80,7 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
         setup_action: "claude auth login",
         brand_icon_asset: "claude",
         account_sync: true,
+        account_sync_protocol: Some(2),
         environment_keys: &["CLAUDE_CONFIG_DIR"],
         credential_config: None,
         browser_session: None,
@@ -92,6 +95,7 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
         setup_action: "grok login",
         brand_icon_asset: "grok",
         account_sync: true,
+        account_sync_protocol: Some(2),
         environment_keys: &["GROK_HOME"],
         credential_config: None,
         browser_session: None,
@@ -106,6 +110,7 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
         setup_action: "Configure in QuotaBar",
         brand_icon_asset: "openrouter",
         account_sync: true,
+        account_sync_protocol: Some(2),
         environment_keys: &["OPENROUTER_API_KEY"],
         credential_config: Some(ApiKeyConfig {
             supports_base_url: false,
@@ -125,6 +130,7 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
         setup_action: "Configure in QuotaBar",
         brand_icon_asset: "deepseek",
         account_sync: true,
+        account_sync_protocol: Some(2),
         environment_keys: &["DEEPSEEK_API_KEY", "DEEPSEEK_KEY"],
         credential_config: Some(ApiKeyConfig {
             supports_base_url: false,
@@ -144,6 +150,7 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
         setup_action: "Configure in QuotaBar",
         brand_icon_asset: "kimi",
         account_sync: true,
+        account_sync_protocol: Some(2),
         environment_keys: &["KIMI_CODE_API_KEY", "KIMI_API_KEY"],
         credential_config: Some(ApiKeyConfig {
             supports_base_url: false,
@@ -163,6 +170,7 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
         setup_action: "Configure in QuotaBar",
         brand_icon_asset: "litellm",
         account_sync: true,
+        account_sync_protocol: Some(2),
         environment_keys: &["LITELLM_API_KEY", "LITELLM_BASE_URL"],
         credential_config: Some(ApiKeyConfig {
             supports_base_url: true,
@@ -181,7 +189,8 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
         default_visible: false,
         setup_action: "Sign in with browser",
         brand_icon_asset: "cursor",
-        account_sync: false,
+        account_sync: true,
+        account_sync_protocol: Some(3),
         environment_keys: &[],
         credential_config: None,
         browser_session: Some(BrowserSessionConfig {
@@ -211,7 +220,7 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
 ];
 
 impl ProviderId {
-    /// Every local collector. Use metadata.account_sync as the managed Account/Relay v2 boundary.
+    /// Every local collector. Use metadata.account_sync_protocol as the managed protocol boundary.
     pub const ALL: &'static [Self] = &[
         Self::Codex,
         Self::Claude,

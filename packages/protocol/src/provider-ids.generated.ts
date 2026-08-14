@@ -16,6 +16,20 @@ export const PROVIDER_IDS = [
 export type ProviderId = (typeof PROVIDER_IDS)[number];
 export const ProviderIdSchema = z.enum(PROVIDER_IDS);
 
+// Current managed Account/Relay v3 IDs.
+export const PROVIDER_IDS_V3 = [
+  "codex",
+  "claude",
+  "grok",
+  "openrouter",
+  "deepseek",
+  "kimi",
+  "litellm",
+  "cursor",
+] as const;
+export type ProviderIdV3 = (typeof PROVIDER_IDS_V3)[number];
+export const ProviderIdV3Schema = z.enum(PROVIDER_IDS_V3);
+
 // Every provider accepted by the private local collection report.
 export const LOCAL_PROVIDER_IDS = [
   "codex",

@@ -3,7 +3,7 @@ use super::{
     MAX_JSONL_LINE_BYTES, MAX_USAGE_MODELS, MAX_USAGE_ROWS, NormalizedUsageEvent, UsageAgent,
     UsageFileIndex, UsageHourlyFact, UsageScanOptions, aggregate_usage_events,
     build_local_usage_summary, fold_usage_facts, scan_claude_usage, scan_codex_usage,
-    scan_grok_usage, scan_local_usage, scan_opencode_usage, scan_pi_usage,
+    scan_cursor_usage, scan_grok_usage, scan_local_usage, scan_opencode_usage, scan_pi_usage,
 };
 use crate::pricing::{
     CalculatedUsageRowCost, PricingCatalog, PricingCatalogEntry, PricingRates, UsageCostAssumption,
@@ -32,6 +32,7 @@ fn fixture(name: &str) -> &'static str {
             include_str!("../../fixtures/usage/grok.jsonl")
         }
         "pi" => include_str!("../../fixtures/usage/pi.jsonl"),
+        "cursor" => include_str!("../../fixtures/usage/cursor.jsonl"),
         "opencode" => include_str!("../../fixtures/usage/opencode-message.jsonl"),
         "pricing" => {
             include_str!("../../fixtures/usage/pricing.json")
@@ -68,6 +69,7 @@ fn parser_fixtures_preserve_normalized_fields_and_coverage() {
         (UsageAgent::ClaudeCode, "claude", 2usize),
         (UsageAgent::Grok, "grok", 1usize),
         (UsageAgent::Pi, "pi", 1usize),
+        (UsageAgent::Cursor, "cursor", 2usize),
     ];
     for (agent, name, expected_records) in cases {
         let path = root(name);
@@ -156,6 +158,21 @@ fn parser_fixtures_preserve_normalized_fields_and_coverage() {
                 assert_eq!(event.output_tokens, 40);
                 assert_eq!(event.reasoning_tokens, 5);
                 assert_eq!(event.source_cost_microusd.as_deref(), Some("20000"));
+            }
+            UsageAgent::Cursor => {
+                let native = &result.records[0].event;
+                assert_eq!(native.model, "gpt-5");
+                assert_eq!(native.billing_channel, BillingChannel::Unknown);
+                assert_eq!(native.input_tokens, 1_000);
+                assert_eq!(native.output_tokens, 200);
+                assert_eq!(native.occurred_at, "2026-08-02T10:00:00.000Z");
+                let api = &result.records[1].event;
+                assert_eq!(api.model, "claude-4.6-sonnet");
+                assert_eq!(api.billing_channel, BillingChannel::AnthropicDirect);
+                assert_eq!(api.input_tokens, 95);
+                assert_eq!(api.cache_read_tokens, 10);
+                assert_eq!(api.cache_write_inferred_tokens, 5);
+                assert_eq!(api.output_tokens, 20);
             }
             UsageAgent::OpenCode => unreachable!(),
         }
@@ -605,6 +622,193 @@ fn opencode_sqlite_reads_completed_or_created_and_ignores_empty_models() {
     assert_eq!(event.source_cost_microusd.as_deref(), Some("10000"));
     assert_eq!(result.sources.len(), 1);
     let _ = fs::remove_dir_all(path);
+}
+
+#[test]
+fn cursor_transcripts_without_usage_are_complete_and_empty() {
+    let path = root("cursor-empty-jsonl");
+    fs::write(
+        path.join("session.jsonl"),
+        r#"{"role":"user","message":{"content":[{"type":"text","text":"hello"}]}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"world"}]}}
+"#,
+    )
+    .expect("write Cursor transcript");
+    let result = scan_cursor_usage(&options(&path)).expect("scan Cursor transcript");
+    assert_eq!(result.coverage.status, CoverageStatus::Complete);
+    assert!(result.records.is_empty());
+    let _ = fs::remove_dir_all(path);
+}
+
+#[test]
+fn cursor_preserves_unknown_model_when_usage_is_nonempty() {
+    let path = root("cursor-unknown-model");
+    fs::write(
+        path.join("session.jsonl"),
+        r#"{"role":"assistant","createdAt":"2026-08-02T10:00:00Z","model":"unknown","tokenCount":{"inputTokens":25,"outputTokens":5}}
+"#,
+    )
+    .expect("write Cursor usage");
+    let result = scan_cursor_usage(&options(&path)).expect("scan Cursor usage");
+    assert_eq!(result.coverage.status, CoverageStatus::Complete);
+    assert_eq!(result.records.len(), 1);
+    assert_eq!(result.records[0].event.model, "unknown");
+    assert_eq!(result.records[0].event.input_tokens, 25);
+    assert_eq!(result.records[0].event.output_tokens, 5);
+    let _ = fs::remove_dir_all(path);
+}
+
+#[test]
+fn cursor_sqlite_pairs_bubble_tokens_and_ignores_context_meters() {
+    let path = root("cursor-sqlite");
+    let database_path = path.join("state.vscdb");
+    let connection = Connection::open(&database_path).expect("open Cursor SQLite");
+    connection
+        .execute_batch("CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value BLOB)")
+        .expect("create Cursor schema");
+    let composer = "aaaa1111-2222-3333-4444-555566667777";
+    let insert = "INSERT INTO cursorDiskKV(key, value) VALUES (?1, ?2)";
+    connection
+        .execute(
+            insert,
+            params![
+                format!("composerData:{composer}"),
+                json!({
+                    "promptTokenBreakdown": { "totalUsedTokens": 80_000 },
+                    "contextTokensUsed": 42_000,
+                    "createdAt": epoch_millis("2026-08-02T09:00:00Z")
+                })
+                .to_string()
+            ],
+        )
+        .expect("insert composer snapshot");
+    connection
+        .execute(
+            insert,
+            params![
+                format!("bubbleId:{composer}:user-1"),
+                json!({
+                    "type": 1,
+                    "createdAt": "2026-08-02T10:00:00Z",
+                    "tokenCount": { "inputTokens": 6_000, "outputTokens": 0 },
+                    "text": "prompt that must not be estimated"
+                })
+                .to_string()
+            ],
+        )
+        .expect("insert user bubble");
+    connection
+        .execute(
+            insert,
+            params![
+                format!("bubbleId:{composer}:asst-1"),
+                json!({
+                    "type": 2,
+                    "createdAt": "2026-08-02T10:00:01Z",
+                    "tokenCount": { "inputTokens": 0, "outputTokens": 900 },
+                    "modelInfo": { "modelName": "gpt-5" }
+                })
+                .to_string()
+            ],
+        )
+        .expect("insert assistant bubble");
+    connection
+        .execute(
+            insert,
+            params![
+                format!("bubbleId:{composer}:empty-1"),
+                json!({
+                    "type": 2,
+                    "createdAt": "2026-08-02T10:00:02Z",
+                    "tokenCount": { "inputTokens": 0, "outputTokens": 0 },
+                    "modelInfo": { "modelName": "gpt-5" },
+                    "text": "zero token reply"
+                })
+                .to_string()
+            ],
+        )
+        .expect("insert empty assistant");
+    connection.close().expect("close Cursor SQLite");
+
+    let result = scan_cursor_usage(&options(&path)).expect("scan Cursor SQLite");
+    assert_eq!(result.coverage.status, CoverageStatus::Complete);
+    assert_eq!(result.records.len(), 1);
+    let event = &result.records[0].event;
+    assert_eq!(event.agent, UsageAgent::Cursor);
+    assert_eq!(event.model, "gpt-5");
+    assert_eq!(event.input_tokens, 6_000);
+    assert_eq!(event.output_tokens, 900);
+    assert_eq!(event.billing_channel, BillingChannel::Unknown);
+    assert!(
+        result.records.iter().all(
+            |record| record.event.input_tokens != 80_000 && record.event.input_tokens != 42_000
+        )
+    );
+    let _ = fs::remove_dir_all(path);
+}
+
+#[test]
+fn cursor_store_db_reads_usage_shaped_blobs() {
+    let path = root("cursor-store");
+    let database_path = path.join("store.db");
+    let connection = Connection::open(&database_path).expect("open Cursor store");
+    connection
+        .execute_batch("CREATE TABLE blobs (id TEXT, data TEXT)")
+        .expect("create store schema");
+    connection
+        .execute(
+            "INSERT INTO blobs(id, data) VALUES (?1, ?2)",
+            params![
+                "asst-1",
+                json!({
+                    "role": "assistant",
+                    "createdAt": "2026-08-02T10:30:00Z",
+                    "model": "composer-1.5",
+                    "tokenCount": { "inputTokens": 120, "outputTokens": 40 }
+                })
+                .to_string()
+            ],
+        )
+        .expect("insert store usage");
+    connection
+        .execute(
+            "INSERT INTO blobs(id, data) VALUES (?1, ?2)",
+            params![
+                "text-only",
+                json!({
+                    "role": "assistant",
+                    "message": { "content": [{ "type": "text", "text": "no usage" }] }
+                })
+                .to_string()
+            ],
+        )
+        .expect("insert store transcript");
+    connection.close().expect("close Cursor store");
+
+    let result = scan_cursor_usage(&options(&path)).expect("scan Cursor store");
+    assert_eq!(result.coverage.status, CoverageStatus::Complete);
+    assert_eq!(result.records.len(), 1);
+    assert_eq!(result.records[0].event.model, "composer-1.5");
+    assert_eq!(result.records[0].event.input_tokens, 120);
+    assert_eq!(result.records[0].event.output_tokens, 40);
+    let _ = fs::remove_dir_all(path);
+}
+
+#[test]
+fn cursor_default_roots_cover_home_and_desktop_state() {
+    let home = root("cursor-home");
+    let options = UsageScanOptions {
+        home_directory: Some(home.clone()),
+        environment: HashMap::new(),
+        roots: None,
+        start_at: RANGE_START.into(),
+        end_at: RANGE_END.into(),
+        ..UsageScanOptions::default()
+    };
+    let roots = super::scan::roots_for(UsageAgent::Cursor, &options);
+    assert!(roots.iter().any(|path| path == &home.join(".cursor")));
+    assert!(roots.iter().any(|path| path.ends_with("state.vscdb")));
+    let _ = fs::remove_dir_all(home);
 }
 
 #[test]

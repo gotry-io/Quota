@@ -61,7 +61,7 @@ describe("managed Relay on real Workers and D1", () => {
       scopes: ["usage:write:self"],
     };
     const submission: UsageSubmission = {
-      protocol_version: 2,
+      protocol_version: 3,
       submission_id: "submission_old",
       device_id: "device_watermark",
       generation: 2,
@@ -300,7 +300,7 @@ describe("managed Relay on real Workers and D1", () => {
     };
     const usage = new D1UsageState(env.DB);
     const common = {
-      protocol_version: 2 as const,
+      protocol_version: 3 as const,
       device_id: "device_multipart",
       generation: 1,
       parser_revision: "parser_multipart",
@@ -486,7 +486,16 @@ describe("managed Relay on real Workers and D1", () => {
     });
   });
 
-  it("filters account Usage by requested agents", async () => {
+  it("stores current account data while v2 reads exclude Cursor", async () => {
+    const quotaSnapshot = (provider: "codex" | "cursor", fingerprint: string) =>
+      JSON.stringify({
+        provider,
+        account: { fingerprint, fingerprint_scope: "global" },
+        windows: [],
+        source: `${provider}_test`,
+        status: "available",
+        observed_at: now.toISOString(),
+      });
     await env.DB.batch([
       env.DB.prepare(
         "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_agents', 'subject_agents', ?1, ?1)",
@@ -498,20 +507,87 @@ describe("managed Relay on real Workers and D1", () => {
       ).bind(now.toISOString()),
       usageFactInsert("codex", "openai_direct", "gpt-5.6-sol"),
       usageFactInsert("grok", "xai_direct", "grok-4.5"),
+      usageFactInsert("cursor", "openai_direct", "cursor-small"),
+      env.DB.prepare(
+        `INSERT INTO quota_snapshots (
+             device_id, provider, account_fingerprint, sequence, captured_at, observed_at,
+             snapshot_json, updated_at
+           ) VALUES ('device_agents', ?1, ?2, 0, ?3, ?3, ?4, ?3)`,
+      ).bind(
+        "codex",
+        "codex_fingerprint",
+        now.toISOString(),
+        quotaSnapshot("codex", "codex_fingerprint"),
+      ),
+      env.DB.prepare(
+        `INSERT INTO quota_snapshots (
+             device_id, provider, account_fingerprint, sequence, captured_at, observed_at,
+             snapshot_json, updated_at
+           ) VALUES ('device_agents', ?1, ?2, 0, ?3, ?3, ?4, ?3)`,
+      ).bind(
+        "cursor",
+        "cursor_fingerprint",
+        now.toISOString(),
+        quotaSnapshot("cursor", "cursor_fingerprint"),
+      ),
     ]);
 
-    const state = new D1UsageState(env.DB);
-    const filtered = await state.queryAccountUsage("account_agents", {
+    const usageState = new D1UsageState(env.DB);
+    const filtered = await usageState.queryAccountUsage("account_agents", {
       agents: ["codex", "claude_code"],
       limit: 100,
     });
-    const all = await state.queryAccountUsage("account_agents", {
-      agents: ["codex", "claude_code", "grok", "opencode", "pi"],
+    const all = await usageState.queryAccountUsage("account_agents", {
+      agents: ["codex", "claude_code", "grok", "opencode", "pi", "cursor"],
       limit: 100,
     });
 
     expect(filtered.rows.map((row) => row.agent)).toEqual(["codex"]);
-    expect(all.rows.map((row) => row.agent)).toEqual(["codex", "grok"]);
+    expect(all.rows.map((row) => row.agent)).toEqual(["codex", "cursor", "grok"]);
+
+    const accountState = new D1AccountState(env.DB);
+    const hasher = new SecretHasher(secret);
+    const webAuth: WebAccountAuth = {
+      handler: async () => new Response(null, { status: 404 }),
+      beginGitHubSignIn: async () => new Response(null, { status: 302 }),
+      getSession: async () => ({
+        user: { id: "account_agents", name: "Quota Tester" },
+        session: {
+          id: "web_agents",
+          createdAt: now,
+          expiresAt: new Date(now.getTime() + 60_000),
+        },
+      }),
+    };
+    const app = createRelayApp({
+      state: accountState,
+      usageState,
+      accountService: new AccountService(accountState, hasher, secret),
+      webAuth,
+      hasher,
+      now: () => now,
+    });
+    const v2 = (await (
+      await app.request("https://quota.gotry.io/api/v2/account/summary?usage_agents=all")
+    ).json()) as {
+      protocol_version: number;
+      quota: Array<{ snapshot: { provider: string } }>;
+      usage: { totals: { requests: number } };
+    };
+    const v3 = (await (
+      await app.request("https://quota.gotry.io/api/v3/account/summary?usage_agents=all")
+    ).json()) as {
+      protocol_version: number;
+      quota: Array<{ snapshot: { provider: string } }>;
+      usage: { totals: { requests: number } };
+    };
+    expect(v2).toMatchObject({ protocol_version: 2, usage: { totals: { requests: 2 } } });
+    expect(v3).toMatchObject({ protocol_version: 3, usage: { totals: { requests: 3 } } });
+    expect(v2.quota.map((observation) => observation.snapshot.provider)).toEqual(["codex"]);
+    expect(v3.quota.map((observation) => observation.snapshot.provider)).toEqual([
+      "codex",
+      "cursor",
+    ]);
   });
 
   it("serves the current pricing and model catalogs", async () => {
@@ -1162,7 +1238,7 @@ function usageSubmission(
   rows: ReturnType<typeof usageFact>[],
 ): UsageSubmission {
   return {
-    protocol_version: 2,
+    protocol_version: 3,
     submission_id: submissionID,
     device_id: "device_partial",
     generation: 1,
@@ -1181,7 +1257,7 @@ function usageSubmission(
 
 function unknownModelSubmission(): UsageSubmission {
   return {
-    protocol_version: 2,
+    protocol_version: 3,
     submission_id: "submission_unknown_model",
     device_id: "device_legacy",
     generation: 1,

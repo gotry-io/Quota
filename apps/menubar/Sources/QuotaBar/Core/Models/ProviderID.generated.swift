@@ -155,17 +155,20 @@ enum ProviderID: String, Codable, CaseIterable, Identifiable, Sendable {
     }
   }
 
-  /// Whether this provider is valid in the released managed Account/Relay v2 protocol.
-  var syncsToAccount: Bool {
+  var accountSyncProtocol: Int? {
     switch self {
-    case .`codex`: true
-    case .`claude`: true
-    case .`grok`: true
-    case .`openrouter`: true
-    case .`deepseek`: true
-    case .`kimi`: true
-    case .`litellm`: true
-    case .`cursor`: false
+    case .`codex`: 2
+    case .`claude`: 2
+    case .`grok`: 2
+    case .`openrouter`: 2
+    case .`deepseek`: 2
+    case .`kimi`: 2
+    case .`litellm`: 2
+    case .`cursor`: 3
     }
+  }
+
+  func syncsToAccount(protocolVersion: Int) -> Bool {
+    accountSyncProtocol.map { $0 <= protocolVersion } ?? false
   }
 }

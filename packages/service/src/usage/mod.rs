@@ -6,6 +6,7 @@
 
 mod claude;
 mod codex;
+mod cursor;
 mod grok;
 mod opencode;
 mod pi;
@@ -16,6 +17,7 @@ mod tests;
 
 pub use claude::scan_claude_usage;
 pub use codex::scan_codex_usage;
+pub use cursor::scan_cursor_usage;
 pub use grok::scan_grok_usage;
 pub use opencode::scan_opencode_usage;
 pub use pi::scan_pi_usage;
@@ -46,7 +48,7 @@ pub const MAX_USAGE_COVERAGE_ITEMS: usize = 2_048;
 pub const MAX_USAGE_COVERAGE_HOURS: i64 = 24 * 31;
 pub const MAX_SAFE_COUNT: u64 = 9_007_199_254_740_991;
 
-/// The five local Usage sources supported by protocol v2.
+/// The local Usage sources supported by the current local Usage schema.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, Serialize, PartialOrd)]
 pub enum UsageAgent {
     #[serde(rename = "codex")]
@@ -59,15 +61,18 @@ pub enum UsageAgent {
     OpenCode,
     #[serde(rename = "pi")]
     Pi,
+    #[serde(rename = "cursor")]
+    Cursor,
 }
 
 impl UsageAgent {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Codex,
         Self::ClaudeCode,
         Self::Grok,
         Self::OpenCode,
         Self::Pi,
+        Self::Cursor,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -77,6 +82,7 @@ impl UsageAgent {
             Self::Grok => "grok",
             Self::OpenCode => "opencode",
             Self::Pi => "pi",
+            Self::Cursor => "cursor",
         }
     }
 }

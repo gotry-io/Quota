@@ -1,5 +1,5 @@
 <script lang="ts">
-import type { AccountSummary, UsageBreakdown } from "@gotry-io/quota-protocol";
+import type { AccountSummaryV3 as AccountSummary, UsageBreakdown } from "@gotry-io/quota-protocol";
 import {
   ACTIVITY_WEEKDAY_LABELS,
   buildUsageActivityModel,

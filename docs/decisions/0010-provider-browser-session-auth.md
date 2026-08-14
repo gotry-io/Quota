@@ -18,8 +18,8 @@ Declare browser-session acquisition and managed-account synchronization independ
 read only matching cookie records into bounded Swift memory and sends one minimal candidate at a
 time over private child stdin; Rust revalidates the catalog rules, verifies the provider account,
 performs provider networking, and stores the session in the owner-only local SQLite state. Cursor is
-the first adapter and remains local-only because `account_sync` is false, preserving the released v2
-network enum.
+the first adapter. It synchronizes from managed-data v3 while released v2 routes retain their closed
+provider enum, as defined by [ADR 0012](0012-managed-data-v3.md).
 
 The credential and redaction boundary is specified in [security](../security.md), and provider API
 behavior remains in [provider collection](../provider-collection.md).
@@ -29,4 +29,4 @@ behavior remains in [provider collection](../provider-collection.md).
 Browser/profile discovery can later move to Rust without changing authentication authority or
 persistence. Browser cookies never enter Relay or managed-account payloads. Adding a provider to the
 local catalog does not automatically make it network-compatible; managed synchronization requires
-an explicit protocol-compatible catalog decision.
+explicit `account_sync` and `account_sync_protocol` catalog decisions.

@@ -78,7 +78,7 @@ direct usage collection and report `auth_required` if Claude rejects the cached 
 Usage parsing is independent from subscription-quota authentication. It reads local agent-owned
 JSONL files and emits normalized usage-bearing model output facts plus typed scan coverage; it never
 reads provider tokens for this path. One fact represents one persisted assistant/output response
-whose Usage is measurable. Aggregated managed-v2 rows retain the released `requests` field; the
+whose Usage is measurable. Aggregated managed-data rows retain the released `requests` field; the
 local-v3 summary exposes their sum as `messages`. This is neither a conversation count nor a session
 count, and sessions are intentionally not collected. In v3 summaries, `total_tokens` is
 `input_tokens + output_tokens`; cache-read and cache-write input tokens are subsets of input, and
@@ -167,6 +167,32 @@ make an otherwise unpriced fact priced.
    both `~/.pi/agent/sessions` and the older `~/.local/share/pi-coding-agent/sessions` location.
 2. Parse persisted assistant messages and retain their provider, model, token/cache/reasoning usage,
    and nonzero source cost. Resolve only explicit recognized provider channels.
+
+### Cursor Usage
+
+1. Discover `$CURSOR_HOME` or `~/.cursor` for Composer JSONL under `projects/*/agent-transcripts`
+   and CLI `store.db` files under `chats`. Also open the desktop `state.vscdb` at
+   `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb` on macOS and
+   `$XDG_CONFIG_HOME/Cursor/User/globalStorage/state.vscdb` on Linux, defaulting `XDG_CONFIG_HOME`
+   to `~/.config`. Rust opens those SQLite files read-only and never mutates Cursor-owned stores.
+2. Emit a fact only from an explicit usage-shaped record: JSONL `tokenCount` / `usage` /
+   `message.usage`, desktop `cursorDiskKV` `bubbleId:` rows with `tokenCount`, or CLI `blobs` JSON
+   that carries the same fields. Ignore zero-token/tool/cost records. Do not estimate tokens from
+   transcript text, and do not treat `composerData.promptTokenBreakdown.totalUsedTokens` or
+   `contextTokensUsed` as billing facts; those are conversation context meters, like Codex
+   `total_tokens`.
+3. Prefer per-bubble `tokenCount.inputTokens` / `outputTokens`. When an assistant bubble omits
+   input, attach the preceding same-composer user bubble's tokens so one output response stays one
+   fact. Preserve cache and reasoning fields only when the source reports them. Model identifiers
+   stay opaque provider text (`modelInfo.modelName`, `model`, or `message.model`). Resolve a billing
+   channel only from an explicit recognized provider field; never infer one from the model string.
+   Cursor house models remain the unknown channel inside the `cursor` client.
+4. Agent-transcript JSONL often has role/message text and no usage; that is complete empty coverage,
+   not a malformed source. Binary or protobuf blobs are skipped. An unreadable database, invalid
+   timestamp/model/usage field, or truncated source makes only that file partial.
+
+Cursor enters the BillingAgent enum only in managed-data v3. The released v2 enum remains closed,
+and v2 routes filter Cursor rows and snapshots so menubar-v0.0.9 through 0.0.11 continue decoding.
 
 All scanners preserve non-empty bounded model identifiers as opaque provider text, ignore zero-
 token/tool/cost internal records, and use canonical `[start_at, end_at)` UTC-hour boundaries,
@@ -308,7 +334,8 @@ OpenRouter, DeepSeek, and Kimi always use their fixed official origins; custom b
 
 ## Cursor
 
-Cursor is the first generic browser-session adapter and is local-only in this release.
+Cursor is the first generic browser-session adapter. Quota snapshots follow the product default and
+sync to the managed Account.
 
 1. QuotaBar opens `https://authenticator.cursor.sh/` in one explicit supported browser and polls
    only that browser's profiles. If the default HTTPS handler is unsupported, the user chooses a
@@ -329,9 +356,9 @@ Cursor is the first generic browser-session adapter and is local-only in this re
    is percent-only. `totalPercentUsed` is not a third quota. Individual, on-demand, team pool, and
    team on-demand cents-based limits map to remaining USD windows. HTTP 401/403 is `auth_required`;
    malformed/partial payloads do not expose provider response data.
-5. Catalog `account_sync: false` keeps Cursor out of released network-v2 snapshot envelopes and
-   Account summaries. menubar-v0.0.9 shipped a closed provider enum; local collection and Overview
-   may show Cursor, while Relay validators reject it.
+5. Catalog `account_sync` is true and `account_sync_protocol` is 3, so Cursor snapshots enter v3
+   envelopes and Account summaries. Browser cookies still never leave the local service. Released
+   v2 routes keep the original provider enum and filter Cursor observations.
 
 ## Identity and normalization
 
