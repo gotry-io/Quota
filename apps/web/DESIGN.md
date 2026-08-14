@@ -12,7 +12,7 @@ open-source tool, not a hosting console or a promotional SaaS dashboard.
 
 - Lead with remaining quota, normalized Usage, and the privacy boundary.
 - Use black type, white space, thin neutral rules, and mint only for brand or healthy state.
-- Support light and dark appearance. Follow the system until the user chooses one in the header.
+- Support light and dark appearance. Follow the system until the user chooses one in the footer.
 - Prefer clear labels and real values over decoration.
 - Do not use gradients, drop shadows, glass effects, fake browser chrome, or ornamental charts.
 - Product names are Quota, QuotaBar, and QuotaRelay.
@@ -22,14 +22,19 @@ open-source tool, not a hosting console or a promotional SaaS dashboard.
 The site has four surfaces:
 
 1. `/` explains local collection, one GitHub-backed Account, Devices, and API-equivalent Usage cost.
-   The hero offers a QuotaBar `.dmg` download and a copyable `brew install gotry-io/tap/quotabar`
-   command. GitHub sign-in lives only in the site header.
+   The hero offers a QuotaBar `.dmg` download as the primary action. Homebrew is a compact
+   secondary install under that CTA: a Homebrew label, a short tap note, the
+   `brew install gotry-io/tap/quotabar` command, and a Copy control with brief Copied feedback.
+   GitHub sign-in lives only in the site header. The appearance control lives in the footer.
 2. `/my` is the signed-in dashboard: compact remaining-quota cards, account totals, cost coverage,
    Usage activity, model/agent breakdowns, Devices, and explicit Device deletion. Quota remaining
    has no "left"/"remaining" suffix; budget windows with an amount use `71% · $3.75`, percent-only
    windows use `71%`, and balance-only windows use **Balance** plus `$12.34`. Quota cards follow
    the same provider / account / remaining / meter / metadata order as QuotaBar Overview, in a
-   denser web layout. The header shows the GitHub username; the name opens `/my`, and its menu
+   denser web layout. Quota cards share `.quota-grid`: two columns on desktop and one column
+   below 620 px. Empty quota states span the full row. Selecting an Activity day loads that
+   day's Usage under the grid. The header shows the GitHub username;
+   the name opens `/my`, and its menu
    contains only **Sign out**. Session cookies stay HttpOnly. SvelteKit renders the header from
    `WebDocumentPort.getViewer` on the first HTML byte. The dashboard still loads Usage from
    `GET /api/v2/account/summary` after paint. Unsigned visits to `/my` are a server redirect to
@@ -66,9 +71,10 @@ Tokens are defined in `src/app.css` and must remain the source used by the imple
 | Inverted surface | `#171717` | `#f4f4f4` | Bounded opposite-tone section |
 | Hairline | `#e5e5e5` | `#2a2a2a` | Dividers and card outlines |
 
-Color never carries status alone. Every state also has a text label. The header theme control
-toggles `light` and `dark`, stores the choice locally, and otherwise follows
-`prefers-color-scheme`. Do not add a third visible “system” control.
+Color never carries status alone. Every state also has a text label. The footer theme control
+toggles `light` and `dark`. First visits and any session without an explicit `quota-theme`
+value follow `prefers-color-scheme`. A click writes `light` or `dark` to local storage. Do not
+add a third visible “system” control.
 
 ### Type
 
@@ -101,8 +107,14 @@ The explanation follows this order:
 - defensible, effective-dated cost;
 - the direct local agent logs → QuotaBar local service → Account data path.
 
-The hero also presents the live GitHub Releases `.dmg` and the Homebrew tap command. Do not present
-unavailable downloads or documentation as active destinations.
+The hero presents the live GitHub Releases `.dmg` first. Homebrew sits below it as a hairline
+or neutral-surface secondary install: no fake terminal, gradient, or shadow. The command is
+monospace; Copy announces a short Copied state through `aria-live`. Narrow viewports stack or
+scroll the command safely without overflowing the page. Do not present unavailable downloads
+or documentation as active destinations.
+
+The footer shows `© {year} GoTry IO · MIT`, repository and account links, and the appearance
+toggle in a controls group. The toggle keeps a visible focus ring and a 42 px target.
 
 ## Account dashboard
 
@@ -110,8 +122,27 @@ The dashboard leads with input tokens, output tokens, and API-equivalent cost. C
 coverage/basis; unavailable cost renders as an em dash plus “Unpriced”, and partial cost uses a lower
 bound marker. It reads all retained Account Usage by default. User-facing dates, numbers, units, and
 plan names use the English presentation shared with QuotaBar rather than the browser locale.
-Usage activity is a compact day grid whose cells use token volume for highlight levels, including a
-distinct today outline. The dashboard does not repeat the GitHub username in the page heading.
+Usage activity is a GitHub-style contribution graph that still follows this file: no gradients,
+shadows, or glass. Weeks are Sunday-first columns. The left axis shows Mon, Wed, and Fri. Month
+labels sit on the Sunday-first week that contains that month’s first visible in-range day, then
+are dropped when they would overlap. In-range days are focusable buttons; padding days stay inert.
+Cell fill still maps token volume to highlight levels. Today keeps a distinct ink outline. The
+selected day uses `aria-pressed`. Hover and keyboard focus scale a cell about 1.35× with a raised
+z-index and no layout shift; `prefers-reduced-motion` disables the transition. A visible tooltip
+appears immediately on pointer hover and keyboard focus with the full UTC date, token total, and
+API-equivalent estimated cost, including Unpriced and priced-subset-only wording. It is not clipped
+by the graph’s horizontal scroller, does not scale with the cell, and stays inside the viewport so
+it cannot overflow the page. Leave and blur hide it. Narrow viewports scroll the graph horizontally
+so weekday labels stay readable and the page does not overflow.
+
+Choosing a day opens an inline details panel under the Activity card, not a modal. The dashboard
+owns selected, loading, error, and data state and fetches
+`GET /api/v2/account/usage/summary?usage_agents=all&cost_mode=calculate&model_catalog=1&from=YYYY-MM-DD&to=YYYY-MM-DD`,
+reusing the existing `usage_date` timezone. A 401 starts GitHub sign-in. Failures stay on the
+page with a retry control. The panel can be closed. It shows that day's date, input, output,
+requests, estimated cost, coverage, and compact agent and model splits, with honest empty,
+truncated, partial, and unpriced copy. The dashboard does not repeat the GitHub username in the
+page heading.
 
 Device cards show display name, platform, lifecycle status, and last-seen time. Deletion copy must
 say that both the Device and its Quota/Usage data are removed. Agent Usage uses a semantic table with
@@ -129,8 +160,10 @@ Quota client.
 
 - At 840 px, two-column hero and architecture layouts become one column.
 - At 620 px, the page gutter reduces, navigation hides nonessential links, actions become full
-  width where useful, summary grids stack, and data tables remain horizontally scrollable. The
-  appearance toggle and account session control stay visible.
+  width where useful, summary and quota grids stack to one column, and data tables remain
+  horizontally scrollable. The Activity graph scrolls horizontally inside its card; weekday
+  labels stay readable. The header account session control and the footer appearance toggle
+  stay visible.
 - The layout must work from 320 px upward without clipped actions or horizontal page scrolling.
 
 ## Accessibility and motion

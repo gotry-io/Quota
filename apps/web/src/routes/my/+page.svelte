@@ -3,6 +3,7 @@ import type {
   AccountDevice,
   AccountQuotaObservation,
   AccountSummary,
+  AccountUsageSummary,
   UsageBreakdown,
 } from "@gotry-io/quota-protocol";
 import {
@@ -10,9 +11,11 @@ import {
   deleteAccount,
   deleteDevice,
   fetchAccountSummary,
+  fetchAccountUsageDay,
 } from "$lib/account-client";
 import QuotaWindows from "$lib/components/QuotaWindows.svelte";
 import UsageActivity from "$lib/components/UsageActivity.svelte";
+import UsageDayDetails from "$lib/components/UsageDayDetails.svelte";
 import {
   agentDisplayName,
   costCoverage,
@@ -22,10 +25,17 @@ import {
   titleCase,
 } from "$lib/format";
 import { DASHBOARD_PATH, planDisplayName } from "$lib/routes";
+import { usageDateBreakdowns } from "$lib/usage-activity";
 
 let summary = $state<AccountSummary | null>(null);
 let loadError = $state<string | null>(null);
 let activityMessage = $state("Loading Usage activity…");
+let selectedDate = $state<string | null>(null);
+let dayLoading = $state(false);
+let dayError = $state<string | null>(null);
+let dayUsage = $state<AccountUsageSummary | null>(null);
+let dayRequest = 0;
+let dayAbort: AbortController | null = null;
 
 $effect(() => {
   void loadSummary();
@@ -99,8 +109,47 @@ function modelBreakdowns(items: UsageBreakdown[]): UsageBreakdown[] {
   return items.filter((item) => item.dimension === "model");
 }
 
-function dateBreakdowns(items: UsageBreakdown[]): UsageBreakdown[] {
-  return items.filter((item) => item.dimension === "usage_date");
+function closeDayDetails(): void {
+  dayAbort?.abort();
+  dayAbort = null;
+  dayRequest += 1;
+  selectedDate = null;
+  dayLoading = false;
+  dayError = null;
+  dayUsage = null;
+}
+
+async function selectDay(date: string): Promise<void> {
+  if (selectedDate === date) {
+    closeDayDetails();
+    return;
+  }
+  await loadDay(date);
+}
+
+async function loadDay(date: string): Promise<void> {
+  selectedDate = date;
+  dayUsage = null;
+  dayError = null;
+  dayLoading = true;
+  dayAbort?.abort();
+  const controller = new AbortController();
+  dayAbort = controller;
+  const requestId = ++dayRequest;
+  const result = await fetchAccountUsageDay(date, { signal: controller.signal });
+  if (requestId !== dayRequest) return;
+  if (result.status === "aborted") return;
+  if (result.status === "unauthorized") {
+    void beginWebLogin(DASHBOARD_PATH);
+    return;
+  }
+  if (result.status === "error") {
+    dayLoading = false;
+    dayError = "Quota could not load this day's Usage. Try again.";
+    return;
+  }
+  dayLoading = false;
+  dayUsage = result.usage;
 }
 </script>
 
@@ -290,9 +339,22 @@ function dateBreakdowns(items: UsageBreakdown[]): UsageBreakdown[] {
     </div>
     {#if summary}
       <UsageActivity
-        breakdowns={dateBreakdowns(summary.usage.breakdowns)}
+        breakdowns={usageDateBreakdowns(summary.usage.breakdowns)}
         range={summary.usage.range}
+        {selectedDate}
+        onSelectDate={(date) => void selectDay(date)}
       />
+      {#if selectedDate}
+        {@const day = selectedDate}
+        <UsageDayDetails
+          date={day}
+          loading={dayLoading}
+          error={dayError}
+          usage={dayUsage}
+          onRetry={() => void loadDay(day)}
+          onClose={closeDayDetails}
+        />
+      {/if}
     {:else}
       <div id="usage-activity-grid" class="usage-activity-state" aria-live="polite">
         {activityMessage}
