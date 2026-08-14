@@ -1,5 +1,8 @@
 <script lang="ts">
-import type { AccountUsageSummary, UsageBreakdown } from "@gotry-io/quota-protocol";
+import type {
+  AccountUsageSummaryV3 as AccountUsageSummary,
+  UsageBreakdown,
+} from "@gotry-io/quota-protocol";
 import { formatActivityDate, usageDayCoverageLabel, usageDayNotices } from "$lib/usage-activity";
 import { agentDisplayName, costCoverage, formatCost, formatCount } from "$lib/format";
 

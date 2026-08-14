@@ -9,6 +9,7 @@
       "setup_action": "codex login",
       "brand_icon_asset": "openai",
       "account_sync": true,
+      "account_sync_protocol": 2,
       "environment_keys": ["CODEX_HOME"],
       "credential_config": null,
       "browser_session": null,
@@ -23,6 +24,7 @@
       "setup_action": "claude auth login",
       "brand_icon_asset": "claude",
       "account_sync": true,
+      "account_sync_protocol": 2,
       "environment_keys": ["CLAUDE_CONFIG_DIR"],
       "credential_config": null,
       "browser_session": null,
@@ -37,6 +39,7 @@
       "setup_action": "grok login",
       "brand_icon_asset": "grok",
       "account_sync": true,
+      "account_sync_protocol": 2,
       "environment_keys": ["GROK_HOME"],
       "credential_config": null,
       "browser_session": null,
@@ -51,6 +54,7 @@
       "setup_action": "Configure in QuotaBar",
       "brand_icon_asset": "openrouter",
       "account_sync": true,
+      "account_sync_protocol": 2,
       "environment_keys": ["OPENROUTER_API_KEY"],
       "credential_config": {
         "kind": "api_key",
@@ -71,6 +75,7 @@
       "setup_action": "Configure in QuotaBar",
       "brand_icon_asset": "deepseek",
       "account_sync": true,
+      "account_sync_protocol": 2,
       "environment_keys": ["DEEPSEEK_API_KEY", "DEEPSEEK_KEY"],
       "credential_config": {
         "kind": "api_key",
@@ -91,6 +96,7 @@
       "setup_action": "Configure in QuotaBar",
       "brand_icon_asset": "kimi",
       "account_sync": true,
+      "account_sync_protocol": 2,
       "environment_keys": ["KIMI_CODE_API_KEY", "KIMI_API_KEY"],
       "credential_config": {
         "kind": "api_key",
@@ -111,6 +117,7 @@
       "setup_action": "Configure in QuotaBar",
       "brand_icon_asset": "litellm",
       "account_sync": true,
+      "account_sync_protocol": 2,
       "environment_keys": ["LITELLM_API_KEY", "LITELLM_BASE_URL"],
       "credential_config": {
         "kind": "api_key",
@@ -130,7 +137,8 @@
       "default_visible": false,
       "setup_action": "Sign in with browser",
       "brand_icon_asset": "cursor",
-      "account_sync": false,
+      "account_sync": true,
+      "account_sync_protocol": 3,
       "environment_keys": [],
       "credential_config": null,
       "browser_session": {

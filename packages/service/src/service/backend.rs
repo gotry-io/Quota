@@ -1615,7 +1615,12 @@ impl NativeBackend {
                         .get("provider")
                         .and_then(Value::as_str)
                         .and_then(ProviderId::parse)
-                        .is_some_and(|provider| provider.metadata().account_sync)
+                        .is_some_and(|provider| {
+                            provider
+                                .metadata()
+                                .account_sync_protocol
+                                .is_some_and(|version| version <= 3)
+                        })
                     {
                         continue;
                     }
@@ -2314,7 +2319,7 @@ fn usage_submission(
         }
     }
     let mut submission = json!({
-        "protocol_version": 2,
+        "protocol_version": 3,
         "submission_id": submission_id,
         "device_id": context.device_id,
         "generation": context.generation,

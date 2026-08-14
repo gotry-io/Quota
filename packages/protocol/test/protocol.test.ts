@@ -14,6 +14,7 @@ import {
   DeviceSyncResponseSchema,
   LOCAL_PROVIDER_IDS,
   LOCAL_USAGE_PROTOCOL_VERSION,
+  MANAGED_DATA_PROTOCOL_VERSION,
   LocalProviderIdSchema,
   LocalUsageReportSchema,
   MAXIMUM_SNAPSHOTS_PER_ENVELOPE,
@@ -24,15 +25,18 @@ import {
   PublicProfileSettingsSchema,
   PublicProfileUpdateRequestSchema,
   PROVIDER_IDS,
+  PROVIDER_IDS_V3,
   ProviderIdSchema,
   PricingCatalogSchema,
   QuotaCollectionReportSchema,
   QuotaSnapshotEnvelopeSchema,
+  QuotaSnapshotEnvelopeV3Schema,
   QuotaSnapshotUploadResponseSchema,
   SessionRefreshResponseSchema,
   UsageBreakdownSchema,
   UsageHourlyFactSchema,
   UsageSubmissionSchema,
+  UsageSubmissionV3Schema,
 } from "../src/index.ts";
 
 describe("quota protocol v2", () => {
@@ -41,6 +45,28 @@ describe("quota protocol v2", () => {
     expect(ProviderIdSchema.safeParse("cursor").success).toBe(false);
     expect(LOCAL_PROVIDER_IDS).toContain("cursor");
     expect(LocalProviderIdSchema.safeParse("cursor").success).toBe(true);
+  });
+
+  it("adds Cursor only to managed-data v3", () => {
+    expect(MANAGED_DATA_PROTOCOL_VERSION).toBe(3);
+    expect(PROVIDER_IDS).not.toContain("cursor");
+    expect(PROVIDER_IDS_V3).toContain("cursor");
+    const cursorEnvelope = {
+      ...quotaEnvelope(),
+      protocol_version: 3 as const,
+      snapshots: [snapshot("cursor")],
+    };
+    expect(QuotaSnapshotEnvelopeV3Schema.safeParse(cursorEnvelope).success).toBe(true);
+    expect(QuotaSnapshotEnvelopeSchema.safeParse(cursorEnvelope).success).toBe(false);
+
+    const cursorUsage = {
+      ...usageSubmission(),
+      protocol_version: 3 as const,
+      coverage: { ...usageSubmission().coverage, agent: "cursor" as const },
+      rows: usageSubmission().rows.map((row) => ({ ...row, agent: "cursor" as const })),
+    };
+    expect(UsageSubmissionV3Schema.safeParse(cursorUsage).success).toBe(true);
+    expect(UsageSubmissionSchema.safeParse(cursorUsage).success).toBe(false);
   });
 
   it("accepts the sole quota upload contract with device generation", () => {
@@ -653,7 +679,8 @@ describe("quota protocol v2", () => {
         (file) =>
           file === "model-catalog-v1.json" ||
           file === "local-usage-v3.json" ||
-          file.endsWith("-v2.json"),
+          file.endsWith("-v2.json") ||
+          file.endsWith("-v3.json"),
       ),
     ).toBe(true);
 

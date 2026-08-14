@@ -86,7 +86,7 @@ reimplements this policy.
 The provider catalog is the language-neutral `packages/provider/catalog.json`, validated by its JSON
 Schema. Generation produces TypeScript protocol IDs, Rust catalog metadata under
 `packages/service/src/catalog.rs`, and Swift `ProviderID`. The shared Rust crate implements all
-eight quota collectors and all five Usage parsers; the macOS and Linux entry points call that crate.
+eight quota collectors and all six Usage parsers; the macOS and Linux entry points call that crate.
 
 Provider credentials remain provider-owned when available. Optional API-key provider overrides use
 the released shared owner-only configuration root and `providers.json`; QuotaBar sends secrets only
@@ -102,12 +102,11 @@ SweetCookieKit only acquires allowlisted Cookie candidates in Swift memory. Rust
 account validation, durable state, provider networking, and routine refresh. Linux QuotaCLI does
 not implement browser acquisition.
 
-The local provider catalog is broader than released managed network v2. Catalog `account_sync` is
-the explicit Account/Relay boundary: the generated network provider schema includes only opted-in
-providers, while the private local collection schema uses the full catalog. Upload construction
-filters local-only snapshots, and remote summary validation rejects them. menubar-v0.0.9 shipped
-strict closed-enum v2 network decoding, so Cursor remains local-only rather than changing that enum
-in place.
+The local provider catalog is broader than each managed protocol. Catalog `account_sync` declares
+whether a provider synchronizes, and `account_sync_protocol` records the first managed-data version
+that accepts it. Generated v2 IDs remain the closed set shipped by menubar-v0.0.9; generated v3 IDs
+add Cursor. New clients upload Cursor only to v3, while Relay keeps v2 routes isolated and filters
+Cursor from their responses. The private local collection schema continues to use the full catalog.
 
 Usage indexing is the final file-level invalidation design. Each refresh performs bounded source
 discovery, records parser revision plus file identity, size, and modification time, skips unchanged
@@ -121,8 +120,8 @@ missing pricing never discards a valid fact.
 Bounded Usage detail responses may explicitly mark truncated coverage, breakdown, or unpriced-model
 detail; exact totals remain usable and clients surface that degradation.
 
-The local Usage report is a private v3 presentation contract, separate from the released managed
-network v2 facts and account summaries. It carries collection status, coverage, timezone, and the
+The local Usage report is a private v3 presentation contract, separate from managed-data v3 facts
+and account summaries. It carries collection status, coverage, timezone, and the
 model-catalog revision. State snapshots separately carry the precomputed Today, 7 Days, 30 Days, and
 All summaries, each with exact totals, cost, and `clients[].providers[].models[]` detail. `total_tokens` is input plus output;
 cache-read and cache-write tokens are named input subsets; reasoning is an output subset; and
@@ -153,13 +152,12 @@ Usage uploads, and D1. A catalog update therefore regroups existing raw rows the
 is built, without reparsing source files or rewriting fact rows. Resolved model breakdown keys use
 the stable canonical ID; unresolved rows retain their raw model text.
 
-Current native clients opt into `usage.clients[].providers[].models[]` on account summaries with
+Current native clients opt into `usage.clients[].providers[].models[]` on v3 account summaries with
 `usage_clients=1`. Relay derives this account-wide structure directly from retained normalized facts,
 preserving the row-level client, billing-channel provider, and model relationship across Devices.
-The field is omitted without the opt-in because released protocol-v2 clients decode summaries
-strictly. A native client talking to a released Relay retries without the unknown key and temporarily
-uses the returned model breakdowns on the Usage page; it never reconstructs ownership from
-independent breakdowns or model text.
+The field remains omitted without the opt-in. It never appears on released v2 summaries unless a v2
+client explicitly requests it, and v2 still excludes Cursor. Clients never reconstruct ownership
+from independent breakdowns or model text.
 
 The native-cutover import and its version-specific Relay behavior ended in 0.0.8 as defined by
 [ADR 0007](decisions/0007-rust-native-local-service.md). Applied SQLite migrations remain ordered
@@ -257,7 +255,8 @@ protocol + quota-model + relay-core
 
 ## Relay, Web, and deployment
 
-QuotaRelay mounts Hono routes at `/oauth/v2` and `/api/v2`, Better Auth at `/api/auth/v2`, and health
+QuotaRelay mounts OAuth and Device control at `/oauth/v2` and `/api/v2`, quota/Usage managed data at
+both compatible `/api/v2` and current `/api/v3` routes, Better Auth at `/api/auth/v2`, and health
 routes at their documented paths. It authenticates each route with the minimum account, device, or
 browser scope and performs Device/Account deletion, rotation/revocation, and Usage replacement in
 storage transactions. Relay serves the current Usage agents and pricing catalog without the ended
@@ -270,7 +269,7 @@ request is rendered by SvelteKit `Server.respond`. The Worker reads the Better A
 cookie through `WebDocumentPort` and writes the signed-in header into the first HTML byte.
 Session cookies remain HttpOnly. `/` offers the QuotaBar `.dmg` and Homebrew install command.
 GitHub sign-in is in the header; `/my` is a server redirect when unsigned and otherwise a
-dashboard shell whose Usage summary is still fetched from `GET /api/v2/account/summary`.
+dashboard shell whose Usage summary is fetched from `GET /api/v3/account/summary`.
 `/u/{username}` is the public projection for that GitHub username. `/activate` approves or
 denies native authorization. `/app` is a server redirect to `/my`. Better Auth owns GitHub
 login and browser sessions. Production Web and Worker deploy together only through
@@ -280,3 +279,6 @@ login and browser sessions. Production Web and Worker deploy together only throu
 D1 is the only durable Relay store and applied migrations are never rewritten. Local Worker builds
 use Wrangler dry-run and local D1 migration verification. Manual remote migration or deployment is
 not a development command.
+
+The shipped compatibility and route split are canonical in
+[ADR 0012](decisions/0012-managed-data-v3.md).

@@ -5,13 +5,18 @@ import { z } from "zod";
 import {
   AccountDevicesResponseSchema,
   AccountQuotaResponseSchema,
+  AccountQuotaResponseV3Schema,
   AccountResponseSchema,
   AccountSummarySchema,
+  AccountSummaryV3Schema,
   PublicProfileSchema,
   PublicProfileSettingsSchema,
   PublicProfileUpdateRequestSchema,
   AccountUsageHourlyResponseSchema,
+  AccountUsageHourlyResponseV3Schema,
   AccountUsageResponseSchema,
+  AccountUsageResponseV3Schema,
+  AccountUsageSummaryV3Schema,
   AccountUsageSummarySchema,
   BrowserLoginExchangeRequestSchema,
   DeleteDeviceResponseSchema,
@@ -28,12 +33,16 @@ import {
   PricingCatalogSchema,
   QuotaCollectionReportSchema,
   QuotaSnapshotEnvelopeSchema,
+  QuotaSnapshotEnvelopeV3Schema,
   QuotaSnapshotUploadResponseSchema,
+  QuotaSnapshotUploadResponseV3Schema,
   RelayErrorEnvelopeSchema,
   SessionRefreshRequestSchema,
   SessionRefreshResponseSchema,
   UsageSubmissionSchema,
+  UsageSubmissionV3Schema,
   UsageUploadResponseSchema,
+  UsageUploadResponseV3Schema,
 } from "../src/index.ts";
 
 const directory = join(dirname(fileURLToPath(import.meta.url)), "../schema");
@@ -70,12 +79,34 @@ const UsagePayloadSchema = z.union([
   LocalUsageReportV2Schema,
 ]);
 
+const AccountHttpV3PayloadSchema = z.union([
+  AccountQuotaResponseV3Schema,
+  AccountSummaryV3Schema,
+  AccountUsageResponseV3Schema,
+  AccountUsageHourlyResponseV3Schema,
+  QuotaSnapshotUploadResponseV3Schema,
+  UsageUploadResponseV3Schema,
+  RelayErrorEnvelopeSchema,
+]);
+
+const UsageV3PayloadSchema = z.union([
+  UsageSubmissionV3Schema,
+  UsageUploadResponseV3Schema,
+  AccountUsageSummaryV3Schema,
+]);
+
 const outputs = [
   {
     filename: "quota-snapshot-v2.json",
     title: "Quota snapshot upload v2",
     schema: QuotaSnapshotEnvelopeSchema,
     comment: "Device-scoped quota upload. The device token must match device_id and generation.",
+  },
+  {
+    filename: "quota-snapshot-v3.json",
+    title: "Quota snapshot upload v3",
+    schema: QuotaSnapshotEnvelopeV3Schema,
+    comment: "Device-scoped quota upload with the current managed provider catalog.",
   },
   {
     filename: "quota-collection-report-v2.json",
@@ -90,11 +121,24 @@ const outputs = [
     comment: "Direct Account to Device managed contract.",
   },
   {
+    filename: "account-http-v3.json",
+    title: "Quota managed data HTTP payloads v3",
+    schema: AccountHttpV3PayloadSchema,
+    comment: "Quota and Usage managed data contracts; OAuth and device control remain v2.",
+  },
+  {
     filename: "usage-v2.json",
     title: "Quota Usage payloads v2",
     schema: UsagePayloadSchema,
     comment:
       "Runtime validation additionally enforces token subset conservation, source-cost coverage, unique same-agent contained rows, and bounded ordered UTC-hour coverage.",
+  },
+  {
+    filename: "usage-v3.json",
+    title: "Quota Usage payloads v3",
+    schema: UsageV3PayloadSchema,
+    comment:
+      "Adds Cursor while preserving the v2 token, identity, coverage, and integrity invariants.",
   },
   {
     filename: "local-usage-v3.json",

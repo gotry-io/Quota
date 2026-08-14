@@ -126,7 +126,7 @@
     },
     "__schema9": {
       "type": "string",
-      "enum": ["codex", "claude_code", "grok", "opencode", "pi"]
+      "enum": ["codex", "claude_code", "grok", "opencode", "pi", "cursor"]
     },
     "__schema10": {
       "type": "string",

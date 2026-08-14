@@ -26,6 +26,7 @@
         "setup_action",
         "brand_icon_asset",
         "account_sync",
+        "account_sync_protocol",
         "environment_keys",
         "credential_config",
         "browser_session",
@@ -56,7 +57,15 @@
           "type": "string",
           "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
         },
-        "account_sync": { "type": "boolean" },
+        "account_sync": {
+          "type": "boolean",
+          "description": "Managed Account/Relay upload. Product default is true; set false only for an explicit local-only provider."
+        },
+        "account_sync_protocol": {
+          "type": ["integer", "null"],
+          "minimum": 2,
+          "description": "First managed network protocol that accepts this provider; null when account_sync is false."
+        },
         "environment_keys": {
           "type": "array",
           "maxItems": 16,

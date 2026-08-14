@@ -202,12 +202,12 @@ extension QuotaSnapshotEnvelope {
     sequence = try container.decode(Int.self, forKey: .sequence)
     capturedAt = try container.decode(Date.self, forKey: .capturedAt)
     snapshots = try container.decode([QuotaSnapshot].self, forKey: .snapshots)
-    guard protocolVersion == 2,
+    guard protocolVersion == 3,
       isQuotaOpaqueID(deviceID),
       (1...quotaJSONSafeIntegerMaximum).contains(generation),
       (0...quotaJSONSafeIntegerMaximum).contains(sequence),
       snapshots.count <= 32,
-      snapshots.allSatisfy({ $0.provider.syncsToAccount })
+      snapshots.allSatisfy({ $0.provider.syncsToAccount(protocolVersion: protocolVersion) })
     else {
       throw DecodingError.dataCorruptedError(
         forKey: .protocolVersion,

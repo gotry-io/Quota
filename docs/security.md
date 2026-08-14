@@ -138,8 +138,8 @@ data requirements. Architecture and product behavior are defined in
   gap; no watcher or byte-checkpoint dependency is used.
 - Outbox payloads contain allowlisted aggregate fields only. Source file IDs, byte offsets, record
   hashes, paths, raw events, and parser diagnostics remain local. Token/count invariants and payload,
-  row, range, model, and dimension resource bounds are enforced by the v2 runtime schema before
-  upload and by Relay again before persistence. Model identifiers are opaque provider text: preserve
+  row, range, model, and dimension resource bounds are enforced by the current managed-data runtime
+  schema before upload and by Relay again before persistence. Model identifiers are opaque provider text: preserve
   any non-empty bounded identifier, including punctuation and `unknown`; do not apply a naming
   whitelist or discard an otherwise valid fact because pricing is missing. Empty internal records
   with no tokens, billable tools, or nonzero source cost do not become Usage facts. Invalid records
@@ -201,6 +201,8 @@ data requirements. Architecture and product behavior are defined in
 
 - D1 is the only Relay store. Keep migrations explicit; never rewrite an applied migration. Review
   lifecycle, retention, and new retained fields as security-sensitive changes.
+- Treat protocol routing as a trust boundary. V2 writes must pass the closed v2 provider/agent
+  schemas, and v2 reads must exclude observations introduced by v3 before serialization.
 - Persist GitHub subjects, installation identities, token/grant secrets, session-store keys, and
   rate-limit subjects only as keyed hashes where equality is required. Better Auth session values
   are encrypted at rest. Persist plaintext native tokens only in the one successful issuance

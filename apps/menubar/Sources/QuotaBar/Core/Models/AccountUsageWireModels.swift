@@ -23,6 +23,7 @@ enum BillingAgent: String, Codable, Sendable {
   case grok
   case opencode
   case pi
+  case cursor
 }
 
 enum BillingChannel: String, Codable, Sendable {
@@ -252,7 +253,7 @@ extension UsageHourlyFact {
   }
 }
 
-struct UsageSubmissionV2: Decodable, Equatable, Sendable {
+struct UsageSubmissionV3: Decodable, Equatable, Sendable {
   let protocolVersion: Int
   let submissionID: String
   let deviceID: String
@@ -305,7 +306,7 @@ struct UsageSubmissionV2: Decodable, Equatable, Sendable {
 
     let start = UsageCoverage.utcHour(coverage.startAt)
     let end = UsageCoverage.utcHour(coverage.endAt)
-    guard protocolVersion == 2,
+    guard protocolVersion == 3,
       isUsageOpaqueID(submissionID), isUsageOpaqueID(deviceID), isUsageOpaqueID(parserRevision),
       (1...jsonSafeIntegerMaximum).contains(generation),
       (0...jsonSafeIntegerMaximum).contains(sequence),
@@ -330,7 +331,7 @@ struct UsageSubmissionV2: Decodable, Equatable, Sendable {
       throw DecodingError.dataCorruptedError(
         forKey: .rows,
         in: container,
-        debugDescription: "Invalid Usage v2 submission."
+        debugDescription: "Invalid Usage v3 submission."
       )
     }
   }
@@ -811,7 +812,7 @@ struct AccountUsageSummary: Codable, Equatable, Sendable {
       && coverage.allSatisfy(\.isValid)
       && breakdowns.count <= 1_000
       && breakdowns.allSatisfy(\.isValid)
-      && clients.map { $0.count <= 5 && $0.allSatisfy(\.isValid) } != false
+      && clients.map { $0.count <= 6 && $0.allSatisfy(\.isValid) } != false
   }
 }
 
@@ -1058,7 +1059,7 @@ struct LocalUsagePeriodSummary: Codable, Equatable, Sendable {
   }
 
   var isValid: Bool {
-    totals.isValid && cost.isValid && clients.count <= 5 && clients.allSatisfy(\.isValid)
+    totals.isValid && cost.isValid && clients.count <= 6 && clients.allSatisfy(\.isValid)
       && modelsTruncated != false
   }
 
@@ -1239,7 +1240,7 @@ struct AccountUsageResponse: Decodable, Equatable, Sendable {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     protocolVersion = try container.decode(Int.self, forKey: .protocolVersion)
     usage = try container.decode(AccountUsageSummary.self, forKey: .usage)
-    guard protocolVersion == 2, usage.isValid else {
+    guard protocolVersion == 3, usage.isValid else {
       throw DecodingError.dataCorruptedError(
         forKey: .protocolVersion,
         in: container,
@@ -1381,7 +1382,7 @@ struct AccountQuotaObservation: Codable, Equatable, Sendable {
 
   var isValid: Bool {
     isUsageOpaqueID(deviceID) && (0...jsonSafeIntegerMaximum).contains(sequence)
-      && snapshot.provider.syncsToAccount
+      && snapshot.provider.syncsToAccount(protocolVersion: 3)
   }
 
 }
@@ -1409,7 +1410,7 @@ struct AccountQuotaResponse: Decodable, Equatable, Sendable {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     protocolVersion = try container.decode(Int.self, forKey: .protocolVersion)
     quota = try container.decode([AccountQuotaObservation].self, forKey: .quota)
-    guard protocolVersion == 2, quota.count <= 8_192, quota.allSatisfy(\.isValid) else {
+    guard protocolVersion == 3, quota.count <= 8_192, quota.allSatisfy(\.isValid) else {
       throw DecodingError.dataCorruptedError(
         forKey: .protocolVersion,
         in: container,
@@ -1498,7 +1499,7 @@ struct AccountUsageHourlyResponse: Decodable, Equatable, Sendable {
     let decodedStart = UsageCoverage.utcHour(startAt)
     let decodedEnd = UsageCoverage.utcHour(endAt)
     let costRows = safeSum([cost.calculatedRows, cost.reportedRows, cost.unpricedRows])
-    guard protocolVersion == 2,
+    guard protocolVersion == 3,
       let start = decodedStart, let end = decodedEnd,
       end > start, end.timeIntervalSince(start) <= 744 * 3_600,
       facts.count <= 1_000,
@@ -1548,7 +1549,7 @@ struct AccountSummary: Codable, Equatable, Sendable {
   }
 
   init(
-    protocolVersion: Int = 2,
+    protocolVersion: Int = 3,
     generatedAt: Date,
     account: QuotaUserAccount,
     devices: [AccountDevice],
@@ -1574,7 +1575,7 @@ struct AccountSummary: Codable, Equatable, Sendable {
     devices = try container.decode([AccountDevice].self, forKey: .devices)
     quota = try container.decode([AccountQuotaObservation].self, forKey: .quota)
     usage = try container.decode(AccountUsageSummary.self, forKey: .usage)
-    guard protocolVersion == 2,
+    guard protocolVersion == 3,
       account.isValid,
       devices.count <= 256,
       devices.allSatisfy(\.isValid),
@@ -1625,7 +1626,7 @@ struct QuotaSnapshotUploadResponse: Codable, Equatable, Sendable {
     deviceGeneration = try container.decode(Int.self, forKey: .deviceGeneration)
     acceptedSequence = try container.decode(Int.self, forKey: .acceptedSequence)
     nextSnapshotSequence = try container.decode(Int.self, forKey: .nextSnapshotSequence)
-    guard protocolVersion == 2,
+    guard protocolVersion == 3,
       isUsageOpaqueID(deviceID),
       (1...jsonSafeIntegerMaximum).contains(deviceGeneration),
       (0...jsonSafeIntegerMaximum).contains(acceptedSequence),

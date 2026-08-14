@@ -1836,6 +1836,7 @@ fn parse_usage_agent(value: &str) -> Option<UsageAgent> {
         "grok" => UsageAgent::Grok,
         "opencode" => UsageAgent::OpenCode,
         "pi" => UsageAgent::Pi,
+        "cursor" => UsageAgent::Cursor,
         _ => return None,
     })
 }

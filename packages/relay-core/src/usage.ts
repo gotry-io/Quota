@@ -1,10 +1,10 @@
 import type {
-  BillingAgent,
+  BillingAgentV3 as BillingAgent,
   CoverageStatus,
   UsageCostMode as ProtocolUsageCostMode,
-  UsageCoverage as ProtocolUsageCoverage,
-  UsageHourlyFact as ProtocolUsageHourlyFact,
-  UsageSubmissionV2,
+  UsageCoverageV3 as ProtocolUsageCoverage,
+  UsageHourlyFactV3 as ProtocolUsageHourlyFact,
+  UsageSubmissionV3,
 } from "@gotry-io/quota-protocol";
 import type { DevicePrincipal } from "./account.ts";
 
@@ -12,7 +12,7 @@ export type UsageAgent = BillingAgent;
 export type UsageCoverageStatus = CoverageStatus;
 export type UsageCoverage = ProtocolUsageCoverage;
 export type UsageHourlyFact = ProtocolUsageHourlyFact;
-export type UsageSubmission = UsageSubmissionV2;
+export type UsageSubmission = UsageSubmissionV3;
 
 export type UsageWriteResult =
   | {

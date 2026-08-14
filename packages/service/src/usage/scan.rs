@@ -97,6 +97,7 @@ pub fn scan_local_usage(
         UsageAgent::Grok => super::grok::scan_grok_usage(options),
         UsageAgent::OpenCode => super::opencode::scan_opencode_usage(options),
         UsageAgent::Pi => super::pi::scan_pi_usage(options),
+        UsageAgent::Cursor => super::cursor::scan_cursor_usage(options),
     }
 }
 
@@ -153,6 +154,15 @@ pub(crate) fn roots_for(agent: UsageAgent, options: &UsageScanOptions) -> Vec<Pa
                         .join("sessions"),
                 ]
             }
+        }
+        UsageAgent::Cursor => {
+            let mut roots = vec![env("CURSOR_HOME").unwrap_or_else(|| home.join(".cursor"))];
+            let xdg = env("XDG_CONFIG_HOME").unwrap_or_else(|| home.join(".config"));
+            roots.push(
+                home.join("Library/Application Support/Cursor/User/globalStorage/state.vscdb"),
+            );
+            roots.push(xdg.join("Cursor/User/globalStorage/state.vscdb"));
+            roots
         }
     }
 }
@@ -736,6 +746,9 @@ pub(crate) fn accepts_file(agent: UsageAgent, path: &Path) -> bool {
         UsageAgent::ClaudeCode | UsageAgent::Pi => name.ends_with(".jsonl"),
         UsageAgent::Grok => name == "updates.jsonl",
         UsageAgent::OpenCode => name == "opencode.db" || name.ends_with(".json"),
+        UsageAgent::Cursor => {
+            name.ends_with(".jsonl") || name == "state.vscdb" || name == "store.db"
+        }
     }
 }
 

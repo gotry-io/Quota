@@ -573,7 +573,7 @@ export class D1UsageState implements UsageState {
     const finalPart = parts.results.at(-1);
     if (!finalPart) return "pending";
     const submission: UsageSubmission = {
-      protocol_version: 2,
+      protocol_version: 3,
       submission_id: finalPart.submission_id,
       device_id: finalPart.device_id,
       generation: finalPart.generation,

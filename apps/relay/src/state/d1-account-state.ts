@@ -1,4 +1,4 @@
-import { QuotaSnapshotSchema } from "@gotry-io/quota-protocol";
+import { QuotaSnapshotV3Schema as QuotaSnapshotSchema } from "@gotry-io/quota-protocol";
 import {
   ACCOUNT_SCOPES,
   type AccountMaintenanceInput,

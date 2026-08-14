@@ -1,5 +1,5 @@
-import type { StoredUsageHourlyFact } from "@gotry-io/relay-core";
 import { MODEL_CATALOG } from "@gotry-io/quota-protocol";
+import type { StoredUsageHourlyFact } from "@gotry-io/relay-core";
 import { describe, expect, it } from "vitest";
 import { PRICING_CATALOG } from "../src/pricing-catalog.ts";
 import { buildUsageSummary } from "../src/usage-summary.ts";

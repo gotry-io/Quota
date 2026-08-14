@@ -24,7 +24,8 @@ For catalog browser-session providers, QuotaBar pins login and Cookie discovery 
 browser application. SweetCookieKit 0.5.2 enumerates that browser's profiles with logging disabled
 and returns only exact-host/name allowlist candidates in memory. Swift sends one minimal Cookie
 header at a time to Rust for validation/commit; it never calls provider APIs or persists the header.
-Cursor is the first adapter and stays local-only under the released network-v2 boundary.
+Cursor is the first adapter. QuotaBar 0.0.12 uploads its quota and Usage through managed-data v3;
+released v2 clients remain isolated from Cursor.
 
 Each background refresh precomputes Today, 7 Days, 30 Days, and All for This Mac and, when enabled,
 the signed-in Account. The four values are persisted and returned by `get_state`; Swift only selects
