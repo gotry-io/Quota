@@ -633,9 +633,9 @@ describe("managed Relay on real Workers and D1", () => {
       },
     ]);
     expect(current.usage.breakdowns.some(({ dimension }) => dimension === "usage_date")).toBe(true);
-    expect(
-      current.usage.breakdowns.some(({ dimension }) => dimension === "bucket_start_utc"),
-    ).toBe(false);
+    expect(current.usage.breakdowns.some(({ dimension }) => dimension === "bucket_start_utc")).toBe(
+      false,
+    );
     expect(
       (
         await app.request(
