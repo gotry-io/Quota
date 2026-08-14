@@ -310,10 +310,15 @@ actor LocalServiceClient: LocalServiceServing {
     receiveBuffer.removeAll(keepingCapacity: true)
     readerTask = Task.detached(priority: .utility) {
       [weak self, handle = outputHandle] in
+      let descriptor = handle.fileDescriptor
+      var buffer = [UInt8](repeating: 0, count: 65_536)
       while !Task.isCancelled {
-        let chunk = handle.availableData
-        guard !chunk.isEmpty else { break }
-        await self?.receive(chunk, generation: generation)
+        let count = buffer.withUnsafeMutableBytes { raw -> Int in
+          guard let base = raw.baseAddress else { return -1 }
+          return Darwin.read(descriptor, base, raw.count)
+        }
+        if count <= 0 { break }
+        await self?.receive(Data(buffer.prefix(count)), generation: generation)
       }
       await self?.readerClosed(generation: generation)
     }
