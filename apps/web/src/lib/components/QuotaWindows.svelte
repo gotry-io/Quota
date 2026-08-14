@@ -2,6 +2,7 @@
 import { formatDate, formatQuotaRemaining } from "$lib/format";
 
 type WindowItem = {
+  id?: string | undefined;
   title: string;
   used_percent: number;
   remaining_value?: number | undefined;
@@ -10,7 +11,7 @@ type WindowItem = {
   resets_at?: string | undefined;
 };
 
-let { windows }: { windows: readonly WindowItem[] } = $props();
+let { windows, provider }: { windows: readonly WindowItem[]; provider?: string } = $props();
 
 function isBalanceOnly(window: WindowItem): boolean {
   return window.remaining_value !== undefined && window.limit_value === undefined;
@@ -26,7 +27,7 @@ function isBalanceOnly(window: WindowItem): boolean {
       <div class="quota-window-card">
         <div class="quota-window-heading">
           <span>{balanceOnly ? "Balance" : window.title}</span>
-          <strong>{formatQuotaRemaining(window)}</strong>
+          <strong>{formatQuotaRemaining(window, provider)}</strong>
         </div>
         {#if !balanceOnly}
           <div class="quota-track">

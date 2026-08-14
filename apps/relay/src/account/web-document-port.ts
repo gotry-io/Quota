@@ -1,6 +1,7 @@
 import type { AccountState } from "@gotry-io/relay-core";
 import type {
   PublicProfileDocumentResult,
+  AccountSummaryDocumentResult,
   WebDocumentPort,
   WebDocumentViewer,
 } from "../../../web/src/lib/server/document-port.ts";
@@ -19,9 +20,11 @@ export function createWebDocumentPort(input: {
   webAuth: WebAccountAuth;
   state: Pick<AccountState, "getAccount" | "getAccountByPublicSlug" | "consumeRateLimit">;
   hasher: SecretHasher;
+  getAccountSummary?: (headers: Headers) => Promise<AccountSummaryDocumentResult>;
   now?: () => Date;
 }): WebDocumentPort {
   const now = input.now ?? (() => new Date());
+  const getAccountSummary = input.getAccountSummary;
   return {
     async getViewer(headers: Headers): Promise<WebDocumentViewer | null> {
       if (!hasWebSessionCookie(headers.get("Cookie"))) return null;
@@ -32,6 +35,13 @@ export function createWebDocumentPort(input: {
       const label = account.display_label?.trim() || session.user.name.trim();
       return { displayLabel: label || "Account" };
     },
+    ...(getAccountSummary
+      ? {
+          getAccountSummary(headers: Headers) {
+            return getAccountSummary(headers);
+          },
+        }
+      : {}),
     async lookupPublicProfile(username: string): Promise<PublicProfileDocumentResult> {
       const slug = normalizePublicSlug(username);
       if (!slug) return { status: "missing" };

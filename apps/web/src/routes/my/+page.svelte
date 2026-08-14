@@ -6,6 +6,7 @@ import type {
   AccountUsageSummaryV3 as AccountUsageSummary,
   UsageBreakdown,
 } from "@gotry-io/quota-protocol";
+import type { AccountSummaryDocumentResult } from "$lib/server/document-port";
 import {
   beginWebLogin,
   deleteAccount,
@@ -26,6 +27,9 @@ import {
 } from "$lib/format";
 import { DASHBOARD_PATH, planDisplayName } from "$lib/routes";
 import { usageDateBreakdowns } from "$lib/usage-activity";
+import type { PageProps } from "./$types";
+
+let { data }: PageProps = $props();
 
 let summary = $state<AccountSummary | null>(null);
 let loadError = $state<string | null>(null);
@@ -38,11 +42,16 @@ let dayRequest = 0;
 let dayAbort: AbortController | null = null;
 
 $effect(() => {
-  void loadSummary();
+  const streamed = data.streamed.summary;
+  if (streamed) void streamed.then(applySummaryResult);
+  else void loadSummary();
 });
 
 async function loadSummary(): Promise<void> {
-  const result = await fetchAccountSummary();
+  applySummaryResult(await fetchAccountSummary());
+}
+
+function applySummaryResult(result: AccountSummaryDocumentResult): void {
   if (result.status === "unauthorized") {
     window.location.replace("/");
     return;
@@ -206,7 +215,10 @@ async function loadDay(date: string): Promise<void> {
                 >{observation.snapshot.status.replaceAll("_", " ")}</span
               >
             </div>
-            <QuotaWindows windows={observation.snapshot.windows} />
+            <QuotaWindows
+              windows={observation.snapshot.windows}
+              provider={observation.snapshot.provider}
+            />
             <p class="quota-card-meta">
               {deviceName(observation, summary.devices) ?? "Device"} · {formatDate(
                 observation.snapshot.observed_at,

@@ -5,8 +5,12 @@ import type { WebDocumentPort } from "../src/lib/server/document-port.ts";
 import { load as loadMy } from "../src/routes/my/+page.server.ts";
 import { load as loadPublic } from "../src/routes/u/[username]/+page.server.ts";
 
-function myEvent(viewer: { displayLabel: string } | null) {
-  return { locals: { viewer } } as Parameters<typeof loadMy>[0];
+function myEvent(viewer: { displayLabel: string } | null, port?: WebDocumentPort) {
+  return {
+    locals: { viewer },
+    request: new Request("https://quota.gotry.io/my"),
+    ...(port ? { platform: { document: port } } : {}),
+  } as Parameters<typeof loadMy>[0];
 }
 
 function publicEvent(username: string, port: WebDocumentPort) {
@@ -28,7 +32,27 @@ test("unsigned /my redirects home and signed-in /my loads a shell", async () => 
       assert.equal(error.location, "/");
     }
   }
-  assert.deepEqual(loadMy(myEvent({ displayLabel: "octocat" })), {});
+  assert.deepEqual(loadMy(myEvent({ displayLabel: "octocat" })), {
+    streamed: { summary: null },
+  });
+
+  const streamed = await loadMy(
+    myEvent(
+      { displayLabel: "octocat" },
+      {
+        async getViewer() {
+          return { displayLabel: "octocat" };
+        },
+        async getAccountSummary() {
+          return { status: "error" };
+        },
+        async lookupPublicProfile() {
+          return { status: "missing" };
+        },
+      },
+    ),
+  );
+  assert.deepEqual(await streamed?.streamed.summary, { status: "error" });
 });
 
 test("public profile load maps port results without inventing Usage", async () => {

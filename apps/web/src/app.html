@@ -11,14 +11,10 @@
     <script>
       (() => {
         const stored = localStorage.getItem("quota-theme");
+        const explicitTheme = stored === "light" || stored === "dark" ? stored : null;
         const theme =
-          stored === "light" || stored === "dark"
-            ? stored
-            : matchMedia("(prefers-color-scheme: dark)").matches
-              ? "dark"
-              : "light";
-        document.documentElement.dataset.theme = theme;
-        document.documentElement.style.colorScheme = theme;
+          explicitTheme ?? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+        if (explicitTheme) document.documentElement.dataset.theme = explicitTheme;
         document.querySelector('meta[name="theme-color"]')?.setAttribute(
           "content",
           theme === "dark" ? "#111111" : "#f2f8f5",

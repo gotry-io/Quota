@@ -1,6 +1,13 @@
+import type { AccountSummaryV3 } from "@gotry-io/quota-protocol";
+
 export interface WebDocumentViewer {
   displayLabel: string;
 }
+
+export type AccountSummaryDocumentResult =
+  | { status: "ok"; summary: AccountSummaryV3 }
+  | { status: "unauthorized" }
+  | { status: "error" };
 
 export type PublicProfileDocumentResult =
   | { status: "exists" }
@@ -9,5 +16,6 @@ export type PublicProfileDocumentResult =
 
 export interface WebDocumentPort {
   getViewer(headers: Headers): Promise<WebDocumentViewer | null>;
+  getAccountSummary?(headers: Headers): Promise<AccountSummaryDocumentResult>;
   lookupPublicProfile(username: string): Promise<PublicProfileDocumentResult>;
 }

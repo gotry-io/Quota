@@ -1,6 +1,7 @@
 import { applyD1Migrations, env } from "cloudflare:test";
 import type { D1Migration } from "@cloudflare/vitest-pool-workers";
 import { beforeEach, describe, expect, inject, it } from "vitest";
+import { memoizeWebAccountAuthSession } from "../src/account/better-auth.ts";
 import { createWebDocumentPort, hasWebSessionCookie } from "../src/account/web-document-port.ts";
 import { isRelayApiPath } from "../src/relay-paths.ts";
 import { SecretHasher } from "../src/security.ts";
@@ -119,6 +120,28 @@ describe("web document port", () => {
     }
     const limited = await port.lookupPublicProfile("not a slug");
     expect(limited.status).toBe("rate_limited");
+  });
+});
+
+describe("web document session", () => {
+  it("reuses one Better Auth session read across document and streamed data", async () => {
+    let calls = 0;
+    const auth = memoizeWebAccountAuthSession({
+      handler: async () => new Response(null, { status: 404 }),
+      beginGitHubSignIn: async () => new Response(null, { status: 404 }),
+      getSession: async () => {
+        calls += 1;
+        return {
+          user: { id: "account_1", name: "octocat" },
+          session: { id: "session_1", createdAt: now, expiresAt: now },
+        };
+      },
+    });
+
+    const first = auth.getSession(new Headers({ Cookie: "quota.session_token=one" }));
+    const second = auth.getSession(new Headers({ Cookie: "quota.session_token=one" }));
+    expect(await first).toEqual(await second);
+    expect(calls).toBe(1);
   });
 });
 
