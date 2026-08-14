@@ -773,6 +773,26 @@ export class D1AccountState implements AccountState {
     return row ?? null;
   }
 
+  async updateDeviceProfile(
+    deviceId: string,
+    generation: number,
+    displayName: string,
+    platform: string,
+    updatedAt: string,
+  ): Promise<boolean> {
+    const result = await this.database
+      .prepare(
+        `UPDATE devices
+         SET display_name = ?3, platform = ?4, last_seen_at = ?5
+         WHERE id = ?1 AND generation = ?2
+           AND signed_out_at IS NULL AND deleted_at IS NULL
+         RETURNING id`,
+      )
+      .bind(deviceId, generation, displayName, platform, updatedAt)
+      .first<{ id: string }>();
+    return result?.id === deviceId;
+  }
+
   async deleteDeviceData(
     accountId: string,
     deviceId: string,

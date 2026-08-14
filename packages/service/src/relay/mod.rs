@@ -196,6 +196,24 @@ impl RelayClient {
         self.get_json("/api/v2/device/sync", token, 200)
     }
 
+    pub fn update_device_profile(
+        &self,
+        token: &str,
+        display_name: &str,
+        platform: &str,
+    ) -> Result<Value, RelayError> {
+        self.put_json(
+            "/api/v2/device/profile",
+            &serde_json::json!({
+                "protocol_version": 2,
+                "display_name": display_name,
+                "platform": platform,
+            }),
+            token,
+            200,
+        )
+    }
+
     pub fn upload_snapshot(&self, token: &str, envelope: &Value) -> Result<Value, RelayError> {
         validate_snapshot_envelope(envelope)?;
         let response = self.put_json("/api/v3/device/snapshots", envelope, token, 200)?;
@@ -2235,6 +2253,34 @@ impl AccountManager {
                 ),
             });
         }
+        let profile_is_current = session
+            .get("device_profile")
+            .and_then(Value::as_object)
+            .is_some_and(|profile| {
+                profile.get("display_name").and_then(Value::as_str)
+                    == Some(self.device_name.as_str())
+                    && profile.get("platform").and_then(Value::as_str) == Some(self.platform)
+            });
+        if !profile_is_current {
+            let response = self
+                .client
+                .update_device_profile(&token, &self.device_name, self.platform)
+                .map_err(|error| BackendError {
+                    error: relay_error_for_backend(error),
+                })?;
+            validate_device_profile_response(&response, expected_device).map_err(|_| {
+                BackendError {
+                    error: crate::protocol::IpcError::new(
+                        crate::protocol::ErrorCode::InvalidResponse,
+                        crate::protocol::RecoveryAction::Retry,
+                    ),
+                }
+            })?;
+            session["device_profile"] = serde_json::json!({
+                "display_name": self.device_name,
+                "platform": self.platform,
+            });
+        }
         if !self
             .state
             .active_session_at_epoch(session_epoch)
@@ -3017,6 +3063,21 @@ fn invalid_response_backend() -> BackendError {
     }
 }
 
+fn validate_device_profile_response(
+    value: &Value,
+    expected_device_id: Option<&str>,
+) -> Result<(), RelayError> {
+    validate_response_object(value, &["protocol_version", "status", "device_id"])?;
+    let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
+    if object.get("protocol_version").and_then(Value::as_i64) != Some(2)
+        || object.get("status").and_then(Value::as_str) != Some("updated")
+        || object.get("device_id").and_then(Value::as_str) != expected_device_id
+    {
+        return Err(RelayError::InvalidResponse);
+    }
+    Ok(())
+}
+
 /// Host computer name for `device_display_name`. Never the product name unless no host name exists.
 pub fn local_device_display_name(fallback: &str) -> String {
     resolve_device_display_name(
@@ -3056,7 +3117,7 @@ fn sanitize_device_name(value: &str) -> String {
 
 #[cfg(target_os = "macos")]
 fn macos_computer_name() -> Option<String> {
-    let output = Command::new("/usr/bin/scutil")
+    let output = Command::new("/usr/sbin/scutil")
         .args(["--get", "ComputerName"])
         .output()
         .ok()?;
@@ -3150,6 +3211,17 @@ mod tests {
         assert!(!name.is_empty());
         assert!(name.len() <= 128);
         assert!(!name.chars().any(char::is_control));
+    }
+
+    #[test]
+    fn device_profile_response_must_match_the_current_device() {
+        let response = serde_json::json!({
+            "protocol_version": 2,
+            "status": "updated",
+            "device_id": "device_current"
+        });
+        assert!(validate_device_profile_response(&response, Some("device_current")).is_ok());
+        assert!(validate_device_profile_response(&response, Some("device_other")).is_err());
     }
 
     #[cfg(target_os = "macos")]

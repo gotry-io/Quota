@@ -107,6 +107,10 @@ whether a provider synchronizes, and `account_sync_protocol` records the first m
 that accepts it. Generated v2 IDs remain the closed set shipped by menubar-v0.0.9; generated v3 IDs
 add Cursor. New clients upload Cursor only to v3, while Relay keeps v2 routes isolated and filters
 Cursor from their responses. The private local collection schema continues to use the full catalog.
+The local SQLite v6 migration handles the shipped v2-to-v3 cutover: v2 Usage outbox payloads are
+promoted in place because v3 preserves their identity, sequence, coverage, and row invariants, while
+the derived v2 Account summary and Account period caches are discarded and rebuilt from Relay. Raw
+indexed Usage facts, provider state, sessions, quota, and upload identity are not removed.
 
 Usage indexing is the final file-level invalidation design. Each refresh performs bounded source
 discovery, records parser revision plus file identity, size, and modification time, skips unchanged
@@ -184,7 +188,9 @@ The shared Rust service is the native OAuth public client used by QuotaBar and L
 QuotaBar uses Authorization Code with PKCE and a temporary loopback callback; Linux `quotacli` uses
 the OAuth Device Authorization Grant and never opens a browser or loopback listener. Device
 `display_name` is the host computer name (macOS ComputerName, otherwise hostname), not the product
-name. QuotaBar uses Sparkle 2 for in-app updates. The packaged app reads
+name. Authenticated device sync reconciles that name and platform through the device-scoped profile
+endpoint; the local session records the successful profile so another write occurs only after login,
+upgrade, or a host-name change. QuotaBar uses Sparkle 2 for in-app updates. The packaged app reads
 `https://github.com/gotry-io/Quota/releases/latest/download/appcast.xml` and verifies EdDSA
 signatures with the `SUPublicEDKey` embedded in `Info.plist`. The release workflow signs the
 notarized `.dmg` with the `SPARKLE_ED_PRIVATE_KEY` repository secret. Releases still publish

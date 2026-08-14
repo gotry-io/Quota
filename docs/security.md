@@ -118,6 +118,9 @@ data requirements. Architecture and product behavior are defined in
 - Quota and Usage uploads require the device token to match the envelope Device ID and current
   generation. Account tokens are read/manage only and cannot write device data; device tokens cannot
   read another Device or the Account aggregate.
+- The device profile endpoint accepts only the current Device's authenticated token and generation.
+  It can update only that Device's bounded display name and platform; it cannot select a Device ID,
+  read Account data, or change authorization state.
 - The service returns authoritative independent `next_snapshot_sequence` and
   `next_usage_sequence`. Clients never guess or reset a lost sequence to zero. A conflict fails
   closed because it can indicate a cloned local configuration.

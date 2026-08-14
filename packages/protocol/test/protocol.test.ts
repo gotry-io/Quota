@@ -11,6 +11,8 @@ import {
   BrowserLoginExchangeRequestSchema,
   DeviceAuthorizationRequestSchema,
   DeviceAuthorizationResponseSchema,
+  DeviceProfileUpdateRequestSchema,
+  DeviceProfileUpdateResponseSchema,
   DeviceSyncResponseSchema,
   LOCAL_PROVIDER_IDS,
   LOCAL_USAGE_PROTOCOL_VERSION,
@@ -327,6 +329,20 @@ describe("quota protocol v2", () => {
         next_usage_sequence: 8,
         usage_deleted_before: "2026-08-01T01:23:45.678Z",
         usage_sync_revision: 9,
+      }).success,
+    ).toBe(true);
+    expect(
+      DeviceProfileUpdateRequestSchema.safeParse({
+        protocol_version: 2,
+        display_name: "Studio Mac",
+        platform: "macos",
+      }).success,
+    ).toBe(true);
+    expect(
+      DeviceProfileUpdateResponseSchema.safeParse({
+        protocol_version: 2,
+        status: "updated",
+        device_id: "device_01",
       }).success,
     ).toBe(true);
     expect(

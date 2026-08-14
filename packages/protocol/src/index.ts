@@ -436,6 +436,24 @@ export const DeviceSyncResponseSchema = z
   .strict();
 export type DeviceSyncResponse = z.infer<typeof DeviceSyncResponseSchema>;
 
+export const DeviceProfileUpdateRequestSchema = z
+  .object({
+    protocol_version: z.literal(PROTOCOL_VERSION),
+    display_name: DisplayNameSchema,
+    platform: PlatformSchema,
+  })
+  .strict();
+export type DeviceProfileUpdateRequest = z.infer<typeof DeviceProfileUpdateRequestSchema>;
+
+export const DeviceProfileUpdateResponseSchema = z
+  .object({
+    protocol_version: z.literal(PROTOCOL_VERSION),
+    status: z.literal("updated"),
+    device_id: OpaqueIdSchema,
+  })
+  .strict();
+export type DeviceProfileUpdateResponse = z.infer<typeof DeviceProfileUpdateResponseSchema>;
+
 export const LogoutResponseSchema = z
   .object({
     protocol_version: z.literal(PROTOCOL_VERSION),
