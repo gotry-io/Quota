@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Quota keeps remaining coding-agent quota and privacy-preserving Usage together. Install QuotaBar on macOS from a .dmg or Homebrew."
+    />
+    <meta name="theme-color" content="#f2f8f5" />
+    <script>
+      (() => {
+        const stored = localStorage.getItem("quota-theme");
+        const theme =
+          stored === "light" || stored === "dark"
+            ? stored
+            : matchMedia("(prefers-color-scheme: dark)").matches
+              ? "dark"
+              : "light";
+        document.documentElement.dataset.theme = theme;
+        document.documentElement.style.colorScheme = theme;
+        document.querySelector('meta[name="theme-color"]')?.setAttribute(
+          "content",
+          theme === "dark" ? "#111111" : "#f2f8f5",
+        );
+      })();
+    </script>
+    <meta property="og:title" content="Quota — Know what you have left" />
+    <meta
+      property="og:description"
+      content="See remaining quota in the menu bar and optionally publish /u/your-github-username."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://quota.gotry.io" />
+    <meta property="og:image" content="https://quota.gotry.io/og.png" />
+    <link rel="canonical" href="https://quota.gotry.io" />
+    <link rel="icon" href="/logo.svg" type="image/svg+xml" />
+    %sveltekit.head%
+  </head>
+  <body data-sveltekit-preload-data="hover">
+    <a class="skip-link" href="#main">Skip to content</a>
+    <div style="display: contents">%sveltekit.body%</div>
+  </body>
+</html>

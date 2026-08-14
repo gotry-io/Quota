@@ -17,7 +17,7 @@ Quota has four application products and one shared Rust library boundary:
   storage, deletion controls, pricing distribution, and account queries. Better Auth owns its Web
   identity/session boundary. Relay runs only as a Cloudflare Worker backed by D1.
 - Quota Web owns the public site and browser account UI. It shares `quota.gotry.io` with the Worker
-  but remains a separate Vite application and source boundary.
+  but remains a separate SvelteKit application and source boundary.
 
 The bundled Rust executable is not a separate product: it has no command parser, terminal output,
 socket, daemon mode, LaunchAgent, PATH lookup, or standalone distribution. QuotaBar is its parent,
@@ -250,8 +250,10 @@ protocol + quota-model + relay-core
   Relay/Web; they are not imported by the local Rust service.
 - `apps/relay` is the only Cloudflare/D1 adapter and must not import filesystem, subprocess, TCP, or
   native-addon APIs.
-- `apps/web` remains a separate Vite source boundary even though production serves it and Relay from
-  one hostname.
+- `apps/web` remains a separate SvelteKit source boundary even though production serves it and Relay
+  from one hostname. SvelteKit owns documents, routes, and document-scoped viewer presentation.
+  Relay owns Better Auth, OAuth, APIs, D1, Usage aggregation, and domain policy. The two meet only
+  through `WebDocumentPort`.
 
 ## Relay, Web, and deployment
 
@@ -261,12 +263,19 @@ browser scope and performs Device/Account deletion, rotation/revocation, and Usa
 storage transactions. Relay serves the current Usage agents and pricing catalog without the ended
 0.0.5 response variant; current clients explicitly send `usage_agents=all`.
 
-Quota Web builds static Vite assets independently. `/` offers the QuotaBar `.dmg` and Homebrew
-install command. `/my` reads account summaries, exports shareable remaining-quota and usage cards,
-and manages Devices, deletion, and an explicit public-profile choice. `/u/{username}` is the opted-in
-public projection. `/activate` approves or denies native authorization. Better Auth owns GitHub
+Quota Web is a SvelteKit app. Hashed `/_app/immutable/*` CSS and JS stay asset-first. Document
+navigations run the existing Relay Worker first: `apps/relay/src/cloudflare.ts` stays Wrangler
+`main`, Hono keeps `/api`, `/oauth`, `/healthz`, and `/readyz`, and every other Worker-first
+request is rendered by SvelteKit `Server.respond`. The Worker reads the Better Auth session
+cookie through `WebDocumentPort` and writes the signed-in header into the first HTML byte.
+Session cookies remain HttpOnly. `/` offers the QuotaBar `.dmg` and Homebrew install command.
+GitHub sign-in is in the header; `/my` is a server redirect when unsigned and otherwise a
+dashboard shell whose Usage summary is still fetched from `GET /api/v2/account/summary`.
+`/u/{username}` is the public projection for that GitHub username. `/activate` approves or
+denies native authorization. `/app` is a server redirect to `/my`. Better Auth owns GitHub
 login and browser sessions. Production Web and Worker deploy together only through
-`.github/workflows/deploy-cloudflare.yml`.
+`.github/workflows/deploy-cloudflare.yml`. The composition decision is
+[ADR 0011](decisions/0011-sveltekit-document-worker.md).
 
 D1 is the only durable Relay store and applied migrations are never rewritten. Local Worker builds
 use Wrangler dry-run and local D1 migration verification. Manual remote migration or deployment is

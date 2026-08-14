@@ -30,7 +30,12 @@ The site has four surfaces:
    windows use `71%`, and balance-only windows use **Balance** plus `$12.34`. Quota cards follow
    the same provider / account / remaining / meter / metadata order as QuotaBar Overview, in a
    denser web layout. The header shows the GitHub username; the name opens `/my`, and its menu
-   contains only **Sign out**. Unsigned visits to `/my` redirect to `/`. The shipped `/app`
+   contains only **Sign out**. Session cookies stay HttpOnly. SvelteKit renders the header from
+   `WebDocumentPort.getViewer` on the first HTML byte. The dashboard still loads Usage from
+   `GET /api/v2/account/summary` after paint. Unsigned visits to `/my` are a server redirect to
+   `/`. A successful `/u/{slug}` page view consumes two `public-profile` limiter tokens (document
+   existence plus the JSON payload); after 60 views / 10 minutes the HTML can remain 200 while the
+   JSON returns 429. The shipped `/app`
    bookmark is a single redirect to `/my`. Every signed-in GitHub account is public at
    `/u/{github-username}`. The dashboard has no public-page visibility control.
 3. `/u/{username}` is the public remaining-quota and usage view for that GitHub username. It never
@@ -43,7 +48,7 @@ provider-secret form, server administration, or self-hosted setup in the Web UI.
 
 ## Tokens
 
-Tokens are defined in `src/styles.css` and must remain the source used by the implementation.
+Tokens are defined in `src/app.css` and must remain the source used by the implementation.
 
 ### Color
 

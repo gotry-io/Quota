@@ -99,9 +99,13 @@ data requirements. Architecture and product behavior are defined in
 - Successful native login issues an account-read token family and a current-device-write token
   family. Access tokens are short-lived; refresh tokens rotate with compare-and-swap so replay
   revokes or rejects the token family. Store only HMACs of server session and grant secrets.
-- Better Auth browser sessions use secure, HttpOnly cookies. Raw secondary-storage keys are HMACed;
-  values are AES-GCM encrypted with the key hash as associated data. Its database session table
-  remains empty because Web session material uses that encrypted store.
+- Better Auth browser sessions use secure, HttpOnly cookies. JavaScript cannot read them. On
+  document navigations the Worker reads the session cookie through `WebDocumentPort` so SvelteKit
+  can paint the header username in the first HTML byte. The session token is not exposed to the
+  page, and SvelteKit never receives `env.DB` or Relay secrets. Every document and SvelteKit load
+  response is `Cache-Control: private, no-store`. Raw secondary-storage keys are HMACed; values are
+  AES-GCM encrypted with the key hash as associated data. Its database session table remains empty
+  because Web session material uses that encrypted store.
 - Better Auth validates trusted origins and session freshness for standard sign-in, sign-out, and
   Account deletion routes. Its user-deletion hook removes the Quota domain Account and cascading
   business data. Device authorization decisions and Delete Device additionally require a session

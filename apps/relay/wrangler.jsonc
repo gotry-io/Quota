@@ -4,6 +4,9 @@
   "main": "src/cloudflare.ts",
   "compatibility_date": "2026-08-01",
   "compatibility_flags": ["nodejs_compat"],
+  "alias": {
+    "quota-sveltekit-server": "../web/.svelte-kit/output/server/quota-sveltekit-server.js"
+  },
   "routes": [
     {
       "pattern": "quota.gotry.io",
@@ -12,8 +15,15 @@
   ],
   "assets": {
     "directory": "../web/dist",
-    "not_found_handling": "single-page-application",
-    "run_worker_first": ["/healthz", "/readyz", "/oauth/*", "/api/*"]
+    "binding": "ASSETS",
+    "run_worker_first": [
+      "/*",
+      "!/_app/*",
+      "!/schema/*",
+      "!/logo.svg",
+      "!/logo-monochrome.svg",
+      "!/og.png"
+    ]
   },
   "observability": {
     "enabled": true

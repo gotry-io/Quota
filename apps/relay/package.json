@@ -7,13 +7,14 @@
   "scripts": {
     "build": "pnpm run build:cloudflare",
     "build:web": "pnpm --filter @gotry-io/quota-web build",
-    "build:cloudflare": "pnpm run build:web && wrangler deploy --dry-run --outdir dist/cloudflare",
+    "build:cloudflare": "pnpm run build:web && pnpm run test:integration && wrangler deploy --dry-run --outdir dist/cloudflare",
     "check": "tsc -p tsconfig.json",
     "deploy:cloudflare": "pnpm run build:web && wrangler deploy",
     "dev": "pnpm run build:web && wrangler dev",
     "d1:migrate:local": "wrangler d1 migrations apply quota --local",
     "d1:migrate:remote": "wrangler d1 migrations apply quota --remote",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts"
   },
   "dependencies": {
     "@gotry-io/quota-model": "workspace:*",

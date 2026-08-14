@@ -2,7 +2,9 @@
 
 QuotaRelay is the managed Cloudflare Worker + D1 account and usage service for
 `https://quota.gotry.io`. It serves the v2 GitHub account, native-client OAuth, device quota/Usage, account
-read, and public pricing-catalog APIs. There is no self-hosted or SQLite runtime.
+read, and public pricing-catalog APIs, and it renders Quota Web documents through SvelteKit
+`Server.respond` as described in [ADR 0011](../../docs/decisions/0011-sveltekit-document-worker.md).
+There is no self-hosted or SQLite runtime.
 
 Apply local D1 migrations before starting Wrangler:
 

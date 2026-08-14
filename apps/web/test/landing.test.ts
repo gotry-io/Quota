@@ -4,24 +4,28 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-const html = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../index.html"), "utf8");
+const root = dirname(fileURLToPath(import.meta.url));
+const html = readFileSync(join(root, "../src/app.html"), "utf8");
+const landing = readFileSync(join(root, "../src/routes/+page.svelte"), "utf8");
+const header = readFileSync(join(root, "../src/lib/components/Header.svelte"), "utf8");
+const theme = readFileSync(join(root, "../src/lib/components/ThemeToggle.svelte"), "utf8");
 
 test("homepage introduces QuotaBar and both install paths", () => {
-  assert.match(html, /Know what you have left/);
-  assert.match(html, /Download QuotaBar \.dmg/);
+  assert.match(landing, /Know what you have left/);
+  assert.match(landing, /Download QuotaBar \.dmg/);
   assert.match(
-    html,
-    /https:\/\/github.com\/gotry-io\/Quota\/releases\/latest\/download\/QuotaBar-macos-arm64\.dmg/,
+    landing,
+    /https:\/\/github.com\/gotry-io\/Quota\/releases\/latest\/download\/QuotaBar-macos-arm64.dmg/,
   );
-  assert.match(html, /brew install gotry-io\/tap\/quotabar/);
-  assert.match(html, /Continue with GitHub/);
-  assert.doesNotMatch(html, /Open Quota/);
-  assert.equal((html.match(/data-web-login/g) ?? []).length, 1);
-  assert.match(html, /id="header-account" class="header-account" hidden/);
-  assert.match(html, /id="theme-toggle"/);
+  assert.match(landing, /brew install gotry-io\/tap\/quotabar/);
+  assert.match(header, /Continue with GitHub/);
+  assert.doesNotMatch(landing, /Open Quota/);
+  assert.match(header, /id="header-account"/);
+  assert.match(theme, /id="theme-toggle"/);
   assert.match(html, /quota-theme/);
   assert.match(html, /prefers-color-scheme: dark/);
-  assert.doesNotMatch(html, /id="export-quota"/);
-  assert.doesNotMatch(html, /id="public-profile-form"/);
-  assert.doesNotMatch(html, /id="public-profile-enabled"/);
+  assert.doesNotMatch(landing, /id="export-quota"/);
+  assert.doesNotMatch(landing, /id="public-profile-form"/);
+  assert.doesNotMatch(html, /__quotaAccountRequest/);
+  assert.doesNotMatch(html, /data-session/);
 });

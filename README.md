@@ -39,7 +39,8 @@ outbox sequencing, merging local and account observations, and scheduling. Quota
 remain TypeScript. See the canonical
 [architecture](docs/architecture.md), [security baseline](docs/security.md),
 [provider strategies](docs/provider-collection.md), [native service decision](docs/decisions/0007-rust-native-local-service.md),
-and [managed account decision](docs/decisions/0006-managed-account-device-usage.md). The data
+[managed account decision](docs/decisions/0006-managed-account-device-usage.md), and
+[SvelteKit document Worker composition](docs/decisions/0011-sveltekit-document-worker.md). The data
 integrity and diagnostic contract is [ADR 0008](docs/decisions/0008-data-integrity-and-diagnostics.md),
 report-time model identity is [ADR 0009](docs/decisions/0009-versioned-model-catalog.md), and
 provider browser-session authentication is
