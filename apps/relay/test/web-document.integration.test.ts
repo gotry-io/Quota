@@ -7,7 +7,7 @@ import {
 import type { D1Migration } from "@cloudflare/vitest-pool-workers";
 import { beforeEach, describe, expect, inject, it } from "vitest";
 import type { WebDocumentPort } from "../../web/src/lib/server/document-port.ts";
-import worker from "../src/cloudflare.ts";
+import worker, { type CloudflareBindings } from "../src/cloudflare.ts";
 import { respondWithWebDocument } from "../src/web-document.ts";
 
 declare module "vitest" {
@@ -28,6 +28,12 @@ async function fetchDocument(path: string): Promise<Response> {
 }
 
 describe("composed Worker documents", () => {
+  it("supplies Worker secrets without a local .env file", () => {
+    const bindings = env as CloudflareBindings;
+    expect(bindings.QUOTA_SESSION_HASH_KEY.length).toBeGreaterThanOrEqual(32);
+    expect(bindings.BETTER_AUTH_SECRET.length).toBeGreaterThanOrEqual(32);
+  });
+
   it("renders the signed-out landing header and keeps the response uncacheable", async () => {
     const response = await fetchDocument("/");
     const html = await response.text();
