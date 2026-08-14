@@ -1,8 +1,16 @@
 <script lang="ts">
 const brewCommand = "brew install gotry-io/tap/quotabar";
 
+let copied = $state(false);
+let copiedReset: ReturnType<typeof setTimeout> | undefined;
+
 async function copyBrew(): Promise<void> {
   await navigator.clipboard.writeText(brewCommand);
+  copied = true;
+  clearTimeout(copiedReset);
+  copiedReset = setTimeout(() => {
+    copied = false;
+  }, 1600);
 }
 </script>
 
@@ -25,10 +33,20 @@ async function copyBrew(): Promise<void> {
         <a class="button button-secondary" href="#product">See how it works</a>
       </div>
       <div class="install-panel">
-        <p class="install-label">Homebrew</p>
+        <div class="install-copy">
+          <p class="install-label">Homebrew</p>
+          <p class="install-note">Install or update QuotaBar from the tap.</p>
+        </div>
         <div class="brew-row">
           <code id="brew-install">{brewCommand}</code>
-          <button class="text-button" type="button" onclick={() => void copyBrew()}>Copy</button>
+          <button
+            class="button button-secondary install-copy-button"
+            type="button"
+            onclick={() => void copyBrew()}
+          >
+            {copied ? "Copied" : "Copy"}
+          </button>
+          <span class="visually-hidden" aria-live="polite">{copied ? "Copied" : ""}</span>
         </div>
       </div>
       <p class="release-note">Apple Silicon · Open source · GitHub is the only sign-in</p>

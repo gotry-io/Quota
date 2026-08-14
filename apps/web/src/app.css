@@ -322,37 +322,59 @@ h1 {
 }
 
 .install-panel {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+  align-items: center;
+  justify-content: space-between;
   margin-top: 20px;
-  padding: 14px 16px;
-  border: 1px solid var(--hairline);
-  border-radius: 12px;
-  background: var(--brand-surface);
+  padding-top: 16px;
+  border-top: 1px solid var(--hairline);
+}
+
+.install-copy {
+  min-width: 0;
 }
 
 .install-label {
-  margin: 0 0 8px;
+  margin: 0;
   color: var(--charcoal);
   font-size: 12px;
   font-weight: 600;
 }
 
+.install-note {
+  margin: 4px 0 0;
+  color: var(--body);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
 .brew-row {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 10px;
   align-items: center;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .brew-row code,
 .brew-row input {
-  flex: 1 1 16rem;
+  min-width: 0;
   min-height: 42px;
   padding: 8px 12px;
+  overflow-x: auto;
   border: 1px solid var(--hairline);
   border-radius: 8px;
-  background: var(--canvas);
+  background: var(--surface-soft);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 13px;
+  white-space: nowrap;
+}
+
+.install-copy-button {
+  flex: 0 0 auto;
 }
 
 .product-preview {
@@ -689,6 +711,13 @@ footer {
   font-size: 12px;
 }
 
+.footer-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px 24px;
+}
+
 .footer-links {
   display: flex;
   gap: 24px;
@@ -873,7 +902,9 @@ footer {
 }
 
 .quota-card {
+  min-width: 0;
   padding: 12px 14px;
+  overflow-wrap: anywhere;
   border: 1px solid var(--hairline);
   border-radius: 10px;
 }
@@ -918,9 +949,8 @@ footer {
 
 .quota-grid {
   display: grid;
-  grid-template-columns: 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
-  max-width: 560px;
 }
 
 .quota-card-heading {
@@ -1078,8 +1108,17 @@ footer {
   border-radius: 12px;
 }
 
+.usage-activity {
+  --activity-cell: 14px;
+  --activity-gap: 5px;
+  --activity-label: 28px;
+  max-width: 100%;
+}
+
 .usage-activity-card {
+  max-width: 100%;
   padding: 24px;
+  overflow: hidden;
   border: 1px solid var(--hairline);
   border-radius: 12px;
 }
@@ -1096,25 +1135,102 @@ footer {
   margin: 0;
 }
 
-ul.usage-activity-grid {
+.usage-activity-scroll {
+  max-width: 100%;
+  padding: 6px 8px 8px 0;
+  overflow-x: auto;
+}
+
+.usage-activity-chart {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: max-content;
+}
+
+.usage-activity-month-row,
+.usage-activity-body {
+  display: grid;
+  grid-template-columns: var(--activity-label) max-content;
+  column-gap: 8px;
+  align-items: end;
+}
+
+.usage-activity-corner,
+.usage-activity-weekdays {
+  position: sticky;
+  left: 0;
+  z-index: 3;
+  background: var(--canvas);
+}
+
+.usage-activity-corner {
+  display: block;
+  width: var(--activity-label);
+}
+
+.usage-activity-months,
+.usage-activity-weeks {
   display: grid;
   grid-auto-flow: column;
-  grid-template-rows: repeat(7, 14px);
-  grid-auto-columns: 14px;
-  gap: 5px;
-  min-width: max-content;
-  margin: 0;
-  padding: 0;
-  list-style: none;
+  grid-auto-columns: var(--activity-cell);
+  gap: var(--activity-gap);
+}
+
+.usage-activity-months {
+  align-items: end;
+}
+
+.usage-activity-month {
+  overflow: hidden;
+  color: var(--body);
+  font-size: 11px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.usage-activity-weekdays {
+  display: grid;
+  grid-template-rows: repeat(7, var(--activity-cell));
+  gap: var(--activity-gap);
+  color: var(--body);
+  font-size: 10px;
+  line-height: var(--activity-cell);
+}
+
+.usage-activity-weeks {
+  isolation: isolate;
+  grid-template-rows: repeat(7, var(--activity-cell));
 }
 
 .usage-activity-cell {
   display: block;
-  width: 14px;
-  height: 14px;
+  width: var(--activity-cell);
+  height: var(--activity-cell);
   border: 1px solid var(--hairline-strong);
   border-radius: 3px;
   background: var(--activity-0);
+}
+
+button.usage-activity-cell {
+  position: relative;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  transform-origin: center;
+  transition: transform 120ms ease;
+}
+
+button.usage-activity-cell:hover,
+button.usage-activity-cell:focus-visible {
+  z-index: 2;
+  transform: scale(1.35);
+}
+
+button.usage-activity-cell[aria-pressed="true"] {
+  z-index: 1;
+  border-color: var(--brand-emerald);
 }
 
 .activity-level-1 {
@@ -1157,6 +1273,89 @@ ul.usage-activity-grid {
 
 .activity-legend .usage-activity-cell {
   flex: 0 0 auto;
+}
+
+.usage-activity-tooltip {
+  position: fixed;
+  z-index: 20;
+  max-width: min(280px, calc(100vw - 16px));
+  padding: 8px 10px;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: var(--canvas);
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.4;
+  pointer-events: none;
+  visibility: hidden;
+}
+
+.usage-activity-tooltip.is-ready {
+  visibility: visible;
+}
+
+.usage-day-details {
+  margin-top: 16px;
+  padding: 20px;
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+}
+
+.usage-day-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.usage-day-heading h3 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 500;
+}
+
+.usage-day-status,
+.usage-day-coverage,
+.usage-day-note {
+  margin: 0 0 12px;
+  color: var(--body);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.usage-day-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.usage-day-metrics > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.usage-day-metrics span,
+.usage-day-metrics small {
+  color: var(--body);
+  font-size: 11px;
+}
+
+.usage-day-metrics strong {
+  font-size: 18px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.usage-day-splits {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
 }
 
 table {
@@ -1280,8 +1479,7 @@ button:focus-visible {
   }
 
   .summary-grid,
-  .device-grid,
-  .quota-grid {
+  .device-grid {
     grid-template-columns: 1fr 1fr;
   }
 }
@@ -1319,7 +1517,9 @@ button:focus-visible {
 
   .summary-grid,
   .device-grid,
-  .quota-grid {
+  .quota-grid,
+  .usage-day-metrics,
+  .usage-day-splits {
     grid-template-columns: 1fr;
   }
 
@@ -1357,10 +1557,25 @@ button:focus-visible {
     justify-content: center;
     padding-block: 24px;
   }
+
+  .install-panel,
+  .brew-row {
+    flex-wrap: wrap;
+    width: 100%;
+  }
+
+  .brew-row code {
+    flex: 1 1 100%;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
   html {
     scroll-behavior: auto;
+  }
+
+  button.usage-activity-cell,
+  .usage-activity-tooltip {
+    transition: none;
   }
 }

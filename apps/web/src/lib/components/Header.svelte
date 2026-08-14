@@ -1,7 +1,6 @@
 <script lang="ts">
 import { openAccountOrLogin, signOut } from "$lib/account-client";
 import type { WebDocumentViewer } from "$lib/server/document-port";
-import ThemeToggle from "./ThemeToggle.svelte";
 
 let { viewer }: { viewer: WebDocumentViewer | null } = $props();
 
@@ -44,7 +43,6 @@ async function onLogout(event: SubmitEvent): Promise<void> {
   <nav aria-label="Primary navigation">
     <a href="/#product">Product</a>
     <a href="https://github.com/gotry-io/Quota">GitHub</a>
-    <ThemeToggle />
     <div class="header-session">
       <button
         id="header-login"

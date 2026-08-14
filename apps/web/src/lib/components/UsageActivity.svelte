@@ -1,78 +1,175 @@
 <script lang="ts">
 import type { AccountSummary, UsageBreakdown } from "@gotry-io/quota-protocol";
-import { activityLevel, formatCount, formatShortDate, safeAdd } from "$lib/format";
+import {
+  ACTIVITY_WEEKDAY_LABELS,
+  buildUsageActivityModel,
+  placeActivityTooltip,
+} from "$lib/usage-activity";
 
 let {
   breakdowns,
   range,
-}: { breakdowns: UsageBreakdown[]; range: AccountSummary["usage"]["range"] } = $props();
+  selectedDate = null,
+  onSelectDate,
+}: {
+  breakdowns: UsageBreakdown[];
+  range: AccountSummary["usage"]["range"];
+  selectedDate?: string | null;
+  onSelectDate: (date: string) => void;
+} = $props();
 
-const totals = $derived.by(() => {
-  const map = new Map<string, { requests: number; tokens: number }>();
-  for (const breakdown of breakdowns) {
-    if (breakdown.key < range.from || breakdown.key > range.to) continue;
-    const current = map.get(breakdown.key) ?? { requests: 0, tokens: 0 };
-    current.requests = safeAdd(current.requests, breakdown.totals.requests);
-    current.tokens = safeAdd(
-      current.tokens,
-      breakdown.totals.input_tokens,
-      breakdown.totals.output_tokens,
-    );
-    map.set(breakdown.key, current);
+const model = $derived(
+  buildUsageActivityModel(breakdowns, range, new Date().toISOString().slice(0, 10)),
+);
+
+let tooltipText = $state<string | null>(null);
+let tooltipAnchor = $state<HTMLElement | null>(null);
+let tooltipEl = $state<HTMLDivElement | null>(null);
+let tooltipBox = $state<{ left: number; top: number } | null>(null);
+
+function dayFromTarget(
+  target: EventTarget | null,
+): { day: (typeof model.days)[number]; button: HTMLButtonElement } | null {
+  if (!(target instanceof Element)) return null;
+  const button = target.closest("button.usage-activity-cell");
+  if (!(button instanceof HTMLButtonElement)) return null;
+  const date = button.dataset.date;
+  const day = date ? model.days.find((item) => item.date === date) : undefined;
+  if (!day || day.outside) return null;
+  return { day, button };
+}
+
+function showTooltip(day: (typeof model.days)[number], button: HTMLElement): void {
+  tooltipText = day.tooltip;
+  tooltipAnchor = button;
+}
+
+function hideTooltip(): void {
+  tooltipText = null;
+  tooltipAnchor = null;
+  tooltipBox = null;
+}
+
+function onPointerOver(event: PointerEvent): void {
+  const found = dayFromTarget(event.target);
+  if (found) showTooltip(found.day, found.button);
+  else hideTooltip();
+}
+
+function hideIfLeftGroup(event: PointerEvent | FocusEvent): void {
+  const current = event.currentTarget;
+  if (
+    current instanceof Node &&
+    event.relatedTarget instanceof Node &&
+    current.contains(event.relatedTarget)
+  ) {
+    return;
   }
-  return map;
-});
+  hideTooltip();
+}
 
-const days = $derived.by(() => {
-  const first = new Date(`${range.from}T00:00:00Z`);
-  first.setUTCDate(first.getUTCDate() - first.getUTCDay());
-  const last = new Date(`${range.to}T00:00:00Z`);
-  last.setUTCDate(last.getUTCDate() + (6 - last.getUTCDay()));
-  const maxTokens = Math.max(...[...totals.values()].map((value) => value.tokens), 0);
-  const today = new Date().toISOString().slice(0, 10);
-  const items: Array<{
-    date: string;
-    outside: boolean;
-    today: boolean;
-    level: number;
-    label: string;
-  }> = [];
-  for (const cursor = new Date(first); cursor <= last; cursor.setUTCDate(cursor.getUTCDate() + 1)) {
-    const date = cursor.toISOString().slice(0, 10);
-    const value = totals.get(date);
-    const outside = date < range.from || date > range.to;
-    items.push({
-      date,
-      outside,
-      today: date === today,
-      level: activityLevel(value?.tokens ?? 0, maxTokens),
-      label: `${formatShortDate(date)}: ${formatCount(value?.requests ?? 0)} messages, ${formatCount(value?.tokens ?? 0)} tokens`,
+function onFocusIn(event: FocusEvent): void {
+  const found = dayFromTarget(event.target);
+  if (found) showTooltip(found.day, found.button);
+}
+
+$effect(() => {
+  if (!tooltipText || !tooltipAnchor || !tooltipEl) return;
+  const anchor = tooltipAnchor;
+  const layer = tooltipEl;
+  const update = (): void => {
+    const cell = anchor.getBoundingClientRect();
+    const box = layer.getBoundingClientRect();
+    const placed = placeActivityTooltip({
+      cell,
+      viewport: { width: window.innerWidth, height: window.innerHeight },
+      tooltip: { width: box.width, height: box.height },
     });
-  }
-  return items;
+    tooltipBox = { left: placed.left, top: placed.top };
+  };
+  update();
+  window.addEventListener("scroll", update, true);
+  window.addEventListener("resize", update);
+  return () => {
+    window.removeEventListener("scroll", update, true);
+    window.removeEventListener("resize", update);
+  };
 });
 </script>
 
-<div class="usage-activity-card">
-  <ul class="usage-activity-grid" aria-label="Usage activity by day">
-    {#each days as day (day.date)}
-      <li
-        class="usage-activity-cell activity-level-{day.level}"
-        class:activity-today={day.today}
-        class:activity-outside={day.outside}
-        aria-hidden={day.outside ? "true" : undefined}
-        aria-label={day.outside ? undefined : day.label}
-        title={day.outside ? undefined : day.label}
-      ></li>
-    {/each}
-  </ul>
-  <div class="activity-legend" aria-hidden="true">
-    <span>Less</span>
-    <i class="usage-activity-cell activity-level-0"></i>
-    <i class="usage-activity-cell activity-level-1"></i>
-    <i class="usage-activity-cell activity-level-2"></i>
-    <i class="usage-activity-cell activity-level-3"></i>
-    <i class="usage-activity-cell activity-level-4"></i>
-    <span>More</span>
+<div class="usage-activity">
+  <div class="usage-activity-card">
+    <div class="usage-activity-scroll">
+      <div class="usage-activity-chart">
+        <div class="usage-activity-month-row">
+          <span class="usage-activity-corner" aria-hidden="true"></span>
+          <div
+            class="usage-activity-months"
+            style="grid-template-columns: repeat({model.weeks.length}, var(--activity-cell))"
+          >
+            {#each model.monthLabels as month (month.weekIndex)}
+              <span
+                class="usage-activity-month"
+                style="grid-column: {month.weekIndex + 1} / span {month.span}">{month.label}</span
+              >
+            {/each}
+          </div>
+        </div>
+        <div class="usage-activity-body">
+          <div class="usage-activity-weekdays" aria-hidden="true">
+            {#each ACTIVITY_WEEKDAY_LABELS as label, index (index)}
+              <span>{label}</span>
+            {/each}
+          </div>
+          <div
+            class="usage-activity-weeks"
+            role="group"
+            aria-label="Usage activity by day"
+            onpointerover={onPointerOver}
+            onpointerout={hideIfLeftGroup}
+            onfocusin={onFocusIn}
+            onfocusout={hideIfLeftGroup}
+          >
+            {#each model.days as day (day.date)}
+              {#if day.outside}
+                <span class="usage-activity-cell activity-outside" aria-hidden="true"></span>
+              {:else}
+                <button
+                  class="usage-activity-cell activity-level-{day.level}"
+                  class:activity-today={day.today}
+                  type="button"
+                  data-date={day.date}
+                  aria-label={day.tooltip}
+                  aria-pressed={selectedDate === day.date}
+                  aria-controls={selectedDate === day.date ? "usage-day-details" : undefined}
+                  onclick={() => onSelectDate(day.date)}
+                ></button>
+              {/if}
+            {/each}
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="activity-legend" aria-hidden="true">
+      <span>Less</span>
+      <i class="usage-activity-cell activity-level-0"></i>
+      <i class="usage-activity-cell activity-level-1"></i>
+      <i class="usage-activity-cell activity-level-2"></i>
+      <i class="usage-activity-cell activity-level-3"></i>
+      <i class="usage-activity-cell activity-level-4"></i>
+      <span>More</span>
+    </div>
   </div>
+  {#if tooltipText}
+    <div
+      bind:this={tooltipEl}
+      class="usage-activity-tooltip"
+      class:is-ready={tooltipBox !== null}
+      aria-hidden="true"
+      style:left={tooltipBox ? `${tooltipBox.left}px` : "0"}
+      style:top={tooltipBox ? `${tooltipBox.top}px` : "0"}
+    >
+      {tooltipText}
+    </div>
+  {/if}
 </div>

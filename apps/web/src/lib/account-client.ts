@@ -6,7 +6,15 @@ import {
   type PublicProfile,
   PublicProfileSchema,
 } from "@gotry-io/quota-protocol";
+import {
+  type AccountUsageDayResult,
+  accountUsageDayPath,
+  parseAccountUsageDayResponse,
+} from "./account-usage-day.ts";
 import { accountEntryAction, DASHBOARD_PATH } from "$lib/routes";
+
+export type { AccountUsageDayResult };
+export { accountUsageDayPath, parseAccountUsageDayResponse };
 
 const jsonRequest = {
   credentials: "same-origin",
@@ -48,6 +56,28 @@ export async function signOut(): Promise<void> {
   });
   if (!response.ok) throw new Error("logout_failed");
   window.location.assign("/");
+}
+
+export async function fetchAccountUsageDay(
+  date: string,
+  init?: { signal?: AbortSignal },
+): Promise<AccountUsageDayResult> {
+  try {
+    const response = await fetch(accountUsageDayPath(date), {
+      ...jsonRequest,
+      ...(init?.signal ? { signal: init.signal } : {}),
+    });
+    if (response.status === 401) return { status: "unauthorized" };
+    if (!response.ok) return { status: "error" };
+    return parseAccountUsageDayResponse(response.status, await response.json());
+  } catch (error) {
+    if (isAbortError(error)) return { status: "aborted" };
+    return { status: "error" };
+  }
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
 }
 
 export async function fetchAccountSummary(): Promise<
