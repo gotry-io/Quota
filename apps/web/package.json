@@ -5,15 +5,25 @@
   "homepage": "https://quota.gotry.io",
   "private": true,
   "type": "module",
+  "exports": {
+    "./document-port": {
+      "types": "./src/lib/server/document-port.ts"
+    }
+  },
   "scripts": {
-    "build": "vite build && node scripts/publish-protocol-schemas.mjs",
-    "check": "tsc -p tsconfig.json",
-    "dev": "vite",
+    "build": "node scripts/publish-protocol-schemas.mjs && vite build && node scripts/stage-web-assets.mjs",
+    "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json && node scripts/check-web-imports.mjs",
+    "dev": "vite dev",
     "preview": "vite preview",
-    "test": "node --test test/routes.test.ts test/landing.test.ts"
+    "test": "node --test test/routes.test.ts test/landing.test.ts test/document-loads.test.ts test/publish-protocol-schemas.test.ts"
   },
   "devDependencies": {
     "@gotry-io/quota-protocol": "workspace:*",
+    "@sveltejs/adapter-cloudflare": "7.2.9",
+    "@sveltejs/kit": "2.70.2",
+    "@sveltejs/vite-plugin-svelte": "7.3.0",
+    "svelte": "5.56.9",
+    "svelte-check": "4.7.6",
     "vite": "8.2.0"
   }
 }

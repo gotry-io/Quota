@@ -6,7 +6,7 @@ import {
   legacyDashboardRedirect,
   planDisplayName,
   publicProfileUsername,
-} from "../src/routes.ts";
+} from "../src/lib/routes.ts";
 
 test("keeps the shipped /app dashboard bookmark as a single redirect", () => {
   assert.equal(DASHBOARD_PATH, "/my");

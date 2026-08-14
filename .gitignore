@@ -13,6 +13,8 @@ DerivedData/
 # JavaScript / TypeScript / Cloudflare
 node_modules/
 dist/
+.svelte-kit/
+apps/web/static/schema/
 .wrangler/
 coverage/
 

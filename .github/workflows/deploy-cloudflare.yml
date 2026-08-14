@@ -66,6 +66,8 @@ jobs:
         run: |
           set -euo pipefail
           pnpm --filter @gotry-io/quota-web check
+          pnpm --filter @gotry-io/quota-web test
+          pnpm --filter @gotry-io/quota-web build
           pnpm --filter @gotry-io/quota-relay check
           pnpm --filter @gotry-io/quota-relay test
           pnpm --filter @gotry-io/quota-relay build:cloudflare

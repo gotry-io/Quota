@@ -50,6 +50,7 @@ import type {
 import { type Context, Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import type { WebAccountAuth } from "./account/better-auth.ts";
+import { consumeNamedRateLimit, publicProfileRateLimit } from "./account/rate-limit.ts";
 import { AccountFlowError, type AccountService, isLoopbackRedirect } from "./account/service.ts";
 import { managedServiceInfo } from "./config.ts";
 import { PRICING_CATALOG, PRICING_CATALOG_ETAG } from "./pricing-catalog.ts";
@@ -73,7 +74,7 @@ const rateLimits = {
   token: { limit: 180, windowSeconds: 10 * 60 },
   sessionMutation: { limit: 60, windowSeconds: 10 * 60 },
   destructiveMutation: { limit: 10, windowSeconds: 60 * 60 },
-  publicProfile: { limit: 120, windowSeconds: 10 * 60 },
+  publicProfile: publicProfileRateLimit,
 } as const;
 
 interface StrictSchema<Output> {
@@ -1156,21 +1157,11 @@ async function enforceRateLimit(
   policy: { limit: number; windowSeconds: number },
   checkedAt: Date,
 ): Promise<Response | null> {
-  const windowMilliseconds = policy.windowSeconds * 1000;
-  const windowStartedAt = new Date(
-    Math.floor(checkedAt.getTime() / windowMilliseconds) * windowMilliseconds,
-  );
-  const result = await state.consumeRateLimit({
-    key_hash: await hasher.hash("rate-limit", `${action}:${subject}`),
-    window_started_at: windowStartedAt.toISOString(),
-    window_expires_at: new Date(windowStartedAt.getTime() + windowMilliseconds).toISOString(),
-    checked_at: checkedAt.toISOString(),
-    limit: policy.limit,
-  });
+  const result = await consumeNamedRateLimit(state, hasher, action, subject, policy, checkedAt);
   if (result.allowed) {
     return null;
   }
-  context.header("Retry-After", String(result.retry_after));
+  context.header("Retry-After", String(result.retryAfterSeconds));
   return relayError(context, 429, "rate_limited", "Too many requests. Retry later.");
 }
 
