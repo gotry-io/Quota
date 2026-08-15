@@ -1,4 +1,7 @@
-import { QuotaSnapshotV3Schema as QuotaSnapshotSchema } from "@gotry-io/quota-protocol";
+import {
+  IOS_OAUTH_CLIENT_ID,
+  QuotaSnapshotV3Schema as QuotaSnapshotSchema,
+} from "@gotry-io/quota-protocol";
 import {
   ACCOUNT_SCOPES,
   type AccountLoginGrantConsumeResult,
@@ -514,7 +517,7 @@ export class D1AccountState implements AccountState {
            WHERE id = ?1 AND code_hash = ?2
              AND account_id IS NOT NULL AND approved_at IS NOT NULL AND denied_at IS NULL
              AND consumed_at IS NULL AND expires_at > ?4
-             AND client_id = 'quota-ios' AND installation_id_hash IS NULL
+             AND client_id = ?5 AND installation_id_hash IS NULL
            RETURNING account_id`,
           )
           .bind(
@@ -522,6 +525,7 @@ export class D1AccountState implements AccountState {
             input.credential_hash,
             input.completion_nonce_hash,
             input.consumed_at,
+            IOS_OAUTH_CLIENT_ID,
           ),
         this.database
           .prepare(
@@ -533,7 +537,7 @@ export class D1AccountState implements AccountState {
            SELECT ?1, ?2, grants.account_id, NULL, ?3, ?4, ?5, ?6, ?7, ?8, ?6, ?6
            FROM login_grants AS grants
            WHERE grants.id = ?9 AND grants.consume_nonce_hash = ?10
-             AND grants.client_id = 'quota-ios' AND grants.installation_id_hash IS NULL`,
+             AND grants.client_id = ?11 AND grants.installation_id_hash IS NULL`,
           )
           .bind(
             input.account_session.session_id,
@@ -546,6 +550,7 @@ export class D1AccountState implements AccountState {
             input.account_session.refresh_expires_at,
             input.grant_id,
             input.completion_nonce_hash,
+            IOS_OAUTH_CLIENT_ID,
           ),
       ]);
     } catch (error) {
