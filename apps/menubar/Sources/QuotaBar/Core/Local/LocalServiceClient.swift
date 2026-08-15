@@ -48,6 +48,7 @@ protocol LocalServiceServing: Sendable {
 
   func state() async throws -> LocalServiceState
   func diagnose() async throws -> LocalServiceDiagnosticReport
+  func recheckDiagnostics() async throws -> LocalServiceRefreshResult
   func refresh() async throws -> LocalServiceRefreshResult
   func login() async throws -> LocalServiceLoginResult
   func cancelLogin() async throws
@@ -69,6 +70,12 @@ protocol LocalServiceServing: Sendable {
     _ provider: ProviderID
   ) async throws -> LocalServiceProviderBrowserSession
   func shutdown() async
+}
+
+extension LocalServiceServing {
+  func recheckDiagnostics() async throws -> LocalServiceRefreshResult {
+    try await refresh()
+  }
 }
 
 actor LocalServiceClient: LocalServiceServing {
@@ -143,6 +150,10 @@ actor LocalServiceClient: LocalServiceServing {
 
   func refresh() async throws -> LocalServiceRefreshResult {
     try await request(operation: "refresh", payload: EmptyPayload())
+  }
+
+  func recheckDiagnostics() async throws -> LocalServiceRefreshResult {
+    try await request(operation: "recheck_diagnostics", payload: EmptyPayload())
   }
 
   func login() async throws -> LocalServiceLoginResult {

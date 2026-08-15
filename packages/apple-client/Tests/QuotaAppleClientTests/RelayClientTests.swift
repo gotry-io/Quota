@@ -54,6 +54,7 @@ struct RelayClientTests {
     #expect(items["usage_agents"] == "all")
     #expect(items["usage_clients"] == "1")
     #expect(items["model_catalog"] == "1")
+    #expect(items["device_health"] == "1")
     #expect(items["cost_mode"] == "calculate")
     #expect(items["from"] == "2026-08-14")
     #expect(items["to"] == "2026-08-14")

@@ -13,7 +13,7 @@ use crate::protocol::{AccountComponentValue, AuthStatus};
 use crate::service::{BackendError, LoginOutcome};
 use crate::state::StateStore;
 use base64::Engine;
-use chrono::Timelike;
+use chrono::{DateTime, Timelike};
 use reqwest::blocking::{Client, Response};
 use reqwest::header::{
     ACCEPT, AUTHORIZATION, CONTENT_TYPE, ETAG, HeaderMap, HeaderValue, IF_NONE_MATCH,
@@ -214,6 +214,13 @@ impl RelayClient {
         )
     }
 
+    pub fn upload_device_health(&self, token: &str, payload: &Value) -> Result<Value, RelayError> {
+        validate_device_health_upload(payload)?;
+        let response = self.put_json("/api/v3/device/health", payload, token, 200)?;
+        validate_device_health_response(&response)?;
+        Ok(response)
+    }
+
     pub fn upload_snapshot(&self, token: &str, envelope: &Value) -> Result<Value, RelayError> {
         validate_snapshot_envelope(envelope)?;
         let response = self.put_json("/api/v3/device/snapshots", envelope, token, 200)?;
@@ -278,8 +285,13 @@ impl RelayClient {
         if added_model_catalog {
             parts.push("model_catalog=1".to_owned());
         }
+        let added_device_health = path == "/api/v3/account/summary"
+            && !parts.iter().any(|part| part.starts_with("device_health="));
+        if added_device_health {
+            parts.push("device_health=1".to_owned());
+        }
         let mut result = self.get_json(&format!("{path}?{}", parts.join("&")), token, 200);
-        if (added_usage_clients || added_model_catalog)
+        if (added_usage_clients || added_model_catalog || added_device_health)
             && matches!(
                 &result,
                 Err(RelayError::Rejected { code, status: 400 }) if code == "invalid_request"
@@ -290,8 +302,12 @@ impl RelayClient {
             parts.retain(|part| {
                 !(added_usage_clients && part.starts_with("usage_clients="))
                     && !(added_model_catalog && part.starts_with("model_catalog="))
+                    && !(added_device_health && part.starts_with("device_health="))
             });
             result = self.get_json(&format!("{path}?{}", parts.join("&")), token, 200);
+            if added_device_health && let Ok(summary) = result.as_mut() {
+                normalize_released_account_summary(summary)?;
+            }
         }
         result
     }
@@ -1060,6 +1076,184 @@ fn validate_response_object(value: &Value, keys: &[&str]) -> Result<(), RelayErr
     Ok(())
 }
 
+fn normalize_released_account_summary(value: &mut Value) -> Result<(), RelayError> {
+    let devices = value
+        .get_mut("devices")
+        .and_then(Value::as_array_mut)
+        .ok_or(RelayError::InvalidResponse)?;
+    for device in devices {
+        let object = device.as_object_mut().ok_or(RelayError::InvalidResponse)?;
+        if object.contains_key("health") {
+            return Err(RelayError::InvalidResponse);
+        }
+        object.insert("health".to_owned(), Value::Null);
+    }
+    Ok(())
+}
+
+fn validate_device_health_upload(value: &Value) -> Result<(), RelayError> {
+    validate_response_object(
+        value,
+        &[
+            "protocol_version",
+            "schema_version",
+            "client_product",
+            "client_version",
+            "platform",
+            "observed_at",
+            "refresh_revision",
+            "last_completed_refresh_at",
+            "last_successful_account_sync_at",
+            "summary",
+            "top_code",
+            "consecutive_failures",
+            "usage_upload_enabled",
+        ],
+    )?;
+    if value.get("protocol_version").and_then(Value::as_u64) != Some(3) {
+        return Err(RelayError::InvalidResponse);
+    }
+    validate_device_health_fields(value)
+}
+
+fn validate_device_health_response(value: &Value) -> Result<(), RelayError> {
+    validate_response_object(
+        value,
+        &["protocol_version", "status", "received_at", "fresh_until"],
+    )?;
+    if value.get("protocol_version").and_then(Value::as_u64) != Some(3)
+        || !matches!(
+            value.get("status").and_then(Value::as_str),
+            Some("updated" | "ignored_stale")
+        )
+        || !value
+            .get("received_at")
+            .and_then(Value::as_str)
+            .is_some_and(valid_rfc3339)
+        || !value
+            .get("fresh_until")
+            .and_then(Value::as_str)
+            .is_some_and(valid_rfc3339)
+    {
+        return Err(RelayError::InvalidResponse);
+    }
+    Ok(())
+}
+
+fn validate_device_health(value: &Value) -> Result<(), RelayError> {
+    validate_response_object(
+        value,
+        &[
+            "schema_version",
+            "client_product",
+            "client_version",
+            "platform",
+            "observed_at",
+            "refresh_revision",
+            "last_completed_refresh_at",
+            "last_successful_account_sync_at",
+            "summary",
+            "top_code",
+            "consecutive_failures",
+            "usage_upload_enabled",
+            "received_at",
+            "fresh_until",
+        ],
+    )?;
+    validate_device_health_fields(value)?;
+    let received_at = value.get("received_at").and_then(Value::as_str);
+    let fresh_until = value.get("fresh_until").and_then(Value::as_str);
+    if !received_at.is_some_and(valid_rfc3339)
+        || !fresh_until.is_some_and(valid_rfc3339)
+        || received_at
+            .zip(fresh_until)
+            .is_some_and(|(received, fresh)| {
+                DateTime::parse_from_rfc3339(fresh).ok()
+                    < DateTime::parse_from_rfc3339(received).ok()
+            })
+    {
+        return Err(RelayError::InvalidResponse);
+    }
+    Ok(())
+}
+
+fn validate_device_health_fields(value: &Value) -> Result<(), RelayError> {
+    let nullable_instant = |key: &str| {
+        value
+            .get(key)
+            .is_some_and(|item| item.is_null() || item.as_str().is_some_and(valid_rfc3339))
+    };
+    let summary = value.get("summary").ok_or(RelayError::InvalidResponse)?;
+    validate_response_object(summary, &["operation", "data", "attention"])?;
+    if value.get("schema_version").and_then(Value::as_u64) != Some(1)
+        || !matches!(
+            value.get("client_product").and_then(Value::as_str),
+            Some("quotabar" | "quotacli")
+        )
+        || !value
+            .get("client_version")
+            .and_then(Value::as_str)
+            .is_some_and(|version| {
+                !version.is_empty()
+                    && version.len() <= 32
+                    && version.bytes().enumerate().all(|(index, byte)| {
+                        byte.is_ascii_alphanumeric()
+                            || (index > 0 && matches!(byte, b'.' | b'+' | b'_' | b'-'))
+                    })
+            })
+        || !matches!(
+            value.get("platform").and_then(Value::as_str),
+            Some("macos" | "linux" | "windows")
+        )
+        || !value
+            .get("observed_at")
+            .and_then(Value::as_str)
+            .is_some_and(valid_rfc3339)
+        || value.get("refresh_revision").and_then(safe_u64).is_none()
+        || !nullable_instant("last_completed_refresh_at")
+        || !nullable_instant("last_successful_account_sync_at")
+        || !matches!(
+            summary.get("operation").and_then(Value::as_str),
+            Some("healthy" | "degraded" | "blocked")
+        )
+        || !matches!(
+            summary.get("data").and_then(Value::as_str),
+            Some("current" | "stale" | "partial" | "empty" | "unknown")
+        )
+        || !matches!(
+            summary.get("attention").and_then(Value::as_str),
+            Some("none" | "automatic" | "optional" | "required")
+        )
+        || !value.get("top_code").is_some_and(|code| {
+            code.is_null()
+                || matches!(
+                    code.as_str(),
+                    Some(
+                        "refresh_failed"
+                            | "quota_collection_failed"
+                            | "usage_scan_partial"
+                            | "usage_upload_failed"
+                            | "account_sync_failed"
+                            | "pricing_refresh_failed"
+                            | "process_interrupted"
+                            | "local_state_invalid"
+                    )
+                )
+        })
+        || !value
+            .get("consecutive_failures")
+            .and_then(safe_u64)
+            .is_some_and(|count| count <= 1_000)
+        || value
+            .get("usage_upload_enabled")
+            .and_then(Value::as_bool)
+            .is_none()
+    {
+        return Err(RelayError::InvalidResponse);
+    }
+    Ok(())
+}
+
 fn validate_control_response(value: &Value) -> Result<(), RelayError> {
     validate_response_object(
         value,
@@ -1137,7 +1331,7 @@ fn validate_account_summary(value: &Value) -> Result<(), RelayError> {
         .filter(|devices| devices.len() <= 256)
         .ok_or(RelayError::InvalidResponse)?;
     for device in devices {
-        validate_account_device(device)?;
+        validate_account_device_with_health(device)?;
     }
     let quota = object
         .get("quota")
@@ -1183,7 +1377,7 @@ fn validate_account_record(value: &Value) -> Result<(), RelayError> {
     Ok(())
 }
 
-fn validate_account_device(value: &Value) -> Result<(), RelayError> {
+fn validate_account_device_with_health(value: &Value) -> Result<(), RelayError> {
     validate_response_object(
         value,
         &[
@@ -1196,6 +1390,7 @@ fn validate_account_device(value: &Value) -> Result<(), RelayError> {
             "last_login_at",
             "last_seen_at",
             "signed_out_at",
+            "health",
         ],
     )?;
     let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
@@ -1238,6 +1433,12 @@ fn validate_account_device(value: &Value) -> Result<(), RelayError> {
                 .is_some_and(|value| !value.is_null())
     {
         return Err(RelayError::InvalidResponse);
+    }
+    if let Some(health) = object.get("health").filter(|value| !value.is_null()) {
+        validate_device_health(health)?;
+        if health.get("platform") != object.get("platform") {
+            return Err(RelayError::InvalidResponse);
+        }
     }
     Ok(())
 }
@@ -2425,6 +2626,37 @@ impl AccountManager {
         let response = self
             .client
             .upload_usage(&token, submission)
+            .map_err(|error| BackendError {
+                error: relay_error_for_backend(error),
+            })?;
+        if !self
+            .state
+            .active_session_at_epoch(epoch)
+            .map_err(|_| BackendError::unavailable())?
+        {
+            return Err(session_changed_error());
+        }
+        Ok(response)
+    }
+
+    pub fn upload_device_health(&self, payload: &Value) -> Result<Value, BackendError> {
+        let (session, epoch) = self
+            .state
+            .session_snapshot()
+            .map_err(|_| BackendError::unavailable())?
+            .ok_or_else(session_changed_error)?;
+        if !is_active_session(&session)
+            || !self
+                .state
+                .active_session_at_epoch(epoch)
+                .map_err(|_| BackendError::unavailable())?
+        {
+            return Err(session_changed_error());
+        }
+        let token = session_access_token_from(&session, "device")?;
+        let response = self
+            .client
+            .upload_device_health(&token, payload)
             .map_err(|error| BackendError {
                 error: relay_error_for_backend(error),
             })?;
@@ -3809,6 +4041,55 @@ mod tests {
             )
             .expect("Usage summary");
         assert_eq!(result["range"]["from"], "2026-08-06");
+        server.join().expect("mock server");
+    }
+
+    #[test]
+    fn account_summary_retries_released_relay_and_marks_device_health_unknown() {
+        let summary = serde_json::json!({
+            "protocol_version": 3,
+            "generated_at": "2026-08-10T00:00:00Z",
+            "account": {
+                "account_id": "account_1",
+                "display_label": null,
+                "created_at": "2026-08-09T00:00:00Z"
+            },
+            "devices": [{
+                "device_id": "device_1",
+                "display_name": "Released Mac",
+                "platform": "macos",
+                "device_generation": 1,
+                "status": "active",
+                "created_at": "2026-08-09T00:00:00Z",
+                "last_login_at": "2026-08-09T00:00:00Z",
+                "last_seen_at": "2026-08-10T00:00:00Z",
+                "signed_out_at": null
+            }],
+            "quota": [],
+            "usage": {
+                "range": {"from": "2026-08-09", "to": "2026-08-10"},
+                "totals": valid_totals(),
+                "cost": valid_cost(),
+                "coverage": [],
+                "breakdowns": []
+            }
+        });
+        let (origin, server) = spawn_mock_server(vec![
+            http_json(
+                400,
+                None,
+                &serde_json::json!({"error": {"code": "invalid_request"}}),
+            ),
+            http_json(200, None, &summary),
+        ]);
+        let client = RelayClient::for_test(&origin).expect("test client");
+
+        let result = client
+            .account_summary("account-token", "cost_mode=calculate")
+            .expect("released Account summary");
+
+        assert!(result["devices"][0]["health"].is_null());
+        assert!(validate_account_summary(&result).is_ok());
         server.join().expect("mock server");
     }
 

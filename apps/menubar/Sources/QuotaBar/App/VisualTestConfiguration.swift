@@ -219,40 +219,29 @@
 
   private func diagnosticVisualReport(at date: Date) -> LocalServiceDiagnosticReport {
     LocalServiceDiagnosticReport(
-      schemaVersion: 1,
-      status: .healthy,
+      schemaVersion: 2,
+      summary: LocalServiceDiagnosticSummary(
+        operation: .healthy, data: .current, attention: .none),
+      refresh: LocalServiceDiagnosticRefresh(
+        phase: .idle, asOf: date, startedAt: nil, nextDueAt: date.addingTimeInterval(300)),
       generatedAt: date,
       client: LocalServiceDiagnosticClient(name: "QuotaBar", version: "Visual QA"),
-      components: [
-        LocalServiceDiagnosticComponent(
-          name: "providers", status: .ready, message: nil,
-          metrics: ["configured": 3, "discovered": 5]
-        ),
-        LocalServiceDiagnosticComponent(
-          name: "quota", status: .ready, message: nil,
-          metrics: ["results": 5, "success": 5]
-        ),
-        LocalServiceDiagnosticComponent(
-          name: "usage", status: .ready, message: nil,
-          metrics: ["records": 128, "files": 4]
-        ),
-        LocalServiceDiagnosticComponent(
-          name: "pricing", status: .ready, message: nil,
-          metrics: ["entries": 126, "catalog_present": 1, "catalog_valid": 1]
-        ),
-        LocalServiceDiagnosticComponent(
-          name: "account", status: .ready, message: nil,
-          metrics: ["signed_in": 1, "devices": 2]
-        ),
-        LocalServiceDiagnosticComponent(
-          name: "sync", status: .ready, message: nil,
-          metrics: [
-            "usage_upload_enabled": 1, "uploadable_dirty_ranges": 0, "outbox": 0,
-            "last_upload_success": 1,
-          ]
-        ),
+      surfaces: [
+        LocalServiceDiagnosticSurface(
+          name: "quota_overview", operation: .healthy, data: .current, source: nil,
+          metrics: ["items": 5, "this_device_sources": 3, "account_sources": 2]),
+        LocalServiceDiagnosticSurface(
+          name: "usage_this_device", operation: .healthy, data: .current, source: .thisDevice,
+          metrics: ["records": 128, "files": 4, "partial_hours": 0]),
+        LocalServiceDiagnosticSurface(
+          name: "usage_account", operation: .healthy, data: .current, source: .account,
+          metrics: ["enabled": 1, "periods": 4]),
+        LocalServiceDiagnosticSurface(
+          name: "account", operation: .healthy, data: .current, source: .account,
+          metrics: ["signed_in": 1, "devices": 2]),
       ],
-      issues: []
+      checks: [],
+      findings: []
     )
   }
 
@@ -260,25 +249,25 @@
     let report = diagnosticVisualReport(at: date)
     return LocalServiceDiagnosticReport(
       schemaVersion: report.schemaVersion,
-      status: .degraded,
+      summary: LocalServiceDiagnosticSummary(
+        operation: .healthy, data: .current, attention: .optional),
+      refresh: report.refresh,
       generatedAt: report.generatedAt,
       client: report.client,
-      components: report.components.map { component in
-        guard component.name == "quota" else { return component }
-        return LocalServiceDiagnosticComponent(
-          name: component.name,
-          status: .degraded,
-          message: nil,
-          metrics: ["results": 1, "success": 0]
-        )
-      },
-      issues: [
-        LocalServiceDiagnosticIssue(
-          component: "quota",
+      surfaces: report.surfaces,
+      checks: [],
+      findings: [
+        LocalServiceDiagnosticFinding(
+          component: "quota_collection",
+          source: .thisDevice,
+          subject: "provider:codex",
           code: "auth_required",
-          severity: .warning,
+          severity: .info,
+          impact: .none,
+          recovery: .login,
           count: 1,
-          message: "recovery_login"
+          observedAt: date,
+          message: "An opportunistically discovered local source could not be collected."
         )
       ]
     )

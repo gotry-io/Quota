@@ -149,10 +149,16 @@ requests, estimated cost, coverage, and compact agent and model splits, with hon
 truncated, partial, and unpriced copy. The dashboard does not repeat the GitHub username in the
 page heading.
 
-Device cards show display name, platform, lifecycle status, and last-seen time. Deletion copy must
-say that both the Device and its Quota/Usage data are removed. Agent Usage uses a semantic table with
-real column headers. Empty, loading, unauthenticated, recent-auth-required, and service-error states
-use plain explanatory text and one next action.
+Device cards show display name, platform, app product/version, and compact last
+report/refresh/sync. A server-fresh healthy/current-or-empty report with no required or optional
+attention is **Healthy**; fresh problem states are **Needs attention** or **Check device** and direct
+the user to Diagnostics on that Device. Expired or absent reports are **Not recently active** or
+**Unknown**, not an assertion that a sleeping or closed app failed. Lifecycle **Signed out** remains
+explicit. Never show raw Device IDs or ask the viewing browser/device to fix another Device's
+provider credentials. Deletion copy must say that both the Device and its Quota/Usage data are
+removed. Agent Usage uses a semantic table with real column headers. Empty, loading,
+unauthenticated, recent-auth-required, and service-error states use plain explanatory text and one
+next action.
 
 ## Device authorization
 

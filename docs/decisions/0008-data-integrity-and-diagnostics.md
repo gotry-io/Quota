@@ -11,10 +11,10 @@ different record, file, provider, or upload boundary is invalid. Every collectio
 retains all valid bounded facts, isolates invalid input at the smallest possible scope, and exposes
 the resulting state through one bounded diagnostic report.
 
-The service is the only diagnostic authority. It reports the same capabilities to QuotaBar and
-QuotaCLI: providers and quota collection, Usage parsing and coverage, pricing, account state, and
-upload/synchronization. Clients render or copy this report; they do not inspect SQLite, source logs,
-credentials, or reimplement health rules.
+The service is the only diagnostic authority. It evaluates whether the user-visible Quota and Usage
+surfaces can fulfill their current promises, then reports the source checks that explain those
+surfaces. QuotaBar and QuotaCLI render or copy the result; they do not inspect SQLite, source logs,
+credentials, or reimplement health, data-state, or recovery policy.
 
 ## Data and upload rules
 
@@ -47,35 +47,76 @@ credentials, or reimplement health rules.
 
 ## Diagnostic report contract
 
-The private `diagnose` operation returns a bounded `schema_version: 1` report. Its top-level fields
-are `schema_version`, `status` (`healthy`, `degraded`, or `blocked`), `generated_at`, `client`,
-`components`, and `issues`; `client` has only `name` and `version`. `components` is an array with one
-entry for each fixed capability name: `providers`, `quota`, `usage`, `pricing`, `account`, and `sync`.
-Each component has `name`, `status` (`ready`, `degraded`, or `blocked`), an optional safe `message`,
-and bounded integer `metrics` whose values are `0..1,000,000`. Issues contain only a fixed component,
-stable code, severity, count (`1..1,000,000`), and safe message. Names, statuses, codes, and messages
-are control-free and bounded. Raw paths, filenames, model lists, prompts, completions, session IDs,
-credentials, tokens, device IDs, and unredacted provider output never cross IPC or appear in a copied
-report.
+The private `diagnose` operation returns a bounded `schema_version: 2` report. Diagnostic v1 shipped,
+but its component/setup model could not express source intent or distinguish usable remote data from
+missing local credentials. V2 is the replacement contract; the bundled service and Swift client move
+together, and QuotaCLI has no separate consumer that requires a v1 compatibility path.
 
-`healthy` means no component is degraded or blocked. `degraded` means valid data remains available
-but a bounded subset was skipped, stale, partial, unpriced, or awaiting retry. `blocked` means the
-capability cannot make progress without a repair such as login, configuration, upgrade, or retry.
-Quota health covers providers that currently expose discoverable credentials or have explicit local
-configuration; optional providers the user has not configured are not individual failures. An
-installation with no monitored provider reports Quota as blocked with a provider-configuration
-recovery issue. Sync health counts only closed dirty Usage ranges that are eligible for upload. The
-open UTC hour remains dirty while its source data can still change and does not by itself degrade
-health.
-QuotaCLI exits zero only for `healthy`; `degraded` and `blocked` have stable nonzero exits.
+The top-level fields are `schema_version`, `summary`, `refresh`, `generated_at`, `client`, `surfaces`,
+`checks`, and `findings`. `client` contains only `name` and `version`. `summary` keeps three independent
+axes instead of collapsing them into one severity:
+
+- `operation` is `healthy`, `degraded`, or `blocked`. `blocked` is reserved for a required path that
+  cannot operate safely or make progress, such as invalid durable state or a required client upgrade.
+  Missing optional setup, login, or local credentials is not blocked.
+- `data` is `current`, `stale`, `partial`, `empty`, or `unknown`. Empty is a valid first-run or inactive
+  state. Stale and partial describe retained data independently of whether the service can operate.
+- `attention` is `none`, `automatic`, `optional`, or `required`. It states who, if anyone, must act;
+  authentication or a recovery verb does not by itself make a finding an error.
+
+The four fixed surfaces are `quota_overview`, `usage_this_device`, `usage_account`, and `account`.
+Checks explain the collection path behind them and carry `source` (`this_device`, `account`, or
+`system`), an optional safe `provider:<id>` or `agent:<id>` subject, `mode` (`inactive`,
+`opportunistic`, or `required`), operation/data state, last-attempt and last-success timestamps, and
+bounded metrics. Findings carry the same source and safe subject plus one root-cause code, severity,
+impact (`none`, `source`, `surface`, or `system`), occurrence count, observation time, recovery code,
+and fixed safe message. The report contains at most four surfaces, 128 checks, and 256 findings;
+metric values and finding counts are bounded to `0..1,000,000` and `1..1,000,000` respectively.
+
+Diagnostic intent follows product behavior:
+
+- **Show in Overview** is a Swift presentation preference only. It never opts this device into local
+  collection and never changes diagnostic mode.
+- Account-sourced provider observations can fully satisfy Quota Overview. A local collector without
+  explicit configuration is opportunistic, so a local authentication failure may be useful info but
+  does not degrade a current Account-backed surface. Explicit saved local configuration makes that
+  source required and its failure actionable. No local providers or credentials is healthy/empty.
+- Signed-out Account state and disabled Usage upload are inactive/healthy. A closed dirty range or
+  outbox entry that is waiting for the next scheduler opportunity is normal automatic work, not a
+  failed upload. Only a recorded completed attempt that failed, was rejected, or found an
+  unrepresentable partition degrades the required upload check. The still-changing open UTC hour is
+  not uploadable pending work.
+- Usage findings are emitted once per agent and root parser/access reason. Aggregate
+  `scan_partial`/`partial_sources` duplicates are not emitted. A truncated active tail, source change,
+  or cancelled scan is transient automatic work; stable malformed input or access failure is an
+  actionable partial-data finding while valid records remain available.
+
+The report is evaluated only at a completed refresh boundary. `refresh.as_of` and
+`refresh.revision` identify that coherent snapshot, while `refresh.phase`, `started_at`, and
+`next_due_at` describe current scheduler state. During a refresh, `diagnose` returns the previous
+completed snapshot marked `running`. QuotaBar Recheck requests a real single-flight refresh and waits
+for a newer idle revision, or clearly keeps the last completed snapshot marked as still running if it
+exceeds the UI wait. The structured attempt journal, Support Report projection, snapshot persistence,
+retention, and cross-device Device Health derived from this boundary are defined by
+[ADR 0015](0015-diagnostic-attempts-and-device-health.md).
+
+Names, codes, messages, and identities are control-free and bounded. Provider and Usage-agent IDs are
+the only retained subject identities. Raw paths, filenames, model names/lists, prompts, completions,
+session or conversation IDs, installation or device IDs, credentials, tokens, raw provider responses,
+and parser excerpts never cross IPC or appear in text/JSON copies.
+
+QuotaCLI exits zero when operation is healthy, data is current or empty, and attention is not
+required. It exits nonzero for blocked/degraded operation, stale/partial/unknown data, or required
+attention. Waiting automatic work and healthy empty/inactive installations exit zero.
 
 ## Consequences
 
 This keeps recovery local and observable: one bad Codex model marker cannot suppress an entire
 history, and one oversized report cannot permanently block the Usage outbox. The service owns
-bounded counters and redaction, so the CLI and Swift UI remain thin presentation clients. New
-capabilities must add a fixed component and safe metrics to the shared report rather than creating a
-second diagnostic command or report cache.
+bounded evaluation and redaction, so the CLI and Swift UI remain thin presentation clients. New
+capabilities extend the fixed surfaces/checks/findings contract rather than creating a second
+diagnostic command or client-side policy. Operational evidence remains the typed bounded journal in
+[ADR 0015](0015-diagnostic-attempts-and-device-health.md), not a generic event log.
 
 See [`docs/architecture.md`](../architecture.md) for runtime boundaries and
 [`docs/security.md`](../security.md) for retained-data and redaction rules.

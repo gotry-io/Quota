@@ -8,7 +8,9 @@ use std::thread;
 use std::time::Duration;
 
 use crate::protocol::*;
-use crate::state::{StateError, StateStore, now_rfc3339};
+use crate::state::{
+    DiagnosticAttemptCompletion, DiagnosticAttemptHandle, StateError, StateStore, now_rfc3339,
+};
 use serde_json::Value;
 
 pub trait EventSink: Send + Sync {
@@ -93,6 +95,12 @@ pub trait LocalBackend: Send + Sync {
     /// order pricing/control, upload/outbox, account summary, and overview merging explicitly.
     fn refresh(&self, cancel: Arc<AtomicBool>) -> RefreshOutcome;
     fn diagnose(&self) -> Result<DiagnosticReport, BackendError>;
+    fn complete_diagnostics(&self) -> Result<DiagnosticReport, BackendError> {
+        self.diagnose()
+    }
+    fn publish_device_health(&self, _: &DiagnosticReport) -> Result<(), BackendError> {
+        Ok(())
+    }
     fn login(
         &self,
         installation_id: &str,
@@ -142,10 +150,12 @@ impl LocalBackend for UnavailableBackend {
 struct RefreshState {
     active: Option<ActiveRefresh>,
     pending: bool,
+    pending_trigger: Option<DiagnosticAttemptTrigger>,
 }
 
 struct ActiveRefresh {
     cancel: Arc<AtomicBool>,
+    started_at: String,
 }
 
 struct LoginState {
@@ -161,6 +171,8 @@ struct ServiceInner {
     login: Mutex<LoginState>,
     scheduler_wakeup: Condvar,
     scheduler_signal: Mutex<bool>,
+    #[cfg(test)]
+    fail_next_refresh_spawn: AtomicBool,
 }
 
 #[derive(Clone)]
@@ -183,17 +195,20 @@ impl LocalService {
                 refresh: Mutex::new(RefreshState {
                     active: None,
                     pending: false,
+                    pending_trigger: None,
                 }),
                 login: Mutex::new(LoginState { active: None }),
                 scheduler_wakeup: Condvar::new(),
                 scheduler_signal: Mutex::new(false),
+                #[cfg(test)]
+                fail_next_refresh_spawn: AtomicBool::new(false),
             }),
         }
     }
 
     pub fn start_scheduler(&self) {
         let service = self.clone();
-        service.request_refresh();
+        service.request_refresh_with_trigger(DiagnosticAttemptTrigger::Startup);
         thread::Builder::new()
             .name("quota-refresh-scheduler".to_owned())
             .spawn(move || {
@@ -215,7 +230,7 @@ impl LocalService {
                     if should_refresh {
                         *signal = false;
                         drop(signal);
-                        service.request_refresh();
+                        service.request_refresh_with_trigger(DiagnosticAttemptTrigger::Scheduled);
                     }
                 }
             })
@@ -238,6 +253,7 @@ impl LocalService {
         let result: Result<Value, IpcError> = match request.operation {
             Operation::GetState => self.get_state(&request).map(as_json),
             Operation::Diagnose => self.diagnose(&request).map(as_json),
+            Operation::RecheckDiagnostics => self.recheck_diagnostics(&request).map(as_json),
             Operation::Refresh => self.refresh(&request).map(as_json),
             Operation::Login => self.login(&request).map(as_json),
             Operation::CancelLogin => self.cancel_login(&request).map(as_json),
@@ -298,7 +314,20 @@ impl LocalService {
 
     fn diagnose(&self, request: &IpcRequest) -> Result<DiagnosticReport, IpcError> {
         request.decode_payload::<EmptyPayload>()?;
-        self.inner.backend.diagnose().map_err(|error| error.error)
+        let mut report = self.inner.backend.diagnose().map_err(|error| error.error)?;
+        if let Ok(refresh) = self.inner.refresh.lock()
+            && let Some(active) = &refresh.active
+        {
+            report.refresh.phase = DiagnosticRefreshPhase::Running;
+            report.refresh.started_at = Some(active.started_at.clone());
+            report.refresh.next_due_at = None;
+        }
+        Ok(report)
+    }
+
+    fn recheck_diagnostics(&self, request: &IpcRequest) -> Result<RefreshResult, IpcError> {
+        request.decode_payload::<EmptyPayload>()?;
+        Ok(self.request_refresh_with_trigger(DiagnosticAttemptTrigger::Recheck))
     }
 
     fn login(&self, request: &IpcRequest) -> Result<LoginResult, IpcError> {
@@ -416,6 +445,7 @@ impl LocalService {
         }
         let Some(session) = self.inner.state.session_json().map_err(state_error)? else {
             self.set_signed_out()?;
+            let _ = self.request_refresh_with_trigger(DiagnosticAttemptTrigger::AccountChange);
             return Ok(LogoutResult {
                 status: AuthStatus::SignedOut,
             });
@@ -474,7 +504,7 @@ impl LocalService {
             )
             .map_err(state_error)?;
         self.emit(vec![ComponentName::Providers]);
-        let _ = self.request_refresh();
+        let _ = self.request_refresh_with_trigger(DiagnosticAttemptTrigger::SettingsChange);
         let config = self
             .inner
             .state
@@ -494,9 +524,7 @@ impl LocalService {
             .set_usage_upload_enabled(payload.enabled)
             .map_err(state_error)?;
         self.emit(vec![ComponentName::Usage]);
-        if payload.enabled {
-            let _ = self.request_refresh();
-        }
+        let _ = self.request_refresh_with_trigger(DiagnosticAttemptTrigger::SettingsChange);
         Ok(UsageUploadSetting {
             enabled: payload.enabled,
         })
@@ -510,7 +538,7 @@ impl LocalService {
             .remove_provider_config(&payload.provider)
             .map_err(state_error)?;
         self.emit(vec![ComponentName::Providers]);
-        let _ = self.request_refresh();
+        let _ = self.request_refresh_with_trigger(DiagnosticAttemptTrigger::SettingsChange);
         Ok(config_view(
             &payload.provider,
             None,
@@ -547,7 +575,7 @@ impl LocalService {
             )
             .map_err(state_error)?;
         self.emit(vec![ComponentName::Providers]);
-        let _ = self.request_refresh();
+        let _ = self.request_refresh_with_trigger(DiagnosticAttemptTrigger::SettingsChange);
         Ok(ProviderBrowserSessionView {
             provider: provider.as_str().to_owned(),
             configured: true,
@@ -596,7 +624,7 @@ impl LocalService {
             .remove_provider_browser_session(provider.as_str())
             .map_err(state_error)?;
         self.emit(vec![ComponentName::Providers]);
-        let _ = self.request_refresh();
+        let _ = self.request_refresh_with_trigger(DiagnosticAttemptTrigger::SettingsChange);
         Ok(ProviderBrowserSessionView {
             provider: provider.as_str().to_owned(),
             configured: false,
@@ -612,6 +640,10 @@ impl LocalService {
     }
 
     fn request_refresh(&self) -> RefreshResult {
+        self.request_refresh_with_trigger(DiagnosticAttemptTrigger::Manual)
+    }
+
+    fn request_refresh_with_trigger(&self, trigger: DiagnosticAttemptTrigger) -> RefreshResult {
         let mut refresh = match self.inner.refresh.lock() {
             Ok(refresh) => refresh,
             Err(_) => {
@@ -624,15 +656,39 @@ impl LocalService {
         };
         if refresh.active.is_some() {
             refresh.pending = true;
+            refresh.pending_trigger = Some(trigger);
             return RefreshResult {
                 accepted: false,
                 pending: true,
                 revision: self.inner.state.current_revision().unwrap_or(0),
             };
         }
+        if self
+            .inner
+            .state
+            .diagnostic_snapshot()
+            .ok()
+            .flatten()
+            .is_none()
+        {
+            let _ = self.inner.backend.complete_diagnostics();
+        }
         let cancel = Arc::new(AtomicBool::new(false));
+        let attempt = self
+            .inner
+            .state
+            .begin_diagnostic_attempt(
+                DiagnosticAttemptKind::Refresh,
+                trigger,
+                DiagnosticSource::System,
+                None,
+                DiagnosticMode::Required,
+                None,
+            )
+            .ok();
         refresh.active = Some(ActiveRefresh {
             cancel: cancel.clone(),
+            started_at: now_rfc3339(),
         });
         drop(refresh);
 
@@ -648,46 +704,89 @@ impl LocalService {
         self.emit(components.to_vec());
 
         let service = self.clone();
-        let spawned = thread::Builder::new()
-            .name("quota-refresh".to_owned())
-            .spawn(move || {
-                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    service.run_refresh(cancel);
-                }));
-                if result.is_err() {
-                    let unavailable = || Err(BackendError::unavailable());
-                    for (component, error) in [
-                        (ComponentName::Quota, unavailable()),
-                        (ComponentName::Usage, unavailable()),
-                        (ComponentName::Account, unavailable()),
-                        (ComponentName::Pricing, unavailable()),
-                    ] {
-                        service.apply_component_result(component, error);
+        #[cfg(test)]
+        let force_spawn_failure = self
+            .inner
+            .fail_next_refresh_spawn
+            .swap(false, Ordering::AcqRel);
+        #[cfg(not(test))]
+        let force_spawn_failure = false;
+        let spawned = !force_spawn_failure
+            && thread::Builder::new()
+                .name("quota-refresh".to_owned())
+                .spawn(move || {
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        service.run_refresh(cancel, attempt);
+                    }));
+                    if result.is_err() {
+                        let unavailable = || Err(BackendError::unavailable());
+                        for (component, error) in [
+                            (ComponentName::Quota, unavailable()),
+                            (ComponentName::Usage, unavailable()),
+                            (ComponentName::Account, unavailable()),
+                            (ComponentName::Pricing, unavailable()),
+                        ] {
+                            service.apply_component_result(component, error);
+                        }
+                        if let Some(attempt) = attempt {
+                            let _ = service
+                                .inner
+                                .state
+                                .finish_diagnostic_attempt_with_interrupted_children(
+                                    attempt,
+                                    &DiagnosticAttemptCompletion {
+                                        outcome: DiagnosticAttemptOutcome::Failed,
+                                        code: Some(DiagnosticAttemptCode::Unavailable),
+                                        recovery: DiagnosticRecovery::Retry,
+                                        metrics: [("failed_components".to_owned(), 4)].into(),
+                                    },
+                                );
+                        }
                     }
-                }
-                let rerun = service
-                    .inner
-                    .refresh
-                    .lock()
-                    .map(|mut refresh| {
-                        refresh.active = None;
-                        let rerun = refresh.pending;
-                        refresh.pending = false;
-                        rerun
-                    })
-                    .unwrap_or(false);
-                service.emit(vec![
-                    ComponentName::Quota,
-                    ComponentName::Usage,
-                    ComponentName::Account,
-                    ComponentName::Pricing,
-                ]);
-                if rerun && !service.is_shutdown() {
-                    let _ = service.request_refresh();
-                }
-            })
-            .is_ok();
+                    if let Ok(report) = service.inner.backend.complete_diagnostics() {
+                        let _ = service.inner.backend.publish_device_health(&report);
+                    }
+                    let rerun = service
+                        .inner
+                        .refresh
+                        .lock()
+                        .map(|mut refresh| {
+                            refresh.active = None;
+                            let rerun = refresh.pending.then_some(
+                                refresh
+                                    .pending_trigger
+                                    .take()
+                                    .unwrap_or(DiagnosticAttemptTrigger::Scheduled),
+                            );
+                            refresh.pending = false;
+                            rerun
+                        })
+                        .unwrap_or(None);
+                    service.emit(vec![
+                        ComponentName::Quota,
+                        ComponentName::Usage,
+                        ComponentName::Account,
+                        ComponentName::Pricing,
+                    ]);
+                    if let Some(trigger) = rerun
+                        && !service.is_shutdown()
+                    {
+                        let _ = service.request_refresh_with_trigger(trigger);
+                    }
+                })
+                .is_ok();
         if !spawned {
+            if let Some(attempt) = attempt {
+                let _ = self.inner.state.finish_diagnostic_attempt(
+                    attempt,
+                    &DiagnosticAttemptCompletion {
+                        outcome: DiagnosticAttemptOutcome::Failed,
+                        code: Some(DiagnosticAttemptCode::Unavailable),
+                        recovery: DiagnosticRecovery::Retry,
+                        metrics: Default::default(),
+                    },
+                );
+            }
             if let Ok(mut refresh) = self.inner.refresh.lock() {
                 refresh.active = None;
             }
@@ -707,7 +806,7 @@ impl LocalService {
         }
     }
 
-    fn run_refresh(&self, cancel: Arc<AtomicBool>) {
+    fn run_refresh(&self, cancel: Arc<AtomicBool>, attempt: Option<DiagnosticAttemptHandle>) {
         let outcome = if cancel.load(Ordering::Acquire) || self.is_shutdown() {
             let cancelled = || Err(BackendError::cancelled());
             RefreshOutcome {
@@ -718,8 +817,16 @@ impl LocalService {
                 overview: None,
             }
         } else {
-            self.inner.backend.refresh(cancel)
+            self.inner.backend.refresh(cancel.clone())
         };
+        let session_required = self
+            .inner
+            .state
+            .session_json()
+            .ok()
+            .flatten()
+            .is_some_and(|value| value.get("status").and_then(Value::as_str) == Some("active"));
+        let completion = refresh_attempt_completion(&outcome, session_required, cancel.as_ref());
         self.apply_component_result(ComponentName::Quota, outcome.quota);
         self.apply_component_result(ComponentName::Usage, outcome.usage);
         let account_result = match self.inner.state.session_json().ok().flatten() {
@@ -736,6 +843,12 @@ impl LocalService {
         self.apply_component_result(ComponentName::Pricing, outcome.pricing);
         if let Some(overview) = outcome.overview {
             let _ = self.inner.state.set_overview(&overview);
+        }
+        if let Some(attempt) = attempt {
+            let _ = self
+                .inner
+                .state
+                .finish_diagnostic_attempt(attempt, &completion);
         }
     }
 
@@ -974,7 +1087,7 @@ impl LocalService {
                     false,
                 );
                 self.emit(vec![ComponentName::Account]);
-                let _ = self.request_refresh();
+                let _ = self.request_refresh_with_trigger(DiagnosticAttemptTrigger::AccountChange);
             }
             Err(error) => {
                 if let Some(pending) =
@@ -1065,6 +1178,8 @@ impl LocalService {
                     .unwrap_or(false)
                 {
                     let _ = self.set_signed_out();
+                    let _ =
+                        self.request_refresh_with_trigger(DiagnosticAttemptTrigger::AccountChange);
                 }
             }
             Err(error) => {
@@ -1125,6 +1240,81 @@ impl LocalService {
         self.inner
             .sink
             .event(IpcEvent::state_changed(revision, components));
+    }
+}
+
+fn refresh_attempt_completion(
+    outcome: &RefreshOutcome,
+    account_required: bool,
+    cancel: &AtomicBool,
+) -> DiagnosticAttemptCompletion {
+    let mut errors = [&outcome.quota, &outcome.usage, &outcome.pricing]
+        .into_iter()
+        .filter_map(|result| result.as_ref().err())
+        .collect::<Vec<_>>();
+    if account_required && let Err(error) = &outcome.account {
+        errors.push(error);
+    }
+    let cancelled = cancel.load(Ordering::Acquire)
+        || errors
+            .iter()
+            .any(|error| error.error.code == ErrorCode::Cancelled);
+    let (outcome, code, recovery) = if cancelled {
+        (
+            DiagnosticAttemptOutcome::Cancelled,
+            Some(DiagnosticAttemptCode::Cancelled),
+            DiagnosticRecovery::None,
+        )
+    } else if let Some(error) = errors.first() {
+        (
+            DiagnosticAttemptOutcome::Failed,
+            Some(diagnostic_attempt_code(error.error.code)),
+            diagnostic_recovery(error.error.recovery_action),
+        )
+    } else {
+        (
+            DiagnosticAttemptOutcome::Success,
+            None,
+            DiagnosticRecovery::None,
+        )
+    };
+    DiagnosticAttemptCompletion {
+        outcome,
+        code,
+        recovery,
+        metrics: [("failed_components".to_owned(), errors.len() as i64)].into(),
+    }
+}
+
+fn diagnostic_attempt_code(code: ErrorCode) -> DiagnosticAttemptCode {
+    match code {
+        ErrorCode::Cancelled => DiagnosticAttemptCode::Cancelled,
+        ErrorCode::AuthenticationRequired | ErrorCode::StaleGeneration => {
+            DiagnosticAttemptCode::AuthenticationRequired
+        }
+        ErrorCode::DeviceDeleted => DiagnosticAttemptCode::DeviceDeleted,
+        ErrorCode::NetworkError => DiagnosticAttemptCode::NetworkError,
+        ErrorCode::InvalidResponse => DiagnosticAttemptCode::InvalidResponse,
+        ErrorCode::InvalidState | ErrorCode::ClientUpgradeRequired => {
+            DiagnosticAttemptCode::InvalidState
+        }
+        ErrorCode::ProviderError => DiagnosticAttemptCode::ProviderError,
+        ErrorCode::InvalidRequest
+        | ErrorCode::UnsupportedOperation
+        | ErrorCode::Busy
+        | ErrorCode::Unavailable
+        | ErrorCode::Internal => DiagnosticAttemptCode::Unavailable,
+    }
+}
+
+fn diagnostic_recovery(recovery: RecoveryAction) -> DiagnosticRecovery {
+    match recovery {
+        RecoveryAction::None => DiagnosticRecovery::None,
+        RecoveryAction::Retry => DiagnosticRecovery::Retry,
+        RecoveryAction::Login => DiagnosticRecovery::Login,
+        RecoveryAction::ConfigureProvider => DiagnosticRecovery::ConfigureProvider,
+        RecoveryAction::Upgrade => DiagnosticRecovery::Upgrade,
+        RecoveryAction::Reinstall => DiagnosticRecovery::Reinstall,
     }
 }
 
@@ -1342,6 +1532,51 @@ mod tests {
         }
     }
 
+    struct PanicChildBackend {
+        state: Arc<StateStore>,
+    }
+
+    impl LocalBackend for PanicChildBackend {
+        fn refresh(&self, _: Arc<AtomicBool>) -> RefreshOutcome {
+            let (parent, _) = self
+                .state
+                .running_refresh_attempt()
+                .expect("running refresh query")
+                .expect("running refresh");
+            self.state
+                .begin_diagnostic_attempt(
+                    DiagnosticAttemptKind::UsageScan,
+                    DiagnosticAttemptTrigger::Recheck,
+                    DiagnosticSource::ThisDevice,
+                    Some("agent:codex"),
+                    DiagnosticMode::Required,
+                    Some(parent),
+                )
+                .expect("child attempt");
+            panic!("synthetic child panic");
+        }
+
+        fn diagnose(&self) -> Result<DiagnosticReport, BackendError> {
+            Err(BackendError::unavailable())
+        }
+
+        fn login(&self, _: &str, _: Arc<AtomicBool>) -> Result<LoginOutcome, BackendError> {
+            Err(BackendError::unavailable())
+        }
+
+        fn logout(&self, _: &Value) -> Result<(), BackendError> {
+            Err(BackendError::unavailable())
+        }
+
+        fn validate_provider_browser_session(
+            &self,
+            _: crate::catalog::ProviderId,
+            _: &str,
+        ) -> Result<crate::providers::ValidatedBrowserSession, BackendError> {
+            Err(BackendError::unavailable())
+        }
+    }
+
     fn browser_session_request(operation: &str, cookie_header: &str) -> IpcRequest {
         serde_json::from_value(serde_json::json!({
             "type": "request",
@@ -1452,6 +1687,160 @@ mod tests {
         assert!(service.inner.refresh.lock().expect("lock").active.is_none());
         service.shutdown();
         drop(service);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn refresh_spawn_failure_finalizes_the_started_attempt() {
+        let root = std::env::temp_dir().join(format!("quota-refresh-spawn-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        let service = LocalService::new(
+            state.clone(),
+            Arc::new(RecordingSink::default()),
+            Arc::new(UnavailableBackend),
+        );
+        service
+            .inner
+            .fail_next_refresh_spawn
+            .store(true, Ordering::Release);
+
+        let result = service.request_refresh_with_trigger(DiagnosticAttemptTrigger::Recheck);
+
+        assert!(!result.accepted);
+        assert!(!result.pending);
+        assert!(
+            service
+                .inner
+                .refresh
+                .lock()
+                .expect("refresh")
+                .active
+                .is_none()
+        );
+        let facts = state
+            .diagnostic_attempt_facts(
+                DiagnosticAttemptKind::Refresh,
+                DiagnosticSource::System,
+                None,
+            )
+            .expect("refresh attempt facts");
+        let attempt = facts.latest_completed.expect("completed attempt");
+        assert_eq!(attempt.trigger, DiagnosticAttemptTrigger::Recheck);
+        assert_eq!(attempt.outcome, DiagnosticAttemptOutcome::Failed);
+        assert_eq!(attempt.code, Some(DiagnosticAttemptCode::Unavailable));
+        assert_eq!(attempt.recovery, DiagnosticRecovery::Retry);
+        assert!(facts.latest_success.is_none());
+
+        service.shutdown();
+        drop(service);
+        drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn refresh_panic_interrupts_running_child_attempts() {
+        let root = std::env::temp_dir().join(format!("quota-refresh-panic-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        let service = LocalService::new(
+            state.clone(),
+            Arc::new(RecordingSink::default()),
+            Arc::new(PanicChildBackend {
+                state: state.clone(),
+            }),
+        );
+
+        let result = service.request_refresh_with_trigger(DiagnosticAttemptTrigger::Recheck);
+        assert!(result.accepted);
+        let deadline = std::time::Instant::now() + Duration::from_secs(1);
+        while service
+            .inner
+            .refresh
+            .lock()
+            .expect("refresh")
+            .active
+            .is_some()
+            && std::time::Instant::now() < deadline
+        {
+            thread::yield_now();
+        }
+        assert!(
+            service
+                .inner
+                .refresh
+                .lock()
+                .expect("refresh")
+                .active
+                .is_none()
+        );
+
+        let child = state
+            .diagnostic_attempt_facts(
+                DiagnosticAttemptKind::UsageScan,
+                DiagnosticSource::ThisDevice,
+                Some("agent:codex"),
+            )
+            .expect("child facts")
+            .latest_completed
+            .expect("completed child");
+        assert_eq!(child.outcome, DiagnosticAttemptOutcome::Interrupted);
+        assert_eq!(child.code, Some(DiagnosticAttemptCode::ProcessInterrupted));
+        assert_eq!(child.recovery, DiagnosticRecovery::Retry);
+
+        service.shutdown();
+        drop(service);
+        drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn diagnose_during_refresh_uses_the_last_completed_snapshot() {
+        let root = std::env::temp_dir().join(format!("quota-service-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        let backend = Arc::new(crate::service::backend::NativeBackend::new(
+            state.clone(),
+            Arc::new(crate::relay::RelayClient::new().expect("relay")),
+            "QuotaTest",
+            "test",
+        ));
+        let baseline = backend
+            .complete_diagnostic_report()
+            .expect("baseline diagnostics");
+        state
+            .set_component(
+                ComponentName::Usage,
+                ComponentStatus::Error,
+                None,
+                None,
+                Some(IpcError::new(ErrorCode::Internal, RecoveryAction::Retry)),
+                true,
+            )
+            .expect("intermediate state");
+        let service = LocalService::new(state.clone(), Arc::new(RecordingSink::default()), backend);
+        service.inner.refresh.lock().expect("refresh").active = Some(ActiveRefresh {
+            cancel: Arc::new(AtomicBool::new(false)),
+            started_at: "2026-08-15T08:00:00Z".into(),
+        });
+        let request: IpcRequest = serde_json::from_value(serde_json::json!({
+            "type": "request",
+            "request_id": "diagnose",
+            "operation": "diagnose",
+            "payload": {}
+        }))
+        .expect("request");
+
+        let response = service.handle(request);
+        let report: DiagnosticReport =
+            serde_json::from_value(response.result.expect("result")).expect("report");
+
+        assert_eq!(report.refresh.phase, DiagnosticRefreshPhase::Running);
+        assert_eq!(report.refresh.revision, baseline.refresh.revision);
+        assert_eq!(report.summary.operation, baseline.summary.operation);
+        service.shutdown();
+        drop(service);
+        drop(state);
         fs::remove_dir_all(root).expect("cleanup");
     }
 
@@ -1630,6 +2019,7 @@ mod tests {
         let cancel = Arc::new(AtomicBool::new(false));
         service.inner.refresh.lock().expect("refresh").active = Some(ActiveRefresh {
             cancel: cancel.clone(),
+            started_at: now_rfc3339(),
         });
         let request: IpcRequest = serde_json::from_value(serde_json::json!({
             "type": "request",

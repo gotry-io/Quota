@@ -243,6 +243,98 @@ export type Account = z.infer<typeof AccountSchema>;
 export const DeviceStatusSchema = z.enum(["active", "offline", "signed_out"]);
 export type DeviceStatus = z.infer<typeof DeviceStatusSchema>;
 
+export const DeviceHealthClientProductSchema = z.enum(["quotabar", "quotacli"]);
+export type DeviceHealthClientProduct = z.infer<typeof DeviceHealthClientProductSchema>;
+
+export const DeviceHealthOperationSchema = z.enum(["healthy", "degraded", "blocked"]);
+export type DeviceHealthOperation = z.infer<typeof DeviceHealthOperationSchema>;
+
+export const DeviceHealthDataStateSchema = z.enum([
+  "current",
+  "stale",
+  "partial",
+  "empty",
+  "unknown",
+]);
+export type DeviceHealthDataState = z.infer<typeof DeviceHealthDataStateSchema>;
+
+export const DeviceHealthAttentionSchema = z.enum(["none", "automatic", "optional", "required"]);
+export type DeviceHealthAttention = z.infer<typeof DeviceHealthAttentionSchema>;
+
+export const DeviceHealthCodeSchema = z.enum([
+  "refresh_failed",
+  "quota_collection_failed",
+  "usage_scan_partial",
+  "usage_upload_failed",
+  "account_sync_failed",
+  "pricing_refresh_failed",
+  "process_interrupted",
+  "local_state_invalid",
+]);
+export type DeviceHealthCode = z.infer<typeof DeviceHealthCodeSchema>;
+
+export const DeviceHealthSummarySchema = z
+  .object({
+    operation: DeviceHealthOperationSchema,
+    data: DeviceHealthDataStateSchema,
+    attention: DeviceHealthAttentionSchema,
+  })
+  .strict();
+export type DeviceHealthSummary = z.infer<typeof DeviceHealthSummarySchema>;
+
+const ClientVersionSchema = z
+  .string()
+  .min(1)
+  .max(32)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9.+_-]*$/);
+
+export const DeviceHealthUploadRequestSchema = z
+  .object({
+    protocol_version: z.literal(MANAGED_DATA_PROTOCOL_VERSION),
+    schema_version: z.literal(1),
+    client_product: DeviceHealthClientProductSchema,
+    client_version: ClientVersionSchema,
+    platform: PlatformSchema,
+    observed_at: Rfc3339InstantSchema,
+    refresh_revision: SafeNonnegativeIntegerSchema,
+    last_completed_refresh_at: Rfc3339InstantSchema.nullable(),
+    last_successful_account_sync_at: Rfc3339InstantSchema.nullable(),
+    summary: DeviceHealthSummarySchema,
+    top_code: DeviceHealthCodeSchema.nullable(),
+    consecutive_failures: SafeNonnegativeIntegerSchema.max(1_000),
+    usage_upload_enabled: z.boolean(),
+  })
+  .strict();
+export type DeviceHealthUploadRequest = z.infer<typeof DeviceHealthUploadRequestSchema>;
+
+export const DeviceHealthUploadResponseSchema = z
+  .object({
+    protocol_version: z.literal(MANAGED_DATA_PROTOCOL_VERSION),
+    status: z.enum(["updated", "ignored_stale"]),
+    received_at: Rfc3339InstantSchema,
+    fresh_until: Rfc3339InstantSchema,
+  })
+  .strict();
+export type DeviceHealthUploadResponse = z.infer<typeof DeviceHealthUploadResponseSchema>;
+
+export const AccountDeviceHealthSchema = DeviceHealthUploadRequestSchema.omit({
+  protocol_version: true,
+})
+  .extend({
+    received_at: Rfc3339InstantSchema,
+    fresh_until: Rfc3339InstantSchema,
+  })
+  .superRefine((health, context) => {
+    if (Date.parse(health.fresh_until) < Date.parse(health.received_at)) {
+      context.addIssue({
+        code: "custom",
+        path: ["fresh_until"],
+        message: "Device Health freshness must not precede server receipt.",
+      });
+    }
+  });
+export type AccountDeviceHealth = z.infer<typeof AccountDeviceHealthSchema>;
+
 export const AccountDeviceSchema = z
   .object({
     device_id: OpaqueIdSchema,
@@ -266,6 +358,19 @@ export const AccountDeviceSchema = z
     }
   });
 export type AccountDevice = z.infer<typeof AccountDeviceSchema>;
+
+export const AccountDeviceWithHealthSchema = AccountDeviceSchema.extend({
+  health: AccountDeviceHealthSchema.nullable(),
+}).superRefine((device, context) => {
+  if (device.health !== null && device.health.platform !== device.platform) {
+    context.addIssue({
+      code: "custom",
+      path: ["health", "platform"],
+      message: "Device Health platform must match the Account Device.",
+    });
+  }
+});
+export type AccountDeviceWithHealth = z.infer<typeof AccountDeviceWithHealthSchema>;
 
 export const AccountResponseSchema = z
   .object({
@@ -1422,6 +1527,15 @@ export const AccountSummaryV3Schema = AccountSummarySchema.extend({
   usage: AccountUsageSummaryV3Schema,
 });
 export type AccountSummaryV3 = z.infer<typeof AccountSummaryV3Schema>;
+
+/**
+ * Opt-in managed-data v3 summary returned only for `device_health=1`.
+ * The shipped default v3 response intentionally remains byte-shape compatible.
+ */
+export const AccountSummaryV3DeviceHealthSchema = AccountSummaryV3Schema.extend({
+  devices: z.array(AccountDeviceWithHealthSchema).max(256),
+});
+export type AccountSummaryV3DeviceHealth = z.infer<typeof AccountSummaryV3DeviceHealthSchema>;
 
 export const PublicProfileSlugSchema = z.string().regex(/^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/);
 export type PublicProfileSlug = z.infer<typeof PublicProfileSlugSchema>;

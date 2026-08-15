@@ -9,6 +9,64 @@ import Testing
 @MainActor
 struct AppModelTests {
   @Test
+  func remoteDeviceHealthPresentationUsesAllAxesAndServerFreshness() {
+    let now = Fixtures.date("2026-08-15T08:10:00Z")
+    func device(
+      operation: AccountDeviceHealthOperation = .healthy,
+      data: AccountDeviceHealthDataState = .current,
+      attention: AccountDeviceHealthAttention = .none,
+      freshUntil: Date? = Fixtures.date("2026-08-15T08:20:00Z"),
+      status: AccountDeviceStatus = .active
+    ) -> AccountDevice {
+      AccountDevice(
+        deviceID: "device_01",
+        displayName: "Studio Mac",
+        platform: .macos,
+        deviceGeneration: 1,
+        status: status,
+        createdAt: now.addingTimeInterval(-86_400),
+        lastLoginAt: now.addingTimeInterval(-600),
+        lastSeenAt: now.addingTimeInterval(-300),
+        signedOutAt: status == .signedOut ? now.addingTimeInterval(-60) : nil,
+        health: freshUntil.map { freshUntil in
+          AccountDeviceHealth(
+            clientProduct: .quotaBar,
+            clientVersion: "0.0.16",
+            platform: .macos,
+            observedAt: now.addingTimeInterval(-300),
+            refreshRevision: 9,
+            lastCompletedRefreshAt: now.addingTimeInterval(-300),
+            lastSuccessfulAccountSyncAt: nil,
+            summary: AccountDeviceHealthSummary(
+              operation: operation,
+              data: data,
+              attention: attention
+            ),
+            topCode: nil,
+            consecutiveFailures: 0,
+            usageUploadEnabled: true,
+            receivedAt: now.addingTimeInterval(-295),
+            freshUntil: freshUntil
+          )
+        }
+      )
+    }
+
+    #expect(RemoteDeviceHealthStatus.status(for: device(), now: now) == .healthy)
+    #expect(RemoteDeviceHealthStatus.status(for: device(data: .partial), now: now) == .needsAttention)
+    #expect(
+      RemoteDeviceHealthStatus.status(for: device(attention: .required), now: now)
+        == .needsAttention)
+    #expect(
+      RemoteDeviceHealthStatus.status(
+        for: device(freshUntil: now.addingTimeInterval(-1)), now: now) == .notRecentlyActive)
+    #expect(RemoteDeviceHealthStatus.status(for: device(freshUntil: nil), now: now) == .unknown)
+    #expect(
+      RemoteDeviceHealthStatus.status(
+        for: device(freshUntil: nil, status: .signedOut), now: now) == .signedOut)
+  }
+
+  @Test
   func restoreSignedOutWithoutSession() async throws {
     let publisher = RecordingWidgetSnapshotPublisher()
     let model = makeModel(session: nil, cache: nil, exchanges: [], widgetPublisher: publisher)

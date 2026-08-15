@@ -39,11 +39,22 @@ schedule, read the GitHub Releases appcast. Local `swift run` binaries are not p
 check for updates.
 
 Settings includes a **Diagnostics** action backed by the private `diagnose` IPC operation. It copies
-the same bounded, redacted report consumed by Linux `quotacli doctor`, covering provider/quota
-collection, Usage, pricing, account state, and synchronization. Swift strictly decodes the fixed
-report shape and only renders safe status, counters, and recovery messages; it never reads SQLite or
-source logs. Raw paths, filenames, model lists, prompts, completions, session identifiers, device
-IDs, credentials, and tokens are excluded.
+the same bounded, redacted v2 report consumed by Linux `quotacli doctor`. The service evaluates
+Quota/Usage surfaces and supplies source-scoped checks and root-cause findings; Swift strictly
+decodes and renders that policy. **Show in Overview** remains presentation-only and never requests
+local collection. Account provider data remains healthy without a matching local login, while an
+explicitly saved local provider setup is a required source. Recheck requests the real single-flight
+refresh and waits for a newer completed diagnostic revision; if it is still running after the UI
+wait, the last completed report stays visible with that phase. Raw paths, filenames, model lists,
+prompts, completions, session or device identifiers, credentials, tokens, raw responses, and parser
+excerpts are excluded from both text and JSON copies.
+
+The report's folded Recent Activity comes from the service's seven-day, 50,000-row structured
+attempt journal; the copied support projection is capped independently. After an authenticated
+completed refresh, the service also uploads a sanitized latest Device Health snapshot on change or
+heartbeat. Account Devices opt into that strict managed-data v3 shape and show app version,
+platform, server-authoritative last report/refresh/sync, and honest Healthy/Needs attention/Not
+recently active states. QuotaBar cannot alter another Device or request credentials for it.
 
 Provider API keys entered in Settings go directly over child stdin. Swift does not put them in argv,
 UserDefaults, logs, or response models; subsequent state exposes only a masked tip.

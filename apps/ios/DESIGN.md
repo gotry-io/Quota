@@ -23,8 +23,8 @@ Core rules:
 6. Widgets render only the non-secret App Group snapshot. They never authenticate, call Relay, or
    invent a second data path.
 
-This slice is Connect Account → Overview, plus Home Screen / Lock Screen overview widgets. It does
-not ship the later Usage / Account tab shell.
+This slice is Connect Account → Overview, including a read-only Device Health card, plus Home Screen
+/ Lock Screen overview widgets. It does not ship the later Usage / Account tab shell.
 
 ## Surfaces
 
@@ -74,7 +74,13 @@ Body, in order:
    time. Remaining has no "left" or "remaining" suffix. Budget windows with an amount use
    `71% · $3.75`, percent-only windows use `71%`, and balance-only windows use **Balance** plus the
    unit amount.
-4. Today: input tokens, output tokens, and API-equivalent cost. Complete cost is `$X.XX`, partial
+4. Devices: display name, platform, app product/version, and compact server-authoritative last
+   report/refresh/sync. Fresh healthy/current-or-empty reports with none/automatic attention are
+   **Healthy**. Fresh problem states are **Needs attention** or **Check device** and say **Review
+   Diagnostics on this device**. Expired or absent reports are **Not recently active** or
+   **Unknown**; never infer failure from sleep, shutdown, or a closed app, and never show raw Device
+   IDs or request a remote Device's credentials.
+5. Today: input tokens, output tokens, and API-equivalent cost. Complete cost is `$X.XX`, partial
    is `≥ $X.XX`, unavailable is **— unpriced**.
 
 Pull to refresh runs one Today fetch. A fetch in flight ignores additional refresh requests.
@@ -140,6 +146,8 @@ Rules:
 | Loading, no cache | Centered progress and **Loading account…** |
 | Empty quota | **No quota reported yet.** Collection happens on a Mac or Linux device. |
 | Empty Today | **No Usage for Today.** |
+| Device Health expired/absent | **Not recently active** / **Unknown**, with last-seen context when available |
+| Device needs attention | Keep Account data visible and direct the user to Diagnostics on that Device |
 | Offline or failed refresh, cache present | Last-good content plus **Showing saved account data. Could not refresh.** |
 | Offline or failed refresh, no cache | Empty Overview plus **Could not refresh account data. Pull to try again.** |
 | Expired session | Connect Account with **Session expired. Connect Account to continue.** |

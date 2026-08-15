@@ -26,6 +26,10 @@ struct OverviewView: View {
           }
         }
 
+        if let devices = model.summary?.devices, !devices.isEmpty {
+          AccountDevicesCard(devices: devices)
+        }
+
         TodayUsageCard(summary: model.summary)
       }
       .frame(maxWidth: QuotaTheme.contentMaxWidth, alignment: .leading)
@@ -112,6 +116,101 @@ struct OverviewView: View {
     .padding(16)
     .frame(maxWidth: .infinity, alignment: .leading)
     .quotaSurface()
+  }
+}
+
+enum RemoteDeviceHealthStatus: String, Equatable, Sendable {
+  case healthy = "Healthy"
+  case needsAttention = "Needs attention"
+  case checkDevice = "Check device"
+  case notRecentlyActive = "Not recently active"
+  case unknown = "Unknown"
+  case signedOut = "Signed out"
+
+  static func status(for device: AccountDevice, now: Date) -> Self {
+    if device.status == .signedOut { return .signedOut }
+    guard let health = device.health else { return .unknown }
+    guard now <= health.freshUntil else { return .notRecentlyActive }
+    guard health.summary.operation == .healthy,
+      health.summary.data == .current || health.summary.data == .empty
+    else { return .needsAttention }
+    switch health.summary.attention {
+    case .none, .automatic: return .healthy
+    case .optional: return .checkDevice
+    case .required: return .needsAttention
+    }
+  }
+}
+
+struct AccountDevicesCard: View {
+  let devices: [AccountDevice]
+
+  var body: some View {
+    let now = Date()
+    VStack(alignment: .leading, spacing: 12) {
+      Text("Devices")
+        .font(.headline)
+        .accessibilityAddTraits(.isHeader)
+      ForEach(Array(devices.enumerated()), id: \.element.id) { index, device in
+        if index > 0 { Divider() }
+        deviceRow(device, now: now)
+      }
+    }
+    .padding(16)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .quotaSurface()
+  }
+
+  private func deviceRow(_ device: AccountDevice, now: Date) -> some View {
+    let status = RemoteDeviceHealthStatus.status(for: device, now: now)
+    return VStack(alignment: .leading, spacing: 5) {
+      HStack(alignment: .firstTextBaseline, spacing: 8) {
+        Text(device.displayName)
+          .font(.subheadline.weight(.medium))
+        Spacer(minLength: 8)
+        Text(status.rawValue)
+          .font(.footnote.weight(.medium))
+          .foregroundStyle(.secondary)
+          .multilineTextAlignment(.trailing)
+      }
+      Text(deviceDetails(device, now: now))
+        .font(.footnote.monospacedDigit())
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+      if status == .needsAttention || status == .checkDevice {
+        Text("Review Diagnostics on this device.")
+          .font(.footnote)
+          .foregroundStyle(.secondary)
+      }
+    }
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel(
+      "\(device.displayName), \(status.rawValue), \(deviceDetails(device, now: now))"
+    )
+  }
+
+  private func deviceDetails(_ device: AccountDevice, now: Date) -> String {
+    let platform = switch device.platform {
+    case .macos: "macOS"
+    case .linux: "Linux"
+    case .windows: "Windows"
+    }
+    guard let health = device.health else {
+      if let seenAt = device.lastSeenAt ?? device.signedOutAt {
+        return "\(platform) · Last seen \(QuotaFormat.refreshedAge(seenAt, now: now)) ago"
+      }
+      return "\(platform) · Never reported"
+    }
+    let product = health.clientProduct == .quotaBar ? "QuotaBar" : "QuotaCLI"
+    var parts = [platform, "\(product) \(health.clientVersion)"]
+    parts.append("Report \(QuotaFormat.refreshedAge(health.receivedAt, now: now)) ago")
+    if let refresh = health.lastCompletedRefreshAt {
+      parts.append("Refresh \(QuotaFormat.refreshedAge(refresh, now: now)) ago")
+    }
+    if let sync = health.lastSuccessfulAccountSyncAt {
+      parts.append("Sync \(QuotaFormat.refreshedAge(sync, now: now)) ago")
+    }
+    return parts.joined(separator: " · ")
   }
 }
 

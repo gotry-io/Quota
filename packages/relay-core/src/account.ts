@@ -1,4 +1,6 @@
 import type {
+  AccountDeviceHealth,
+  DeviceHealthUploadRequest,
   QuotaSnapshotV3 as QuotaSnapshot,
   QuotaSnapshotEnvelopeV3,
 } from "@gotry-io/quota-protocol";
@@ -42,6 +44,13 @@ export interface DeviceRecord {
   deleted_at: string | null;
   deleted_before: string | null;
 }
+
+export interface StoredDeviceHealth extends AccountDeviceHealth {
+  device_id: string;
+  device_generation: number;
+}
+
+export type DeviceHealthWriteOutcome = "updated" | "ignored_stale" | "unauthorized";
 
 export interface AccountPrincipal {
   kind: "account";
@@ -295,6 +304,13 @@ export interface AccountState {
     platform: string,
     updatedAt: string,
   ): Promise<boolean>;
+  recordDeviceHealth(
+    principal: DevicePrincipal,
+    health: DeviceHealthUploadRequest,
+    receivedAt: string,
+    freshUntil: string,
+  ): Promise<DeviceHealthWriteOutcome>;
+  listDeviceHealth(accountId: string): Promise<StoredDeviceHealth[]>;
   deleteDeviceData(
     accountId: string,
     deviceId: string,

@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use crate::state::StateError;
 
-const CURRENT_SCHEMA: i64 = 6;
+const CURRENT_SCHEMA: i64 = 8;
 
 pub fn apply(conn: &mut Connection) -> Result<(), StateError> {
     conn.execute_batch(
@@ -32,6 +32,8 @@ pub fn apply(conn: &mut Connection) -> Result<(), StateError> {
             4 => migration_v4(&tx)?,
             5 => migration_v5(&tx)?,
             6 => migration_v6(&tx)?,
+            7 => migration_v7(&tx)?,
+            8 => migration_v8(&tx)?,
             _ => return Err(StateError::InvalidState),
         }
         tx.execute(
@@ -253,6 +255,94 @@ fn migration_v6(tx: &Transaction<'_>) -> Result<(), StateError> {
     Ok(())
 }
 
+fn migration_v7(tx: &Transaction<'_>) -> Result<(), StateError> {
+    tx.execute_batch(
+        "CREATE TABLE diagnostic_snapshot (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            payload_json TEXT NOT NULL,
+            completed_at TEXT NOT NULL
+        );",
+    )?;
+    Ok(())
+}
+
+fn migration_v8(tx: &Transaction<'_>) -> Result<(), StateError> {
+    tx.execute_batch(
+        "CREATE TABLE diagnostic_attempts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            parent_refresh_id INTEGER REFERENCES diagnostic_attempts(id) ON DELETE SET NULL,
+            kind TEXT NOT NULL CHECK (kind IN (
+                'refresh', 'quota_collection', 'usage_scan', 'usage_upload',
+                'account_sync', 'pricing_refresh', 'device_health_upload'
+            )),
+            trigger TEXT NOT NULL CHECK (trigger IN (
+                'manual', 'scheduled', 'startup', 'recheck', 'settings_change', 'account_change'
+            )),
+            source TEXT NOT NULL CHECK (source IN ('this_device', 'account', 'system')),
+            subject TEXT CHECK (subject IS NULL OR (
+                length(subject) BETWEEN 7 AND 96
+                AND (subject LIKE 'provider:%' OR subject LIKE 'agent:%')
+                AND subject NOT GLOB '*[^a-z0-9_:]*'
+            )),
+            mode TEXT NOT NULL CHECK (mode IN ('inactive', 'opportunistic', 'required')),
+            started_at TEXT NOT NULL,
+            completed_at TEXT,
+            duration_ms INTEGER CHECK (duration_ms IS NULL OR duration_ms BETWEEN 0 AND 86400000),
+            outcome TEXT CHECK (outcome IS NULL OR outcome IN (
+                'success', 'partial', 'no_work', 'failed', 'interrupted', 'cancelled'
+            )),
+            code TEXT CHECK (code IS NULL OR code IN (
+                'process_interrupted', 'cancelled', 'no_work', 'authentication_required',
+                'network_error', 'unavailable', 'invalid_response', 'invalid_state',
+                'provider_error', 'partial_source', 'malformed_data',
+                'truncated_active_source', 'invalid_usage_batch', 'unrepresentable_hour',
+                'device_deleted', 'upload_disabled', 'signed_out'
+            )),
+            recovery TEXT NOT NULL CHECK (recovery IN (
+                'none', 'automatic', 'login', 'configure_provider', 'retry',
+                'update_source', 'check_access', 'upgrade', 'reinstall', 'feedback'
+            )),
+            metrics_json TEXT NOT NULL DEFAULT '{}',
+            start_revision INTEGER NOT NULL CHECK (start_revision >= 0),
+            end_revision INTEGER CHECK (end_revision IS NULL OR end_revision >= 0)
+        );
+        CREATE INDEX diagnostic_attempts_recent_idx
+            ON diagnostic_attempts(started_at DESC, id DESC);
+        CREATE INDEX diagnostic_attempts_parent_idx
+            ON diagnostic_attempts(parent_refresh_id, id);
+        INSERT INTO metadata(key, value) VALUES ('attempt_history_truncated', '0')
+            ON CONFLICT(key) DO NOTHING;",
+    )?;
+
+    // QuotaBar 0.0.15 may have cached the shipped default managed-data v3 summary, whose Device
+    // shape predates the explicit `device_health=1` response. The new client strictly decodes the
+    // opted-in shape, so discard only this derived presentation before it can cross IPC. Session,
+    // upload identity, local Usage, and Account Usage period caches remain intact and the next
+    // refresh rebuilds the summary from Relay.
+    let account = tx
+        .query_row(
+            "SELECT value_json FROM components WHERE name = 'account'",
+            [],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()?
+        .flatten();
+    if let Some(raw) = account {
+        let mut value: Value = serde_json::from_str(&raw)?;
+        if value
+            .get("account_summary")
+            .is_some_and(|summary| !summary.is_null())
+        {
+            value["account_summary"] = Value::Null;
+            tx.execute(
+                "UPDATE components SET value_json = ?1 WHERE name = 'account'",
+                [serde_json::to_string(&value)?],
+            )?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -295,6 +385,14 @@ mod tests {
             columns(&v1, "sync_diagnostics")
         );
         assert_eq!(
+            columns(&fresh, "diagnostic_snapshot"),
+            columns(&v1, "diagnostic_snapshot")
+        );
+        assert_eq!(
+            columns(&fresh, "diagnostic_attempts"),
+            columns(&v1, "diagnostic_attempts")
+        );
+        assert_eq!(
             columns(&fresh, "model_catalog_cache"),
             columns(&v1, "model_catalog_cache")
         );
@@ -312,7 +410,7 @@ mod tests {
             .expect("v1 rows")
             .collect::<Result<Vec<_>, _>>()
             .expect("v1 values");
-        assert_eq!(fresh_versions, vec![1, 2, 3, 4, 5, 6]);
+        assert_eq!(fresh_versions, vec![1, 2, 3, 4, 5, 6, 7, 8]);
         assert_eq!(fresh_versions, v1_versions);
         assert_eq!(
             columns(&fresh, "usage_period_cache"),
@@ -378,6 +476,15 @@ mod tests {
             .expect("rewind period cache");
         conn.execute("DROP TABLE provider_browser_sessions", [])
             .expect("rewind browser sessions");
+        conn.execute("DROP TABLE diagnostic_snapshot", [])
+            .expect("rewind diagnostics");
+        conn.execute("DROP TABLE diagnostic_attempts", [])
+            .expect("rewind attempt journal");
+        conn.execute(
+            "DELETE FROM metadata WHERE key = 'attempt_history_truncated'",
+            [],
+        )
+        .expect("rewind attempt metadata");
         conn.execute(
             "DELETE FROM metadata WHERE key = 'usage_upload_enabled'",
             [],
@@ -440,8 +547,17 @@ mod tests {
             [],
         )
         .expect("period fixtures");
-        conn.execute("DELETE FROM schema_migrations WHERE version = 6", [])
+        conn.execute("DELETE FROM schema_migrations WHERE version >= 6", [])
             .expect("rewind migration marker");
+        conn.execute("DROP TABLE diagnostic_snapshot", [])
+            .expect("rewind diagnostics");
+        conn.execute("DROP TABLE diagnostic_attempts", [])
+            .expect("rewind attempt journal");
+        conn.execute(
+            "DELETE FROM metadata WHERE key = 'attempt_history_truncated'",
+            [],
+        )
+        .expect("rewind attempt metadata");
 
         apply(&mut conn).expect("v6 migration");
 
@@ -496,6 +612,76 @@ mod tests {
             )
             .expect("account periods"),
             0
+        );
+    }
+
+    #[test]
+    fn v8_discards_only_the_pre_health_account_summary() {
+        let mut conn = Connection::open_in_memory().expect("database");
+        apply(&mut conn).expect("current schema");
+        conn.execute(
+            "INSERT INTO components(name, status, value_json)
+             VALUES ('account', 'ready', ?1)",
+            [serde_json::json!({
+                "auth_status": "signed_in",
+                "account_id": "account",
+                "device_id": "device",
+                "device_generation": 1,
+                "account_summary": {
+                    "protocol_version": 3,
+                    "devices": [{"device_id": "device", "platform": "macos"}]
+                }
+            })
+            .to_string()],
+        )
+        .expect("account fixture");
+        conn.execute(
+            "INSERT INTO session(id, payload_json, epoch) VALUES (1, '{\"status\":\"active\"}', 7)",
+            [],
+        )
+        .expect("session fixture");
+        conn.execute(
+            "INSERT INTO usage_period_cache(source, period, value_json)
+             VALUES ('local', 'today', '{}'), ('account', 'today', '{}')",
+            [],
+        )
+        .expect("period fixtures");
+        conn.execute("DELETE FROM schema_migrations WHERE version >= 8", [])
+            .expect("rewind migration marker");
+        conn.execute("DROP TABLE diagnostic_attempts", [])
+            .expect("rewind attempt journal");
+        conn.execute(
+            "DELETE FROM metadata WHERE key = 'attempt_history_truncated'",
+            [],
+        )
+        .expect("rewind attempt metadata");
+
+        apply(&mut conn).expect("v8 migration");
+
+        let account: Value = serde_json::from_str(
+            &conn
+                .query_row(
+                    "SELECT value_json FROM components WHERE name = 'account'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .expect("account value"),
+        )
+        .expect("account json");
+        assert_eq!(account["account_id"], "account");
+        assert_eq!(account["device_id"], "device");
+        assert!(account["account_summary"].is_null());
+        assert_eq!(
+            conn.query_row("SELECT epoch FROM session WHERE id = 1", [], |row| row
+                .get::<_, i64>(0))
+                .expect("session epoch"),
+            7
+        );
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM usage_period_cache", [], |row| row
+                .get::<_, i64>(0))
+                .expect("period count"),
+            2
         );
     }
 

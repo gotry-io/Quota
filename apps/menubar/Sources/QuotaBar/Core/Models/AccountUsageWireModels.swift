@@ -1304,6 +1304,82 @@ enum AccountDevicePlatform: String, Codable, Sendable {
   case windows
 }
 
+enum AccountDeviceHealthClientProduct: String, Codable, Sendable {
+  case quotaBar = "quotabar"
+  case quotaCLI = "quotacli"
+}
+
+enum AccountDeviceHealthCode: String, Codable, Sendable {
+  case refreshFailed = "refresh_failed"
+  case quotaCollectionFailed = "quota_collection_failed"
+  case usageScanPartial = "usage_scan_partial"
+  case usageUploadFailed = "usage_upload_failed"
+  case accountSyncFailed = "account_sync_failed"
+  case pricingRefreshFailed = "pricing_refresh_failed"
+  case processInterrupted = "process_interrupted"
+  case localStateInvalid = "local_state_invalid"
+}
+
+struct AccountDeviceHealth: Codable, Equatable, Sendable {
+  let schemaVersion: Int
+  let clientProduct: AccountDeviceHealthClientProduct
+  let clientVersion: String
+  let platform: AccountDevicePlatform
+  let observedAt: Date
+  let refreshRevision: Int
+  let lastCompletedRefreshAt: Date?
+  let lastSuccessfulAccountSyncAt: Date?
+  let summary: LocalServiceDiagnosticSummary
+  let topCode: AccountDeviceHealthCode?
+  let consecutiveFailures: Int
+  let usageUploadEnabled: Bool
+  let receivedAt: Date
+  let freshUntil: Date
+
+  init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys([
+      "schemaVersion", "clientProduct", "clientVersion", "platform", "observedAt",
+      "refreshRevision", "lastCompletedRefreshAt", "lastSuccessfulAccountSyncAt", "summary",
+      "topCode", "consecutiveFailures", "usageUploadEnabled", "receivedAt", "freshUntil",
+    ])
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+    clientProduct = try container.decode(AccountDeviceHealthClientProduct.self, forKey: .clientProduct)
+    clientVersion = try container.decode(String.self, forKey: .clientVersion)
+    platform = try container.decode(AccountDevicePlatform.self, forKey: .platform)
+    observedAt = try container.decode(Date.self, forKey: .observedAt)
+    refreshRevision = try container.decode(Int.self, forKey: .refreshRevision)
+    lastCompletedRefreshAt = try container.decode(Date?.self, forKey: .lastCompletedRefreshAt)
+    lastSuccessfulAccountSyncAt = try container.decode(Date?.self, forKey: .lastSuccessfulAccountSyncAt)
+    summary = try container.decode(LocalServiceDiagnosticSummary.self, forKey: .summary)
+    topCode = try container.decode(AccountDeviceHealthCode?.self, forKey: .topCode)
+    consecutiveFailures = try container.decode(Int.self, forKey: .consecutiveFailures)
+    usageUploadEnabled = try container.decode(Bool.self, forKey: .usageUploadEnabled)
+    receivedAt = try container.decode(Date.self, forKey: .receivedAt)
+    freshUntil = try container.decode(Date.self, forKey: .freshUntil)
+    let versionValid = !clientVersion.isEmpty && clientVersion.count <= 32
+      && clientVersion.enumerated().allSatisfy { index, character in
+        character.isASCII && (character.isLetter || character.isNumber
+          || (index > 0 && ".+_-".contains(character)))
+      }
+    guard schemaVersion == 1, versionValid,
+      (0 ... jsonSafeIntegerMaximum).contains(refreshRevision),
+      (0 ... 1_000).contains(consecutiveFailures), freshUntil >= receivedAt,
+      lastCompletedRefreshAt.map({ $0 <= observedAt.addingTimeInterval(300) }) ?? true,
+      lastSuccessfulAccountSyncAt.map({ $0 <= observedAt.addingTimeInterval(300) }) ?? true
+    else {
+      throw DecodingError.dataCorruptedError(
+        forKey: .schemaVersion, in: container, debugDescription: "Invalid device health.")
+    }
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case schemaVersion, clientProduct, clientVersion, platform, observedAt, refreshRevision
+    case lastCompletedRefreshAt, lastSuccessfulAccountSyncAt, summary, topCode
+    case consecutiveFailures, usageUploadEnabled, receivedAt, freshUntil
+  }
+}
+
 struct AccountDevice: Codable, Equatable, Identifiable, Sendable {
   let deviceID: String
   let displayName: String
@@ -1314,6 +1390,7 @@ struct AccountDevice: Codable, Equatable, Identifiable, Sendable {
   let lastLoginAt: Date
   let lastSeenAt: Date?
   let signedOutAt: Date?
+  let health: AccountDeviceHealth?
 
   var id: String { deviceID }
 
@@ -1327,6 +1404,7 @@ struct AccountDevice: Codable, Equatable, Identifiable, Sendable {
     case lastLoginAt
     case lastSeenAt
     case signedOutAt
+    case health
   }
 
   var isValid: Bool {
@@ -1335,6 +1413,27 @@ struct AccountDevice: Codable, Equatable, Identifiable, Sendable {
       && displayName == displayName.trimmingCharacters(in: .whitespacesAndNewlines)
       && (1...jsonSafeIntegerMaximum).contains(deviceGeneration)
       && (status == .signedOut) == (signedOutAt != nil)
+      && (health.map { $0.platform == platform } ?? true)
+  }
+
+  init(
+    deviceID: String,
+    displayName: String,
+    platform: AccountDevicePlatform,
+    deviceGeneration: Int,
+    status: AccountDeviceStatus,
+    createdAt: Date,
+    lastLoginAt: Date,
+    lastSeenAt: Date?,
+    signedOutAt: Date?,
+    health: AccountDeviceHealth? = nil
+  ) {
+    (self.deviceID, self.displayName, self.platform, self.deviceGeneration, self.status) = (
+      deviceID, displayName, platform, deviceGeneration, status
+    )
+    (self.createdAt, self.lastLoginAt, self.lastSeenAt, self.signedOutAt, self.health) = (
+      createdAt, lastLoginAt, lastSeenAt, signedOutAt, health
+    )
   }
 }
 
@@ -1344,6 +1443,7 @@ extension AccountDevice {
       "deviceId", "displayName", "platform", "deviceGeneration", "status", "createdAt",
       "lastLoginAt",
       "lastSeenAt", "signedOutAt",
+      "health",
     ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     deviceID = try container.decode(String.self, forKey: .deviceID)
@@ -1355,6 +1455,7 @@ extension AccountDevice {
     lastLoginAt = try container.decode(Date.self, forKey: .lastLoginAt)
     lastSeenAt = try container.decode(Date?.self, forKey: .lastSeenAt)
     signedOutAt = try container.decode(Date?.self, forKey: .signedOutAt)
+    health = try container.decode(AccountDeviceHealth?.self, forKey: .health)
     guard isValid else {
       throw DecodingError.dataCorruptedError(
         forKey: .deviceID,

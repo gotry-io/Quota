@@ -18,12 +18,16 @@ Cursor browser sessions on macOS.
 Local Usage analytics supports Codex, Claude Code, Grok, OpenCode, Pi, and Cursor logs. Provider credentials,
 prompts, completions, raw events, local paths, and conversation identifiers never upload.
 
-Both native clients expose the same service-owned diagnostics: Linux `quotacli doctor
+Both collection clients expose the same service-owned diagnostics: Linux `quotacli doctor
 [--format text|json] [--pretty]` and the QuotaBar Settings **Diagnostics** action on macOS. The
-report covers provider discovery and quota collection, Usage parsing/coverage, pricing, account
-state, and synchronization. It contains bounded counters and safe recovery codes only; it never
-includes credentials, tokens, local paths, raw logs, prompts, completions, session identifiers, or
-device identifiers. A healthy report exits successfully; degraded or blocked state exits nonzero.
+v2 report evaluates user-visible Quota/Usage surfaces and explains them with source-scoped checks and
+root-cause findings. Optional setup is healthy/inactive; Account data may fulfill Overview without a
+local provider login, and pending Usage waits normally until a completed upload attempt fails. The
+report uses the last completed refresh boundary and contains only safe provider/agent identities,
+bounded counters, timestamps, impact, and recovery codes. It never includes credentials, tokens,
+local paths or filenames, model lists, raw logs/responses, parser excerpts, prompts, completions,
+session identifiers, or device identifiers. QuotaCLI exits nonzero for failed operation,
+stale/partial/unknown data, or required attention; healthy empty and automatic waiting states succeed.
 
 ## Architecture
 
@@ -51,7 +55,9 @@ remain TypeScript. See the canonical
 [SvelteKit document Worker composition](docs/decisions/0011-sveltekit-document-worker.md). The data
 integrity and diagnostic contract is [ADR 0008](docs/decisions/0008-data-integrity-and-diagnostics.md),
 report-time model identity is [ADR 0009](docs/decisions/0009-versioned-model-catalog.md), and
-provider browser-session authentication is
+structured attempts, Support Report, and Device Health are
+[ADR 0015](docs/decisions/0015-diagnostic-attempts-and-device-health.md), and provider
+browser-session authentication is
 [ADR 0010](docs/decisions/0010-provider-browser-session-auth.md).
 
 ## Repository layout
@@ -161,8 +167,13 @@ account dashboard. Raw model
 identifiers remain opaque bounded provider text; a separately versioned catalog derives stable
 report keys without rewriting facts or changing pricing. Valid facts remain usable when pricing or
 model aliases are unknown. Record/file failures are isolated and complete uploads are partitioned
-losslessly, while partial scans do not replace remote facts. The service diagnostic report makes
-every capability's status and safe counters observable.
+losslessly, while partial scans do not replace remote facts. The service-owned diagnostics v2 report
+separates operational health, data state, and attention; source checks explain a coherent
+last-completed refresh without treating absent optional setup as failure. A seven-day bounded local
+attempt journal supplies recent Support activity and canonical latest-attempt/success facts. Signed-in
+collection Devices upload only a sanitized latest health snapshot; QuotaBar, Web, and iOS opt into
+the compatible Account Device Health view with version, platform, and server-authoritative last
+report/refresh/sync state.
 
 Production GitHub OAuth and D1 deployment require the secrets documented by the managed Relay
 configuration. The checked-in deployment workflow is the only authorized production path.

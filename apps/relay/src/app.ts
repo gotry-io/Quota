@@ -5,6 +5,7 @@ import {
   AccountQuotaResponseV3Schema,
   AccountResponseSchema,
   AccountSummarySchema,
+  AccountSummaryV3DeviceHealthSchema,
   AccountSummaryV3Schema,
   AccountUsageHourlyResponseSchema,
   AccountUsageHourlyResponseV3Schema,
@@ -16,6 +17,8 @@ import {
   DeviceAuthorizationDecisionRequestSchema,
   DeviceAuthorizationRequestSchema,
   DeviceAuthorizationResponseSchema,
+  DeviceHealthUploadRequestSchema,
+  DeviceHealthUploadResponseSchema,
   DeviceProfileUpdateRequestSchema,
   DeviceProfileUpdateResponseSchema,
   DeviceSyncResponseSchema,
@@ -87,6 +90,7 @@ const maximumAccountSnapshots = 8_192;
 const maximumAccountUsageSummaryRows = 100_000;
 const recentAuthenticationMilliseconds = 10 * 60 * 1000;
 const activeDeviceMilliseconds = 15 * 60 * 1000;
+const deviceHealthFreshMilliseconds = 20 * 60 * 1000;
 const expiredSessionRetentionMilliseconds = 7 * 24 * 60 * 60 * 1000;
 const maintenanceBatchLimit = 100;
 
@@ -196,6 +200,10 @@ export function createRelayApp(options: RelayAppOptions): Hono {
   );
   app.use(
     "/api/v2/device/profile",
+    bodyLimit({ maxSize: maximumCredentialBodyBytes, onError: requestBodyTooLarge }),
+  );
+  app.use(
+    "/api/v3/device/health",
     bodyLimit({ maxSize: maximumCredentialBodyBytes, onError: requestBodyTooLarge }),
   );
 
@@ -570,12 +578,14 @@ export function createRelayApp(options: RelayAppOptions): Hono {
       version: PROTOCOL_VERSION,
       schema: AccountSummarySchema,
       agents: BILLING_AGENTS,
+      deviceHealth: false,
     },
     {
       path: "/api/v3/account/summary",
       version: MANAGED_DATA_PROTOCOL_VERSION,
       schema: AccountSummaryV3Schema,
       agents: BILLING_AGENTS_V3,
+      deviceHealth: true,
     },
   ] as const) {
     app.get(route.path, async (context) => {
@@ -592,29 +602,40 @@ export function createRelayApp(options: RelayAppOptions): Hono {
           allByDefault: true,
           includeHourlyBreakdowns: false,
           agents: route.agents,
+          allowDeviceHealth: route.deviceHealth,
         },
       );
       if (selected instanceof Response) return selected;
       const account = await options.state.getAccount(principal.account_id);
       if (!account) return unauthorized(context);
-      const [devices, storedQuota] = await Promise.all([
+      const [devices, storedQuota, deviceHealth] = await Promise.all([
         options.state.listAccountDevices(principal.account_id),
         options.state.listLatestSnapshots(principal.account_id),
+        selected.deviceHealthOptIn
+          ? options.state.listDeviceHealth(principal.account_id)
+          : Promise.resolve([]),
       ]);
       const quota = route.version === PROTOCOL_VERSION ? v2Quota(storedQuota) : storedQuota;
       if (devices.length > maximumAccountDevices || quota.length > maximumAccountSnapshots) {
         return resultLimit(context);
       }
-      return context.json(
-        route.schema.parse({
-          protocol_version: route.version,
-          generated_at: now().toISOString(),
-          account: publicAccount(account),
-          devices: devices.map((device) => publicDevice(device, now())),
-          quota,
-          usage: selected.summary,
-        }),
-      );
+      const publicDevices = devices.map((device) => publicDevice(device, now()));
+      const healthByDevice = new Map(deviceHealth.map((health) => [health.device_id, health]));
+      const response = {
+        protocol_version: route.version,
+        generated_at: now().toISOString(),
+        account: publicAccount(account),
+        devices: selected.deviceHealthOptIn
+          ? publicDevices.map((device) => ({
+              ...device,
+              health: publicDeviceHealth(healthByDevice.get(device.device_id)),
+            }))
+          : publicDevices,
+        quota,
+        usage: selected.summary,
+      };
+      const schema = selected.deviceHealthOptIn ? AccountSummaryV3DeviceHealthSchema : route.schema;
+      return context.json(schema.parse(response));
     });
   }
 
@@ -948,6 +969,62 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     );
   });
 
+  app.put("/api/v3/device/health", async (context) => {
+    // Existing released device sessions carry sync:read:self. Health is a new self-only write
+    // attached to that authenticated device principal so installed 0.0.15 sessions keep working.
+    const checkedAt = now();
+    const principal = await deviceWriter(context, options, "sync:read:self", checkedAt);
+    if (principal instanceof Response) return principal;
+    const limited = await enforceRateLimit(
+      context,
+      options.state,
+      options.hasher,
+      "device-health",
+      principal.device_id,
+      rateLimits.sessionMutation,
+      checkedAt,
+    );
+    if (limited) return limited;
+    const raw = await parseRawJSON(context);
+    if (raw instanceof Response) return raw;
+    const parsed = DeviceHealthUploadRequestSchema.safeParse(raw);
+    if (!parsed.success) return invalidRequest(context);
+    const observedAt = Date.parse(parsed.data.observed_at);
+    if (
+      observedAt > checkedAt.getTime() + 5 * 60 * 1000 ||
+      observedAt < checkedAt.getTime() - 7 * 24 * 60 * 60 * 1000 ||
+      [parsed.data.last_completed_refresh_at, parsed.data.last_successful_account_sync_at].some(
+        (value) => value !== null && Date.parse(value) > observedAt + 5 * 60 * 1000,
+      )
+    ) {
+      return invalidRequest(context);
+    }
+    const receivedAt = checkedAt.toISOString();
+    const freshUntil = new Date(checkedAt.getTime() + deviceHealthFreshMilliseconds).toISOString();
+    const outcome = await options.state.recordDeviceHealth(
+      principal,
+      parsed.data,
+      receivedAt,
+      freshUntil,
+    );
+    if (outcome === "unauthorized") return unauthorized(context);
+    const current =
+      outcome === "ignored_stale"
+        ? (await options.state.listDeviceHealth(principal.account_id)).find(
+            (health) => health.device_id === principal.device_id,
+          )
+        : undefined;
+    if (outcome === "ignored_stale" && !current) return unauthorized(context);
+    return context.json(
+      DeviceHealthUploadResponseSchema.parse({
+        protocol_version: MANAGED_DATA_PROTOCOL_VERSION,
+        status: outcome,
+        received_at: current?.received_at ?? receivedAt,
+        fresh_until: current?.fresh_until ?? freshUntil,
+      }),
+    );
+  });
+
   app.post("/api/v2/device/logout", async (context) => {
     const principal = await deviceWriter(context, options, "session:revoke:self", now());
     if (principal instanceof Response) {
@@ -1159,6 +1236,7 @@ async function accountUsageQuery(
     allByDefault: boolean;
     includeHourlyBreakdowns: boolean;
     agents: readonly UsageAgent[];
+    allowDeviceHealth?: boolean;
   } = {
     allByDefault: false,
     includeHourlyBreakdowns: false,
@@ -1174,6 +1252,7 @@ async function accountUsageQuery(
       "usage_agents",
       "model_catalog",
       "usage_clients",
+      ...(summaryOptions.allowDeviceHealth ? ["device_health"] : []),
     ])
   ) {
     return invalidRequest(context);
@@ -1181,14 +1260,17 @@ async function accountUsageQuery(
   const requestedAgents = context.req.query("usage_agents");
   const modelCatalogQuery = context.req.query("model_catalog");
   const usageClientsQuery = context.req.query("usage_clients");
+  const deviceHealthQuery = context.req.query("device_health");
   if (
     (modelCatalogQuery !== undefined && modelCatalogQuery !== "1") ||
-    (usageClientsQuery !== undefined && usageClientsQuery !== "1")
+    (usageClientsQuery !== undefined && usageClientsQuery !== "1") ||
+    (deviceHealthQuery !== undefined && deviceHealthQuery !== "1")
   ) {
     return invalidRequest(context);
   }
   const modelCatalogOptIn = modelCatalogQuery === "1";
   const usageClientsOptIn = usageClientsQuery === "1";
+  const deviceHealthOptIn = summaryOptions.allowDeviceHealth === true && deviceHealthQuery === "1";
   if (requestedAgents !== undefined && requestedAgents !== "all") {
     return invalidRequest(context);
   }
@@ -1242,6 +1324,7 @@ async function accountUsageQuery(
         modelCatalogOptIn ? modelCatalog : undefined,
         usageClientsOptIn,
       ),
+      deviceHealthOptIn,
     };
   } catch (error) {
     if (error instanceof UsageSummaryLimitError) {
@@ -1424,6 +1507,28 @@ function publicDevice(
     last_login_at: device.last_login_at,
     last_seen_at: device.last_seen_at,
     signed_out_at: device.signed_out_at,
+  };
+}
+
+function publicDeviceHealth(
+  health: Awaited<ReturnType<AccountState["listDeviceHealth"]>>[number] | undefined,
+) {
+  if (!health) return null;
+  return {
+    schema_version: health.schema_version,
+    client_product: health.client_product,
+    client_version: health.client_version,
+    platform: health.platform,
+    observed_at: health.observed_at,
+    refresh_revision: health.refresh_revision,
+    received_at: health.received_at,
+    fresh_until: health.fresh_until,
+    last_completed_refresh_at: health.last_completed_refresh_at,
+    last_successful_account_sync_at: health.last_successful_account_sync_at,
+    summary: health.summary,
+    top_code: health.top_code,
+    consecutive_failures: health.consecutive_failures,
+    usage_upload_enabled: health.usage_upload_enabled,
   };
 }
 

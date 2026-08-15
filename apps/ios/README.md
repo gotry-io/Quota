@@ -21,7 +21,9 @@ Relay, session, Security, or network APIs. See
 [ADR 0014](../../docs/decisions/0014-nonsecret-ios-widget-snapshot.md).
 
 Quota iOS is not a collection Device. It does not configure Providers, collect local logs, upload
-snapshots or Usage, or add `ios` to `PlatformSchema`. See
+snapshots, Usage, or Device Health, or add `ios` to `PlatformSchema`. Its Account summary opts into
+read-only Device Health so Overview can show the collection Devices' app version, platform, and
+server-authoritative status/ages without requesting credentials for them. See
 [ADR 0013](../../docs/decisions/0013-readonly-ios-account-client.md).
 
 The detailed system boundary is in [`docs/architecture.md`](../../docs/architecture.md), security

@@ -1,4 +1,4 @@
-import { AccountSummaryV3Schema } from "@gotry-io/quota-protocol";
+import { AccountSummaryV3DeviceHealthSchema } from "@gotry-io/quota-protocol";
 import { createWebAccountAuth, memoizeWebAccountAuthSession } from "./account/better-auth.ts";
 import { AccountService } from "./account/service.ts";
 import { createWebDocumentPort } from "./account/web-document-port.ts";
@@ -57,13 +57,13 @@ export default {
         async getAccountSummary(headers) {
           try {
             const url = new URL(
-              "/api/v3/account/summary?cost_mode=calculate&usage_agents=all&model_catalog=1",
+              "/api/v3/account/summary?cost_mode=calculate&usage_agents=all&model_catalog=1&device_health=1",
               request.url,
             );
             const response = await relay.fetch(new Request(url, { headers }));
             if (response.status === 401) return { status: "unauthorized" };
             if (!response.ok) return { status: "error" };
-            const parsed = AccountSummaryV3Schema.safeParse(await response.json());
+            const parsed = AccountSummaryV3DeviceHealthSchema.safeParse(await response.json());
             return parsed.success ? { status: "ok", summary: parsed.data } : { status: "error" };
           } catch {
             return { status: "error" };

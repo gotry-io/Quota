@@ -6,6 +6,11 @@ Usage, and Account summary use managed-data v3. `quota-ios` adds client-specific
 and account-session payloads on the v2 OAuth contract; the released `quotacli` request and response
 shapes are unchanged.
 
+Managed-data v3's default Account summary Device shape shipped and remains unchanged. Device Health
+uses `PUT /api/v3/device/health` for authenticated self-owned writes and the explicit
+`GET /api/v3/account/summary?device_health=1` read shape, where `health` is required but nullable.
+Runtime schemas and exported JSON Schema keep those default/opt-in shapes distinct.
+
 - TypeScript runtime validation lives in `src`.
 - Managed-network `ProviderId` and local-report `LocalProviderId` are generated from
   `packages/provider/catalog.json` into `src/provider-ids.generated.ts` via
