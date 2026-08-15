@@ -28,8 +28,10 @@ The Worker requires these secrets:
 Register the GitHub OAuth App callback as
 `https://quota.gotry.io/api/auth/v2/callback/github`. Better Auth owns GitHub OAuth state, PKCE,
 browser cookies, session expiry, and standard auth-route origin checks. QuotaRelay retains the
-native grants and their separate account/device token families. The checked-in Worker enables
-Cloudflare `nodejs_compat`, which Better Auth's runtime requires.
+native grants and their separate account/device token families. The registered `quota-ios` public
+client is a read-only Account login: Authorization Code with PKCE and the exact redirect
+`io.gotry.quota:/oauth/callback`. It never receives a Device session or upload authority. The
+checked-in Worker enables Cloudflare `nodejs_compat`, which Better Auth's runtime requires.
 
 Each keyed secret is independent and must contain at least 32 random characters. OAuth and session
 routes return `Cache-Control: no-store`; only the versioned pricing catalog is publicly cacheable.

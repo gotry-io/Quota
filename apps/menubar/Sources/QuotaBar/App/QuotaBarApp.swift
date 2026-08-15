@@ -30,6 +30,8 @@ struct QuotaBarApp: App {
           model: model,
           initialPath: visualTestConfiguration.initialPath,
           performsInitialRefresh: visualTestConfiguration.performsInitialRefresh,
+          performsDiagnosticsCheckOnEntry: visualTestConfiguration.dataSource == .live,
+          diagnosticsModel: visualTestConfiguration.makeDiagnosticsModel(),
           seedsLaunchAtLogin: false
         )
         .preferredColorScheme(visualTestConfiguration.colorScheme)

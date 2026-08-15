@@ -167,10 +167,6 @@ struct ProviderSettingsView: View {
       if session?.configured == true {
         Text("Connected as \(session?.accountLabel ?? "account")")
           .quotaSecondaryStyle()
-      } else {
-        Text("Sign in in a supported browser. QuotaBar reads only the provider's session cookie.")
-          .quotaSecondaryStyle()
-          .fixedSize(horizontal: false, vertical: true)
       }
 
       HStack(spacing: QuotaDesign.Spacing.sm) {
@@ -190,10 +186,10 @@ struct ProviderSettingsView: View {
           Button("Sign In") {
             model.startProviderBrowserSessionLogin(provider)
           }
-          .buttonStyle(QuotaPrimaryButtonStyle(isCompact: true))
+          .buttonStyle(QuotaSecondaryButtonStyle())
         }
       }
-      .frame(minHeight: QuotaDesign.Layout.fieldMinHeight)
+      .frame(minHeight: QuotaDesign.Layout.minimumInteractiveDimension)
 
       if let message = model.browserSessionErrorMessages[provider] {
         Label(message, systemImage: "exclamationmark.circle")

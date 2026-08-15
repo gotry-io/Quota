@@ -16,8 +16,12 @@ Read the relevant source before changing that area:
 | Codex, Claude Code, Grok, and OpenRouter collection strategies | `docs/provider-collection.md` |
 | Persistent Relay storage decision and rationale | `docs/decisions/0001-persistent-relay-storage.md` |
 | Managed account, device, authentication, deletion, and Usage boundary | `docs/decisions/0006-managed-account-device-usage.md` |
+| Managed-data v3 and Cursor account-sync protocol | `docs/decisions/0012-managed-data-v3.md` |
+| Read-only iOS account client | `docs/decisions/0013-readonly-ios-account-client.md` |
+| Non-secret iOS widget snapshot | `docs/decisions/0014-nonsecret-ios-widget-snapshot.md` |
 | Website visual tokens and marketing UI | `apps/web/DESIGN.md` |
 | QuotaBar menu-panel visual tokens and UI behavior | `apps/menubar/DESIGN.md` |
+| Quota iOS visual tokens and UI behavior | `apps/ios/DESIGN.md` |
 | App-specific usage | The corresponding `apps/*/README.md` |
 
 Do not create a second description of a canonical rule. Update its source and link to it.
@@ -76,12 +80,13 @@ Do not create a second description of a canonical rule. Update its source and li
 - Rust code targets the stable toolchain. Keep `apps/menubar/helper` private: no command parser,
   socket listener, daemonization, or public installation surface. `apps/cli` is the Linux-only
   native `quotacli` command and is built/tested without a Windows target or publication workflow.
-- Swift code targets macOS 14+ and Swift 6.2. Keep wire decoding and Relay access separate from views.
+- Swift code targets macOS 14+ or iOS 17+ and Swift 6.2. Keep wire decoding and Relay access separate from views.
 - Web UI follows `apps/web/DESIGN.md` and must remain keyboard-accessible and responsive.
 - QuotaBar UI follows `apps/menubar/DESIGN.md` (system material panel), not the website design file.
 - Wire JSON uses `snake_case`. Primary quota values and meters always represent remaining quota.
-- Product names are Quota, QuotaBar, QuotaCLI, and QuotaRelay. The bundled Rust service executable is
-  a private QuotaBar implementation detail, not the public `quotacli` command.
+- Product names are Quota, QuotaBar, QuotaCLI, and QuotaRelay. The iOS app's product name is Quota.
+  The bundled Rust service executable is a private QuotaBar implementation detail, not the public
+  `quotacli` command.
 - Prefer direct implementations over redundant wrappers, retries, fallbacks, and defensive branches.
   Add them only for a concrete boundary, failure mode, or security requirement.
 
@@ -120,6 +125,9 @@ Do not commit generated state such as `node_modules/`, `dist/`, `target/`, `.bui
 - Relay change: run Vitest, local D1 migration verification, and the Cloudflare dry-run build.
 - QuotaBar account-path change: on macOS, run affected Swift and Relay tests plus the signed-service
   integration tests available in the app package.
+- Quota iOS or `packages/apple-client` change: run `pnpm generate:ios`, `swift test --package-path
+  packages/apple-client`, and the iOS Simulator build/tests from `apps/ios/README.md`. Do not migrate
+  QuotaBar into `packages/apple-client` unless that is the requested change.
 - Web change: run its type check and production build; inspect desktop and mobile rendering when
   browser tooling is available.
 - Deployment change: validate the Cloudflare workflow and the complete Worker + Static Assets

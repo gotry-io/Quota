@@ -112,21 +112,27 @@ func decodesAccountSummaryWithUsageCost() throws {
     "reasoning_tokens": 50,
     "messages": 1,
   ]
-  expandedUsage["clients"] = [[
-    "client": "codex",
-    "totals": structuredTotals,
-    "cost": expandedCost,
-    "providers": [[
-      "provider": "openai",
+  expandedUsage["clients"] = [
+    [
+      "client": "codex",
       "totals": structuredTotals,
       "cost": expandedCost,
-      "models": [[
-        "model": "gpt-5.6-sol",
-        "totals": structuredTotals,
-        "cost": expandedCost,
-      ]],
-    ]],
-  ]]
+      "providers": [
+        [
+          "provider": "openai",
+          "totals": structuredTotals,
+          "cost": expandedCost,
+          "models": [
+            [
+              "model": "gpt-5.6-sol",
+              "totals": structuredTotals,
+              "cost": expandedCost,
+            ]
+          ],
+        ]
+      ],
+    ]
+  ]
   expandedObject["usage"] = expandedUsage
   let expandedData = try JSONSerialization.data(withJSONObject: expandedObject)
   let expanded = try QuotaWireCodec.makeDecoder().decode(AccountSummary.self, from: expandedData)
@@ -682,15 +688,18 @@ func rejectsQuotaSnapshotWithoutFingerprintScope() {
 
 @Test
 func includesCursorInTheManagedAccountEnum() throws {
-  let snapshot = #"{"provider":"cursor","account":{"fingerprint":"account_01","fingerprint_scope":"global"},"windows":[],"source":"cursor_dashboard_api","status":"available","observed_at":"2026-08-02T01:00:00Z"}"#
+  let snapshot =
+    #"{"provider":"cursor","account":{"fingerprint":"account_01","fingerprint_scope":"global"},"windows":[],"source":"cursor_dashboard_api","status":"available","observed_at":"2026-08-02T01:00:00Z"}"#
   let envelope = Data(
-    #"{"protocol_version":3,"device_id":"device_01","generation":1,"sequence":0,"captured_at":"2026-08-02T01:00:00Z","snapshots":[\#(snapshot)]}"#.utf8)
+    #"{"protocol_version":3,"device_id":"device_01","generation":1,"sequence":0,"captured_at":"2026-08-02T01:00:00Z","snapshots":[\#(snapshot)]}"#
+      .utf8)
   let decodedEnvelope = try QuotaWireCodec.makeDecoder().decode(
     QuotaSnapshotEnvelope.self, from: envelope)
   #expect(decodedEnvelope.snapshots.first?.provider == .cursor)
 
   let localReport = Data(
-    #"{"protocol_version":2,"captured_at":"2026-08-02T01:00:00Z","results":[{"provider":"cursor","outcome":"success","snapshots":[\#(snapshot)],"source":"cursor_dashboard_api"}]}"#.utf8)
+    #"{"protocol_version":2,"captured_at":"2026-08-02T01:00:00Z","results":[{"provider":"cursor","outcome":"success","snapshots":[\#(snapshot)],"source":"cursor_dashboard_api"}]}"#
+      .utf8)
   let decoded = try QuotaWireCodec.makeDecoder().decode(
     QuotaCollectionReport.self, from: localReport)
   #expect(decoded.results.first?.provider == .cursor)

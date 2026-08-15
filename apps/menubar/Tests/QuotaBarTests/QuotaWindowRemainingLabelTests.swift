@@ -26,6 +26,7 @@ struct QuotaWindowRemainingLabelTests {
     )
     #expect(window.remainingDisplayLabel == "$60.00")
     #expect(window.absoluteRemainingLabel == "$60.00")
+    #expect(window.displayTitle == "Balance")
   }
 
   @Test

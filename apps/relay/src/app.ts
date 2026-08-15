@@ -19,11 +19,14 @@ import {
   DeviceProfileUpdateRequestSchema,
   DeviceProfileUpdateResponseSchema,
   DeviceSyncResponseSchema,
+  IosLoginExchangeRequestSchema,
+  IosOAuthTokenResponseSchema,
+  IosSessionRefreshRequestSchema,
   LogoutResponseSchema,
+  MANAGED_DATA_PROTOCOL_VERSION,
   MAXIMUM_USAGE_READ_ROWS,
   MAXIMUM_USAGE_SUBMISSION_BYTES,
   MODEL_CATALOG,
-  MANAGED_DATA_PROTOCOL_VERSION,
   type ModelCatalog,
   ModelCatalogSchema,
   OAuthTokenRequestSchema,
@@ -58,14 +61,19 @@ import type {
   AccountState,
   DevicePrincipal,
   DeviceScope,
-  UsageState,
   UsageAgent,
+  UsageState,
 } from "@gotry-io/relay-core";
 import { type Context, Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import type { WebAccountAuth } from "./account/better-auth.ts";
 import { consumeNamedRateLimit, publicProfileRateLimit } from "./account/rate-limit.ts";
-import { AccountFlowError, type AccountService, isLoopbackRedirect } from "./account/service.ts";
+import {
+  AccountFlowError,
+  type AccountService,
+  isIosRedirect,
+  isLoopbackRedirect,
+} from "./account/service.ts";
 import { managedServiceInfo } from "./config.ts";
 import { PRICING_CATALOG, PRICING_CATALOG_ETAG } from "./pricing-catalog.ts";
 import { normalizePublicSlug, publicProfileFromAccount } from "./public-profile.ts";
@@ -81,6 +89,22 @@ const recentAuthenticationMilliseconds = 10 * 60 * 1000;
 const activeDeviceMilliseconds = 15 * 60 * 1000;
 const expiredSessionRetentionMilliseconds = 7 * 24 * 60 * 60 * 1000;
 const maintenanceBatchLimit = 100;
+
+function requireValidPricingCatalog(value: PricingCatalog): PricingCatalog {
+  const validation = validatePricingCatalog(value);
+  if (!validation.valid) {
+    throw new Error("Pricing catalog validation failed");
+  }
+  return validation.catalog;
+}
+
+function requireValidModelCatalog(value: ModelCatalog): ModelCatalog {
+  const validation = validateModelCatalog(value);
+  if (!validation.valid) {
+    throw new Error("Model catalog validation failed");
+  }
+  return validation.catalog;
+}
 
 const rateLimits = {
   nativeAuthorize: { limit: 60, windowSeconds: 10 * 60 },
@@ -121,21 +145,17 @@ export function accountMaintenanceInput(checkedAt: Date): AccountMaintenanceInpu
 export function createRelayApp(options: RelayAppOptions): Hono {
   const app = new Hono();
   const now = options.now ?? (() => new Date());
-  const parsedCatalog = PricingCatalogSchema.parse(options.pricingCatalog ?? PRICING_CATALOG);
-  const catalogValidation = validatePricingCatalog(parsedCatalog);
-  if (!catalogValidation.valid) {
-    throw new Error("Pricing catalog validation failed");
-  }
-  const catalog = catalogValidation.catalog;
+  // Checked-in defaults are schema-constructed by their source modules and semantic-validation
+  // tested. Keep the production request path free of the pricing validator's pairwise scan.
+  const catalog = options.pricingCatalog
+    ? requireValidPricingCatalog(PricingCatalogSchema.parse(options.pricingCatalog))
+    : PRICING_CATALOG;
   const catalogETag = options.pricingCatalog
     ? `"${options.pricingCatalog.revision}"`
     : PRICING_CATALOG_ETAG;
-  const parsedModelCatalog = ModelCatalogSchema.parse(options.modelCatalog ?? MODEL_CATALOG);
-  const modelCatalogValidation = validateModelCatalog(parsedModelCatalog);
-  if (!modelCatalogValidation.valid) {
-    throw new Error("Model catalog validation failed");
-  }
-  const modelCatalog = modelCatalogValidation.catalog;
+  const modelCatalog = options.modelCatalog
+    ? requireValidModelCatalog(ModelCatalogSchema.parse(options.modelCatalog))
+    : MODEL_CATALOG;
   const modelCatalogETag = options.modelCatalog
     ? '"' + options.modelCatalog.revision + '"'
     : '"' + modelCatalog.revision + '"';
@@ -252,7 +272,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
         webSession.user.name,
         now(),
       );
-      if (!isLoopbackRedirect(completion.redirect_uri)) {
+      if (!isLoopbackRedirect(completion.redirect_uri) && !isIosRedirect(completion.redirect_uri)) {
         throw new AccountFlowError("invalid_state");
       }
       const redirect = new URL(completion.redirect_uri);
@@ -351,8 +371,15 @@ export function createRelayApp(options: RelayAppOptions): Hono {
       return raw;
     }
     const tokenRequest = OAuthTokenRequestSchema.safeParse(raw);
+    const iosTokenRequest = IosLoginExchangeRequestSchema.safeParse(raw);
     const refreshRequest = SessionRefreshRequestSchema.safeParse(raw);
-    if (!tokenRequest.success && !refreshRequest.success) {
+    const iosRefreshRequest = IosSessionRefreshRequestSchema.safeParse(raw);
+    if (
+      !tokenRequest.success &&
+      !iosTokenRequest.success &&
+      !refreshRequest.success &&
+      !iosRefreshRequest.success
+    ) {
       return invalidRequest(context);
     }
     const limited = await enforceRateLimit(
@@ -368,10 +395,31 @@ export function createRelayApp(options: RelayAppOptions): Hono {
       return limited;
     }
     try {
+      if (iosRefreshRequest.success) {
+        const refreshed = await options.accountService.refresh(
+          iosRefreshRequest.data.refresh_token,
+          "account",
+          iosRefreshRequest.data.client_id,
+          now(),
+        );
+        if (refreshed.principal.kind !== "account") {
+          throw new AccountFlowError("invalid_grant");
+        }
+        return context.json(
+          SessionRefreshResponseSchema.parse({
+            protocol_version: PROTOCOL_VERSION,
+            token_type: "Bearer",
+            token_audience: "account",
+            account_id: refreshed.principal.account_id,
+            account_session: sessionToken(refreshed),
+          }),
+        );
+      }
       if (refreshRequest.success) {
         const refreshed = await options.accountService.refresh(
           refreshRequest.data.refresh_token,
           refreshRequest.data.token_audience,
+          refreshRequest.data.client_id,
           now(),
         );
         const common = {
@@ -397,6 +445,13 @@ export function createRelayApp(options: RelayAppOptions): Hono {
                 },
           ),
         );
+      }
+      if (iosTokenRequest.success) {
+        const issued = await options.accountService.exchangeIosAuthorizationCode(
+          iosTokenRequest.data,
+          now(),
+        );
+        return context.json(IosOAuthTokenResponseSchema.parse(iosOAuthTokenResponse(issued)));
       }
       if (!tokenRequest.success) {
         return invalidRequest(context);
@@ -1299,7 +1354,9 @@ function requireRecentWebMutation(
 }
 
 function refreshTokenAudience(value: string): "account" | "device" | null {
-  if (/^qar_[A-Za-z0-9_-]{43}$/.test(value)) return "account";
+  if (/^qar_[A-Za-z0-9_-]{43}$/.test(value) || /^qiar_[A-Za-z0-9_-]{43}$/.test(value)) {
+    return "account";
+  }
   if (/^qdr_[A-Za-z0-9_-]{43}$/.test(value)) return "device";
   return null;
 }
@@ -1367,6 +1424,22 @@ function publicDevice(
     last_login_at: device.last_login_at,
     last_seen_at: device.last_seen_at,
     signed_out_at: device.signed_out_at,
+  };
+}
+
+function iosOAuthTokenResponse(
+  issued: Awaited<ReturnType<AccountService["exchangeIosAuthorizationCode"]>>,
+) {
+  return {
+    protocol_version: PROTOCOL_VERSION,
+    token_type: issued.token_type,
+    account_id: issued.account_id,
+    account_session: {
+      access_token: issued.account_access_token,
+      access_expires_at: issued.account_access_expires_at,
+      refresh_token: issued.account_refresh_token,
+      refresh_expires_at: issued.account_refresh_expires_at,
+    },
   };
 }
 

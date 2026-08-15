@@ -8,8 +8,8 @@ import {
   PROVIDER_IDS,
   PROVIDER_IDS_V3,
   type ProviderId,
-  type ProviderIdV3,
   ProviderIdSchema,
+  type ProviderIdV3,
   ProviderIdV3Schema,
 } from "./provider-ids.generated.ts";
 
@@ -20,8 +20,8 @@ export {
   PROVIDER_IDS,
   PROVIDER_IDS_V3,
   type ProviderId,
-  type ProviderIdV3,
   ProviderIdSchema,
+  type ProviderIdV3,
   ProviderIdV3Schema,
 };
 
@@ -286,6 +286,11 @@ export type AccountDevicesResponse = z.infer<typeof AccountDevicesResponseSchema
 const NativeClientSchema = z.literal("quotacli");
 const InstallationIdSchema = z.string().uuid();
 
+export const IOS_OAUTH_CLIENT_ID = "quota-ios" as const;
+export const IOS_OAUTH_REDIRECT_URI = "io.gotry.quota:/oauth/callback" as const;
+const IosClientSchema = z.literal(IOS_OAUTH_CLIENT_ID);
+const IosRedirectUriSchema = z.literal(IOS_OAUTH_REDIRECT_URI);
+
 export const BrowserLoginExchangeRequestSchema = z
   .object({
     protocol_version: z.literal(PROTOCOL_VERSION),
@@ -300,6 +305,18 @@ export const BrowserLoginExchangeRequestSchema = z
   })
   .strict();
 export type BrowserLoginExchangeRequest = z.infer<typeof BrowserLoginExchangeRequestSchema>;
+
+export const IosLoginExchangeRequestSchema = z
+  .object({
+    protocol_version: z.literal(PROTOCOL_VERSION),
+    grant_type: z.literal("authorization_code"),
+    client_id: IosClientSchema,
+    code: SecretSchema,
+    code_verifier: z.string().regex(PKCE_VERIFIER_PATTERN),
+    redirect_uri: IosRedirectUriSchema,
+  })
+  .strict();
+export type IosLoginExchangeRequest = z.infer<typeof IosLoginExchangeRequestSchema>;
 
 export const DeviceAuthorizationRequestSchema = z
   .object({
@@ -383,6 +400,16 @@ export const OAuthTokenResponseSchema = z
   .strict();
 export type OAuthTokenResponse = z.infer<typeof OAuthTokenResponseSchema>;
 
+export const IosOAuthTokenResponseSchema = z
+  .object({
+    protocol_version: z.literal(PROTOCOL_VERSION),
+    token_type: z.literal("Bearer"),
+    account_id: OpaqueIdSchema,
+    account_session: SessionTokenSchema,
+  })
+  .strict();
+export type IosOAuthTokenResponse = z.infer<typeof IosOAuthTokenResponseSchema>;
+
 export const SessionRefreshRequestSchema = z
   .object({
     protocol_version: z.literal(PROTOCOL_VERSION),
@@ -393,6 +420,17 @@ export const SessionRefreshRequestSchema = z
   })
   .strict();
 export type SessionRefreshRequest = z.infer<typeof SessionRefreshRequestSchema>;
+
+export const IosSessionRefreshRequestSchema = z
+  .object({
+    protocol_version: z.literal(PROTOCOL_VERSION),
+    grant_type: z.literal("refresh_token"),
+    client_id: IosClientSchema,
+    token_audience: z.literal("account"),
+    refresh_token: SecretSchema,
+  })
+  .strict();
+export type IosSessionRefreshRequest = z.infer<typeof IosSessionRefreshRequestSchema>;
 
 const AccountSessionRefreshResponseSchema = z
   .object({

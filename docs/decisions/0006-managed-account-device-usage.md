@@ -24,9 +24,11 @@ username slug. Each Device
 `display_name` is the host computer name collected at login and reconciled by authenticated device
 sync, not the QuotaBar or QuotaCLI product name. This lets a shipped session repair an earlier
 product-name fallback and follow a later host rename without requiring logout. QuotaBar's bundled
-Rust service is the sole native OAuth public client and writer of
+Rust service is the sole collection OAuth public client and writer of
 installation identity,
-account/device sessions, upload sequences, Usage state, and Usage outbox. Swift renders typed IPC
+account/device sessions, upload sequences, Usage state, and Usage outbox. The registered
+`quota-ios` public client is a read-only Account viewer as defined by
+[ADR 0013](0013-readonly-ios-account-client.md). Swift renders typed IPC
 state; it does not read credentials or service files.
 
 The same service owns a durable per-installation Usage upload preference. Disabling it preserves
@@ -35,8 +37,8 @@ Usage from This Mac only. Pending work resumes after re-enabling. It is not a re
 already uploaded data remains until the user invokes the existing Device or Account deletion flow.
 
 Browser login uses Authorization Code with PKCE and headless login uses the OAuth Device
-Authorization Grant. Successful native login issues separate account-read and current-device-write
-token families. Refresh tokens rotate with compare-and-swap semantics. Better Auth owns browser
+Authorization Grant. Successful collection-client login issues separate account-read and
+current-device-write token families. Refresh tokens rotate with compare-and-swap semantics. Better Auth owns browser
 Account deletion; its deletion hook removes the Quota domain Account and cascading business data.
 Product-specific Device authorization and deletion additionally require recent authentication and
 an exact same-origin request.

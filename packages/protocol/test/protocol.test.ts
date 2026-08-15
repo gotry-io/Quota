@@ -14,22 +14,27 @@ import {
   DeviceProfileUpdateRequestSchema,
   DeviceProfileUpdateResponseSchema,
   DeviceSyncResponseSchema,
+  IOS_OAUTH_CLIENT_ID,
+  IOS_OAUTH_REDIRECT_URI,
+  IosLoginExchangeRequestSchema,
+  IosOAuthTokenResponseSchema,
+  IosSessionRefreshRequestSchema,
   LOCAL_PROVIDER_IDS,
   LOCAL_USAGE_PROTOCOL_VERSION,
-  MANAGED_DATA_PROTOCOL_VERSION,
   LocalProviderIdSchema,
   LocalUsageReportSchema,
+  MANAGED_DATA_PROTOCOL_VERSION,
   MAXIMUM_SNAPSHOTS_PER_ENVELOPE,
   OAuthTokenRequestSchema,
   OAuthTokenResponseSchema,
   PROTOCOL_VERSION,
+  PROVIDER_IDS,
+  PROVIDER_IDS_V3,
+  PricingCatalogSchema,
+  ProviderIdSchema,
   PublicProfileSchema,
   PublicProfileSettingsSchema,
   PublicProfileUpdateRequestSchema,
-  PROVIDER_IDS,
-  PROVIDER_IDS_V3,
-  ProviderIdSchema,
-  PricingCatalogSchema,
   QuotaCollectionReportSchema,
   QuotaSnapshotEnvelopeSchema,
   QuotaSnapshotEnvelopeV3Schema,
@@ -42,7 +47,7 @@ import {
 } from "../src/index.ts";
 
 describe("quota protocol v2", () => {
-  it("keeps local-only providers out of the released managed-account enum", () => {
+  it("keeps v3-only providers out of the released managed-account enum", () => {
     expect(PROVIDER_IDS).not.toContain("cursor");
     expect(ProviderIdSchema.safeParse("cursor").success).toBe(false);
     expect(LOCAL_PROVIDER_IDS).toContain("cursor");
@@ -53,6 +58,8 @@ describe("quota protocol v2", () => {
     expect(MANAGED_DATA_PROTOCOL_VERSION).toBe(3);
     expect(PROVIDER_IDS).not.toContain("cursor");
     expect(PROVIDER_IDS_V3).toContain("cursor");
+    expect(protocol.BILLING_AGENTS).not.toContain("cursor");
+    expect(protocol.BILLING_AGENTS_V3).toContain("cursor");
     const cursorEnvelope = {
       ...quotaEnvelope(),
       protocol_version: 3 as const,
@@ -294,6 +301,90 @@ describe("quota protocol v2", () => {
         verification_uri_complete: null,
         expires_in: 600,
         poll_interval_seconds: 5,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("adds a strictly additive quota-ios account-only token contract", () => {
+    const iosExchange = {
+      protocol_version: 2,
+      grant_type: "authorization_code",
+      client_id: IOS_OAUTH_CLIENT_ID,
+      code: "synthetic-login-code",
+      code_verifier: "a".repeat(43),
+      redirect_uri: IOS_OAUTH_REDIRECT_URI,
+    };
+    expect(IosLoginExchangeRequestSchema.safeParse(iosExchange).success).toBe(true);
+    expect(OAuthTokenRequestSchema.safeParse(iosExchange).success).toBe(false);
+    expect(
+      IosLoginExchangeRequestSchema.safeParse({
+        ...iosExchange,
+        installation_id: "6eec1da2-8d8f-4e77-9a9a-3b6d61bf8998",
+        device_display_name: "iPhone",
+        platform: "ios",
+      }).success,
+    ).toBe(false);
+    expect(
+      IosLoginExchangeRequestSchema.safeParse({
+        ...iosExchange,
+        redirect_uri: "http://127.0.0.1:49152/callback",
+      }).success,
+    ).toBe(false);
+    expect(
+      IosLoginExchangeRequestSchema.safeParse({
+        ...iosExchange,
+        redirect_uri: "io.gotry.quota://oauth/callback",
+      }).success,
+    ).toBe(false);
+    expect(protocol.PlatformSchema.safeParse("ios").success).toBe(false);
+    expect(protocol.PlatformSchema.options).toEqual(["macos", "linux", "windows"]);
+
+    const accountSession = {
+      access_token: "synthetic-access-token",
+      access_expires_at: "2026-08-02T12:15:00Z",
+      refresh_token: "synthetic-refresh-token",
+      refresh_expires_at: "2026-11-01T12:00:00Z",
+    };
+    const iosResponse = {
+      protocol_version: 2,
+      token_type: "Bearer",
+      account_id: "account_01",
+      account_session: accountSession,
+    };
+    expect(IosOAuthTokenResponseSchema.safeParse(iosResponse).success).toBe(true);
+    expect(OAuthTokenResponseSchema.safeParse(iosResponse).success).toBe(false);
+    expect(
+      IosOAuthTokenResponseSchema.safeParse({
+        ...iosResponse,
+        device_id: "device_01",
+        device_session: accountSession,
+      }).success,
+    ).toBe(false);
+    expect(
+      IosSessionRefreshRequestSchema.safeParse({
+        protocol_version: 2,
+        grant_type: "refresh_token",
+        client_id: IOS_OAUTH_CLIENT_ID,
+        token_audience: "account",
+        refresh_token: "synthetic-refresh-token",
+      }).success,
+    ).toBe(true);
+    expect(
+      IosSessionRefreshRequestSchema.safeParse({
+        protocol_version: 2,
+        grant_type: "refresh_token",
+        client_id: IOS_OAUTH_CLIENT_ID,
+        token_audience: "device",
+        refresh_token: "synthetic-refresh-token",
+      }).success,
+    ).toBe(false);
+    expect(
+      protocol.SessionRefreshRequestSchema.safeParse({
+        protocol_version: 2,
+        grant_type: "refresh_token",
+        client_id: IOS_OAUTH_CLIENT_ID,
+        token_audience: "account",
+        refresh_token: "synthetic-refresh-token",
       }).success,
     ).toBe(false);
   });

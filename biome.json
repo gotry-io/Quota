@@ -9,7 +9,10 @@
       "!**/target",
       "!**/node_modules",
       "!**/.svelte-kit",
-      "!apps/menubar/.swiftpm"
+      "!apps/menubar/.swiftpm",
+      "!packages/apple-client/.swiftpm",
+      "!packages/apple-shared/.swiftpm",
+      "!apps/ios/Quota.xcodeproj"
     ]
   },
   "formatter": {

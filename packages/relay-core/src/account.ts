@@ -1,6 +1,6 @@
 import type {
-  QuotaSnapshotEnvelopeV3,
   QuotaSnapshotV3 as QuotaSnapshot,
+  QuotaSnapshotEnvelopeV3,
 } from "@gotry-io/quota-protocol";
 
 export const ACCOUNT_SCOPES = ["account:read", "account:manage", "session:revoke:self"] as const;
@@ -13,7 +13,7 @@ export const DEVICE_SCOPES = [
   "session:revoke:self",
 ] as const;
 export type DeviceScope = (typeof DEVICE_SCOPES)[number];
-export type AccountClientKind = "web" | "cli";
+export type AccountClientKind = "web" | "cli" | "ios";
 export type LoginGrantKind = "browser_pkce" | "device_code";
 
 export interface AccountRecord {
@@ -167,6 +167,19 @@ export type LoginGrantConsumeResult =
     }
   | { outcome: "not_found" | "expired" | "consumed" | "not_approved" };
 
+export interface ConsumeAccountLoginGrantInput {
+  grant_id: string;
+  credential_hash: string;
+  completion_nonce_hash: string;
+  family_id: string;
+  account_session: SessionCredentialHashes;
+  consumed_at: string;
+}
+
+export type AccountLoginGrantConsumeResult =
+  | { outcome: "issued"; account_id: string }
+  | { outcome: "not_found" | "expired" | "consumed" | "not_approved" };
+
 export interface RefreshSessionInput {
   refresh_token_hash: string;
   new_access_token_hash: string;
@@ -244,6 +257,9 @@ export interface AccountState {
   authorizeDeviceGrant(input: AuthorizeDeviceGrantInput): Promise<DeviceGrantDecisionOutcome>;
   pollDeviceGrant(hash: string, checkedAt: string): Promise<DeviceGrantPollResult>;
   consumeLoginGrant(input: ConsumeLoginGrantInput): Promise<LoginGrantConsumeResult>;
+  consumeAccountLoginGrant(
+    input: ConsumeAccountLoginGrantInput,
+  ): Promise<AccountLoginGrantConsumeResult>;
   authorizeAccountSession(
     accessTokenHash: string,
     checkedAt: string,
@@ -253,6 +269,7 @@ export interface AccountState {
     checkedAt: string,
   ): Promise<DevicePrincipal | null>;
   refreshAccountSession(input: RefreshSessionInput): Promise<AccountPrincipal | null>;
+  refreshAccountOnlySession(input: RefreshSessionInput): Promise<AccountPrincipal | null>;
   refreshDeviceSession(input: RefreshSessionInput): Promise<DevicePrincipal | null>;
   revokeRefreshSession(input: RevokeRefreshSessionInput): Promise<void>;
   revokePrincipalFamily(

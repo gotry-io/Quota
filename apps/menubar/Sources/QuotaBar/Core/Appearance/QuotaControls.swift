@@ -52,6 +52,7 @@ struct QuotaHeaderButtonStyle: ButtonStyle {
     let configuration: Configuration
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.isEnabled) private var isEnabled
     @State private var isHovered = false
 
     var body: some View {
@@ -65,12 +66,13 @@ struct QuotaHeaderButtonStyle: ButtonStyle {
             )
         }
         .contentShape(Rectangle())
+        .opacity(isEnabled ? 1 : 0.65)
         .onHover { isHovered = $0 }
         .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: isHovered)
     }
 
     private var hoverFill: Color {
-      isHovered ? QuotaPalette.rowHoverFill : .clear
+      isHovered && isEnabled ? QuotaPalette.rowHoverFill : .clear
     }
   }
 }

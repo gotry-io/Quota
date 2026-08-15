@@ -30,6 +30,10 @@
     "test:linux-cli": "cargo test --locked --package quotacli",
     "build:menubar:app": "./scripts/package-menubar.sh",
     "build:menubar:visual": "./scripts/package-menubar-visual.sh",
+    "generate:ios": "./scripts/generate-ios.sh",
+    "check:ios": "./scripts/check-ios.sh",
+    "test:ios": "./scripts/test-ios.sh",
+    "build:ios": "./scripts/build-ios.sh",
     "deploy:cloudflare": "pnpm --filter @gotry-io/quota-relay deploy:cloudflare",
     "dev:web": "pnpm --filter @gotry-io/quota-web dev",
     "dev:relay": "pnpm --filter @gotry-io/quota-relay dev"

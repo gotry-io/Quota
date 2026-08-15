@@ -1,6 +1,10 @@
 import SwiftUI
 
 enum QuotaDesign {
+  enum Motion {
+    static let pageTransitionDuration: TimeInterval = 0.28
+  }
+
   enum Layout {
     static let panelWidth: CGFloat = 320
     /// Fixed panel height for every page. MenuBarExtra first-open ignores flexible heights.
@@ -12,7 +16,9 @@ enum QuotaDesign {
     static var panelContentWidth: CGFloat { panelWidth - (panelHorizontalPadding * 2) }
 
     static let pageVerticalPadding: CGFloat = 16
+    static let emptyStateHorizontalPadding: CGFloat = 24
     static let emptyStateVerticalPadding: CGFloat = 24
+    static let emptyStateContentMaxWidth: CGFloat = 240
 
     static let headerHeight: CGFloat = 44
     static let footerHeight: CGFloat = 36
@@ -292,6 +298,7 @@ struct QuotaSecondaryButtonStyle: ButtonStyle {
     configuration.label
       .quotaFont(.settingsLabel)
       .foregroundStyle(labelColor)
+      .tint(labelColor)
       .padding(.horizontal, 10)
       .frame(minHeight: QuotaDesign.Layout.minimumInteractiveDimension)
       .background(surfaceFill(isPressed: configuration.isPressed))

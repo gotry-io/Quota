@@ -5,22 +5,30 @@ struct MenuBarContentView: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var navigation: MenuBarNavigationState
   @State private var navigationDirection: NavigationDirection = .forward
+  @State private var navigationTransitionActive = false
+  @State private var navigationTransitionGeneration = 0
   @State private var isLogoutConfirmationPresented = false
   @State private var usageSource: UsageSource = .account
   @State private var usagePeriod: UsagePeriod = .today
+  @State private var diagnostics = DiagnosticsPageModel()
   private let performsInitialRefresh: Bool
+  private let performsDiagnosticsCheckOnEntry: Bool
   private let seedsLaunchAtLogin: Bool
 
   init(
     model: MenuBarViewModel,
     initialPath: [MenuBarRoute] = [],
     performsInitialRefresh: Bool = true,
+    performsDiagnosticsCheckOnEntry: Bool = true,
+    diagnosticsModel: DiagnosticsPageModel? = nil,
     seedsLaunchAtLogin: Bool = true
   ) {
     self.model = model
     self.performsInitialRefresh = performsInitialRefresh
+    self.performsDiagnosticsCheckOnEntry = performsDiagnosticsCheckOnEntry
     self.seedsLaunchAtLogin = seedsLaunchAtLogin
     _navigation = State(initialValue: MenuBarNavigationState(path: initialPath))
+    _diagnostics = State(initialValue: diagnosticsModel ?? DiagnosticsPageModel())
   }
 
   var body: some View {
@@ -39,7 +47,7 @@ struct MenuBarContentView: View {
           .transition(pageTransition)
       }
     }
-    .animation(panelAnimation, value: navigation.pageIdentity)
+    .environment(\.quotaPageTransitionActive, navigationTransitionActive)
     .task {
       if seedsLaunchAtLogin {
         LaunchAtLoginController.seedDefaultOnIfNeeded()
@@ -103,7 +111,7 @@ struct MenuBarContentView: View {
   }
 
   private var panelAnimation: Animation? {
-    reduceMotion ? nil : .snappy(duration: 0.28)
+    reduceMotion ? nil : .snappy(duration: QuotaDesign.Motion.pageTransitionDuration)
   }
 
   private var pageTransition: AnyTransition {
@@ -123,12 +131,23 @@ struct MenuBarContentView: View {
   }
 
   private var headerTrailingAction: MenuBarHeader.TrailingAction {
+    guard !navigationTransitionActive else { return .none }
     if navigation.showsSettingsMenu { return .overflowMenu }
     if navigation.currentRoute == .usage,
       model.usageUploadEnabled,
       model.accountSummary != nil
     {
       return .usageSource(usageSource) { usageSource = $0 }
+    }
+    if navigation.currentRoute == .diagnostics, diagnostics.showsHeaderActions {
+      return .diagnostics(
+        isChecking: diagnostics.isLoading,
+        canRecheck: diagnostics.canRecheck,
+        canCopy: diagnostics.canCopy,
+        didCopy: diagnostics.didCopy,
+        onRecheck: { Task { await runDiagnosticsCheck() } },
+        onCopy: { diagnostics.copyTextReport() }
+      )
     }
     if !navigation.canNavigateBack { return .openSettings(openSettings) }
     return .none
@@ -172,7 +191,14 @@ struct MenuBarContentView: View {
     case .support:
       SettingsSupportView(model: model, onOpenDiagnostics: { navigate(to: .diagnostics) })
     case .diagnostics:
-      SettingsDiagnosticsView(model: model)
+      SettingsDiagnosticsView(
+        state: diagnostics.pageState,
+        onRetry: { Task { await runDiagnosticsCheck() } }
+      )
+      .task {
+        guard performsDiagnosticsCheckOnEntry else { return }
+        await runDiagnosticsCheck()
+      }
     }
   }
 
@@ -180,10 +206,17 @@ struct MenuBarContentView: View {
     navigate(to: .settings)
   }
 
+  private func runDiagnosticsCheck() async {
+    await diagnostics.runCheck { try await model.diagnose() }
+  }
+
   private func navigate(to route: MenuBarRoute) {
     navigationDirection = .forward
     var next = navigation
     next.open(route)
+    if route == .diagnostics {
+      diagnostics.prepareForEntry()
+    }
     applyNavigation(next)
   }
 
@@ -197,10 +230,32 @@ struct MenuBarContentView: View {
   private func applyNavigation(_ next: MenuBarNavigationState) {
     guard next != navigation else { return }
     if let panelAnimation {
-      withAnimation(panelAnimation) { navigation = next }
+      let generation = navigationTransitionGeneration + 1
+      updateWithoutAnimation {
+        navigationTransitionGeneration = generation
+        navigationTransitionActive = true
+      }
+      withAnimation(panelAnimation, completionCriteria: .removed) {
+        navigation = next
+      } completion: {
+        guard navigationTransitionGeneration == generation else { return }
+        updateWithoutAnimation {
+          navigationTransitionActive = false
+        }
+      }
     } else {
-      navigation = next
+      updateWithoutAnimation {
+        navigationTransitionGeneration += 1
+        navigationTransitionActive = false
+        navigation = next
+      }
     }
+  }
+
+  private func updateWithoutAnimation(_ update: () -> Void) {
+    var transaction = Transaction()
+    transaction.disablesAnimations = true
+    withTransaction(transaction, update)
   }
 }
 

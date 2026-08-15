@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import Observation
+import QuotaPresentation
 
 enum QuotaOverviewState: Equatable {
   case loading
@@ -58,7 +59,7 @@ struct ProviderReportingSourcePresentation: Equatable, Identifiable {
   func detailLabel(now: Date) -> String {
     var parts = [kind.rawValue]
     if isStale { parts.append("Stale") }
-    parts.append("\(CompactAgeFormatter.string(since: observedAt, now: now)) ago")
+    parts.append("\(CompactAgeFormat.string(since: observedAt, now: now)) ago")
     return parts.joined(separator: " · ")
   }
 }
@@ -72,7 +73,7 @@ struct BrowserSessionAccountChoice: Identifiable, Equatable, Sendable {
   let cookieHeader: String
 
   var id: String { accountFingerprint }
-  var title: String { accountLabel ?? "Account" }
+  var title: String { PlanDisplay.accountLabel(accountLabel) ?? "Account" }
   var subtitle: String { "\(browserName) · \(profileName)" }
 }
 
@@ -144,9 +145,7 @@ final class MenuBarViewModel {
   }
 
   var accountDisplayLabel: String {
-    let label = accountSummary?.account.displayLabel?
-      .trimmingCharacters(in: .whitespacesAndNewlines)
-    return label?.isEmpty == false ? label! : "Quota account"
+    PlanDisplay.accountLabel(accountSummary?.account.displayLabel) ?? "Quota account"
   }
 
   var accountDeviceSummary: String {

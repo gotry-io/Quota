@@ -95,6 +95,11 @@ enum LastCheckedLabel {
 
   static func accessibleString(from date: Date?) -> String {
     guard let date else { return "Not checked" }
-    return "Last checked \(date.formatted(date: .omitted, time: .shortened))"
+    return "Last checked \(string(from: date))"
+  }
+
+  /// Diagnostics status caption: fixed locale-shortened check time, not relative age.
+  static func checkedStatusString(from date: Date) -> String {
+    "Checked \(string(from: date))"
   }
 }

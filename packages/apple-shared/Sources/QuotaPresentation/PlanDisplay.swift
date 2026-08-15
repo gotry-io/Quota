@@ -1,7 +1,7 @@
 import Foundation
 
-enum PlanDisplay {
-  static func displayName(_ raw: String?) -> String? {
+public enum PlanDisplay: Sendable {
+  public static func displayName(_ raw: String?) -> String? {
     guard let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty
     else {
       return nil
@@ -20,12 +20,12 @@ enum PlanDisplay {
   }
 
   /// Plan text only — never falls back to account label.
-  static func planBadge(_ raw: String?) -> String? {
+  public static func planBadge(_ raw: String?) -> String? {
     displayName(raw)
   }
 
   /// Secondary account identity under the provider header.
-  static func accountLabel(_ label: String?) -> String? {
+  public static func accountLabel(_ label: String?) -> String? {
     nonempty(label)
   }
 

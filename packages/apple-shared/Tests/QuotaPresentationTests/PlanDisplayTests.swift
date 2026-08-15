@@ -1,6 +1,5 @@
+import QuotaPresentation
 import Testing
-
-@testable import QuotaBar
 
 struct PlanDisplayTests {
   @Test
@@ -14,6 +13,8 @@ struct PlanDisplayTests {
     #expect(PlanDisplay.displayName("supergrok") == "SuperGrok")
     #expect(PlanDisplay.displayName("super_grok") == "SuperGrok")
     #expect(PlanDisplay.displayName("SuperGrok") == "SuperGrok")
+    #expect(PlanDisplay.displayName("edu") == "Edu")
+    #expect(PlanDisplay.displayName("education") == "Education")
   }
 
   @Test
@@ -36,18 +37,6 @@ struct PlanDisplayTests {
     #expect(PlanDisplay.planBadge(nil) == nil)
     #expect(PlanDisplay.accountLabel("eg***@dhao.me") == "eg***@dhao.me")
     #expect(PlanDisplay.accountLabel("  ") == nil)
-  }
-
-}
-
-struct QuotaUsageToneTests {
-  @Test
-  func classifiesRemainingPercentThresholds() {
-    #expect(QuotaUsageTone.tone(remainingPercent: 100) == .healthy)
-    #expect(QuotaUsageTone.tone(remainingPercent: 40) == .healthy)
-    #expect(QuotaUsageTone.tone(remainingPercent: 39.9) == .warning)
-    #expect(QuotaUsageTone.tone(remainingPercent: 15) == .warning)
-    #expect(QuotaUsageTone.tone(remainingPercent: 14.9) == .critical)
-    #expect(QuotaUsageTone.tone(remainingPercent: 0) == .critical)
+    #expect(PlanDisplay.accountLabel(nil) == nil)
   }
 }
