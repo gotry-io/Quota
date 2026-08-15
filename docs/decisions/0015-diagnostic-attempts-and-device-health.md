@@ -35,9 +35,11 @@ old Device object without the required nullable `health` field. Account session,
 identity, local facts, outbox work, and Account Usage period caches remain intact; the next refresh
 rebuilds the summary from Relay.
 
-An attempt is inserted before work begins and the same row is finalized after success, partial work,
-no work, failure, cancellation, or a caught worker failure. Opening the database converts any
-remaining running rows to `interrupted/process_interrupted`. `partial` is distinct from `success`:
+An attempt is inserted before work begins; if that insert fails, the associated work does not start.
+The same row is finalized after success, partial work, no work, failure, cancellation, or a caught
+worker failure. Completing a parent refresh atomically marks any still-running child as
+`interrupted/process_interrupted`, and opening the database performs the same recovery for any
+remaining running rows. `partial` is distinct from `success`:
 stable malformed Usage or incomplete coverage cannot become a successful scan. Authentication may
 remain the cause of an opportunistic `no_work` attempt without making optional local collection
 unhealthy.

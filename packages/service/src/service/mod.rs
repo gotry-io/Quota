@@ -848,7 +848,7 @@ impl LocalService {
             let _ = self
                 .inner
                 .state
-                .finish_diagnostic_attempt(attempt, &completion);
+                .finish_diagnostic_attempt_with_interrupted_children(attempt, &completion);
         }
     }
 
@@ -1532,11 +1532,12 @@ mod tests {
         }
     }
 
-    struct PanicChildBackend {
+    struct ChildLeakBackend {
         state: Arc<StateStore>,
+        panic_after_child: bool,
     }
 
-    impl LocalBackend for PanicChildBackend {
+    impl LocalBackend for ChildLeakBackend {
         fn refresh(&self, _: Arc<AtomicBool>) -> RefreshOutcome {
             let (parent, _) = self
                 .state
@@ -1553,7 +1554,16 @@ mod tests {
                     Some(parent),
                 )
                 .expect("child attempt");
-            panic!("synthetic child panic");
+            if self.panic_after_child {
+                panic!("synthetic child panic");
+            }
+            RefreshOutcome {
+                quota: Ok(serde_json::json!({})),
+                usage: Ok(serde_json::json!({})),
+                account: Ok(serde_json::json!({})),
+                pricing: Ok(serde_json::json!({})),
+                overview: None,
+            }
         }
 
         fn diagnose(&self) -> Result<DiagnosticReport, BackendError> {
@@ -1746,8 +1756,9 @@ mod tests {
         let service = LocalService::new(
             state.clone(),
             Arc::new(RecordingSink::default()),
-            Arc::new(PanicChildBackend {
+            Arc::new(ChildLeakBackend {
                 state: state.clone(),
+                panic_after_child: true,
             }),
         );
 
@@ -1775,6 +1786,73 @@ mod tests {
                 .is_none()
         );
 
+        let child = state
+            .diagnostic_attempt_facts(
+                DiagnosticAttemptKind::UsageScan,
+                DiagnosticSource::ThisDevice,
+                Some("agent:codex"),
+            )
+            .expect("child facts")
+            .latest_completed
+            .expect("completed child");
+        assert_eq!(child.outcome, DiagnosticAttemptOutcome::Interrupted);
+        assert_eq!(child.code, Some(DiagnosticAttemptCode::ProcessInterrupted));
+        assert_eq!(child.recovery, DiagnosticRecovery::Retry);
+
+        service.shutdown();
+        drop(service);
+        drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn refresh_completion_interrupts_running_child_attempts() {
+        let root = std::env::temp_dir().join(format!("quota-refresh-child-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        let service = LocalService::new(
+            state.clone(),
+            Arc::new(RecordingSink::default()),
+            Arc::new(ChildLeakBackend {
+                state: state.clone(),
+                panic_after_child: false,
+            }),
+        );
+
+        let result = service.request_refresh_with_trigger(DiagnosticAttemptTrigger::Recheck);
+        assert!(result.accepted);
+        let deadline = std::time::Instant::now() + Duration::from_secs(1);
+        while service
+            .inner
+            .refresh
+            .lock()
+            .expect("refresh")
+            .active
+            .is_some()
+            && std::time::Instant::now() < deadline
+        {
+            thread::yield_now();
+        }
+        assert!(
+            service
+                .inner
+                .refresh
+                .lock()
+                .expect("refresh")
+                .active
+                .is_none()
+        );
+
+        let refresh = state
+            .diagnostic_attempt_facts(
+                DiagnosticAttemptKind::Refresh,
+                DiagnosticSource::System,
+                None,
+            )
+            .expect("refresh facts")
+            .latest_completed
+            .expect("completed refresh");
+        assert_eq!(refresh.outcome, DiagnosticAttemptOutcome::Success);
         let child = state
             .diagnostic_attempt_facts(
                 DiagnosticAttemptKind::UsageScan,
