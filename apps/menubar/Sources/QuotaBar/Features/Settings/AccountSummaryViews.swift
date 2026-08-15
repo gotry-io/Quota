@@ -1,41 +1,92 @@
 import Foundation
+import QuotaPresentation
 import SwiftUI
+
+private enum AccountDevicesPageState: Equatable {
+  case loading
+  case empty(message: String)
+  case error(message: String)
+  case content(summary: AccountSummary, refreshWarning: String?)
+}
 
 struct AccountDevicesView: View {
   @Bindable var model: MenuBarViewModel
 
   var body: some View {
+    QuotaNavigationStableContent(state: pageState) { state in
+      content(state)
+    }
+  }
+
+  private var pageState: AccountDevicesPageState {
+    if let summary = model.accountSummary {
+      return .content(
+        summary: summary,
+        refreshWarning: model.accountErrorMessage ?? model.errorMessage
+      )
+    } else if model.accountRefreshing {
+      return .loading
+    } else if model.accountState == .signedOut || model.accountState == .logoutPending {
+      return .empty(message: accountUnavailableMessage)
+    } else if let pageErrorMessage = model.accountErrorMessage ?? model.errorMessage {
+      return .error(message: pageErrorMessage)
+    } else {
+      return .empty(message: accountUnavailableMessage)
+    }
+  }
+
+  @ViewBuilder
+  private func content(_ state: AccountDevicesPageState) -> some View {
+    switch state {
+    case .loading:
+      QuotaPageStateView(loadingTitle: "Loading devices…")
+    case .empty(let message):
+      QuotaPageStateView(
+        emptySystemImage: "desktopcomputer",
+        title: "No Account Devices",
+        message: message
+      )
+    case .error(let message):
+      QuotaPageStateView(
+        errorTitle: "Devices Unavailable",
+        message: message,
+        retry: { Task { await model.refresh() } }
+      )
+    case .content(let summary, let refreshWarning):
+      loadedDevices(summary, refreshWarning: refreshWarning)
+    }
+  }
+
+  private func loadedDevices(_ summary: AccountSummary, refreshWarning: String?) -> some View {
     ScrollView {
       VStack(alignment: .leading, spacing: QuotaDesign.Spacing.md) {
-        if let accountErrorMessage = model.accountErrorMessage {
-          accountIssue(accountErrorMessage)
+        if let refreshWarning {
+          QuotaInlineNotice(message: refreshWarning)
         }
 
-        if let summary = model.accountSummary {
-          SettingsSection(title: "Account Devices") {
-            if summary.devices.isEmpty {
-              settingsEmptyCopy("No devices have signed in yet.")
-            } else {
-              VStack(alignment: .leading, spacing: 0) {
-                ForEach(summary.devices) { device in
-                  SettingsListRow(
-                    title: device.displayName,
-                    subtitle: deviceSubtitle(device),
-                    systemImage: device.platform == .macos ? "desktopcomputer" : "terminal",
-                    height: QuotaDesign.Layout.settingsListRowHeight
-                  ) {
-                    Text(statusLabel(device.status))
-                      .quotaListSecondaryStyle()
-                  }
-                  .accessibilityElement(children: .ignore)
-                  .accessibilityLabel(device.displayName)
-                  .accessibilityValue("\(statusLabel(device.status)). \(deviceSubtitle(device))")
+        SettingsSection(title: "Account Devices") {
+          if summary.devices.isEmpty {
+            QuotaSectionStateView(
+              presentation: .empty(message: "No devices have signed in yet.")
+            )
+          } else {
+            VStack(alignment: .leading, spacing: 0) {
+              ForEach(summary.devices) { device in
+                SettingsListRow(
+                  title: device.displayName,
+                  subtitle: deviceSubtitle(device),
+                  systemImage: device.platform == .macos ? "desktopcomputer" : "terminal",
+                  height: QuotaDesign.Layout.settingsListRowHeight
+                ) {
+                  Text(statusLabel(device.status))
+                    .quotaListSecondaryStyle()
                 }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(device.displayName)
+                .accessibilityValue("\(statusLabel(device.status)). \(deviceSubtitle(device))")
               }
             }
           }
-        } else {
-          accountUnavailableCopy
         }
       }
       .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -44,12 +95,10 @@ struct AccountDevicesView: View {
     }
   }
 
-  private var accountUnavailableCopy: some View {
-    settingsEmptyCopy(
-      model.accountState == .logoutPending
-        ? "Logout is pending. QuotaBar will finish when this Mac is online."
-        : "Sign in from Settings to view account devices."
-    )
+  private var accountUnavailableMessage: String {
+    model.accountState == .logoutPending
+      ? "Logout is pending. QuotaBar will finish when this Mac is online."
+      : "Sign in from Settings to view account devices."
   }
 
   private func deviceSubtitle(_ device: AccountDevice) -> String {
@@ -60,7 +109,7 @@ struct AccountDevicesView: View {
       case .windows: "Windows"
       }
     guard let activity = device.lastSeenAt ?? device.signedOutAt else { return platform }
-    return "\(platform) · Seen \(CompactAgeFormatter.string(since: activity, now: Date())) ago"
+    return "\(platform) · Seen \(CompactAgeFormat.string(since: activity, now: Date())) ago"
   }
 
   private func statusLabel(_ status: AccountDeviceStatus) -> String {
@@ -78,19 +127,42 @@ struct AccountUsageView: View {
   @Binding var period: UsagePeriod
 
   var body: some View {
+    QuotaNavigationStableContent(state: pageState) { state in
+      content(state)
+    }
+  }
+
+  private var pageState: AccountUsagePageState {
+    let presentedSource = effectiveSource
+    return AccountUsagePageState(
+      refreshWarning: model.errorMessage,
+      accountWarning: presentedSource == .account ? model.accountErrorMessage : nil,
+      statusWarning: usageStatusWarning(source: presentedSource),
+      usage: presentedUsage(source: presentedSource),
+      isPreparing: model.isPreparingUsage(source: presentedSource)
+    )
+  }
+
+  private func content(_ state: AccountUsagePageState) -> some View {
     ScrollView {
       VStack(alignment: .leading, spacing: QuotaDesign.Spacing.md) {
-        if effectiveSource == .account, let accountErrorMessage = model.accountErrorMessage {
-          accountIssue(accountErrorMessage)
+        if let refreshWarning = state.refreshWarning {
+          QuotaInlineNotice(message: refreshWarning)
+        }
+
+        if let accountErrorMessage = state.accountWarning,
+          accountErrorMessage != state.refreshWarning
+        {
+          QuotaInlineNotice(message: accountErrorMessage)
         }
 
         usagePeriodTabs
 
-        if let warning = usageStatusWarning {
-          accountIssue(warning)
+        if let warning = state.statusWarning {
+          QuotaInlineNotice(message: warning)
         }
 
-        if let usage = presentedUsage {
+        if let usage = state.usage {
           SettingsSection(title: "Summary") {
             usageSummary(usage)
           }
@@ -98,7 +170,9 @@ struct AccountUsageView: View {
           SettingsSection(title: "Models") {
             let providers = presentedProviders(usage.models)
             if providers.isEmpty {
-              settingsEmptyCopy("No model usage is available for this period.")
+              QuotaSectionStateView(
+                presentation: .empty(message: "No model usage is available for this period.")
+              )
             } else {
               VStack(
                 alignment: .leading,
@@ -113,11 +187,13 @@ struct AccountUsageView: View {
           }
 
         } else {
-          settingsEmptyCopy(
-            model.isPreparingUsage(source: effectiveSource)
-              ? "Preparing Usage…"
-              : "No Usage is available for this period."
-          )
+          SettingsSection(title: "Summary") {
+            QuotaSectionStateView(
+              presentation: state.isPreparing
+                ? .loading(title: "Preparing Usage…")
+                : .empty(message: "No Usage is available for this period.")
+            )
+          }
         }
       }
       .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -169,16 +245,16 @@ struct AccountUsageView: View {
     .accessibilityLabel("Usage period")
   }
 
-  private var usageStatusWarning: String? {
-    guard let detail = model.usageDetail(source: effectiveSource, period: period) else { return nil }
+  private func usageStatusWarning(source: UsageSource) -> String? {
+    guard let detail = model.usageDetail(source: source, period: period) else { return nil }
     guard detail.incomplete || detail.detailsTruncated else { return nil }
-    return effectiveSource == .local
+    return source == .local
       ? "Some local Usage may be incomplete."
       : "Some account Usage may be incomplete."
   }
 
-  private var presentedUsage: PresentedUsage? {
-    guard let detail = model.usageDetail(source: effectiveSource, period: period) else { return nil }
+  private func presentedUsage(source: UsageSource) -> PresentedUsage? {
+    guard let detail = model.usageDetail(source: source, period: period) else { return nil }
     let usage = detail.usage
     let localModels = usage.clients.flatMap { client in
       client.providers.flatMap { provider in
@@ -367,7 +443,15 @@ extension UsagePeriod {
   }
 }
 
-private struct PresentedUsage {
+private struct AccountUsagePageState: Equatable {
+  let refreshWarning: String?
+  let accountWarning: String?
+  let statusWarning: String?
+  let usage: PresentedUsage?
+  let isPreparing: Bool
+}
+
+private struct PresentedUsage: Equatable {
   let totals: PresentedUsageTotals
   let cost: UsageCostOutcome
   let models: [PresentedUsageModel]
@@ -380,7 +464,7 @@ private struct PresentedUsageProvider: Identifiable {
   var id: String { provider?.rawValue ?? "unknown" }
 }
 
-private struct PresentedUsageTotals {
+private struct PresentedUsageTotals: Equatable {
   let totalTokens: Int
   let inputTokens: Int
   let outputTokens: Int
@@ -411,7 +495,7 @@ private struct PresentedUsageTotals {
   }
 }
 
-private struct PresentedUsageModel {
+private struct PresentedUsageModel: Equatable {
   let provider: InferenceProvider?
   let client: BillingAgent?
   let model: String
@@ -480,103 +564,4 @@ extension InferenceProvider {
     }
   }
 
-}
-
-@ViewBuilder
-@MainActor
-private func accountIssue(_ message: String) -> some View {
-  Label(message, systemImage: "exclamationmark.circle")
-    .quotaSecondaryStyle()
-    .fixedSize(horizontal: false, vertical: true)
-}
-
-@ViewBuilder
-@MainActor
-private func settingsEmptyCopy(_ message: String) -> some View {
-  Text(message)
-    .quotaSecondaryStyle()
-    .fixedSize(horizontal: false, vertical: true)
-    .padding(.horizontal, QuotaDesign.Layout.groupContentInset)
-    .padding(.vertical, QuotaDesign.Layout.settingsRowVerticalPadding)
-    .frame(
-      maxWidth: .infinity, minHeight: QuotaDesign.Layout.settingsRowHeight, alignment: .leading)
-}
-
-enum UsageValueFormatter {
-  static func count(_ value: Int) -> String {
-    value.formatted(
-      .number
-        .notation(.compactName)
-        .precision(.significantDigits(1...3))
-    )
-    .replacingOccurrences(of: "K", with: "k")
-  }
-
-  static func accessibleCount(_ value: Int) -> String {
-    value.formatted(.number)
-  }
-
-  static func compactCost(_ outcome: UsageCostOutcome) -> String {
-    let amount = outcome.amountMicrousd.flatMap { usd($0, maximumFractionDigits: 2) } ?? "$0.00"
-    return switch outcome.status {
-    case .complete: amount
-    case .partial: "≥ \(amount)"
-    case .unavailable: "— unpriced"
-    }
-  }
-
-  static func tokensAndCost(_ tokens: Int, _ cost: UsageCostOutcome) -> String {
-    let tokens = count(tokens)
-    guard cost.status != .unavailable, cost.amountMicrousd != nil else { return tokens }
-    return "\(tokens) · \(compactCost(cost))"
-  }
-
-  static func precedes(
-    cost leftCost: UsageCostOutcome,
-    tokens leftTokens: Int,
-    name leftName: String,
-    before rightCost: UsageCostOutcome,
-    tokens rightTokens: Int,
-    name rightName: String
-  ) -> Bool {
-    let left = normalizedMicrousd(leftCost.amountMicrousd)
-    let right = normalizedMicrousd(rightCost.amountMicrousd)
-    if (left != nil) != (right != nil) { return left != nil }
-    if let left, let right, left != right {
-      return left.count == right.count ? left > right : left.count > right.count
-    }
-    if leftTokens != rightTokens { return leftTokens > rightTokens }
-    return leftName.localizedStandardCompare(rightName) == .orderedAscending
-  }
-
-  static func agent(_ agent: BillingAgent) -> String {
-    switch agent {
-    case .codex: "Codex"
-    case .claudeCode: "Claude Code"
-    case .grok: "Grok"
-    case .opencode: "OpenCode"
-    case .pi: "Pi"
-    case .cursor: "Cursor"
-    }
-  }
-
-  private static func usd(_ microusd: String, maximumFractionDigits: Int) -> String? {
-    guard let decimal = Decimal(string: microusd, locale: Locale(identifier: "en_US_POSIX")) else {
-      return nil
-    }
-    let dollars = decimal / 1_000_000
-    let formatter = NumberFormatter()
-    formatter.numberStyle = .currency
-    formatter.currencyCode = "USD"
-    formatter.locale = .current
-    formatter.minimumFractionDigits = 2
-    formatter.maximumFractionDigits = maximumFractionDigits
-    return formatter.string(from: NSDecimalNumber(decimal: dollars))
-  }
-
-  private static func normalizedMicrousd(_ value: String?) -> String? {
-    guard let value else { return nil }
-    let normalized = value.drop(while: { $0 == "0" })
-    return normalized.isEmpty ? "0" : String(normalized)
-  }
 }

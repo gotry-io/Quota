@@ -54,6 +54,7 @@
     case agents
     case providerCodex = "provider-codex"
     case providerOpenRouter = "provider-openrouter"
+    case providerCursor = "provider-cursor"
     case devices
     case usage
     case support
@@ -66,6 +67,7 @@
       case .agents: [.settings, .agents]
       case .providerCodex: [.settings, .agents, .provider(.codex)]
       case .providerOpenRouter: [.settings, .agents, .provider(.openrouter)]
+      case .providerCursor: [.settings, .agents, .provider(.cursor)]
       case .devices: [.settings, .devices]
       case .usage: [.settings, .usage]
       case .support: [.settings, .support]
@@ -163,6 +165,26 @@
       }
     }
 
+    @MainActor
+    func makeDiagnosticsModel() -> DiagnosticsPageModel {
+      guard dataSource == .fixture else { return DiagnosticsPageModel() }
+      switch fixture {
+      case .loading:
+        return DiagnosticsPageModel(isLoading: true)
+      case .content:
+        return DiagnosticsPageModel(report: diagnosticVisualReport(at: referenceDate))
+      case .cachedRefreshError:
+        return DiagnosticsPageModel(
+          report: diagnosticVisualReport(at: referenceDate),
+          errorMessage: "The latest check failed. Showing the last diagnostics report."
+        )
+      case .empty:
+        return DiagnosticsPageModel(report: signedOutDiagnosticVisualReport(at: referenceDate))
+      case .unavailable:
+        return DiagnosticsPageModel(errorMessage: "The bundled local service could not be started.")
+      }
+    }
+
     func prepareEnvironment() {
       ProviderDisplayOrder.reset()
       for provider in ProviderID.allCases {
@@ -192,6 +214,73 @@
       accountSummary: accountSummary,
       authStatus: .signedIn,
       overview: overviewItems(summary: accountSummary, now: date)
+    )
+  }
+
+  private func diagnosticVisualReport(at date: Date) -> LocalServiceDiagnosticReport {
+    LocalServiceDiagnosticReport(
+      schemaVersion: 1,
+      status: .healthy,
+      generatedAt: date,
+      client: LocalServiceDiagnosticClient(name: "QuotaBar", version: "Visual QA"),
+      components: [
+        LocalServiceDiagnosticComponent(
+          name: "providers", status: .ready, message: nil,
+          metrics: ["configured": 3, "discovered": 5]
+        ),
+        LocalServiceDiagnosticComponent(
+          name: "quota", status: .ready, message: nil,
+          metrics: ["results": 5, "success": 5]
+        ),
+        LocalServiceDiagnosticComponent(
+          name: "usage", status: .ready, message: nil,
+          metrics: ["records": 128, "files": 4]
+        ),
+        LocalServiceDiagnosticComponent(
+          name: "pricing", status: .ready, message: nil,
+          metrics: ["entries": 126, "catalog_present": 1, "catalog_valid": 1]
+        ),
+        LocalServiceDiagnosticComponent(
+          name: "account", status: .ready, message: nil,
+          metrics: ["signed_in": 1, "devices": 2]
+        ),
+        LocalServiceDiagnosticComponent(
+          name: "sync", status: .ready, message: nil,
+          metrics: [
+            "usage_upload_enabled": 1, "uploadable_dirty_ranges": 0, "outbox": 0,
+            "last_upload_success": 1,
+          ]
+        ),
+      ],
+      issues: []
+    )
+  }
+
+  private func signedOutDiagnosticVisualReport(at date: Date) -> LocalServiceDiagnosticReport {
+    let report = diagnosticVisualReport(at: date)
+    return LocalServiceDiagnosticReport(
+      schemaVersion: report.schemaVersion,
+      status: .degraded,
+      generatedAt: report.generatedAt,
+      client: report.client,
+      components: report.components.map { component in
+        guard component.name == "quota" else { return component }
+        return LocalServiceDiagnosticComponent(
+          name: component.name,
+          status: .degraded,
+          message: nil,
+          metrics: ["results": 1, "success": 0]
+        )
+      },
+      issues: [
+        LocalServiceDiagnosticIssue(
+          component: "quota",
+          code: "auth_required",
+          severity: .warning,
+          count: 1,
+          message: "recovery_login"
+        )
+      ]
     )
   }
 

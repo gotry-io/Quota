@@ -61,6 +61,12 @@ report.
 `healthy` means no component is degraded or blocked. `degraded` means valid data remains available
 but a bounded subset was skipped, stale, partial, unpriced, or awaiting retry. `blocked` means the
 capability cannot make progress without a repair such as login, configuration, upgrade, or retry.
+Quota health covers providers that currently expose discoverable credentials or have explicit local
+configuration; optional providers the user has not configured are not individual failures. An
+installation with no monitored provider reports Quota as blocked with a provider-configuration
+recovery issue. Sync health counts only closed dirty Usage ranges that are eligible for upload. The
+open UTC hour remains dirty while its source data can still change and does not by itself degrade
+health.
 QuotaCLI exits zero only for `healthy`; `degraded` and `blocked` have stable nonzero exits.
 
 ## Consequences

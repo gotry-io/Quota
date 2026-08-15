@@ -34,7 +34,8 @@ data requirements. Architecture and product behavior are defined in
   and persists only the accepted header plus an irreversible fingerprint and bounded masked label
   in owner-only SQLite. Failed validation/commit preserves the old session; disconnect removes it
   transactionally.
-- Quota Web receives normalized account data only. It does not discover local credentials or logs.
+- Quota Web and the Quota iOS `quota-ios` account client receive normalized account data only. They
+  do not discover local credentials or logs.
   Public `/u/{username}` pages use the GitHub username as the public id and expose remaining quota
   windows plus aggregated usage totals. They never include device ids, fingerprints, credentials,
   cookies, raw logs, prompts, or paths. Unknown usernames return not found.
@@ -56,7 +57,8 @@ data requirements. Architecture and product behavior are defined in
   the released installation/session/cache/outbox/pricing JSON transactionally and removes source
   files only after the imported state is readable. The bounded migration lifecycle is defined in
   [ADR 0007](decisions/0007-rust-native-local-service.md). The shared
-  `providers.json`/`ProviderConfigLock` path and OAuth `client_id=quotacli` remain current interfaces.
+  `providers.json`/`ProviderConfigLock` path and OAuth `client_id=quotacli` remain current collection
+  interfaces. The registered `quota-ios` public client is a separate read-only Account interface.
 - QuotaBar's private service and Linux `quotacli` use the same owner-only configuration and state
   boundary. The Linux command is a foreground native binary; it is built and tested only and has no
   separate published credential or storage format.
@@ -96,8 +98,38 @@ data requirements. Architecture and product behavior are defined in
   human-readable as appropriate, single-use, short-lived, hashed at rest, and rate-limited. Polling
   implements `authorization_pending`, `slow_down`, denial, and expiry without printing device codes
   or session credentials.
-- Successful native login issues an account-read token family and a current-device-write token
-  family. Access tokens are short-lived; refresh tokens rotate with compare-and-swap so replay
+- The registered `quota-ios` public client uses the same Authorization Code with PKCE S256 authorize
+  route and the exact custom-scheme redirect `io.gotry.quota:/oauth/callback`. The token exchange
+  rejects `installation_id`, `device_display_name`, and `platform`. Relay issues only an account
+  token family with `account:read` and `session:revoke:self`. It never creates a Device, Device
+  session, upload sequence, or installation record. Refresh is account-audience only and rotates
+  with the same compare-and-swap rule. Those credentials use the `qia_`/`qiar_` prefixes and cannot
+  be presented as `quotacli` `qa_`/`qar_` or `qd_`/`qdr_` tokens. These sessions cannot call Web-only
+  management or destructive routes and cannot write snapshots or Usage. Quota iOS generates a
+  cryptographically random verifier and state, verifies the exact callback and state, exchanges the
+  code once, never sends a client secret, and never logs codes or tokens. `ASWebAuthenticationSession`
+  stays in the app target. The access and refresh session is one Keychain item with
+  `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`. UserDefaults may hold UI preferences only. The
+  HTTPS client is fixed to `https://quota.gotry.io`, attaches Bearer only to that origin, refuses
+  redirects, uses a 20-second timeout and a 1 MiB response limit, and performs one single-flight
+  account refresh after 401. Last-good cache stores only the decoded Account summary and fetched
+  time in protected app storage. Its Account id must match the current Keychain session before the
+  cache is displayed or used as a fallback; orphaned or mismatched cache is cleared. Logout clears
+  the session and the cache.
+- Quota iOS widgets use App Group `group.io.gotry.quota` only. The app target alone performs OAuth,
+  holds the Keychain session, calls Relay, and publishes a non-secret `WidgetSnapshot` through
+  `ProtectedFileWidgetSnapshotStore` (atomic write,
+  `completeFileProtectionUntilFirstUserAuthentication`, excluded from backup). The snapshot may
+  contain display remaining-quota and Today token/cost fields; it must not contain account ids,
+  device ids, fingerprints, tokens, sequences, or raw sources. The WidgetKit extension reads that
+  file and reloads on app publish/clear only. It has no network, no Keychain, no Security framework
+  usage, and no account wire/session modules. Missing, corrupt, or oversize files are treated as
+  no-data. Logout, expired session, and absence of a trusted summary clear the snapshot. Both the
+  app and `io.gotry.quota.widgets` signing identities need the App Group entitlement; provisioning
+  profiles must include `group.io.gotry.quota`. See
+  [ADR 0014](decisions/0014-nonsecret-ios-widget-snapshot.md).
+- Successful collection-client login issues an account-read token family and a current-device-write
+  token family. Access tokens are short-lived; refresh tokens rotate with compare-and-swap so replay
   revokes or rejects the token family. Store only HMACs of server session and grant secrets.
 - Better Auth browser sessions use secure, HttpOnly cookies. JavaScript cannot read them. On
   document navigations the Worker reads the session cookie through `WebDocumentPort` so SvelteKit

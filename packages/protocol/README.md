@@ -1,7 +1,10 @@
 # @gotry-io/quota-protocol
 
-The single v2 wire contract shared by QuotaBar's Rust local service, managed QuotaRelay, and Swift `Codable`
-models.
+Runtime schemas for QuotaBar's Rust local service, managed QuotaRelay, Swift `Codable` models, and
+the registered `quota-ios` account client. OAuth and Device control remain released v2; quota,
+Usage, and Account summary use managed-data v3. `quota-ios` adds client-specific authorization-code
+and account-session payloads on the v2 OAuth contract; the released `quotacli` request and response
+shapes are unchanged.
 
 - TypeScript runtime validation lives in `src`.
 - Managed-network `ProviderId` and local-report `LocalProviderId` are generated from

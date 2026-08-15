@@ -38,6 +38,7 @@
       ("agents", "Agents", 2),
       ("provider-codex", "Codex", 3),
       ("provider-openrouter", "OpenRouter", 3),
+      ("provider-cursor", "Cursor", 3),
       ("devices", "Devices", 2),
       ("usage", "Usage", 2),
       ("support", "Support", 2),
@@ -115,11 +116,15 @@
         .overviewState(enabledProviders: ProviderID.allCases, now: referenceDate) == .loading
     )
 
+    let cachedModel = try configuration(
+      fixture: .cachedRefreshError,
+      referenceDate: referenceDate
+    ).makeModel()
+    #expect(cachedModel.accountSummary != nil)
+    #expect(cachedModel.accountErrorMessage == nil)
+    #expect(cachedModel.errorMessage == "Sync failed. Showing the last known result.")
     guard
-      case .content(_, let refreshWarning) = try configuration(
-        fixture: .cachedRefreshError,
-        referenceDate: referenceDate
-      ).makeModel().overviewState(
+      case .content(_, let refreshWarning) = cachedModel.overviewState(
         enabledProviders: ProviderID.allCases,
         now: referenceDate
       )
@@ -150,6 +155,46 @@
         .overviewState(enabledProviders: ProviderID.allCases, now: referenceDate)
         == .unavailable(message: "The bundled local service could not be started.")
     )
+  }
+
+  @Test @MainActor
+  func diagnosticsVisualFixturesCoverLoadingContentStaleAndErrorStates() throws {
+    let referenceDate = Date(timeIntervalSince1970: 1_785_752_430)
+
+    let loading = try configuration(fixture: .loading, referenceDate: referenceDate)
+      .makeDiagnosticsModel()
+    guard case .loading = loading.pageState else {
+      Issue.record("Expected Diagnostics loading fixture.")
+      return
+    }
+    #expect(!loading.showsHeaderActions)
+
+    let content = try configuration(fixture: .content, referenceDate: referenceDate)
+      .makeDiagnosticsModel()
+    guard case .report(let contentReport, false, nil) = content.pageState else {
+      Issue.record("Expected Diagnostics content fixture.")
+      return
+    }
+    #expect(contentReport.status == .healthy)
+    #expect(content.showsHeaderActions)
+
+    let stale = try configuration(fixture: .cachedRefreshError, referenceDate: referenceDate)
+      .makeDiagnosticsModel()
+    guard case .report(_, false, let warning?) = stale.pageState else {
+      Issue.record("Expected Diagnostics stale-content fixture.")
+      return
+    }
+    #expect(warning.contains("Showing the last diagnostics report"))
+    #expect(stale.canCopy)
+
+    let unavailable = try configuration(fixture: .unavailable, referenceDate: referenceDate)
+      .makeDiagnosticsModel()
+    guard case .error(let message) = unavailable.pageState else {
+      Issue.record("Expected Diagnostics unavailable fixture.")
+      return
+    }
+    #expect(message.contains("local service"))
+    #expect(!unavailable.showsHeaderActions)
   }
 
   private func configuration(

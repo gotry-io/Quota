@@ -1390,6 +1390,14 @@ impl StateStore {
         Ok(events)
     }
 
+    pub fn usage_event_count(&self) -> Result<u64, StateError> {
+        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        let count = conn.query_row("SELECT COUNT(*) FROM usage_file_records", [], |row| {
+            row.get::<_, i64>(0)
+        })?;
+        u64::try_from(count).map_err(|_| StateError::InvalidState)
+    }
+
     pub fn dirty_usage_ranges(&self) -> Result<Vec<UsageDirtyRange>, StateError> {
         let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
         let mut statement = conn.prepare(
@@ -3329,6 +3337,33 @@ mod tests {
                 end_at: "2026-08-10T13:00:00Z".into(),
             }]
         );
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn usage_event_count_does_not_load_or_decode_event_bodies() {
+        let root = std::env::temp_dir().join(format!("quota-usage-count-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let store = StateStore::open(&root).expect("state");
+        store
+            .apply_usage_scan(
+                UsageAgent::Codex,
+                &usage_scan(vec![usage_event("2026-08-10T12:15:00Z", 1)], 1),
+            )
+            .expect("initial scan");
+        store
+            .db
+            .lock()
+            .expect("database")
+            .execute(
+                "UPDATE usage_file_records SET event_json = '{\"legacy\":true}'",
+                [],
+            )
+            .expect("replace event body");
+
+        assert_eq!(store.usage_event_count().expect("count"), 1);
+        assert!(store.usage_events().is_err());
         drop(store);
         fs::remove_dir_all(root).expect("cleanup");
     }

@@ -3,25 +3,6 @@ import Testing
 
 @testable import QuotaBar
 
-struct CompactAgeFormatterTests {
-  @Test(
-    arguments: [
-      (0.0, "0s"),
-      (59.0, "59s"),
-      (60.0, "1min"),
-      (3_599.0, "59min"),
-      (3_600.0, "1h"),
-      (86_400.0, "1d"),
-      (604_800.0, "1w"),
-      (31_536_000.0, "1y"),
-    ]
-  )
-  func formatsLargestUsefulWholeUnit(age: TimeInterval, expected: String) {
-    let now = Date(timeIntervalSince1970: 31_536_000)
-    #expect(CompactAgeFormatter.string(since: now.addingTimeInterval(-age), now: now) == expected)
-  }
-}
-
 struct LastCheckedLabelTests {
   @Test
   func neverCheckedIsAnEmDash() {
@@ -36,6 +17,35 @@ struct LastCheckedLabelTests {
     #expect(!label.isEmpty)
     #expect(!label.localizedCaseInsensitiveContains("last checked"))
     #expect(LastCheckedLabel.accessibleString(from: date).localizedStandardContains("Last checked"))
+  }
+
+  @Test
+  func diagnosticsCheckedStatusUsesFixedTimeNotRelativeAge() {
+    let date = Date(timeIntervalSince1970: 1_786_617_600)
+    let time = LastCheckedLabel.string(from: date)
+    let status = LastCheckedLabel.checkedStatusString(from: date)
+    #expect(status == "Checked \(time)")
+    #expect(!status.localizedCaseInsensitiveContains("ago"))
+    #expect(!status.localizedCaseInsensitiveContains("generated"))
+    #expect(LastCheckedLabel.accessibleString(from: date) == "Last checked \(time)")
+  }
+}
+
+struct DiagnosticsHeaderActionTests {
+  @Test
+  func copyAccessibilityLabels() {
+    #expect(DiagnosticsHeaderAction.copyAccessibilityLabel(didCopy: false) == "Copy diagnostics")
+    #expect(DiagnosticsHeaderAction.copyAccessibilityLabel(didCopy: true) == "Diagnostics copied")
+    #expect(DiagnosticsHeaderAction.recheckLabel == "Recheck diagnostics")
+    #expect(
+      DiagnosticsHeaderAction.recheckAccessibilityLabel(isChecking: false)
+        == "Recheck diagnostics"
+    )
+    #expect(
+      DiagnosticsHeaderAction.recheckAccessibilityLabel(isChecking: true)
+        == "Checking diagnostics"
+    )
+    #expect(DiagnosticsHeaderAction.copyFeedbackDuration == .seconds(2))
   }
 }
 

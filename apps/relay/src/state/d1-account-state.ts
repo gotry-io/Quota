@@ -1,6 +1,7 @@
 import { QuotaSnapshotV3Schema as QuotaSnapshotSchema } from "@gotry-io/quota-protocol";
 import {
   ACCOUNT_SCOPES,
+  type AccountLoginGrantConsumeResult,
   type AccountMaintenanceInput,
   type AccountPrincipal,
   type AccountRecord,
@@ -8,6 +9,7 @@ import {
   type AuthorizeDeviceGrantInput,
   type CompleteIdentityLoginInput,
   type CompleteIdentityLoginResult,
+  type ConsumeAccountLoginGrantInput,
   type ConsumeLoginGrantInput,
   type CreateLoginGrantInput,
   DEVICE_SCOPES,
@@ -498,6 +500,81 @@ export class D1AccountState implements AccountState {
     return { outcome: "not_approved" };
   }
 
+  async consumeAccountLoginGrant(
+    input: ConsumeAccountLoginGrantInput,
+  ): Promise<AccountLoginGrantConsumeResult> {
+    const accountScopes = encodeScopes(["account:read", "session:revoke:self"], ACCOUNT_SCOPES);
+    let results: D1Result<unknown>[];
+    try {
+      results = await this.database.batch([
+        this.database
+          .prepare(
+            `UPDATE login_grants
+           SET consumed_at = ?4, consume_nonce_hash = ?3
+           WHERE id = ?1 AND code_hash = ?2
+             AND account_id IS NOT NULL AND approved_at IS NOT NULL AND denied_at IS NULL
+             AND consumed_at IS NULL AND expires_at > ?4
+             AND client_id = 'quota-ios' AND installation_id_hash IS NULL
+           RETURNING account_id`,
+          )
+          .bind(
+            input.grant_id,
+            input.credential_hash,
+            input.completion_nonce_hash,
+            input.consumed_at,
+          ),
+        this.database
+          .prepare(
+            `INSERT INTO account_sessions (
+             id, family_id, account_id, device_id, access_token_hash, refresh_token_hash,
+             scopes_json, authenticated_at, expires_at, refresh_expires_at,
+             last_used_at, created_at
+           )
+           SELECT ?1, ?2, grants.account_id, NULL, ?3, ?4, ?5, ?6, ?7, ?8, ?6, ?6
+           FROM login_grants AS grants
+           WHERE grants.id = ?9 AND grants.consume_nonce_hash = ?10
+             AND grants.client_id = 'quota-ios' AND grants.installation_id_hash IS NULL`,
+          )
+          .bind(
+            input.account_session.session_id,
+            input.family_id,
+            input.account_session.access_token_hash,
+            input.account_session.refresh_token_hash,
+            accountScopes,
+            input.consumed_at,
+            input.account_session.access_expires_at,
+            input.account_session.refresh_expires_at,
+            input.grant_id,
+            input.completion_nonce_hash,
+          ),
+      ]);
+    } catch (error) {
+      const concurrent = await this.getLoginGrantByIdAndCredential(
+        input.grant_id,
+        input.credential_hash,
+      );
+      if (concurrent?.consumed_at) {
+        return { outcome: "consumed" };
+      }
+      throw error;
+    }
+    const account = resultRow<{ account_id: string }>(results[0]);
+    if (resultChanged(results[0]) && resultChanged(results[1]) && account) {
+      return { outcome: "issued", account_id: account.account_id };
+    }
+    const grant = await this.getLoginGrantByIdAndCredential(input.grant_id, input.credential_hash);
+    if (!grant) {
+      return { outcome: "not_found" };
+    }
+    if (grant.consumed_at) {
+      return { outcome: "consumed" };
+    }
+    if (Date.parse(grant.expires_at) <= Date.parse(input.consumed_at)) {
+      return { outcome: "expired" };
+    }
+    return { outcome: "not_approved" };
+  }
+
   async authorizeAccountSession(
     accessTokenHash: string,
     checkedAt: string,
@@ -562,6 +639,28 @@ export class D1AccountState implements AccountState {
          SET access_token_hash = ?2, refresh_token_hash = ?3, expires_at = ?4,
              refresh_expires_at = ?5, last_used_at = ?6
          WHERE refresh_token_hash = ?1 AND revoked_at IS NULL AND refresh_expires_at > ?6
+         RETURNING id, family_id, account_id, device_id, scopes_json, authenticated_at`,
+      )
+      .bind(
+        input.refresh_token_hash,
+        input.new_access_token_hash,
+        input.new_refresh_token_hash,
+        input.access_expires_at,
+        input.refresh_expires_at,
+        input.refreshed_at,
+      )
+      .first<AccountPrincipalRow>();
+    return row ? accountPrincipal(row) : null;
+  }
+
+  async refreshAccountOnlySession(input: RefreshSessionInput): Promise<AccountPrincipal | null> {
+    const row = await this.database
+      .prepare(
+        `UPDATE account_sessions
+         SET access_token_hash = ?2, refresh_token_hash = ?3, expires_at = ?4,
+             refresh_expires_at = ?5, last_used_at = ?6
+         WHERE refresh_token_hash = ?1 AND revoked_at IS NULL AND refresh_expires_at > ?6
+           AND device_id IS NULL
          RETURNING id, family_id, account_id, device_id, scopes_json, authenticated_at`,
       )
       .bind(
@@ -1039,7 +1138,7 @@ function accountPrincipal(row: AccountPrincipalRow): AccountPrincipal {
     family_id: row.family_id,
     account_id: row.account_id,
     device_id: row.device_id,
-    client_kind: "cli",
+    client_kind: row.device_id === null ? "ios" : "cli",
     scopes: decodeAccountScopes(row.scopes_json),
     authenticated_at: row.authenticated_at,
   };

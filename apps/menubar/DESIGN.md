@@ -86,8 +86,13 @@ targets stay at least 28pt. Technical strings and chevrons never receive primary
 The header shows:
 
 - Overview: Quota mark, **QuotaBar**, and Settings gear.
-- Child page: Back and page title. Usage alone may place its Account/This Mac source menu at the
-  trailing edge because the choice changes the whole page.
+- Child page: Back and page title. Usage may place its Account/This Mac source menu at the trailing
+  edge because the choice changes the whole page. Diagnostics places icon-only **Recheck**
+  (`arrow.clockwise`) then **Copy** (`doc.on.doc`) actions there only after a report exists; initial
+  loading and full-page failure leave the header action area empty. Recheck runs only the private
+  `diagnose` check (not a full quota/Usage refresh); while checking, its icon becomes a small spinner
+  and the action is disabled. Copy writes the human-readable text report, shows a `checkmark` for
+  about two seconds after success, and remains available while an existing report is rechecked.
 - Settings root: Back, **Settings**, and an overflow menu containing **Quit QuotaBar**.
 
 The footer is a single quiet button showing the sync-completion clock as locale-shortened time only
@@ -175,16 +180,34 @@ totals while signed in with Usage sync enabled, and local totals otherwise. Gene
 native mini **Launch at Login** and **Sync Usage** switches followed by the **Support** destination.
 Support contains Diagnostics, Feedback, Website, version, and **Check for Updates**. That row
 opens Sparkle's standard updater. Sparkle also checks on a daily schedule after launch. Diagnostics
-remains backed by the private `diagnose` operation and shows one bounded
-status for Providers, Quota, Usage, Pricing, Account, and Sync, plus safe issue counts and **Copy
-Text** and **Copy JSON** actions. The Usage source control is not repeated in Settings.
+remains backed by the private `diagnose` operation and shows one bounded status for Providers, Quota,
+Usage, Pricing, Account, and Sync. Issues appear before Components in error, warning, then info order
+and explain both the problem and the next recovery step using the report's recovery guidance.
+Components show only concise user-facing summaries; their trailing state is a semantic icon (accent
+check, orange warning, or red blocked mark), never a raw state word or metric key. The report age is
+a fixed locale-shortened check time (`Checked 3:40 PM`), not relative age. Recheck and Copy live only
+in the page header; opening Diagnostics resets and runs a fresh check so re-entry never silently
+shows a previous report. That initial check uses a centered page Loading state. Its failure uses a
+centered Error state with **Retry** as the only recovery action and no header actions. A later
+Recheck preserves the last good report; failure adds a fixed inline warning above the report's
+scrolling content instead of replacing the page, keeps Copy available, and enables Recheck again.
+The Usage source control is not repeated in Settings.
+
+Page navigation animates an immutable presentation snapshot. Async work and model updates continue
+during the transition, while the shared page host coalesces presentation changes and publishes only
+the latest state after the navigation animation is removed. Any page that can replace loading,
+empty, error, or content at its root uses this host; individual pages must not delay requests or
+guess the navigation duration. Header actions stay hidden during the transition and then reflect the
+published page state. Reduce Motion skips the transition and publishes updates immediately.
 
 ### Devices
 
 Devices is read-only in QuotaBar. Show account device display name, platform, Active/Offline/Signed
 out state, and compact last-seen age. Never display raw device ids. Empty and signed-out states point
-back to the Account action in Settings. Device deletion and account administration live on the web
-account surface.
+back to the Account action in Settings using the shared centered Empty state. An unavailable account
+with no device content uses the centered Error state and Retry; a refresh warning with cached device
+content uses an inline notice. Device deletion and account administration live on the web account
+surface.
 
 ### Usage
 
@@ -202,6 +225,9 @@ and changing either selector never starts collection or network work and never s
 state when a snapshot already exists. If the selected source has no snapshot yet and that
 component is still refreshing, the page says **Preparing Usage…** instead of implying Usage is
 absent. After refresh finishes with no snapshot, it says **No Usage is available for this period.**
+Preparing and empty Usage remain section states below the period tabs because those controls are
+still useful. Cached account refresh failures and partial Usage warnings are inline notices and do
+not replace available content.
 The default page contains:
 
 - Summary: a titled group with separate Tokens and Cost headline metrics followed by the six token
@@ -255,8 +281,10 @@ Provider detail contains:
   masked saved state, Save, and Remove; and
 - **Browser Session** when catalog-enabled: disconnected **Sign In**, bounded **Waiting / Cancel**,
   non-cancellable **Connecting** after commit begins, or a connected masked account with only
-  **Disconnect**. Confirmed disconnect is likewise non-cancellable. There is no switch-account
-  action; a different account is disconnect, then sign in.
+  **Disconnect**. Sign In, Cancel, and Disconnect are the same compact secondary control; do not
+  use an accent capsule or explanatory body copy on this surface. Confirmed disconnect is likewise
+  non-cancellable. There is no switch-account action; a different account is disconnect, then sign
+  in.
 
 Browser-session login uses app-owned selection/confirmation popups at the panel root, never system
 alerts or sheets. Login is pinned to one supported browser; an unsupported default HTTPS handler
@@ -281,19 +309,33 @@ Swift clears the field after Save; the service owns validation, owner-only persi
 | `QuotaSecondaryButtonStyle` | Compact field-height control for secondary or destructive in-section actions |
 | `QuotaListRowButtonStyle` | Nested hover/press feedback with full-row hit target |
 | `ProviderBrandIcon` | Catalog brand resource with stable optical sizing |
+| `QuotaPageStateView` | Centered Loading, Empty, or Error when no page content is available |
+| `QuotaInlineNotice` | Compact refresh/error warning while cached content remains visible |
+| `QuotaSectionStateView` | Left-aligned Loading, Empty, or Error scoped to one section |
 
 Prefer these components over page-local replicas. In-section actions never mix an accent capsule
-with a system or bordered control. **Sign In**, **Save**, and empty-state **Retry** use compact
-primary. **Cancel**, **Remove**, **Disconnect**, and the second Diagnostics copy action use
-secondary; destructive labels use the destructive variant. Full-width Settings rows such as **Log
-Out** stay list rows. Do not use `ButtonStyle.bordered` or an unstyled system button inside the
-panel. Provider assets remain in `Resources/BrandIcons`; do not copy their geometry into SwiftUI
-paths.
+with a system or bordered control. **Save** and empty-state **Retry** use compact primary. Browser
+Session **Sign In**, **Cancel**, **Remove**, and **Disconnect** use secondary; destructive labels
+use the destructive variant. Diagnostics Recheck and Copy are header icon actions only, not
+in-section buttons. Full-width Settings rows such as **Log Out** stay list rows. Do not use
+`ButtonStyle.bordered` or an unstyled system button inside the panel. Provider assets remain in
+`Resources/BrandIcons`; do not copy their geometry into SwiftUI paths.
+
+Page states live outside `ScrollView`, fill the entire body between the normal header and footer,
+and center their content horizontally and vertically. Loading is a small spinner plus a short title.
+Empty uses a neutral icon, title, explanation, and at most one action. Error uses a critical icon,
+title, explanation, and one central **Retry**. The header never renders loading or failure copy and
+does not gain recovery controls for a full-page state. If useful content exists, keep it visible and
+use `QuotaInlineNotice`; if only one section lacks content, use `QuotaSectionStateView`. These views
+share tokens and accessibility semantics but do not own tasks or form a generic async state machine.
 
 ## Accessibility and input
 
 - Every icon-only button has an accessibility label and Help tooltip.
-- Diagnostics Copy Text and Copy JSON buttons announce their action and copied confirmation.
+- Diagnostics Recheck and Copy header icons announce their actions; Copy uses **Copy diagnostics**
+  and **Diagnostics copied**. The status line VoiceOver label includes the fixed check time.
+  Component status icons use distinct shapes and announce Working, Needs attention, or Unavailable;
+  issue rows announce severity and recovery instructions without exposing wire codes.
 - Rows combine or replace child accessibility deliberately; never announce raw opaque identifiers.
 - Disclosure rows announce their destination and current summary.
 - Login exposes a real Cancel action while the service's browser flow runs.
@@ -306,8 +348,9 @@ paths.
 
 Required fixture states are loading, signed-in content, cached content with a sync warning,
 signed-out provider issues, and service unavailable. Required routes are Overview, Settings, Agents,
-both provider setup variants, Devices, and Usage. Inspect light and dark appearances, standard and
-accessibility text sizes, keyboard traversal, VoiceOver labels, and Reduce Motion transitions.
+provider setup variants (CLI, API key, and browser session), Devices, Usage, and Diagnostics. Inspect
+light and dark appearances, standard and accessibility text sizes, keyboard traversal, VoiceOver
+labels, and Reduce Motion transitions.
 
 Synthetic fixtures may contain display labels and opaque ids needed for typed models, but must never
 contain access tokens, refresh tokens, provider secrets, or raw production data.

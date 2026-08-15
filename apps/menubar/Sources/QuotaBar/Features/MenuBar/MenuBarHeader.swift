@@ -7,6 +7,14 @@ struct MenuBarHeader: View {
     case openSettings(() -> Void)
     case overflowMenu
     case usageSource(UsageSource, (UsageSource) -> Void)
+    case diagnostics(
+      isChecking: Bool,
+      canRecheck: Bool,
+      canCopy: Bool,
+      didCopy: Bool,
+      onRecheck: () -> Void,
+      onCopy: () -> Void
+    )
   }
 
   let title: String
@@ -160,7 +168,59 @@ struct MenuBarHeader: View {
       .fixedSize()
       .accessibilityLabel("Usage source")
       .accessibilityValue(source.label)
+    case .diagnostics(
+      let isChecking,
+      let canRecheck,
+      let canCopy,
+      let didCopy,
+      let onRecheck,
+      let onCopy
+    ):
+      HStack(spacing: 0) {
+        diagnosticsRecheckButton(
+          isChecking: isChecking,
+          isEnabled: canRecheck,
+          action: onRecheck
+        )
+        headerButton(
+          systemName: didCopy ? "checkmark" : "doc.on.doc",
+          accessibilityLabel: DiagnosticsHeaderAction.copyAccessibilityLabel(didCopy: didCopy),
+          isEnabled: canCopy,
+          action: onCopy
+        )
+      }
     }
+  }
+
+  private func diagnosticsRecheckButton(
+    isChecking: Bool,
+    isEnabled: Bool,
+    action: @escaping () -> Void
+  ) -> some View {
+    let accessibilityLabel = DiagnosticsHeaderAction.recheckAccessibilityLabel(
+      isChecking: isChecking
+    )
+    return Button(action: action) {
+      Group {
+        if isChecking {
+          ProgressView()
+            .controlSize(.mini)
+        } else {
+          Image(systemName: "arrow.clockwise")
+            .font(QuotaDesign.Typography.headerActionIcon)
+        }
+      }
+      .frame(width: QuotaDesign.Layout.headerGlyphWidth)
+      .frame(
+        width: QuotaDesign.Layout.headerControlWidth,
+        height: QuotaDesign.Layout.headerHeight
+      )
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(QuotaHeaderButtonStyle())
+    .disabled(!isEnabled)
+    .accessibilityLabel(accessibilityLabel)
+    .help(accessibilityLabel)
   }
 
   private func usageSourceItem(
@@ -231,6 +291,7 @@ struct MenuBarHeader: View {
     systemName: String,
     font: Font = QuotaDesign.Typography.headerActionIcon,
     accessibilityLabel: String,
+    isEnabled: Bool = true,
     action: @escaping () -> Void
   ) -> some View {
     Button(action: action) {
@@ -245,6 +306,7 @@ struct MenuBarHeader: View {
         .contentShape(Rectangle())
     }
     .buttonStyle(QuotaHeaderButtonStyle())
+    .disabled(!isEnabled)
     .accessibilityLabel(accessibilityLabel)
     .help(accessibilityLabel)
   }

@@ -64,39 +64,53 @@ fn array_len(value: Option<&Value>, key: &str) -> i64 {
         .unwrap_or(0)
 }
 
-fn outcome_count(value: Option<&Value>, outcome: &str) -> i64 {
+fn monitored_quota_results<'a>(
+    value: Option<&'a Value>,
+    monitored_providers: &HashSet<ProviderId>,
+) -> Vec<&'a Value> {
     value
         .and_then(Value::as_object)
         .and_then(|object| object.get("results"))
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
-        .filter(|result| result.get("outcome").and_then(Value::as_str) == Some(outcome))
-        .count() as i64
+        .filter(|result| {
+            result
+                .get("provider")
+                .and_then(Value::as_str)
+                .and_then(ProviderId::parse)
+                .is_some_and(|provider| monitored_providers.contains(&provider))
+        })
+        .collect()
 }
 
-fn quota_diagnostic_metrics(value: Option<&Value>) -> BTreeMap<String, i64> {
-    let snapshots = value
-        .and_then(Value::as_object)
-        .and_then(|object| object.get("results"))
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
+fn quota_diagnostic_metrics(
+    value: Option<&Value>,
+    monitored_providers: &HashSet<ProviderId>,
+) -> BTreeMap<String, i64> {
+    let results = monitored_quota_results(value, monitored_providers);
+    let snapshots = results
+        .iter()
         .map(|result| array_len(Some(result), "snapshots"))
         .sum::<i64>();
+    let outcome_count = |outcome: &str| {
+        results
+            .iter()
+            .filter(|result| result.get("outcome").and_then(Value::as_str) == Some(outcome))
+            .count() as i64
+    };
     metrics([
-        ("results", array_len(value, "results")),
+        ("results", results.len() as i64),
         ("snapshots", snapshots),
-        ("success", outcome_count(value, "success")),
-        ("auth_required", outcome_count(value, "auth_required")),
-        ("unavailable", outcome_count(value, "unavailable")),
-        ("error", outcome_count(value, "error")),
-        ("unsupported", outcome_count(value, "unsupported")),
+        ("success", outcome_count("success")),
+        ("auth_required", outcome_count("auth_required")),
+        ("unavailable", outcome_count("unavailable")),
+        ("error", outcome_count("error")),
+        ("unsupported", outcome_count("unsupported")),
     ])
 }
 
-fn quota_collection_status(value: Option<&Value>) -> &'static str {
-    let metrics = quota_diagnostic_metrics(value);
+fn quota_collection_status(metrics: &BTreeMap<String, i64>) -> &'static str {
     let results = metrics.get("results").copied().unwrap_or(0);
     let success = metrics.get("success").copied().unwrap_or(0);
     let auth_required = metrics.get("auth_required").copied().unwrap_or(0);
@@ -111,6 +125,21 @@ fn quota_collection_status(value: Option<&Value>) -> &'static str {
     } else {
         "ready"
     }
+}
+
+fn uploadable_dirty_range_count(ranges: &[UsageDirtyRange], now: DateTime<Utc>) -> i64 {
+    let Ok(complete_until) = DateTime::parse_from_rfc3339(&floor_utc_hour(&now)) else {
+        return ranges.len().min(i64::MAX as usize) as i64;
+    };
+    ranges
+        .iter()
+        .filter(|range| {
+            DateTime::parse_from_rfc3339(&range.start_at)
+                .map(|start| start < complete_until)
+                .unwrap_or(true)
+        })
+        .count()
+        .min(i64::MAX as usize) as i64
 }
 
 fn error_code_wire(code: ErrorCode) -> String {
@@ -277,8 +306,8 @@ impl NativeBackend {
         let mut degraded = false;
         let mut blocked = false;
 
-        let discovered = match self.configured_providers() {
-            Ok(providers) => providers.len() as i64,
+        let discovered_providers = match self.configured_providers() {
+            Ok(providers) => providers,
             Err(_) => {
                 degraded = true;
                 issues.push(DiagnosticIssue {
@@ -288,22 +317,32 @@ impl NativeBackend {
                     count: 1,
                     message: "provider browser session state could not be read".into(),
                 });
-                0
+                Vec::new()
             }
         };
+        let discovered = discovered_providers.len() as i64;
+        let mut monitored_providers = discovered_providers.into_iter().collect::<HashSet<_>>();
         let (config_present, config_readable) = config_file_diagnostic(self.state.root());
         let configured = match self.state.snapshot() {
             Ok(snapshot) => {
-                (snapshot
-                    .providers
-                    .iter()
-                    .filter(|provider| provider.configured)
-                    .count()
-                    + snapshot
-                        .provider_browser_sessions
-                        .iter()
-                        .filter(|session| session.configured)
-                        .count()) as i64
+                let mut configured = 0i64;
+                for provider in snapshot.providers {
+                    if provider.configured {
+                        configured = configured.saturating_add(1);
+                        if let Some(provider) = ProviderId::parse(&provider.provider) {
+                            monitored_providers.insert(provider);
+                        }
+                    }
+                }
+                for session in snapshot.provider_browser_sessions {
+                    if session.configured {
+                        configured = configured.saturating_add(1);
+                        if let Some(provider) = ProviderId::parse(&session.provider) {
+                            monitored_providers.insert(provider);
+                        }
+                    }
+                }
+                configured
             }
             Err(_) => {
                 degraded = true;
@@ -460,8 +499,8 @@ impl NativeBackend {
                 }
             }
         }
-        let record_count = match self.state.usage_events() {
-            Ok(events) => events.len() as i64,
+        let record_count = match self.state.usage_event_count() {
+            Ok(count) => count.min(i64::MAX as u64) as i64,
             Err(_) => {
                 degraded = true;
                 issues.push(DiagnosticIssue {
@@ -488,8 +527,8 @@ impl NativeBackend {
                 true
             }
         };
-        let dirty_count = match self.state.dirty_usage_ranges() {
-            Ok(ranges) => ranges.len() as i64,
+        let dirty_ranges = match self.state.dirty_usage_ranges() {
+            Ok(ranges) => ranges,
             Err(_) => {
                 degraded = true;
                 issues.push(DiagnosticIssue {
@@ -499,9 +538,11 @@ impl NativeBackend {
                     count: 1,
                     message: "dirty Usage ranges could not be read".into(),
                 });
-                0
+                Vec::new()
             }
         };
+        let dirty_count = dirty_ranges.len() as i64;
+        let uploadable_dirty_count = uploadable_dirty_range_count(&dirty_ranges, Utc::now());
         let partial_count = match self.state.partial_usage_hours() {
             Ok(hours) => hours.len() as i64,
             Err(_) => {
@@ -625,13 +666,14 @@ impl NativeBackend {
                 message: "some source hours retain last-good data".into(),
             });
         }
-        if usage_upload_enabled && outbox_count > 0 {
+        let pending_upload_count = outbox_count.saturating_add(uploadable_dirty_count);
+        if usage_upload_enabled && pending_upload_count > 0 {
             degraded = true;
             issues.push(DiagnosticIssue {
                 component: "sync".into(),
                 code: "pending_upload".into(),
                 severity: DiagnosticSeverity::Warning,
-                count: outbox_count,
+                count: pending_upload_count,
                 message: "usage uploads are pending".into(),
             });
         }
@@ -653,7 +695,7 @@ impl NativeBackend {
                 None
             }
         };
-        let quota_metrics = quota_diagnostic_metrics(quota_value);
+        let quota_metrics = quota_diagnostic_metrics(quota_value, &monitored_providers);
         let pricing_metrics = pricing_diagnostic_metrics(pricing_value);
         let model_catalog_metrics = model_catalog_diagnostic_metrics(model_catalog_value.as_ref());
         usage_metrics.extend(
@@ -737,7 +779,7 @@ impl NativeBackend {
                 message: "recovery_retry".into(),
             });
         }
-        let quota_status = quota_collection_status(quota_value);
+        let quota_status = quota_collection_status(&quota_metrics);
         let quota_failures = [
             ("auth_required", DiagnosticSeverity::Error),
             ("unavailable", DiagnosticSeverity::Warning),
@@ -760,6 +802,7 @@ impl NativeBackend {
                 });
             }
         }
+        let quota_component_issue_start = issues.len();
         let mut quota_component = component(
             "quota",
             quota,
@@ -768,7 +811,20 @@ impl NativeBackend {
             &mut degraded,
             &mut blocked,
         );
-        if quota_status == "blocked" {
+        if monitored_providers.is_empty() {
+            // A first-run account has no provider result to attach an outcome issue to. Replace
+            // the generic missing-state issue with the setup action that can actually unblock it.
+            issues.truncate(quota_component_issue_start);
+            issues.push(DiagnosticIssue {
+                component: "quota".into(),
+                code: "not_configured".into(),
+                severity: DiagnosticSeverity::Error,
+                count: 1,
+                message: "recovery_configure_provider".into(),
+            });
+            quota_component.status = "blocked".into();
+            blocked = true;
+        } else if quota_status == "blocked" {
             quota_component.status = "blocked".into();
             blocked = true;
         } else if quota_status == "degraded" {
@@ -806,7 +862,7 @@ impl NativeBackend {
             "blocked"
         } else if sync_failed || sync_degraded {
             "degraded"
-        } else if outbox_count == 0 && dirty_count == 0 {
+        } else if pending_upload_count == 0 {
             "ready"
         } else {
             "degraded"
@@ -818,6 +874,7 @@ impl NativeBackend {
             metrics: metrics([
                 ("usage_upload_enabled", i64::from(usage_upload_enabled)),
                 ("dirty_ranges", dirty_count),
+                ("uploadable_dirty_ranges", uploadable_dirty_count),
                 ("outbox", outbox_count),
                 ("partial_hours", partial_count),
                 (
@@ -1815,12 +1872,15 @@ impl LocalBackend for NativeBackend {
                         if let Ok(quota_payload) = &quota_value
                             && let Err(error) = self.account.upload_quota_report(quota_payload)
                         {
-                            account_sync_error = Some(error);
+                            record_account_sync_error(&mut account_sync_error, error);
                         }
                         let usage_upload_enabled = match self.state.usage_upload_enabled() {
                             Ok(enabled) => enabled,
                             Err(_) => {
-                                account_sync_error = Some(BackendError::unavailable());
+                                record_account_sync_error(
+                                    &mut account_sync_error,
+                                    BackendError::unavailable(),
+                                );
                                 false
                             }
                         };
@@ -1849,11 +1909,13 @@ impl LocalBackend for NativeBackend {
                                         .map_err(|_| BackendError::unavailable())
                                 });
                             if let Err(error) = context_result {
-                                account_sync_error = Some(error);
+                                record_account_sync_error(&mut account_sync_error, error);
                             } else {
                                 match self.stage_outbox(&usage_collection.timezone) {
                                     Ok(blocked) => stage_blocked = blocked,
-                                    Err(error) => account_sync_error = Some(error),
+                                    Err(error) => {
+                                        record_account_sync_error(&mut account_sync_error, error)
+                                    }
                                 }
                             }
                         }
@@ -1901,7 +1963,7 @@ impl LocalBackend for NativeBackend {
                                         "pending": before,
                                         "error": error_code_wire(error.error.code)
                                     }));
-                                    account_sync_error = Some(error);
+                                    record_account_sync_error(&mut account_sync_error, error);
                                 }
                             }
                         } else if let Some(error) = &account_sync_error {
@@ -1912,25 +1974,25 @@ impl LocalBackend for NativeBackend {
                                 "error": error_code_wire(error.error.code)
                             }));
                         }
-                        if account_sync_error.is_none() {
-                            account_value = self.account.refresh_account_state(cancel.as_ref());
-                            if usage_upload_enabled
-                                && let Ok(value) = &account_value
-                                && let Err(error) =
-                                    self.refresh_account_usage_periods(value, cancel.as_ref())
-                                && error.error.code.requires_login()
-                            {
-                                account_value = Err(error);
-                            }
-                            if account_value
-                                .as_ref()
-                                .err()
-                                .is_some_and(|error| error.error.code.requires_login())
-                            {
-                                self.clear_active_session();
-                            }
-                        } else if let Some(error) = account_sync_error {
+                        account_value = account_read_after_sync(
+                            account_sync_error,
+                            cancel.load(Ordering::Acquire),
+                            || self.account.refresh_account_state(cancel.as_ref()),
+                        );
+                        if usage_upload_enabled
+                            && let Ok(value) = &account_value
+                            && let Err(error) =
+                                self.refresh_account_usage_periods(value, cancel.as_ref())
+                            && error.error.code.requires_login()
+                        {
                             account_value = Err(error);
+                        }
+                        if account_value
+                            .as_ref()
+                            .err()
+                            .is_some_and(|error| error.error.code.requires_login())
+                        {
+                            self.clear_active_session();
                         }
                     }
                     Err(error) => {
@@ -2254,6 +2316,43 @@ fn invalid_local_state() -> BackendError {
     BackendError {
         error: IpcError::new(ErrorCode::InvalidState, RecoveryAction::Reinstall),
     }
+}
+
+/// Prefer the first session-authority failure over later non-auth sync diagnostics.
+///
+/// A later Unavailable from usage preference/state must not erase an earlier
+/// AuthenticationRequired/DeviceDeleted/StaleGeneration from quota upload or outbox drain.
+fn record_account_sync_error(slot: &mut Option<BackendError>, error: BackendError) {
+    if slot
+        .as_ref()
+        .is_some_and(|existing| existing.error.code.requires_login())
+    {
+        return;
+    }
+    *slot = Some(error);
+}
+
+/// After successful control sync, run the read-only account summary when allowed.
+///
+/// Non-authentication upload/staging/outbox failures stay in the sync diagnostic and must not
+/// block the account summary. Session-authority failures and cancellation skip the account read.
+fn account_read_after_sync<F>(
+    sync_error: Option<BackendError>,
+    cancelled: bool,
+    read: F,
+) -> Result<Value, BackendError>
+where
+    F: FnOnce() -> Result<Value, BackendError>,
+{
+    if cancelled {
+        return Err(BackendError::cancelled());
+    }
+    if let Some(error) = sync_error
+        && error.error.code.requires_login()
+    {
+        return Err(error);
+    }
+    read()
 }
 
 struct UsageSubmissionContext<'a> {
@@ -2660,6 +2759,100 @@ mod tests {
     use std::fs;
 
     #[test]
+    fn non_auth_sync_error_still_reads_account_summary() {
+        let mut reads = 0;
+        let result = account_read_after_sync(Some(BackendError::unavailable()), false, || {
+            reads += 1;
+            Ok(json!({"status": "active"}))
+        });
+        assert_eq!(reads, 1);
+        assert_eq!(result.expect("account read"), json!({"status": "active"}));
+    }
+
+    #[test]
+    fn requires_login_sync_error_skips_account_summary() {
+        for code in [
+            ErrorCode::AuthenticationRequired,
+            ErrorCode::DeviceDeleted,
+            ErrorCode::StaleGeneration,
+        ] {
+            let result = account_read_after_sync(
+                Some(BackendError {
+                    error: IpcError::new(code, RecoveryAction::Login),
+                }),
+                false,
+                || panic!("account read must not run for requires-login sync error"),
+            );
+            let error = result.expect_err("expected skip");
+            assert_eq!(error.error.code, code);
+            assert!(error.error.code.requires_login());
+        }
+    }
+
+    #[test]
+    fn cancellation_skips_account_summary_even_with_non_auth_sync_error() {
+        let result = account_read_after_sync(Some(BackendError::unavailable()), true, || {
+            panic!("account read must not run when cancelled")
+        });
+        assert_eq!(
+            result.expect_err("expected skip").error.code,
+            ErrorCode::Cancelled
+        );
+        let result = account_read_after_sync(None, true, || {
+            panic!("account read must not run when cancelled")
+        });
+        assert_eq!(
+            result.expect_err("expected skip").error.code,
+            ErrorCode::Cancelled
+        );
+    }
+
+    #[test]
+    fn successful_sync_reads_account_summary() {
+        let mut reads = 0;
+        let result = account_read_after_sync(None, false, || {
+            reads += 1;
+            Ok(json!({"plan": "pro"}))
+        });
+        assert_eq!(reads, 1);
+        assert_eq!(result.expect("account read"), json!({"plan": "pro"}));
+    }
+
+    #[test]
+    fn requires_login_sync_error_is_not_overwritten_by_later_non_auth() {
+        for code in [
+            ErrorCode::AuthenticationRequired,
+            ErrorCode::DeviceDeleted,
+            ErrorCode::StaleGeneration,
+        ] {
+            let mut slot = None;
+            record_account_sync_error(
+                &mut slot,
+                BackendError {
+                    error: IpcError::new(code, RecoveryAction::Login),
+                },
+            );
+            record_account_sync_error(&mut slot, BackendError::unavailable());
+            let error = slot.expect("retained requires-login error");
+            assert_eq!(error.error.code, code);
+            assert!(error.error.code.requires_login());
+        }
+
+        let mut slot = None;
+        record_account_sync_error(&mut slot, BackendError::unavailable());
+        record_account_sync_error(
+            &mut slot,
+            BackendError {
+                error: IpcError::new(ErrorCode::AuthenticationRequired, RecoveryAction::Login),
+            },
+        );
+        assert_eq!(
+            slot.expect("promoted requires-login error").error.code,
+            ErrorCode::AuthenticationRequired
+        );
+    }
+
+    #[test]
     fn usage_periods_are_inclusive_and_use_the_service_timezone() {
         let now = DateTime::parse_from_rfc3339("2026-08-12T18:00:00Z")
             .expect("instant")
@@ -2877,7 +3070,9 @@ mod tests {
         fs::create_dir_all(&root).expect("root");
         let state = Arc::new(StateStore::open(&root).expect("state"));
         let relay = Arc::new(RelayClient::new().expect("relay"));
-        let backend = NativeBackend::new(state.clone(), relay, "QuotaTest", "test");
+        let mut backend = NativeBackend::new(state.clone(), relay, "QuotaTest", "test");
+        backend.home = root.join("home");
+        backend.environment.clear();
         state
             .write_sync_diagnostic(&json!({
                 "status": "blocked",
@@ -2903,6 +3098,19 @@ mod tests {
                 .issues
                 .iter()
                 .any(|issue| issue.component == "sync" && issue.code == "unrepresentable_hour")
+        );
+        assert!(report.issues.iter().any(|issue| {
+            issue.component == "quota"
+                && issue.code == "not_configured"
+                && issue.message == "recovery_configure_provider"
+        }));
+        assert_eq!(
+            report
+                .issues
+                .iter()
+                .filter(|issue| issue.component == "quota")
+                .count(),
+            1
         );
         assert_eq!(
             report
@@ -2960,29 +3168,70 @@ mod tests {
     fn quota_diagnostics_classify_all_failed_and_mixed_outcomes() {
         let all_auth = json!({
             "results": [
-                {"provider": "one", "outcome": "auth_required", "snapshots": []},
-                {"provider": "two", "outcome": "auth_required", "snapshots": []}
+                {"provider": "codex", "outcome": "auth_required", "snapshots": []},
+                {"provider": "claude", "outcome": "auth_required", "snapshots": []}
             ]
         });
-        assert_eq!(quota_collection_status(Some(&all_auth)), "blocked");
+        let monitored = HashSet::from([ProviderId::Codex, ProviderId::Claude]);
+        let metrics = quota_diagnostic_metrics(Some(&all_auth), &monitored);
+        assert_eq!(quota_collection_status(&metrics), "blocked");
 
         let all_unavailable = json!({
             "results": [
-                {"provider": "one", "outcome": "unavailable", "snapshots": []},
-                {"provider": "two", "outcome": "error", "snapshots": []}
+                {"provider": "codex", "outcome": "unavailable", "snapshots": []},
+                {"provider": "claude", "outcome": "error", "snapshots": []}
             ]
         });
-        assert_eq!(quota_collection_status(Some(&all_unavailable)), "blocked");
+        let metrics = quota_diagnostic_metrics(Some(&all_unavailable), &monitored);
+        assert_eq!(quota_collection_status(&metrics), "blocked");
 
         let mixed = json!({
             "results": [
-                {"provider": "one", "outcome": "success", "snapshots": [{}]},
-                {"provider": "two", "outcome": "unavailable", "snapshots": []}
+                {"provider": "codex", "outcome": "success", "snapshots": [{}]},
+                {"provider": "claude", "outcome": "unavailable", "snapshots": []}
             ]
         });
-        assert_eq!(quota_collection_status(Some(&mixed)), "degraded");
-        assert_eq!(quota_diagnostic_metrics(Some(&mixed))["success"], 1);
-        assert_eq!(quota_diagnostic_metrics(Some(&mixed))["unavailable"], 1);
+        let metrics = quota_diagnostic_metrics(Some(&mixed), &monitored);
+        assert_eq!(quota_collection_status(&metrics), "degraded");
+        assert_eq!(metrics["success"], 1);
+        assert_eq!(metrics["unavailable"], 1);
+    }
+
+    #[test]
+    fn quota_diagnostics_ignore_optional_unconfigured_providers() {
+        let report = json!({
+            "results": [
+                {"provider": "codex", "outcome": "success", "snapshots": [{}]},
+                {"provider": "claude", "outcome": "auth_required", "snapshots": []},
+                {"provider": "kimi", "outcome": "auth_required", "snapshots": []}
+            ]
+        });
+        let metrics = quota_diagnostic_metrics(Some(&report), &HashSet::from([ProviderId::Codex]));
+        assert_eq!(quota_collection_status(&metrics), "ready");
+        assert_eq!(metrics["results"], 1);
+        assert_eq!(metrics["success"], 1);
+        assert_eq!(metrics["auth_required"], 0);
+    }
+
+    #[test]
+    fn diagnostics_do_not_treat_the_open_hour_as_a_pending_upload() {
+        let now = DateTime::parse_from_rfc3339("2026-08-15T04:30:00Z")
+            .expect("now")
+            .with_timezone(&Utc);
+        let ranges = [
+            UsageDirtyRange {
+                agent: UsageAgent::Codex,
+                start_at: "2026-08-15T03:00:00Z".into(),
+                end_at: "2026-08-15T04:00:00Z".into(),
+            },
+            UsageDirtyRange {
+                agent: UsageAgent::Codex,
+                start_at: "2026-08-15T04:00:00Z".into(),
+                end_at: "2026-08-15T05:00:00Z".into(),
+            },
+        ];
+        assert_eq!(uploadable_dirty_range_count(&ranges, now), 1);
+        assert_eq!(uploadable_dirty_range_count(&ranges[1..], now), 0);
     }
 
     #[test]

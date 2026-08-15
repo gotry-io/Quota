@@ -6,8 +6,12 @@ the root [`README.md`](../README.md); credential and retained-data rules live in
 
 ## Product boundaries
 
-Quota has four application products and one shared Rust library boundary:
+Quota has five application products and three shared native library boundaries:
 
+- Quota is the iOS 17+ presentation product. It signs in with the registered `quota-ios` public
+  client and reads Account remaining quota and Today Usage. Home Screen and Lock Screen widgets
+  render a non-secret App Group snapshot published by the app; the extension never collects or
+  uploads. It is not a collection Device.
 - QuotaBar is the macOS presentation product. Its app bundle contains one private Rust service;
   Swift owns views, UI preferences, accessibility, Launch at Login, and strict decoding only. The
   Rust service owns the durable Usage upload setting so it applies before background work begins.
@@ -24,12 +28,21 @@ socket, daemon mode, LaunchAgent, PATH lookup, or standalone distribution. Quota
 transport peer, scheduler lifetime, and release boundary. `packages/service` contains the shared
 provider, Usage, pricing, persistence, and Relay logic used by both Rust application entry points;
 `apps/menubar/helper` supplies the private macOS stdio binary and `apps/cli` supplies the Linux-only
-`quotacli` command.
+`quotacli` command. `packages/apple-client` is the shared Apple wire, fixed-origin Relay, session,
+last-good cache, and non-secret widget-snapshot boundary consumed by Quota iOS. `packages/apple-shared`
+is the Foundation-only presentation package consumed by QuotaBar, Quota iOS, and the Quota widget
+extension for remaining-quota, plan/account label, compact count, Usage cost, and compact
+relative-age text. It does not decode protocol or app wire types, own ProviderID, network, persist,
+or access Relay. QuotaBar still owns its Swift IPC and network-wire models; those types stay out of
+both Apple packages.
 
 GitHub is the only account identity provider. The managed origin is fixed at
 `https://quota.gotry.io`. There is no anonymous owner, pairing group, arbitrary Relay URL, discovery
 document, self-hosted process, SQLite Relay adapter, or protocol v1 route. The durable managed
-boundary is [ADR 0006](decisions/0006-managed-account-device-usage.md); the local runtime decision is
+boundary is [ADR 0006](decisions/0006-managed-account-device-usage.md); managed-data v3 is
+[ADR 0012](decisions/0012-managed-data-v3.md); the read-only iOS account client is
+[ADR 0013](decisions/0013-readonly-ios-account-client.md); the non-secret iOS widget
+snapshot is [ADR 0014](decisions/0014-nonsecret-ios-widget-snapshot.md); the local runtime decision is
 [ADR 0007](decisions/0007-rust-native-local-service.md).
 
 ## Local runtime and IPC
@@ -175,16 +188,19 @@ path or fallback.
 GitHub ── Better Auth web OAuth ──► QuotaRelay ──► browser account session
                                           │
 browser PKCE authorization                │ account + device token families
+quota-ios PKCE (account session only)     │
                                           ▼
 Rust service ─ quota snapshots + hourly facts ─► D1
         ▲                                           │
         └──────── account summary / pricing ───────┘
                              │
                              ├──► QuotaBar
-                             └──► Quota Web
+                             ├──► Quota Web
+                             └──► Quota iOS account reads
 ```
 
-The shared Rust service is the native OAuth public client used by QuotaBar and Linux `quotacli`.
+The shared Rust service is the native collection OAuth public client used by QuotaBar and Linux
+`quotacli`.
 QuotaBar uses Authorization Code with PKCE and a temporary loopback callback; Linux `quotacli` uses
 the OAuth Device Authorization Grant and never opens a browser or loopback listener. Device
 `display_name` is the host computer name (macOS ComputerName, otherwise hostname), not the product
@@ -194,10 +210,22 @@ upgrade, or a host-name change. QuotaBar uses Sparkle 2 for in-app updates. The 
 `https://github.com/gotry-io/Quota/releases/latest/download/appcast.xml` and verifies EdDSA
 signatures with the `SUPublicEDKey` embedded in `Info.plist`. The release workflow signs the
 notarized `.dmg` with the `SPARKLE_ED_PRIVATE_KEY` repository secret. Releases still publish
-`menubar-update.json` so QuotaBar 0.0.10 can update once onto Sparkle. Relay returns
+`menubar-update.json` so QuotaBar 0.0.10 can update once onto Sparkle. Collection login returns
 separate account-read and current-device-write sessions; access and refresh expiry are explicit and
 refresh rotates atomically. The network `client_id` value `quotacli` remains unchanged because it is
 part of released protocol v2.
+
+The registered public client `quota-ios` uses the same GitHub identity and `/oauth/v2/authorize`
+PKCE route with the exact redirect `io.gotry.quota:/oauth/callback`. Its token exchange rejects
+installation identity and Device fields and returns only an account session. It is not a collection
+Device, is absent from `PlatformSchema`, and never receives snapshot or Usage write authority. Quota
+iOS consumes that session through `packages/apple-client` and fetches
+`GET /api/v3/account/summary` for Today. The app process alone holds OAuth and network authority.
+After a trusted summary is available it projects a non-secret `WidgetSnapshot` into the App Group
+`group.io.gotry.quota` for the embedded `QuotaWidgets` extension; the extension reads only that
+protected file and never calls Relay. See
+[ADR 0013](decisions/0013-readonly-ios-account-client.md) and
+[ADR 0014](decisions/0014-nonsecret-ios-widget-snapshot.md).
 
 The random installation ID is HMACed with an account-scoped server key before storage. Quota and
 Usage upload sequences are independent and recovered from authoritative Device control before
@@ -226,10 +254,16 @@ last-known-good cache. Catalog fetch failure never blocks collection, upload, to
 packages/provider/catalog.json
         ├──generated──► packages/service Rust crate
         ├──generated──► Swift QuotaBar
+        ├──generated──► Swift packages/apple-client
         └──generated──► protocol TypeScript IDs
 
 apps/menubar/helper ──private IPC──► Swift QuotaBar
 apps/cli ──native CLI──► packages/service
+packages/apple-shared ──presentation──► Swift QuotaBar
+packages/apple-shared ──presentation──► Quota iOS
+packages/apple-shared ──presentation──► QuotaWidgets
+packages/apple-client ──HTTPS──► Quota iOS (app only)
+packages/apple-client QuotaWidgetData ──App Group snapshot──► QuotaWidgets
 
 protocol + quota-model + relay-core
                 │
@@ -244,7 +278,19 @@ protocol + quota-model + relay-core
 - `apps/cli` is the Linux-only `quotacli` entry point and owns command parsing/terminal output around
   `packages/service`; its release boundary is the native x86_64 Linux binary.
 - `apps/menubar` keeps private IPC/network-wire decoding separate from SwiftUI views and never reads
-  local service files or provider-owned credentials.
+  local service files or provider-owned credentials. It depends on `packages/apple-shared` for
+  presentation text only and must not depend on QuotaWire, QuotaRelay, or QuotaAccount.
+- `packages/apple-shared` owns reusable Apple presentation semantics with scalar inputs. QuotaBar and
+  Quota iOS map their own models onto those inputs. The package does not depend on
+  `packages/apple-client` or either app. QuotaBar local/provider IDs and the released iOS Account
+  `ProviderID` stay in their current owners because their future admissible sets differ.
+- `packages/apple-client` owns iOS account-read wire models, PKCE values, the fixed-origin Relay
+  client, account session refresh/revoke, last-good Account summary cache, and the Foundation-only
+  `QuotaWidgetData` snapshot types/store. `apps/ios` owns SwiftUI, `ASWebAuthenticationSession`, App
+  Group snapshot publish/clear, and the embedded WidgetKit extension. App views do not call
+  `URLSession`, Security, or decode JSON. `QuotaWidgets` depends only on `QuotaWidgetData` and
+  `QuotaPresentation`; it must not import `QuotaWire`, `QuotaRelay`, `QuotaAccount`, or Security, and
+  must not use `URLSession` or Keychain.
 - `packages/protocol` defines released managed-network contracts and exported JSON Schemas.
 - `packages/protocol/fixtures/pricing-conformance.json` is the language-neutral pricing input and
   expected-output fixture consumed by both Rust service and TypeScript quota-model tests.

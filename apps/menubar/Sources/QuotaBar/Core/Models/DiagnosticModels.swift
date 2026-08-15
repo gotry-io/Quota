@@ -7,25 +7,25 @@ private func isSafeDiagnosticText(_ value: String, maximum: Int) -> Bool {
     }
 }
 
-enum LocalServiceDiagnosticStatus: String, Decodable, Sendable {
+enum LocalServiceDiagnosticStatus: String, Decodable, Equatable, Sendable {
   case healthy
   case degraded
   case blocked
 }
 
-enum LocalServiceDiagnosticSeverity: String, Decodable, Sendable {
+enum LocalServiceDiagnosticSeverity: String, Decodable, Equatable, Sendable {
   case info
   case warning
   case error
 }
 
-enum LocalServiceDiagnosticComponentStatus: String, Decodable, Sendable {
+enum LocalServiceDiagnosticComponentStatus: String, Decodable, Equatable, Sendable {
   case ready
   case degraded
   case blocked
 }
 
-struct LocalServiceDiagnosticClient: Decodable, Sendable {
+struct LocalServiceDiagnosticClient: Decodable, Equatable, Sendable {
   let name: String
   let version: String
 
@@ -53,7 +53,7 @@ extension LocalServiceDiagnosticClient {
   }
 }
 
-struct LocalServiceDiagnosticComponent: Decodable, Sendable {
+struct LocalServiceDiagnosticComponent: Decodable, Equatable, Sendable {
   let name: String
   let status: LocalServiceDiagnosticComponentStatus
   let message: String?
@@ -89,7 +89,7 @@ extension LocalServiceDiagnosticComponent {
   }
 }
 
-struct LocalServiceDiagnosticIssue: Decodable, Sendable {
+struct LocalServiceDiagnosticIssue: Decodable, Equatable, Sendable {
   let component: String
   let code: String
   let severity: LocalServiceDiagnosticSeverity
@@ -127,7 +127,7 @@ extension LocalServiceDiagnosticIssue {
   }
 }
 
-struct LocalServiceDiagnosticReport: Decodable, Sendable {
+struct LocalServiceDiagnosticReport: Decodable, Equatable, Sendable {
   let schemaVersion: Int
   let status: LocalServiceDiagnosticStatus
   let generatedAt: Date

@@ -3,6 +3,9 @@
 Quota is the monorepo behind [quota.gotry.io](https://quota.gotry.io). It keeps coding-agent
 subscription quota and privacy-preserving Usage together across a user's devices.
 
+- **Quota** — native iOS 17+ read-only Account viewer. It signs in with the registered `quota-ios`
+  public client, reads remaining quota and Today Usage, and publishes a non-secret App Group
+  snapshot for Home Screen and Lock Screen widgets.
 - **QuotaBar** — native macOS menu-bar UI with a bundled private Rust service for local collection,
   durable state, account sync, and scheduling.
 - **QuotaCLI** — Linux-only native Rust command that reuses the shared local service crate. It is
@@ -33,13 +36,18 @@ five-minute scheduler exists only for the QuotaBar process lifetime, so quitting
 work and synchronization. Linux `quotacli` uses the same Rust service semantics through a native
 command-line entry point.
 
-Swift owns presentation, UI preferences, accessibility, and Launch at Login. Rust owns provider and
+Swift owns presentation, UI preferences, accessibility, and Launch at Login. Shared remaining-quota,
+plan, count, cost, and compact-age copy lives in `packages/apple-shared`; wire decoding and Relay
+access stay in each app or `packages/apple-client`. Rust owns provider and
 Usage semantics, credentials, OAuth, Relay traffic, persistence, the durable Usage upload setting,
 outbox sequencing, merging local and account observations, and scheduling. QuotaRelay and Quota Web
 remain TypeScript. See the canonical
 [architecture](docs/architecture.md), [security baseline](docs/security.md),
 [provider strategies](docs/provider-collection.md), [native service decision](docs/decisions/0007-rust-native-local-service.md),
-[managed account decision](docs/decisions/0006-managed-account-device-usage.md), and
+[managed account decision](docs/decisions/0006-managed-account-device-usage.md),
+[managed-data v3](docs/decisions/0012-managed-data-v3.md),
+[read-only iOS account client](docs/decisions/0013-readonly-ios-account-client.md),
+[non-secret iOS widget snapshot](docs/decisions/0014-nonsecret-ios-widget-snapshot.md), and
 [SvelteKit document Worker composition](docs/decisions/0011-sveltekit-document-worker.md). The data
 integrity and diagnostic contract is [ADR 0008](docs/decisions/0008-data-integrity-and-diagnostics.md),
 report-time model identity is [ADR 0009](docs/decisions/0009-versioned-model-catalog.md), and
@@ -50,9 +58,12 @@ provider browser-session authentication is
 
 ```text
 apps/cli/                  Linux-only native Rust quotacli command
+apps/ios/                 Quota iPhone/iPad SwiftUI account app
 apps/menubar/             QuotaBar Swift 6.2 / SwiftUI app, including its private Rust helper
 apps/relay/               Managed Hono Worker and D1 adapters
 apps/web/                 Public site and authenticated account UI
+packages/apple-client/    Shared Apple wire, Relay, session, last-good cache, and widget-snapshot modules
+packages/apple-shared/    Foundation-only Apple presentation semantics for QuotaBar, Quota iOS, and widgets
 packages/provider/        Language-neutral provider catalog and JSON Schema
 packages/protocol/        Runtime schemas and exported network JSON Schemas
 packages/service/         Shared Rust collection, Usage, pricing, and Relay logic
@@ -78,7 +89,9 @@ provider set shipped by menubar-v0.0.9.
 
 ## Development
 
-Requirements: Node.js 24+, pnpm 10+, stable Rust, and Swift 6.2+ on macOS.
+Requirements: Node.js 24+, pnpm 10+, stable Rust, and Swift 6.2+ on macOS. Quota iOS also needs
+Xcode with Swift 6.2 and the iOS 17+ SDK, plus the installed XcodeGen CLI to regenerate its
+checked-in project.
 
 ```bash
 pnpm install
@@ -93,8 +106,8 @@ pnpm test:linux-cli
 ```
 
 The root `pnpm check`, `pnpm test`, and `pnpm build` commands cover the macOS service and QuotaBar
-only; they intentionally do not compile the Linux-only CLI. Run the Linux commands on Ubuntu (or
-another supported Linux host).
+only; they intentionally do not compile the Linux-only CLI or the iOS app. Run the Linux commands on
+Ubuntu (or another supported Linux host). Run the iOS commands on macOS.
 
 Useful entry points:
 
@@ -104,6 +117,11 @@ pnpm dev:relay
 cargo test --locked --package quota-service --package quota-menubar-helper
 cargo test --locked --package quotacli
 swift test --package-path apps/menubar
+swift test --package-path packages/apple-shared
+swift test --package-path packages/apple-client
+pnpm generate:ios
+pnpm test:ios
+pnpm build:ios
 pnpm build:menubar:app
 pnpm test:menubar:helper
 ```
@@ -130,7 +148,10 @@ The marketing version lives in `apps/menubar/Support/Info.plist`.
 
 ## Current status
 
-The repository implements protocol-v2 account/device authentication, managed-data v3, independent
+The repository implements protocol-v2 account/device authentication, managed-data v3, a registered
+read-only `quota-ios` account OAuth client, a Quota iOS Connect Account / Today overview slice on
+`packages/apple-client`, shared Apple presentation semantics in `packages/apple-shared`, a
+non-secret App Group widget snapshot with an embedded WidgetKit extension, independent
 quota and Usage upload sequencing, D1 persistence and deletion watermarks, eight Rust quota collectors, six Rust
 Usage parsers with file-level incremental indexing, effective-dated cost calculation, owner-only
 local SQLite state and provider configuration, persistent private IPC, QuotaBar account/provider

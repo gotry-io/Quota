@@ -17,15 +17,18 @@ The Rust service returns persisted component state immediately, then performs st
 the background. It owns the five-minute schedule, providers, Usage, pricing, OAuth/account sync,
 SQLite, outbox, and local/account observation merge. QuotaBar owns presentation, provider visibility
 and ordering preferences, native provider configuration fields, account actions, accessibility, and
-Launch at Login. The service persists the Usage upload preference so it applies before its startup
-refresh. Quitting the app closes stdin and stops the service and all synchronization.
+Launch at Login. Shared remaining-quota, plan/account label, compact count, Usage cost, and compact
+relative-age text come from [`packages/apple-shared`](../../packages/apple-shared). IPC models,
+ProviderID, and session/helper logic stay in this app; QuotaBar does not depend on QuotaWire,
+QuotaRelay, or QuotaAccount. The service persists the Usage upload preference so it applies before
+its startup refresh. Quitting the app closes stdin and stops the service and all synchronization.
 
 For catalog browser-session providers, QuotaBar pins login and Cookie discovery to one supported
 browser application. SweetCookieKit 0.5.2 enumerates that browser's profiles with logging disabled
 and returns only exact-host/name allowlist candidates in memory. Swift sends one minimal Cookie
 header at a time to Rust for validation/commit; it never calls provider APIs or persists the header.
 Cursor is the first adapter. QuotaBar 0.0.13 uploads its quota and Usage through managed-data v3;
-released v2 clients remain isolated from Cursor.
+released v2 clients remain isolated from Cursor. Browser cookies stay local.
 
 Each background refresh precomputes Today, 7 Days, 30 Days, and All for This Mac and, when enabled,
 the signed-in Account. The four values are persisted and returned by `get_state`; Swift only selects
@@ -75,7 +78,7 @@ Build the deterministic visual app with `pnpm build:menubar:visual`. It accepts:
 ```text
 --data-source fixture|live
 --fixture loading|content|cached-refresh-error|empty|unavailable
---route overview|settings|agents|provider-codex|provider-openrouter|devices|usage|support|diagnostics
+--route overview|settings|agents|provider-codex|provider-openrouter|provider-cursor|devices|usage|support|diagnostics
 --appearance system|light|dark
 --text-size standard|extra-large|accessibility
 ```

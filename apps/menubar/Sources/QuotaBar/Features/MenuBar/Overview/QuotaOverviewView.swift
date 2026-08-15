@@ -7,38 +7,33 @@ struct QuotaOverviewView: View {
   let onOpenSettings: () -> Void
 
   var body: some View {
-    ScrollView {
-      providerContent(now: now)
-        .frame(maxWidth: .infinity, alignment: .topLeading)
-        .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
+    QuotaNavigationStableContent(
+      state: model.overviewState(enabledProviders: enabledProviders, now: now)
+    ) { state in
+      content(state)
     }
   }
 
   @ViewBuilder
-  private func providerContent(now: Date) -> some View {
-    switch model.overviewState(enabledProviders: enabledProviders, now: now) {
+  private func content(_ state: QuotaOverviewState) -> some View {
+    switch state {
     case .loading:
-      OverviewEmptyStateView(
-        systemImage: "gauge.with.dots.needle.50percent",
-        title: "Reading Quota",
-        message: "Checking local and account device quota."
-      )
+      QuotaPageStateView(loadingTitle: "Reading quota…")
     case .unavailable(let message):
-      OverviewEmptyStateView(
-        systemImage: "exclamationmark.circle",
-        title: "Quota Unavailable",
+      QuotaPageStateView(
+        errorTitle: "Quota Unavailable",
         message: message,
-        actionTitle: "Retry"
-      ) {
-        Task { await model.refresh() }
-      }
+        retry: { Task { await model.refresh() } }
+      )
     case .empty(let refreshWarning):
       VStack(spacing: 0) {
         if let refreshWarning {
-          InlineRefreshError(message: refreshWarning)
+          QuotaInlineNotice(message: refreshWarning)
+            .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
+            .padding(.top, QuotaDesign.Layout.pageVerticalPadding)
         }
-        OverviewEmptyStateView(
-          systemImage: "eye.slash",
+        QuotaPageStateView(
+          emptySystemImage: "eye.slash",
           title: "No Quota to Show",
           message: "Sign in to a provider CLI or enable an agent in Settings.",
           actionTitle: "Open Settings",
@@ -46,7 +41,11 @@ struct QuotaOverviewView: View {
         )
       }
     case .content(let providers, let refreshWarning):
-      loadedProviderContent(providers: providers, refreshWarning: refreshWarning, now: now)
+      ScrollView {
+        loadedProviderContent(providers: providers, refreshWarning: refreshWarning, now: now)
+          .frame(maxWidth: .infinity, alignment: .topLeading)
+          .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
+      }
     }
   }
 
@@ -57,7 +56,8 @@ struct QuotaOverviewView: View {
   ) -> some View {
     VStack(spacing: 0) {
       if let refreshWarning {
-        InlineRefreshError(message: refreshWarning)
+        QuotaInlineNotice(message: refreshWarning)
+          .padding(.vertical, QuotaDesign.Spacing.sm)
       }
 
       ForEach(Array(providers.enumerated()), id: \.element.id) { index, provider in
@@ -68,45 +68,5 @@ struct QuotaOverviewView: View {
         }
       }
     }
-  }
-}
-
-private struct OverviewEmptyStateView: View {
-  let systemImage: String
-  let title: String
-  let message: String
-  var actionTitle: String?
-  var action: (() -> Void)?
-
-  var body: some View {
-    VStack(spacing: QuotaDesign.Spacing.sectionBody) {
-      Image(systemName: systemImage)
-        .quotaEmptyIconStyle()
-
-      Text(title)
-        .quotaEmptyTitleStyle()
-
-      Text(message)
-        .quotaSecondaryStyle()
-        .multilineTextAlignment(.center)
-        .fixedSize(horizontal: false, vertical: true)
-
-      if let actionTitle, let action {
-        Button(actionTitle, action: action)
-          .buttonStyle(QuotaPrimaryButtonStyle())
-      }
-    }
-    .frame(maxWidth: .infinity, minHeight: 260)
-  }
-}
-
-private struct InlineRefreshError: View {
-  let message: String
-
-  var body: some View {
-    Label(message, systemImage: "clock.arrow.circlepath")
-      .quotaSecondaryStyle()
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .padding(.vertical, QuotaDesign.Spacing.sectionBody)
   }
 }
