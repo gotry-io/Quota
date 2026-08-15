@@ -44,6 +44,11 @@ stable malformed Usage or incomplete coverage cannot become a successful scan. A
 remain the cause of an opportunistic `no_work` attempt without making optional local collection
 unhealthy.
 
+Single-flight refreshes retain one pending rerun. When requests coalesce, user-triggered manual or
+diagnostic rechecks take precedence over settings/account changes, which take precedence over
+startup and scheduled work; the first trigger wins within a class. This keeps the journal's trigger
+attribution aligned with the most intentional work without scheduling redundant refreshes.
+
 Subjects are either null or catalog-owned `provider:<id>` / `agent:<id>` values. Metrics contain at
 most 16 allowlisted labels and bounded nonnegative integers. The journal must never contain paths,
 filenames, models, raw responses, parser excerpts, stderr, prompts, session/conversation IDs,

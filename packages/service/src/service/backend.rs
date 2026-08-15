@@ -4131,6 +4131,36 @@ mod tests {
                 .iter()
                 .any(|finding| finding.component == "usage_upload")
         );
+
+        let retry = state
+            .begin_diagnostic_attempt(
+                DiagnosticAttemptKind::UsageUpload,
+                DiagnosticAttemptTrigger::Scheduled,
+                DiagnosticSource::Account,
+                None,
+                DiagnosticMode::Required,
+                None,
+            )
+            .expect("retry attempt");
+        state
+            .finish_diagnostic_attempt(
+                retry,
+                &DiagnosticAttemptCompletion {
+                    outcome: DiagnosticAttemptOutcome::NoWork,
+                    code: Some(DiagnosticAttemptCode::NoWork),
+                    recovery: DiagnosticRecovery::None,
+                    metrics: metrics([("attempted", 0), ("pending", 0)]),
+                },
+            )
+            .expect("finish retry");
+        let recovered = backend.evaluate_diagnostic_report().expect("recovered");
+        assert_eq!(recovered.summary.operation, DiagnosticOperation::Healthy);
+        assert!(
+            !recovered
+                .findings
+                .iter()
+                .any(|finding| finding.component == "usage_upload")
+        );
         drop(backend);
         fs::remove_dir_all(root).expect("cleanup");
     }

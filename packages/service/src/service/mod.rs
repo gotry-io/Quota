@@ -153,6 +153,20 @@ struct RefreshState {
     pending_trigger: Option<DiagnosticAttemptTrigger>,
 }
 
+fn coalesce_refresh_trigger(
+    current: Option<DiagnosticAttemptTrigger>,
+    incoming: DiagnosticAttemptTrigger,
+) -> DiagnosticAttemptTrigger {
+    let priority = |trigger| match trigger {
+        DiagnosticAttemptTrigger::Scheduled | DiagnosticAttemptTrigger::Startup => 0,
+        DiagnosticAttemptTrigger::SettingsChange | DiagnosticAttemptTrigger::AccountChange => 1,
+        DiagnosticAttemptTrigger::Manual | DiagnosticAttemptTrigger::Recheck => 2,
+    };
+    current
+        .filter(|current| priority(*current) >= priority(incoming))
+        .unwrap_or(incoming)
+}
+
 struct ActiveRefresh {
     cancel: Arc<AtomicBool>,
     started_at: String,
@@ -656,7 +670,8 @@ impl LocalService {
         };
         if refresh.active.is_some() {
             refresh.pending = true;
-            refresh.pending_trigger = Some(trigger);
+            refresh.pending_trigger =
+                Some(coalesce_refresh_trigger(refresh.pending_trigger, trigger));
             return RefreshResult {
                 accepted: false,
                 pending: true,
@@ -1473,6 +1488,35 @@ mod tests {
     use crate::state::StateStore;
     use std::fs;
     use uuid::Uuid;
+
+    #[test]
+    fn pending_refresh_keeps_the_highest_intent_trigger() {
+        assert_eq!(
+            coalesce_refresh_trigger(None, DiagnosticAttemptTrigger::Scheduled),
+            DiagnosticAttemptTrigger::Scheduled
+        );
+        assert_eq!(
+            coalesce_refresh_trigger(
+                Some(DiagnosticAttemptTrigger::Scheduled),
+                DiagnosticAttemptTrigger::SettingsChange,
+            ),
+            DiagnosticAttemptTrigger::SettingsChange
+        );
+        assert_eq!(
+            coalesce_refresh_trigger(
+                Some(DiagnosticAttemptTrigger::Manual),
+                DiagnosticAttemptTrigger::Scheduled,
+            ),
+            DiagnosticAttemptTrigger::Manual
+        );
+        assert_eq!(
+            coalesce_refresh_trigger(
+                Some(DiagnosticAttemptTrigger::Recheck),
+                DiagnosticAttemptTrigger::Manual,
+            ),
+            DiagnosticAttemptTrigger::Recheck
+        );
+    }
 
     #[derive(Default)]
     struct RecordingSink(Mutex<Vec<IpcEvent>>);
