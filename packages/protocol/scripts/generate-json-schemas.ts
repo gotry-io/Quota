@@ -9,6 +9,7 @@ import {
   AccountResponseSchema,
   AccountSummarySchema,
   AccountSummaryV3Schema,
+  AccountSummaryV3DeviceHealthSchema,
   AccountUsageHourlyResponseSchema,
   AccountUsageHourlyResponseV3Schema,
   AccountUsageResponseSchema,
@@ -22,6 +23,8 @@ import {
   DeviceAuthorizationResponseSchema,
   DeviceProfileUpdateRequestSchema,
   DeviceProfileUpdateResponseSchema,
+  DeviceHealthUploadRequestSchema,
+  DeviceHealthUploadResponseSchema,
   DeviceSyncResponseSchema,
   IosLoginExchangeRequestSchema,
   IosOAuthTokenResponseSchema,
@@ -92,10 +95,13 @@ const UsagePayloadSchema = z.union([
 const AccountHttpV3PayloadSchema = z.union([
   AccountQuotaResponseV3Schema,
   AccountSummaryV3Schema,
+  AccountSummaryV3DeviceHealthSchema,
   AccountUsageResponseV3Schema,
   AccountUsageHourlyResponseV3Schema,
   QuotaSnapshotUploadResponseV3Schema,
   UsageUploadResponseV3Schema,
+  DeviceHealthUploadRequestSchema,
+  DeviceHealthUploadResponseSchema,
   RelayErrorEnvelopeSchema,
 ]);
 

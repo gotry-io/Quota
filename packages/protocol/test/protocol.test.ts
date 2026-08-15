@@ -6,11 +6,14 @@ import * as protocol from "../src/index.ts";
 import {
   AccountQuotaResponseSchema,
   AccountSummarySchema,
+  AccountSummaryV3DeviceHealthSchema,
+  AccountSummaryV3Schema,
   AccountUsageHourlyResponseSchema,
   AccountUsageResponseSchema,
   BrowserLoginExchangeRequestSchema,
   DeviceAuthorizationRequestSchema,
   DeviceAuthorizationResponseSchema,
+  DeviceHealthUploadRequestSchema,
   DeviceProfileUpdateRequestSchema,
   DeviceProfileUpdateResponseSchema,
   DeviceSyncResponseSchema,
@@ -76,6 +79,48 @@ describe("quota protocol v2", () => {
     };
     expect(UsageSubmissionV3Schema.safeParse(cursorUsage).success).toBe(true);
     expect(UsageSubmissionSchema.safeParse(cursorUsage).success).toBe(false);
+  });
+
+  it("keeps shipped v3 devices unchanged unless Device Health is explicitly selected", () => {
+    const current = { ...accountSummary(), protocol_version: 3 as const };
+    expect(AccountSummaryV3Schema.safeParse(current).success).toBe(true);
+    expect(AccountSummaryV3DeviceHealthSchema.safeParse(current).success).toBe(false);
+
+    const opted = {
+      ...current,
+      devices: current.devices.map((device) => ({ ...device, health: null })),
+    };
+    expect(AccountSummaryV3DeviceHealthSchema.safeParse(opted).success).toBe(true);
+    expect(AccountSummaryV3Schema.safeParse(opted).success).toBe(false);
+
+    const health = {
+      protocol_version: 3 as const,
+      schema_version: 1 as const,
+      client_product: "quotabar" as const,
+      client_version: "0.0.16",
+      platform: "macos" as const,
+      observed_at: "2026-08-02T12:00:00Z",
+      refresh_revision: 42,
+      last_completed_refresh_at: "2026-08-02T12:00:00Z",
+      last_successful_account_sync_at: null,
+      summary: {
+        operation: "healthy" as const,
+        data: "current" as const,
+        attention: "none" as const,
+      },
+      top_code: null,
+      consecutive_failures: 0,
+      usage_upload_enabled: false,
+    };
+    expect(DeviceHealthUploadRequestSchema.safeParse(health).success).toBe(true);
+    expect(
+      DeviceHealthUploadRequestSchema.safeParse({
+        ...health,
+        device_id: "device_other",
+        agent: "codex",
+        path: "/Users/private",
+      }).success,
+    ).toBe(false);
   });
 
   it("accepts the sole quota upload contract with device generation", () => {

@@ -50,7 +50,8 @@ func decodesAccountSummaryWithUsageCost() throws {
         "created_at": "2026-07-01T00:00:00Z",
         "last_login_at": "2026-08-01T00:00:00Z",
         "last_seen_at": "2026-08-02T01:00:00Z",
-        "signed_out_at": null
+        "signed_out_at": null,
+        "health": null
       }],
       "quota": [],
       "usage": {
@@ -180,6 +181,72 @@ func decodesAccountSummaryWithUsageCost() throws {
   #expect(throws: DecodingError.self) {
     _ = try QuotaWireCodec.makeDecoder().decode(AccountSummary.self, from: nestedExtra)
   }
+}
+
+@Test
+func accountDeviceHealthPresentationUsesAllAxesAndServerFreshness() throws {
+  let now = try #require(ISO8601DateFormatter().date(from: "2026-08-15T08:10:00Z"))
+  func decodeDevice(
+    status: String = "active",
+    freshUntil: String = "2026-08-15T08:20:00Z",
+    operation: String = "healthy",
+    data: String = "current",
+    attention: String = "none",
+    includesHealth: Bool = true
+  ) throws -> AccountDevice {
+    let health: Any = includesHealth
+      ? [
+        "schema_version": 1,
+        "client_product": "quotabar",
+        "client_version": "0.0.16",
+        "platform": "macos",
+        "observed_at": "2026-08-15T08:00:00Z",
+        "refresh_revision": 7,
+        "last_completed_refresh_at": "2026-08-15T08:00:00Z",
+        "last_successful_account_sync_at": NSNull(),
+        "summary": ["operation": operation, "data": data, "attention": attention],
+        "top_code": NSNull(),
+        "consecutive_failures": 0,
+        "usage_upload_enabled": true,
+        "received_at": "2026-08-15T08:00:05Z",
+        "fresh_until": freshUntil,
+      ] as [String: Any]
+      : NSNull()
+    let value: [String: Any] = [
+      "device_id": "device_01",
+      "display_name": "Studio Mac",
+      "platform": "macos",
+      "device_generation": 1,
+      "status": status,
+      "created_at": "2026-08-01T00:00:00Z",
+      "last_login_at": "2026-08-15T08:00:00Z",
+      "last_seen_at": "2026-08-15T08:00:05Z",
+      "signed_out_at": status == "signed_out" ? "2026-08-15T08:05:00Z" : NSNull(),
+      "health": health,
+    ]
+    return try QuotaWireCodec.makeDecoder().decode(
+      AccountDevice.self,
+      from: JSONSerialization.data(withJSONObject: value)
+    )
+  }
+
+  #expect(AccountDeviceHealthPresentation.status(for: try decodeDevice(), now: now) == .healthy)
+  #expect(
+    AccountDeviceHealthPresentation.status(
+      for: try decodeDevice(data: "partial"), now: now) == .needsAttention)
+  #expect(
+    AccountDeviceHealthPresentation.status(
+      for: try decodeDevice(attention: "required"), now: now) == .needsAttention)
+  #expect(
+    AccountDeviceHealthPresentation.status(
+      for: try decodeDevice(freshUntil: "2026-08-15T08:09:59Z"), now: now)
+      == .notRecentlyActive)
+  #expect(
+    AccountDeviceHealthPresentation.status(
+      for: try decodeDevice(includesHealth: false), now: now) == .unknown)
+  #expect(
+    AccountDeviceHealthPresentation.status(
+      for: try decodeDevice(status: "signed_out", includesHealth: false), now: now) == .signedOut)
 }
 
 @Test
@@ -323,106 +390,68 @@ func decodesUnifiedDiagnosticsAndRejectsUnknownFields() throws {
   let data = Data(
     #"""
     {
-      "schema_version": 1,
-      "status": "healthy",
-      "generated_at": "2026-08-11T00:00:00Z",
-      "client": {"name": "QuotaBar", "version": "0.0.7"},
-      "components": [
-        {"name": "providers", "status": "ready", "message": null, "metrics": {}},
-        {"name": "quota", "status": "ready", "message": null, "metrics": {}},
-        {"name": "usage", "status": "ready", "message": "safe source note", "metrics": {"files": 1}},
-        {"name": "pricing", "status": "ready", "message": null, "metrics": {}},
-        {"name": "account", "status": "ready", "message": null, "metrics": {}},
-        {"name": "sync", "status": "ready", "message": null, "metrics": {}}
+      "schema_version":2,
+      "summary":{"operation":"healthy","data":"current","attention":"optional"},
+      "refresh":{"phase":"idle","revision":7,"as_of":"2026-08-11T00:00:00Z","started_at":null,"next_due_at":"2026-08-11T00:05:00Z"},
+      "generated_at":"2026-08-11T00:00:00Z",
+      "client":{"name":"QuotaBar","version":"0.0.7"},
+      "surfaces":[
+        {"name":"quota_overview","operation":"healthy","data":"current","source":null,"metrics":{"items":1}},
+        {"name":"usage_this_device","operation":"healthy","data":"partial","source":"this_device","metrics":{"files":1}},
+        {"name":"usage_account","operation":"healthy","data":"empty","source":"account","metrics":{}},
+        {"name":"account","operation":"healthy","data":"current","source":"account","metrics":{"signed_in":1}}
       ],
-      "issues": []
+      "checks":[{"name":"usage_scan","source":"this_device","subject":"agent:cursor","mode":"required","operation":"healthy","data":"partial","last_attempt_at":"2026-08-11T00:00:00Z","last_success_at":null,"metrics":{"partial_files":1}}],
+      "findings":[{"component":"usage_scan","source":"this_device","subject":"agent:cursor","code":"malformed_json","severity":"warning","impact":"surface","recovery":"update_source","count":2,"observed_at":"2026-08-11T00:00:00Z","message":"Invalid Usage input was isolated while valid records were retained."}],
+      "recent_activity":{"attempts":[],"history_truncated":false}
     }
     """#.utf8
   )
-
   let report = try QuotaWireCodec.makeDecoder().decode(
-    LocalServiceDiagnosticReport.self, from: data
-  )
-  #expect(report.status == .healthy)
-  #expect(report.components.count == 6)
-  #expect(report.components.first(where: { $0.name == "usage" })?.metrics["files"] == 1)
-  #expect(report.textReport.contains("Diagnostics: healthy"))
-  #expect(report.textReport.contains("usage\tready"))
-  #expect(report.textReport.contains("safe source note"))
-  #expect(report.textReport.contains("files=1"))
-  #expect(report.jsonReport.contains("\"schema_version\":1"))
+    LocalServiceDiagnosticReport.self, from: data)
+  #expect(report.summary.operation == .healthy)
+  #expect(report.surfaces.count == 4)
+  #expect(report.checks.first?.subject == "agent:cursor")
+  #expect(report.textReport.contains("agent:cursor"))
+  #expect(report.jsonReport.contains("\"schema_version\":2"))
   #expect(!report.jsonReport.contains("/Users/"))
 
-  var issueObject = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
-  issueObject["status"] = "degraded"
-  issueObject["issues"] = [
-    [
-      "component": "usage",
-      "code": "scan_partial",
-      "severity": "warning",
-      "count": 2,
-      "message": "some sources are incomplete",
-    ]
-  ]
-  let issueData = try JSONSerialization.data(withJSONObject: issueObject)
-  let issueReport = try QuotaWireCodec.makeDecoder().decode(
-    LocalServiceDiagnosticReport.self, from: issueData
-  )
-  #expect(issueReport.textReport.contains("usage/scan_partial (2)"))
-  #expect(issueReport.textReport.contains("some sources are incomplete"))
-
-  let extra = Data(
-    String(decoding: data, as: UTF8.self).replacingOccurrences(
-      of: "\"issues\": []",
-      with: "\"issues\": [], \"future_key\": true"
-    ).utf8
-  )
-  #expect(throws: DecodingError.self) {
-    _ = try QuotaWireCodec.makeDecoder().decode(LocalServiceDiagnosticReport.self, from: extra)
-  }
-
-  var invalidStatus = issueObject
-  var invalidStatusComponents = try #require(invalidStatus["components"] as? [[String: Any]])
-  invalidStatusComponents[0]["status"] = "unknown"
-  invalidStatus["components"] = invalidStatusComponents
+  var object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+  object["future_key"] = true
   #expect(throws: DecodingError.self) {
     _ = try QuotaWireCodec.makeDecoder().decode(
       LocalServiceDiagnosticReport.self,
-      from: JSONSerialization.data(withJSONObject: invalidStatus)
-    )
+      from: JSONSerialization.data(withJSONObject: object))
   }
 
-  var invalidMetric = issueObject
-  var invalidMetricComponents = try #require(invalidMetric["components"] as? [[String: Any]])
-  invalidMetricComponents[2]["metrics"] = ["files": 1_000_001]
-  invalidMetric["components"] = invalidMetricComponents
+  object.removeValue(forKey: "future_key")
+  var surfaces = try #require(object["surfaces"] as? [[String: Any]])
+  surfaces[1]["metrics"] = ["files": 1_000_001]
+  object["surfaces"] = surfaces
   #expect(throws: DecodingError.self) {
     _ = try QuotaWireCodec.makeDecoder().decode(
       LocalServiceDiagnosticReport.self,
-      from: JSONSerialization.data(withJSONObject: invalidMetric)
-    )
+      from: JSONSerialization.data(withJSONObject: object))
   }
 
-  var invalidCount = issueObject
-  var invalidIssues = try #require(invalidCount["issues"] as? [[String: Any]])
-  invalidIssues[0]["count"] = 0
-  invalidCount["issues"] = invalidIssues
+  var missingMetrics = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+  var missingMetricsChecks = try #require(missingMetrics["checks"] as? [[String: Any]])
+  missingMetricsChecks[0].removeValue(forKey: "metrics")
+  missingMetrics["checks"] = missingMetricsChecks
   #expect(throws: DecodingError.self) {
     _ = try QuotaWireCodec.makeDecoder().decode(
       LocalServiceDiagnosticReport.self,
-      from: JSONSerialization.data(withJSONObject: invalidCount)
-    )
+      from: JSONSerialization.data(withJSONObject: missingMetrics))
   }
 
-  var unsafeMessage = issueObject
-  var unsafeMessageComponents = try #require(unsafeMessage["components"] as? [[String: Any]])
-  unsafeMessageComponents[2]["message"] = "safe\nspoof"
-  unsafeMessage["components"] = unsafeMessageComponents
+  var unsafe = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+  var findings = try #require(unsafe["findings"] as? [[String: Any]])
+  findings[0]["subject"] = "agent:/Users/private"
+  unsafe["findings"] = findings
   #expect(throws: DecodingError.self) {
     _ = try QuotaWireCodec.makeDecoder().decode(
       LocalServiceDiagnosticReport.self,
-      from: JSONSerialization.data(withJSONObject: unsafeMessage)
-    )
+      from: JSONSerialization.data(withJSONObject: unsafe))
   }
 }
 

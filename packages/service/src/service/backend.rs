@@ -2,18 +2,13 @@
 //! provider, Usage, pricing, and Relay calls and returns only protocol-shaped values.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::fs;
-use std::fs::OpenOptions;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 
-#[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
-
-use chrono::{DateTime, Days, SecondsFormat, Timelike, Utc};
+use chrono::{DateTime, Days, Duration, SecondsFormat, Timelike, Utc};
 use chrono_tz::Tz;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -21,16 +16,24 @@ use sha2::{Digest, Sha256};
 use crate::catalog::ProviderId;
 use crate::pricing;
 use crate::protocol::{
-    DiagnosticClient, DiagnosticComponent, DiagnosticIssue, DiagnosticReport, DiagnosticSeverity,
-    DiagnosticStatus, ErrorCode, IpcError, QuotaOverviewIdentity, QuotaOverviewItem,
-    QuotaOverviewSource, RecoveryAction, UsagePeriod, UsageSource,
+    DiagnosticAttemptCode, DiagnosticAttemptKind, DiagnosticAttemptOutcome,
+    DiagnosticAttemptTrigger, DiagnosticAttention, DiagnosticCheck, DiagnosticClient,
+    DiagnosticDataState, DiagnosticFinding, DiagnosticImpact, DiagnosticMode, DiagnosticOperation,
+    DiagnosticRecovery, DiagnosticRefresh, DiagnosticRefreshPhase, DiagnosticReport,
+    DiagnosticSeverity, DiagnosticSource, DiagnosticSummary, DiagnosticSurface, ErrorCode,
+    IpcError, QuotaOverviewIdentity, QuotaOverviewItem, QuotaOverviewSource, RecoveryAction,
+    UsagePeriod, UsageSource,
 };
-use crate::providers::common::ErrorCategory;
+use crate::providers::common::{ErrorCategory, ProviderSession};
 use crate::providers::{self, CollectionContext};
 use crate::relay::{AccountManager, RelayClient};
 use crate::service::{BackendError, LocalBackend, LoginOutcome, RefreshOutcome};
-use crate::state::{StateStore, UsageDirtyRange, now_rfc3339};
-use crate::usage::{self, CoverageStatus, UsageAgent, UsageHourlyFact, UsageScanOptions};
+use crate::state::{
+    DiagnosticAttemptCompletion, DiagnosticAttemptHandle, StateStore, UsageDirtyRange, now_rfc3339,
+};
+use crate::usage::{
+    self, CoverageReasonCode, CoverageStatus, UsageAgent, UsageHourlyFact, UsageScanOptions,
+};
 
 const PARSER_REVISION: &str = "quota-usage-rust-4";
 const FILE_INDEX_PARSER_REVISION: &str = "usage-rust-v5";
@@ -45,16 +48,6 @@ fn metrics<const N: usize>(values: [(&str, i64); N]) -> BTreeMap<String, i64> {
         .collect()
 }
 
-fn component_name(name: crate::protocol::ComponentName) -> &'static str {
-    match name {
-        crate::protocol::ComponentName::Quota => "quota",
-        crate::protocol::ComponentName::Usage => "usage",
-        crate::protocol::ComponentName::Account => "account",
-        crate::protocol::ComponentName::Pricing => "pricing",
-        crate::protocol::ComponentName::Providers => "providers",
-    }
-}
-
 fn array_len(value: Option<&Value>, key: &str) -> i64 {
     value
         .and_then(Value::as_object)
@@ -62,69 +55,6 @@ fn array_len(value: Option<&Value>, key: &str) -> i64 {
         .and_then(Value::as_array)
         .map(|items| items.len() as i64)
         .unwrap_or(0)
-}
-
-fn monitored_quota_results<'a>(
-    value: Option<&'a Value>,
-    monitored_providers: &HashSet<ProviderId>,
-) -> Vec<&'a Value> {
-    value
-        .and_then(Value::as_object)
-        .and_then(|object| object.get("results"))
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter(|result| {
-            result
-                .get("provider")
-                .and_then(Value::as_str)
-                .and_then(ProviderId::parse)
-                .is_some_and(|provider| monitored_providers.contains(&provider))
-        })
-        .collect()
-}
-
-fn quota_diagnostic_metrics(
-    value: Option<&Value>,
-    monitored_providers: &HashSet<ProviderId>,
-) -> BTreeMap<String, i64> {
-    let results = monitored_quota_results(value, monitored_providers);
-    let snapshots = results
-        .iter()
-        .map(|result| array_len(Some(result), "snapshots"))
-        .sum::<i64>();
-    let outcome_count = |outcome: &str| {
-        results
-            .iter()
-            .filter(|result| result.get("outcome").and_then(Value::as_str) == Some(outcome))
-            .count() as i64
-    };
-    metrics([
-        ("results", results.len() as i64),
-        ("snapshots", snapshots),
-        ("success", outcome_count("success")),
-        ("auth_required", outcome_count("auth_required")),
-        ("unavailable", outcome_count("unavailable")),
-        ("error", outcome_count("error")),
-        ("unsupported", outcome_count("unsupported")),
-    ])
-}
-
-fn quota_collection_status(metrics: &BTreeMap<String, i64>) -> &'static str {
-    let results = metrics.get("results").copied().unwrap_or(0);
-    let success = metrics.get("success").copied().unwrap_or(0);
-    let auth_required = metrics.get("auth_required").copied().unwrap_or(0);
-    let failures = auth_required
-        + metrics.get("unavailable").copied().unwrap_or(0)
-        + metrics.get("error").copied().unwrap_or(0)
-        + metrics.get("unsupported").copied().unwrap_or(0);
-    if results == 0 || success == 0 {
-        "blocked"
-    } else if failures > 0 {
-        "degraded"
-    } else {
-        "ready"
-    }
 }
 
 fn uploadable_dirty_range_count(ranges: &[UsageDirtyRange], now: DateTime<Utc>) -> i64 {
@@ -149,26 +79,96 @@ fn error_code_wire(code: ErrorCode) -> String {
         .unwrap_or_else(|| "unknown_error".to_owned())
 }
 
-fn safe_sync_error_code(value: Option<&Value>) -> &'static str {
-    match value.and_then(Value::as_str) {
-        Some("invalid_request") => "invalid_request",
-        Some("unsupported_operation") => "unsupported_operation",
-        Some("invalid_state") => "invalid_state",
-        Some("client_upgrade_required") => "client_upgrade_required",
-        Some("busy") => "busy",
-        Some("cancelled") => "cancelled",
-        Some("authentication_required") => "authentication_required",
-        Some("device_deleted") => "device_deleted",
-        Some("stale_generation") => "stale_generation",
-        Some("unavailable") => "unavailable",
-        Some("provider_error") => "provider_error",
-        Some("network_error") => "network_error",
-        Some("invalid_response") => "invalid_response",
-        Some("internal") => "internal",
-        Some("unrepresentable_hour") => "unrepresentable_hour",
-        Some("invalid_usage_batch") => "invalid_usage_batch",
-        _ => "sync_failed",
+fn backend_attempt_error(
+    error: &IpcError,
+) -> (
+    DiagnosticAttemptOutcome,
+    DiagnosticAttemptCode,
+    DiagnosticRecovery,
+) {
+    if error.code == ErrorCode::Cancelled {
+        return (
+            DiagnosticAttemptOutcome::Cancelled,
+            DiagnosticAttemptCode::Cancelled,
+            DiagnosticRecovery::None,
+        );
     }
+    let code = match error.code {
+        ErrorCode::AuthenticationRequired | ErrorCode::StaleGeneration => {
+            DiagnosticAttemptCode::AuthenticationRequired
+        }
+        ErrorCode::DeviceDeleted => DiagnosticAttemptCode::DeviceDeleted,
+        ErrorCode::NetworkError => DiagnosticAttemptCode::NetworkError,
+        ErrorCode::InvalidResponse => DiagnosticAttemptCode::InvalidResponse,
+        ErrorCode::InvalidState | ErrorCode::ClientUpgradeRequired => {
+            DiagnosticAttemptCode::InvalidState
+        }
+        ErrorCode::ProviderError => DiagnosticAttemptCode::ProviderError,
+        ErrorCode::Cancelled => DiagnosticAttemptCode::Cancelled,
+        ErrorCode::InvalidRequest
+        | ErrorCode::UnsupportedOperation
+        | ErrorCode::Busy
+        | ErrorCode::Unavailable
+        | ErrorCode::Internal => DiagnosticAttemptCode::Unavailable,
+    };
+    let recovery = match error.recovery_action {
+        RecoveryAction::None => DiagnosticRecovery::None,
+        RecoveryAction::Retry => DiagnosticRecovery::Retry,
+        RecoveryAction::Login => DiagnosticRecovery::Login,
+        RecoveryAction::ConfigureProvider => DiagnosticRecovery::ConfigureProvider,
+        RecoveryAction::Upgrade => DiagnosticRecovery::Upgrade,
+        RecoveryAction::Reinstall => DiagnosticRecovery::Reinstall,
+    };
+    (DiagnosticAttemptOutcome::Failed, code, recovery)
+}
+
+fn diagnostic_attempt_code_wire(value: DiagnosticAttemptCode) -> &'static str {
+    match value {
+        DiagnosticAttemptCode::ProcessInterrupted => "process_interrupted",
+        DiagnosticAttemptCode::Cancelled => "cancelled",
+        DiagnosticAttemptCode::NoWork => "no_work",
+        DiagnosticAttemptCode::AuthenticationRequired => "authentication_required",
+        DiagnosticAttemptCode::NetworkError => "network_error",
+        DiagnosticAttemptCode::Unavailable => "unavailable",
+        DiagnosticAttemptCode::InvalidResponse => "invalid_response",
+        DiagnosticAttemptCode::InvalidState => "invalid_state",
+        DiagnosticAttemptCode::ProviderError => "provider_error",
+        DiagnosticAttemptCode::PartialSource => "partial_source",
+        DiagnosticAttemptCode::MalformedData => "malformed_data",
+        DiagnosticAttemptCode::TruncatedActiveSource => "truncated_active_source",
+        DiagnosticAttemptCode::InvalidUsageBatch => "invalid_usage_batch",
+        DiagnosticAttemptCode::UnrepresentableHour => "unrepresentable_hour",
+        DiagnosticAttemptCode::DeviceDeleted => "device_deleted",
+        DiagnosticAttemptCode::UploadDisabled => "upload_disabled",
+        DiagnosticAttemptCode::SignedOut => "signed_out",
+    }
+}
+
+fn device_health_code_for_attempt(attempt: &crate::protocol::DiagnosticAttempt) -> &'static str {
+    if attempt.outcome == DiagnosticAttemptOutcome::Interrupted
+        || attempt.code == Some(DiagnosticAttemptCode::ProcessInterrupted)
+    {
+        return "process_interrupted";
+    }
+    if attempt.code == Some(DiagnosticAttemptCode::InvalidState) {
+        return "local_state_invalid";
+    }
+    match attempt.kind {
+        DiagnosticAttemptKind::Refresh => "refresh_failed",
+        DiagnosticAttemptKind::QuotaCollection => "quota_collection_failed",
+        DiagnosticAttemptKind::UsageScan => "usage_scan_partial",
+        DiagnosticAttemptKind::UsageUpload => "usage_upload_failed",
+        DiagnosticAttemptKind::AccountSync => "account_sync_failed",
+        DiagnosticAttemptKind::PricingRefresh => "pricing_refresh_failed",
+        DiagnosticAttemptKind::DeviceHealthUpload => "refresh_failed",
+    }
+}
+
+fn diagnostic_attempt_timestamp(attempt: &crate::protocol::DiagnosticAttempt) -> String {
+    attempt
+        .completed_at
+        .clone()
+        .unwrap_or_else(|| attempt.started_at.clone())
 }
 
 fn pricing_diagnostic_metrics(value: Option<&Value>) -> BTreeMap<String, i64> {
@@ -177,21 +177,6 @@ fn pricing_diagnostic_metrics(value: Option<&Value>) -> BTreeMap<String, i64> {
         ("catalog_present", i64::from(value.is_some())),
         ("catalog_valid", i64::from(valid)),
         ("entries", array_len(value, "entries")),
-    ])
-}
-
-fn model_catalog_diagnostic_metrics(value: Option<&Value>) -> BTreeMap<String, i64> {
-    let valid =
-        value.is_some_and(|value| crate::model_catalog::validate_model_catalog_value(value).valid);
-    let revision_available = value
-        .and_then(Value::as_object)
-        .and_then(|object| object.get("revision"))
-        .and_then(Value::as_str)
-        .is_some_and(|revision| !revision.is_empty());
-    metrics([
-        ("catalog_present", i64::from(value.is_some())),
-        ("catalog_valid", i64::from(valid)),
-        ("revision_available", i64::from(revision_available)),
     ])
 }
 
@@ -233,21 +218,6 @@ fn account_diagnostic_metrics(
     ])
 }
 
-fn config_file_diagnostic(root: &std::path::Path) -> (bool, bool) {
-    let path = root.join("providers.json");
-    let present = match fs::metadata(&path) {
-        Ok(metadata) => metadata.is_file(),
-        Err(_) => false,
-    };
-    let readable = present
-        && OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(path)
-            .is_ok();
-    (present, readable)
-}
-
 pub struct NativeBackend {
     state: Arc<StateStore>,
     relay: Arc<RelayClient>,
@@ -281,6 +251,74 @@ impl NativeBackend {
         }
     }
 
+    fn begin_attempt(
+        &self,
+        kind: DiagnosticAttemptKind,
+        source: DiagnosticSource,
+        subject: Option<&str>,
+        mode: DiagnosticMode,
+    ) -> Result<DiagnosticAttemptHandle, BackendError> {
+        let parent = self
+            .state
+            .running_refresh_attempt()
+            .map_err(|_| BackendError::unavailable())?;
+        self.state
+            .begin_diagnostic_attempt(
+                kind,
+                parent
+                    .map(|(_, trigger)| trigger)
+                    .unwrap_or(DiagnosticAttemptTrigger::Manual),
+                source,
+                subject,
+                mode,
+                parent.map(|(handle, _)| handle),
+            )
+            .map_err(|_| BackendError::unavailable())
+    }
+
+    fn finish_attempt(
+        &self,
+        handle: DiagnosticAttemptHandle,
+        outcome: DiagnosticAttemptOutcome,
+        code: Option<DiagnosticAttemptCode>,
+        recovery: DiagnosticRecovery,
+        metrics: BTreeMap<String, i64>,
+    ) -> Result<(), BackendError> {
+        self.state
+            .finish_diagnostic_attempt(
+                handle,
+                &DiagnosticAttemptCompletion {
+                    outcome,
+                    code,
+                    recovery,
+                    metrics,
+                },
+            )
+            .map_err(|_| BackendError::unavailable())?;
+        Ok(())
+    }
+
+    fn finish_backend_result_attempt<T>(
+        &self,
+        handle: DiagnosticAttemptHandle,
+        result: &Result<T, BackendError>,
+        metrics: BTreeMap<String, i64>,
+    ) -> Result<(), BackendError> {
+        match result {
+            Ok(_) => self.finish_attempt(
+                handle,
+                DiagnosticAttemptOutcome::Success,
+                None,
+                DiagnosticRecovery::None,
+                metrics,
+            ),
+            Err(error) => {
+                let (outcome, code, recovery) = backend_attempt_error(&error.error);
+                self.finish_attempt(handle, outcome, Some(code), recovery, metrics)
+            }
+        }
+    }
+
     /// Collect provider quota without Usage, pricing, account synchronization, or uploads.
     ///
     /// This is the local-only path used by diagnostic/status callers.  Full refresh remains the
@@ -301,619 +339,850 @@ impl NativeBackend {
     }
 
     pub fn diagnostic_report(&self) -> Result<DiagnosticReport, BackendError> {
-        let mut components = Vec::with_capacity(6);
-        let mut issues = Vec::new();
-        let mut degraded = false;
-        let mut blocked = false;
-
-        let discovered_providers = match self.configured_providers() {
-            Ok(providers) => providers,
-            Err(_) => {
-                degraded = true;
-                issues.push(DiagnosticIssue {
-                    component: "providers".into(),
-                    code: "state_unavailable".into(),
-                    severity: DiagnosticSeverity::Error,
-                    count: 1,
-                    message: "provider browser session state could not be read".into(),
-                });
-                Vec::new()
-            }
-        };
-        let discovered = discovered_providers.len() as i64;
-        let mut monitored_providers = discovered_providers.into_iter().collect::<HashSet<_>>();
-        let (config_present, config_readable) = config_file_diagnostic(self.state.root());
-        let configured = match self.state.snapshot() {
-            Ok(snapshot) => {
-                let mut configured = 0i64;
-                for provider in snapshot.providers {
-                    if provider.configured {
-                        configured = configured.saturating_add(1);
-                        if let Some(provider) = ProviderId::parse(&provider.provider) {
-                            monitored_providers.insert(provider);
-                        }
-                    }
-                }
-                for session in snapshot.provider_browser_sessions {
-                    if session.configured {
-                        configured = configured.saturating_add(1);
-                        if let Some(provider) = ProviderId::parse(&session.provider) {
-                            monitored_providers.insert(provider);
-                        }
-                    }
-                }
-                configured
-            }
-            Err(_) => {
-                degraded = true;
-                issues.push(DiagnosticIssue {
-                    component: "providers".into(),
-                    code: "state_unavailable".into(),
-                    severity: DiagnosticSeverity::Error,
-                    count: 1,
-                    message: "provider configuration state could not be read".into(),
-                });
-                0
-            }
-        };
-        if config_present && !config_readable {
-            issues.push(DiagnosticIssue {
-                component: "providers".into(),
-                code: "config_unreadable".into(),
-                severity: DiagnosticSeverity::Error,
-                count: 1,
-                message: "recovery_configure_provider".into(),
-            });
+        if let Some(mut report) = self
+            .state
+            .diagnostic_snapshot()
+            .map_err(|_| BackendError::unavailable())?
+        {
+            report.generated_at = now_rfc3339();
+            report.client = self.diagnostic_client();
+            report.recent_activity = self
+                .state
+                .diagnostic_recent_activity()
+                .map_err(|_| BackendError::unavailable())?;
+            return Ok(report);
         }
-        components.push(DiagnosticComponent {
-            name: "providers".into(),
-            status: if config_present && !config_readable {
-                degraded = true;
-                "degraded"
-            } else {
-                "ready"
-            }
-            .into(),
-            message: None,
-            metrics: metrics([
-                ("configured", configured),
-                ("discovered", discovered),
-                ("config_present", i64::from(config_present)),
-                ("config_readable", i64::from(config_readable)),
-                (
-                    "config_root_explicit",
-                    i64::from(self.environment.contains_key("XDG_CONFIG_HOME")),
-                ),
-            ]),
+        self.evaluate_diagnostic_report()
+    }
+
+    pub fn complete_diagnostic_report(&self) -> Result<DiagnosticReport, BackendError> {
+        let report = self.evaluate_diagnostic_report()?;
+        self.state
+            .write_diagnostic_snapshot(&report)
+            .map_err(|_| BackendError::unavailable())?;
+        Ok(report)
+    }
+
+    fn diagnostic_client(&self) -> DiagnosticClient {
+        DiagnosticClient {
+            name: self.client_name.clone(),
+            version: self.client_version.clone(),
+        }
+    }
+
+    fn evaluate_diagnostic_report(&self) -> Result<DiagnosticReport, BackendError> {
+        let now = now_rfc3339();
+        let snapshot = self
+            .state
+            .snapshot_for_diagnostics()
+            .map_err(|_| BackendError::unavailable())?;
+        let recent_activity = self
+            .state
+            .diagnostic_recent_activity()
+            .map_err(|_| BackendError::unavailable())?;
+        let quota = self
+            .state
+            .component(crate::protocol::ComponentName::Quota)
+            .map_err(|_| BackendError::unavailable())?;
+        let usage = self
+            .state
+            .component(crate::protocol::ComponentName::Usage)
+            .map_err(|_| BackendError::unavailable())?;
+        let pricing = self
+            .state
+            .component(crate::protocol::ComponentName::Pricing)
+            .map_err(|_| BackendError::unavailable())?;
+        let account = self
+            .state
+            .component(crate::protocol::ComponentName::Account)
+            .map_err(|_| BackendError::unavailable())?;
+        let session = self
+            .state
+            .session_json()
+            .map_err(|_| BackendError::unavailable())?;
+        let usage_upload_enabled = snapshot.usage_upload_enabled;
+        let account_active = session
+            .as_ref()
+            .is_some_and(|value| value.get("status").and_then(Value::as_str) == Some("active"));
+        let account_signed_in = account.as_ref().is_some_and(|record| {
+            record
+                .value
+                .as_ref()
+                .and_then(|value| value.get("auth_status"))
+                .and_then(Value::as_str)
+                == Some("signed_in")
         });
 
-        let component = |name: &str,
-                         record: Option<crate::state::ComponentRecord>,
-                         metrics: BTreeMap<String, i64>,
-                         issues: &mut Vec<DiagnosticIssue>,
-                         degraded: &mut bool,
-                         blocked: &mut bool| {
-            let (status, message) = match record {
-                Some(record) => {
-                    let status = match record.status {
-                        crate::protocol::ComponentStatus::Ready => "ready",
-                        crate::protocol::ComponentStatus::Stale => "degraded",
-                        crate::protocol::ComponentStatus::AuthRequired => "blocked",
-                        crate::protocol::ComponentStatus::Unavailable => "blocked",
-                        crate::protocol::ComponentStatus::Unsupported => "degraded",
-                        crate::protocol::ComponentStatus::Error => "degraded",
-                        crate::protocol::ComponentStatus::SignedOut => "ready",
-                    };
-                    if status == "degraded" {
-                        *degraded = true;
-                    } else if status == "blocked" {
-                        *blocked = true;
-                    }
-                    if status != "ready" {
-                        let (code, message) = record
-                            .last_error
-                            .as_ref()
-                            .map(|error| {
-                                (
-                                    serde_json::to_value(error.code)
-                                        .ok()
-                                        .and_then(|value| value.as_str().map(str::to_owned))
-                                        .unwrap_or_else(|| "component_error".into()),
-                                    format!(
-                                        "recovery_{}",
-                                        serde_json::to_value(error.recovery_action)
-                                            .ok()
-                                            .and_then(|value| value.as_str().map(str::to_owned))
-                                            .unwrap_or_else(|| "retry".into())
-                                    ),
-                                )
-                            })
-                            .unwrap_or_else(|| (status.into(), "component_not_ready".into()));
-                        issues.push(DiagnosticIssue {
-                            component: name.into(),
-                            code,
-                            severity: if status == "blocked" {
-                                DiagnosticSeverity::Error
-                            } else {
-                                DiagnosticSeverity::Warning
-                            },
-                            count: 1,
-                            message,
-                        });
-                    }
-                    (status.into(), None)
-                }
-                None => {
-                    *blocked = true;
-                    issues.push(DiagnosticIssue {
-                        component: name.into(),
-                        code: "unavailable".into(),
-                        severity: DiagnosticSeverity::Error,
-                        count: 1,
-                        message: "component has no stored state".into(),
-                    });
-                    ("blocked".into(), Some("no stored state".into()))
-                }
-            };
-            DiagnosticComponent {
-                name: name.into(),
-                status,
-                message,
-                metrics,
-            }
-        };
+        let explicit_providers = snapshot
+            .providers
+            .iter()
+            .filter(|value| value.configured)
+            .map(|value| value.provider.as_str())
+            .chain(
+                snapshot
+                    .provider_browser_sessions
+                    .iter()
+                    .filter(|value| value.configured)
+                    .map(|value| value.provider.as_str()),
+            )
+            .collect::<HashSet<_>>();
+        let mut surfaces = Vec::with_capacity(4);
+        let mut checks = Vec::new();
+        let mut findings = Vec::new();
 
-        let mut read_component =
-            |name: crate::protocol::ComponentName| match self.state.component(name) {
-                Ok(value) => value,
-                Err(_) => {
-                    degraded = true;
-                    issues.push(DiagnosticIssue {
-                        component: component_name(name).into(),
-                        code: "state_unavailable".into(),
-                        severity: DiagnosticSeverity::Error,
-                        count: 1,
-                        message: "component state could not be read".into(),
-                    });
-                    None
-                }
-            };
-        let quota = read_component(crate::protocol::ComponentName::Quota);
-        let usage = read_component(crate::protocol::ComponentName::Usage);
-        let pricing = read_component(crate::protocol::ComponentName::Pricing);
-        let account = read_component(crate::protocol::ComponentName::Account);
-        let mut file_count = 0i64;
-        for agent in UsageAgent::ALL {
-            match self.state.usage_file_index(agent) {
-                Ok(index) => file_count = file_count.saturating_add(index.len() as i64),
-                Err(_) => {
-                    degraded = true;
-                    issues.push(DiagnosticIssue {
-                        component: "usage".into(),
-                        code: "state_unavailable".into(),
-                        severity: DiagnosticSeverity::Error,
-                        count: 1,
-                        message: "Usage file index could not be read".into(),
-                    });
-                    break;
+        let mut local_quota_sources = 0i64;
+        let mut account_quota_sources = 0i64;
+        let mut current_quota = 0i64;
+        let mut account_provider_states = BTreeMap::<String, bool>::new();
+        for item in &snapshot.overview {
+            if !item.is_stale {
+                current_quota = current_quota.saturating_add(1);
+            }
+            for source in &item.sources {
+                if source.kind == "local" {
+                    local_quota_sources = local_quota_sources.saturating_add(1);
+                } else if source.kind == "device" {
+                    account_quota_sources = account_quota_sources.saturating_add(1);
+                    account_provider_states
+                        .entry(item.identity.provider.clone())
+                        .and_modify(|current| *current |= !source.is_stale)
+                        .or_insert(!source.is_stale);
                 }
             }
         }
-        let record_count = match self.state.usage_event_count() {
-            Ok(count) => count.min(i64::MAX as u64) as i64,
-            Err(_) => {
-                degraded = true;
-                issues.push(DiagnosticIssue {
-                    component: "usage".into(),
-                    code: "state_unavailable".into(),
-                    severity: DiagnosticSeverity::Error,
-                    count: 1,
-                    message: "Usage records could not be read".into(),
-                });
-                0
-            }
+        let quota_data = if snapshot.overview.is_empty() {
+            DiagnosticDataState::Empty
+        } else if current_quota > 0 {
+            DiagnosticDataState::Current
+        } else {
+            DiagnosticDataState::Stale
         };
-        let usage_upload_enabled = match self.state.usage_upload_enabled() {
-            Ok(enabled) => enabled,
-            Err(_) => {
-                degraded = true;
-                issues.push(DiagnosticIssue {
-                    component: "sync".into(),
-                    code: "state_unavailable".into(),
-                    severity: DiagnosticSeverity::Error,
-                    count: 1,
-                    message: "Usage upload preference could not be read".into(),
+        surfaces.push(DiagnosticSurface {
+            name: "quota_overview".into(),
+            operation: DiagnosticOperation::Healthy,
+            data: quota_data,
+            source: None,
+            metrics: metrics([
+                ("items", snapshot.overview.len() as i64),
+                ("current_items", current_quota),
+                ("this_device_sources", local_quota_sources),
+                ("account_sources", account_quota_sources),
+            ]),
+        });
+        for (provider, current) in account_provider_states {
+            checks.push(DiagnosticCheck {
+                name: "quota_collection".into(),
+                source: DiagnosticSource::Account,
+                subject: Some(format!("provider:{provider}")),
+                mode: DiagnosticMode::Required,
+                operation: DiagnosticOperation::Healthy,
+                data: if current {
+                    DiagnosticDataState::Current
+                } else {
+                    DiagnosticDataState::Stale
+                },
+                last_attempt_at: account.as_ref().and_then(|value| value.updated_at.clone()),
+                last_success_at: account.as_ref().and_then(|value| value.updated_at.clone()),
+                metrics: metrics([("sources", 1)]),
+            });
+        }
+
+        if let Some(results) = quota
+            .as_ref()
+            .and_then(|record| record.value.as_ref())
+            .and_then(|value| value.get("results"))
+            .and_then(Value::as_array)
+        {
+            for result in results {
+                let Some(provider) = result.get("provider").and_then(Value::as_str) else {
+                    continue;
+                };
+                let explicit = explicit_providers.contains(provider);
+                let subject = format!("provider:{provider}");
+                let attempt_facts = self
+                    .state
+                    .diagnostic_attempt_facts(
+                        DiagnosticAttemptKind::QuotaCollection,
+                        DiagnosticSource::ThisDevice,
+                        Some(&subject),
+                    )
+                    .map_err(|_| BackendError::unavailable())?;
+                let discovered = attempt_facts
+                    .latest_completed
+                    .as_ref()
+                    .and_then(|attempt| attempt.metrics.get("sources"))
+                    .copied()
+                    .unwrap_or(0)
+                    > 0;
+                if !explicit && !discovered {
+                    continue;
+                }
+                let mode = if explicit {
+                    DiagnosticMode::Required
+                } else {
+                    DiagnosticMode::Opportunistic
+                };
+                let outcome = result
+                    .get("outcome")
+                    .and_then(Value::as_str)
+                    .unwrap_or("error");
+                let snapshots = array_len(Some(result), "snapshots");
+                let success = outcome == "success" && snapshots > 0;
+                checks.push(DiagnosticCheck {
+                    name: "quota_collection".into(),
+                    source: DiagnosticSource::ThisDevice,
+                    subject: Some(subject.clone()),
+                    mode,
+                    operation: if success {
+                        DiagnosticOperation::Healthy
+                    } else {
+                        DiagnosticOperation::Degraded
+                    },
+                    data: if success {
+                        DiagnosticDataState::Current
+                    } else {
+                        DiagnosticDataState::Empty
+                    },
+                    last_attempt_at: attempt_facts
+                        .latest_completed
+                        .as_ref()
+                        .map(diagnostic_attempt_timestamp),
+                    last_success_at: attempt_facts
+                        .latest_success
+                        .as_ref()
+                        .map(diagnostic_attempt_timestamp),
+                    metrics: metrics([
+                        ("sources", i64::from(discovered)),
+                        ("snapshots", snapshots),
+                    ]),
                 });
-                true
+                if !success {
+                    let code = match outcome {
+                        "auth_required" => "auth_required",
+                        "unsupported" => "unsupported",
+                        "unavailable" => "unavailable",
+                        _ => "provider_error",
+                    };
+                    findings.push(DiagnosticFinding {
+                        component: "quota_collection".into(),
+                        source: DiagnosticSource::ThisDevice,
+                        subject: Some(subject),
+                        code: code.into(),
+                        severity: if explicit {
+                            DiagnosticSeverity::Warning
+                        } else {
+                            DiagnosticSeverity::Info
+                        },
+                        impact: if explicit {
+                            DiagnosticImpact::Source
+                        } else {
+                            DiagnosticImpact::None
+                        },
+                        recovery: if !explicit {
+                            DiagnosticRecovery::None
+                        } else if code == "auth_required" {
+                            DiagnosticRecovery::ConfigureProvider
+                        } else {
+                            DiagnosticRecovery::Retry
+                        },
+                        count: 1,
+                        observed_at: attempt_facts
+                            .latest_completed
+                            .as_ref()
+                            .map(diagnostic_attempt_timestamp)
+                            .unwrap_or_else(|| now.clone()),
+                        message: if explicit {
+                            "Configured collection on this device did not produce quota data."
+                        } else {
+                            "An opportunistically discovered local source could not be collected."
+                        }
+                        .into(),
+                    });
+                }
             }
-        };
-        let dirty_ranges = match self.state.dirty_usage_ranges() {
-            Ok(ranges) => ranges,
-            Err(_) => {
-                degraded = true;
-                issues.push(DiagnosticIssue {
-                    component: "sync".into(),
-                    code: "state_unavailable".into(),
-                    severity: DiagnosticSeverity::Error,
-                    count: 1,
-                    message: "dirty Usage ranges could not be read".into(),
-                });
-                Vec::new()
-            }
-        };
-        let dirty_count = dirty_ranges.len() as i64;
-        let uploadable_dirty_count = uploadable_dirty_range_count(&dirty_ranges, Utc::now());
-        let partial_count = match self.state.partial_usage_hours() {
-            Ok(hours) => hours.len() as i64,
-            Err(_) => {
-                degraded = true;
-                issues.push(DiagnosticIssue {
-                    component: "usage".into(),
-                    code: "state_unavailable".into(),
-                    severity: DiagnosticSeverity::Error,
-                    count: 1,
-                    message: "partial Usage ranges could not be read".into(),
-                });
-                0
-            }
-        };
-        let outbox_count = match self.state.outbox_entries() {
-            Ok(entries) => entries.len() as i64,
-            Err(_) => {
-                degraded = true;
-                issues.push(DiagnosticIssue {
-                    component: "sync".into(),
-                    code: "state_unavailable".into(),
-                    severity: DiagnosticSeverity::Error,
-                    count: 1,
-                    message: "Usage outbox could not be read".into(),
-                });
-                0
-            }
-        };
-        let scan_diagnostics = match self.state.usage_scan_diagnostics() {
-            Ok(values) => values,
-            Err(_) => {
-                degraded = true;
-                issues.push(DiagnosticIssue {
-                    component: "usage".into(),
-                    code: "state_unavailable".into(),
-                    severity: DiagnosticSeverity::Error,
-                    count: 1,
-                    message: "scan diagnostics could not be read".into(),
-                });
-                Vec::new()
-            }
-        };
-        let mut usage_metrics = metrics([
-            ("files", file_count),
-            ("records", record_count),
-            ("dirty_ranges", dirty_count),
-            ("partial_hours", partial_count),
-            ("scan_agents", scan_diagnostics.len() as i64),
-        ]);
-        let mut reason_counts = BTreeMap::<String, i64>::new();
-        for (_, value) in &scan_diagnostics {
-            if value.get("status").and_then(Value::as_str) == Some("blocked") {
-                blocked = true;
-                issues.push(DiagnosticIssue {
-                    component: "usage".into(),
-                    code: "scan_blocked".into(),
-                    severity: DiagnosticSeverity::Error,
-                    count: 1,
-                    message: "recovery_retry".into(),
-                });
-            } else if value.get("status").and_then(Value::as_str) == Some("partial") {
-                degraded = true;
-                issues.push(DiagnosticIssue {
-                    component: "usage".into(),
-                    code: "scan_partial".into(),
+        }
+
+        let (config_present, config_readable) = self.state.provider_config_status();
+        if config_present {
+            checks.push(DiagnosticCheck {
+                name: "provider_configuration".into(),
+                source: DiagnosticSource::ThisDevice,
+                subject: None,
+                mode: DiagnosticMode::Required,
+                operation: if config_readable {
+                    DiagnosticOperation::Healthy
+                } else {
+                    DiagnosticOperation::Degraded
+                },
+                data: if config_readable {
+                    DiagnosticDataState::Current
+                } else {
+                    DiagnosticDataState::Unknown
+                },
+                last_attempt_at: Some(now.clone()),
+                last_success_at: config_readable.then(|| now.clone()),
+                metrics: metrics([("present", 1), ("valid", i64::from(config_readable))]),
+            });
+        }
+        if config_present && !config_readable {
+            findings.push(DiagnosticFinding {
+                component: "provider_configuration".into(),
+                source: DiagnosticSource::ThisDevice,
+                subject: None,
+                code: "config_unreadable".into(),
+                severity: DiagnosticSeverity::Error,
+                impact: DiagnosticImpact::Source,
+                recovery: DiagnosticRecovery::ConfigureProvider,
+                count: 1,
+                observed_at: now.clone(),
+                message: "Saved provider configuration cannot be read safely.".into(),
+            });
+        }
+
+        let mut file_count = 0i64;
+        for agent in UsageAgent::ALL {
+            file_count = file_count.saturating_add(
+                self.state
+                    .usage_file_index(agent)
+                    .map_err(|_| BackendError::unavailable())?
+                    .len() as i64,
+            );
+        }
+        let record_count = self
+            .state
+            .usage_event_count()
+            .map_err(|_| BackendError::unavailable())?
+            .min(i64::MAX as u64) as i64;
+        let partial_hours = self
+            .state
+            .partial_usage_hours()
+            .map_err(|_| BackendError::unavailable())?;
+        let scan_diagnostics = self
+            .state
+            .usage_scan_diagnostics()
+            .map_err(|_| BackendError::unavailable())?;
+        let mut usage_partial = !partial_hours.is_empty();
+        let mut usage_requires_attention = false;
+        for (agent, value, observed_at) in &scan_diagnostics {
+            let subject = format!("agent:{}", agent.as_str());
+            let attempt_facts = self
+                .state
+                .diagnostic_attempt_facts(
+                    DiagnosticAttemptKind::UsageScan,
+                    DiagnosticSource::ThisDevice,
+                    Some(&subject),
+                )
+                .map_err(|_| BackendError::unavailable())?;
+            let attempt_observed_at = attempt_facts
+                .latest_completed
+                .as_ref()
+                .map(diagnostic_attempt_timestamp)
+                .unwrap_or_else(|| observed_at.clone());
+            let status = value.get("status").and_then(Value::as_str);
+            let partial = status == Some("partial") || status == Some("blocked");
+            usage_partial |= partial;
+            let partial_for_agent = partial_hours
+                .iter()
+                .filter(|(candidate, _)| candidate == agent)
+                .count() as i64;
+            checks.push(DiagnosticCheck {
+                name: "usage_scan".into(),
+                source: DiagnosticSource::ThisDevice,
+                subject: Some(subject.clone()),
+                mode: DiagnosticMode::Required,
+                operation: if status == Some("blocked") {
+                    DiagnosticOperation::Degraded
+                } else {
+                    DiagnosticOperation::Healthy
+                },
+                data: if partial {
+                    DiagnosticDataState::Partial
+                } else if value
+                    .get("valid_records")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0)
+                    > 0
+                {
+                    DiagnosticDataState::Current
+                } else {
+                    DiagnosticDataState::Empty
+                },
+                last_attempt_at: attempt_facts
+                    .latest_completed
+                    .as_ref()
+                    .map(diagnostic_attempt_timestamp),
+                last_success_at: attempt_facts
+                    .latest_success
+                    .as_ref()
+                    .map(diagnostic_attempt_timestamp),
+                metrics: metrics([
+                    (
+                        "scanned_files",
+                        value
+                            .get("scanned_files")
+                            .and_then(Value::as_i64)
+                            .unwrap_or(0),
+                    ),
+                    (
+                        "partial_files",
+                        value
+                            .get("partial_files")
+                            .and_then(Value::as_i64)
+                            .unwrap_or(0),
+                    ),
+                    (
+                        "valid_records",
+                        value
+                            .get("valid_records")
+                            .and_then(Value::as_i64)
+                            .unwrap_or(0),
+                    ),
+                    ("partial_hours", partial_for_agent),
+                ]),
+            });
+            if status == Some("blocked") {
+                usage_requires_attention = true;
+                findings.push(DiagnosticFinding {
+                    component: "usage_scan".into(),
+                    source: DiagnosticSource::ThisDevice,
+                    subject: Some(subject.clone()),
+                    code: "scan_unavailable".into(),
                     severity: DiagnosticSeverity::Warning,
+                    impact: DiagnosticImpact::Surface,
+                    recovery: DiagnosticRecovery::Retry,
                     count: 1,
-                    message: "some Usage sources are incomplete".into(),
+                    observed_at: attempt_observed_at.clone(),
+                    message: "This Usage source could not be scanned.".into(),
                 });
             }
-            for (reason, count) in value
+            for (code, count) in value
                 .get("reason_counts")
                 .and_then(Value::as_object)
                 .into_iter()
                 .flatten()
             {
-                let count = count
-                    .as_u64()
-                    .map(|value| value.min(i64::MAX as u64) as i64)
-                    .or_else(|| count.as_i64())
-                    .unwrap_or(0)
-                    .max(0);
-                let entry = reason_counts.entry(reason.clone()).or_default();
-                *entry = entry.saturating_add(count);
-            }
-        }
-        for metric in [
-            "scanned_files",
-            "skipped_files",
-            "complete_files",
-            "partial_files",
-            "indexed_records",
-            "valid_records",
-            "ignored_empty_records",
-        ] {
-            let total = scan_diagnostics
-                .iter()
-                .filter_map(|(_, value)| value.get(metric).and_then(Value::as_i64))
-                .sum::<i64>();
-            usage_metrics.insert(metric.into(), total.clamp(0, 1_000_000));
-        }
-        for (reason, count) in reason_counts {
-            if count > 0 {
-                degraded = true;
-                issues.push(DiagnosticIssue {
-                    component: "usage".into(),
-                    code: reason.clone(),
-                    severity: DiagnosticSeverity::Warning,
-                    count,
-                    message: "records or sources were isolated during parsing".into(),
-                });
-            }
-        }
-        if partial_count > 0 {
-            degraded = true;
-            issues.push(DiagnosticIssue {
-                component: "usage".into(),
-                code: "partial_sources".into(),
-                severity: DiagnosticSeverity::Warning,
-                count: partial_count,
-                message: "some source hours retain last-good data".into(),
-            });
-        }
-        let pending_upload_count = outbox_count.saturating_add(uploadable_dirty_count);
-        if usage_upload_enabled && pending_upload_count > 0 {
-            degraded = true;
-            issues.push(DiagnosticIssue {
-                component: "sync".into(),
-                code: "pending_upload".into(),
-                severity: DiagnosticSeverity::Warning,
-                count: pending_upload_count,
-                message: "usage uploads are pending".into(),
-            });
-        }
-        let quota_value = quota.as_ref().and_then(|record| record.value.as_ref());
-        let pricing_value = pricing.as_ref().and_then(|record| record.value.as_ref());
-        let model_catalog_value = self.state.model_catalog().ok().flatten();
-        let account_value = account.as_ref().and_then(|record| record.value.as_ref());
-        let session = match self.state.session_json() {
-            Ok(value) => value,
-            Err(_) => {
-                degraded = true;
-                issues.push(DiagnosticIssue {
-                    component: "account".into(),
-                    code: "state_unavailable".into(),
-                    severity: DiagnosticSeverity::Error,
-                    count: 1,
-                    message: "account session state could not be read".into(),
-                });
-                None
-            }
-        };
-        let quota_metrics = quota_diagnostic_metrics(quota_value, &monitored_providers);
-        let pricing_metrics = pricing_diagnostic_metrics(pricing_value);
-        let model_catalog_metrics = model_catalog_diagnostic_metrics(model_catalog_value.as_ref());
-        usage_metrics.extend(
-            model_catalog_metrics
-                .iter()
-                .map(|(key, value)| (format!("model_{key}"), *value)),
-        );
-        let account_metrics = account_diagnostic_metrics(account_value, session.as_ref());
-        if pricing_value.is_some()
-            && !pricing::validate_pricing_catalog(pricing_value.unwrap()).valid
-        {
-            degraded = true;
-            issues.push(DiagnosticIssue {
-                component: "pricing".into(),
-                code: "invalid_catalog".into(),
-                severity: DiagnosticSeverity::Warning,
-                count: 1,
-                message: "last pricing catalog failed validation".into(),
-            });
-        }
-        if model_catalog_value
-            .as_ref()
-            .is_some_and(|value| !crate::model_catalog::validate_model_catalog_value(value).valid)
-        {
-            degraded = true;
-            issues.push(DiagnosticIssue {
-                component: "usage".into(),
-                code: "invalid_model_catalog".into(),
-                severity: DiagnosticSeverity::Warning,
-                count: 1,
-                message: "last model catalog failed validation".into(),
-            });
-        }
-        let sync_diagnostic = match self.state.sync_diagnostic() {
-            Ok(value) => value,
-            Err(_) => {
-                degraded = true;
-                issues.push(DiagnosticIssue {
-                    component: "sync".into(),
-                    code: "state_unavailable".into(),
-                    severity: DiagnosticSeverity::Error,
-                    count: 1,
-                    message: "last upload status could not be read".into(),
-                });
-                None
-            }
-        };
-        let sync_status_value = sync_diagnostic
-            .as_ref()
-            .and_then(|value| value.get("status"))
-            .and_then(Value::as_str);
-        let sync_blocked = usage_upload_enabled && sync_status_value == Some("blocked");
-        let sync_failed = usage_upload_enabled && sync_status_value == Some("failed");
-        let sync_degraded = usage_upload_enabled && sync_status_value == Some("degraded");
-        if sync_blocked {
-            blocked = true;
-            let code = safe_sync_error_code(
-                sync_diagnostic
-                    .as_ref()
-                    .and_then(|value| value.get("error")),
-            );
-            issues.push(DiagnosticIssue {
-                component: "sync".into(),
-                code: code.into(),
-                severity: DiagnosticSeverity::Error,
-                count: 1,
-                message: "recovery_retry".into(),
-            });
-        } else if sync_failed || sync_degraded {
-            degraded = true;
-            let code = safe_sync_error_code(
-                sync_diagnostic
-                    .as_ref()
-                    .and_then(|value| value.get("error")),
-            );
-            issues.push(DiagnosticIssue {
-                component: "sync".into(),
-                code: code.into(),
-                severity: DiagnosticSeverity::Warning,
-                count: 1,
-                message: "recovery_retry".into(),
-            });
-        }
-        let quota_status = quota_collection_status(&quota_metrics);
-        let quota_failures = [
-            ("auth_required", DiagnosticSeverity::Error),
-            ("unavailable", DiagnosticSeverity::Warning),
-            ("error", DiagnosticSeverity::Warning),
-            ("unsupported", DiagnosticSeverity::Warning),
-        ];
-        for (code, severity) in quota_failures {
-            let count = quota_metrics.get(code).copied().unwrap_or(0);
-            if count > 0 {
-                issues.push(DiagnosticIssue {
-                    component: "quota".into(),
-                    code: code.into(),
-                    severity,
-                    count,
-                    message: if code == "auth_required" {
-                        "recovery_login".into()
+                let count = count.as_i64().unwrap_or(0).clamp(0, 1_000_000);
+                if count == 0 {
+                    continue;
+                }
+                let transient = matches!(
+                    code.as_str(),
+                    "truncated_tail" | "source_changed" | "scan_cancelled"
+                );
+                let access = matches!(code.as_str(), "permission_denied" | "source_unreadable");
+                usage_requires_attention |= !transient;
+                findings.push(DiagnosticFinding {
+                    component: "usage_scan".into(),
+                    source: DiagnosticSource::ThisDevice,
+                    subject: Some(format!("agent:{}", agent.as_str())),
+                    code: code.clone(),
+                    severity: if transient {
+                        DiagnosticSeverity::Info
                     } else {
-                        "recovery_retry".into()
+                        DiagnosticSeverity::Warning
                     },
+                    impact: DiagnosticImpact::Surface,
+                    recovery: if transient {
+                        DiagnosticRecovery::Automatic
+                    } else if access {
+                        DiagnosticRecovery::CheckAccess
+                    } else {
+                        DiagnosticRecovery::UpdateSource
+                    },
+                    count,
+                    observed_at: attempt_observed_at.clone(),
+                    message: if transient {
+                        "The source changed while it was being scanned; the next refresh will retry."
+                    } else {
+                        "Invalid Usage input was isolated while valid records were retained."
+                    }
+                    .into(),
                 });
             }
         }
-        let quota_component_issue_start = issues.len();
-        let mut quota_component = component(
-            "quota",
-            quota,
-            quota_metrics,
-            &mut issues,
-            &mut degraded,
-            &mut blocked,
-        );
-        if monitored_providers.is_empty() {
-            // A first-run account has no provider result to attach an outcome issue to. Replace
-            // the generic missing-state issue with the setup action that can actually unblock it.
-            issues.truncate(quota_component_issue_start);
-            issues.push(DiagnosticIssue {
-                component: "quota".into(),
-                code: "not_configured".into(),
-                severity: DiagnosticSeverity::Error,
-                count: 1,
-                message: "recovery_configure_provider".into(),
-            });
-            quota_component.status = "blocked".into();
-            blocked = true;
-        } else if quota_status == "blocked" {
-            quota_component.status = "blocked".into();
-            blocked = true;
-        } else if quota_status == "degraded" {
-            quota_component.status = "degraded".into();
-            degraded = true;
-        }
-        components.push(quota_component);
-        components.push(component(
-            "usage",
-            usage,
-            usage_metrics,
-            &mut issues,
-            &mut degraded,
-            &mut blocked,
-        ));
-        components.push(component(
-            "pricing",
-            pricing,
-            pricing_metrics,
-            &mut issues,
-            &mut degraded,
-            &mut blocked,
-        ));
-        components.push(component(
-            "account",
-            account,
-            account_metrics,
-            &mut issues,
-            &mut degraded,
-            &mut blocked,
-        ));
-        let sync_status = if !usage_upload_enabled {
-            "ready"
-        } else if sync_blocked {
-            "blocked"
-        } else if sync_failed || sync_degraded {
-            "degraded"
-        } else if pending_upload_count == 0 {
-            "ready"
-        } else {
-            "degraded"
+        let usage_operation = match usage.as_ref().map(|value| value.status) {
+            Some(crate::protocol::ComponentStatus::Error) => DiagnosticOperation::Degraded,
+            _ => DiagnosticOperation::Healthy,
         };
-        components.push(DiagnosticComponent {
-            name: "sync".into(),
-            status: sync_status.into(),
-            message: None,
+        let local_usage_data = if usage_partial {
+            DiagnosticDataState::Partial
+        } else if record_count > 0 {
+            DiagnosticDataState::Current
+        } else {
+            DiagnosticDataState::Empty
+        };
+        surfaces.push(DiagnosticSurface {
+            name: "usage_this_device".into(),
+            operation: usage_operation,
+            data: local_usage_data,
+            source: Some(DiagnosticSource::ThisDevice),
             metrics: metrics([
-                ("usage_upload_enabled", i64::from(usage_upload_enabled)),
-                ("dirty_ranges", dirty_count),
-                ("uploadable_dirty_ranges", uploadable_dirty_count),
-                ("outbox", outbox_count),
-                ("partial_hours", partial_count),
-                (
-                    "last_upload_success",
-                    i64::from(
-                        sync_diagnostic
-                            .as_ref()
-                            .and_then(|value| value.get("status"))
-                            .and_then(Value::as_str)
-                            == Some("success"),
-                    ),
-                ),
-                ("last_upload_failed", i64::from(sync_failed)),
-                ("last_upload_degraded", i64::from(sync_degraded)),
-                ("last_upload_blocked", i64::from(sync_blocked)),
+                ("files", file_count),
+                ("records", record_count),
+                ("partial_hours", partial_hours.len() as i64),
+                ("agents", scan_diagnostics.len() as i64),
             ]),
         });
-        if sync_status == "degraded" {
-            degraded = true;
-        }
-        let status = if blocked {
-            DiagnosticStatus::Blocked
-        } else if degraded {
-            DiagnosticStatus::Degraded
-        } else {
-            DiagnosticStatus::Healthy
-        };
-        let report = DiagnosticReport {
-            schema_version: 1,
-            status,
-            generated_at: now_rfc3339(),
-            client: DiagnosticClient {
-                name: self.client_name.clone(),
-                version: self.client_version.clone(),
+
+        let account_usage_available = [
+            &snapshot.usage_periods.account.today,
+            &snapshot.usage_periods.account.last_7_days,
+            &snapshot.usage_periods.account.last_30_days,
+            &snapshot.usage_periods.account.all,
+        ]
+        .into_iter()
+        .filter(|value| value.is_some())
+        .count() as i64;
+        surfaces.push(DiagnosticSurface {
+            name: "usage_account".into(),
+            operation: DiagnosticOperation::Healthy,
+            data: if !usage_upload_enabled || !account_signed_in {
+                DiagnosticDataState::Empty
+            } else if account_usage_available > 0 {
+                DiagnosticDataState::Current
+            } else {
+                DiagnosticDataState::Empty
             },
-            components,
-            issues: issues.into_iter().take(256).collect(),
+            source: Some(DiagnosticSource::Account),
+            metrics: metrics([
+                ("enabled", i64::from(usage_upload_enabled)),
+                ("periods", account_usage_available),
+            ]),
+        });
+
+        let account_sync_facts = self
+            .state
+            .diagnostic_attempt_facts(
+                DiagnosticAttemptKind::AccountSync,
+                DiagnosticSource::Account,
+                None,
+            )
+            .map_err(|_| BackendError::unavailable())?;
+        let account_attempt_failed = account_active
+            && account_sync_facts
+                .latest_completed
+                .as_ref()
+                .is_some_and(|attempt| {
+                    matches!(
+                        attempt.outcome,
+                        DiagnosticAttemptOutcome::Failed | DiagnosticAttemptOutcome::Interrupted
+                    )
+                });
+        let account_operation = match account.as_ref().map(|value| value.status) {
+            Some(crate::protocol::ComponentStatus::Stale)
+            | Some(crate::protocol::ComponentStatus::AuthRequired)
+            | Some(crate::protocol::ComponentStatus::Error)
+                if account_signed_in || account_active =>
+            {
+                DiagnosticOperation::Degraded
+            }
+            _ if account_attempt_failed => DiagnosticOperation::Degraded,
+            _ => DiagnosticOperation::Healthy,
         };
-        Ok(report)
+        let account_data = if !account_signed_in && !account_active {
+            DiagnosticDataState::Empty
+        } else if account_operation == DiagnosticOperation::Degraded {
+            DiagnosticDataState::Stale
+        } else {
+            DiagnosticDataState::Current
+        };
+        let account_metrics = account_diagnostic_metrics(
+            account.as_ref().and_then(|value| value.value.as_ref()),
+            session.as_ref(),
+        );
+        surfaces.push(DiagnosticSurface {
+            name: "account".into(),
+            operation: account_operation,
+            data: account_data,
+            source: Some(DiagnosticSource::Account),
+            metrics: account_metrics,
+        });
+        if account_operation != DiagnosticOperation::Healthy {
+            let error = account.as_ref().and_then(|value| value.last_error.as_ref());
+            let code = error
+                .map(|value| error_code_wire(value.code))
+                .unwrap_or_else(|| "account_unavailable".into());
+            findings.push(DiagnosticFinding {
+                component: "account".into(),
+                source: DiagnosticSource::Account,
+                subject: None,
+                code,
+                severity: DiagnosticSeverity::Warning,
+                impact: DiagnosticImpact::Surface,
+                recovery: if error.is_some_and(|value| value.code.requires_login()) {
+                    DiagnosticRecovery::Login
+                } else {
+                    DiagnosticRecovery::Retry
+                },
+                count: 1,
+                observed_at: account
+                    .as_ref()
+                    .and_then(|_| {
+                        account_sync_facts
+                            .latest_completed
+                            .as_ref()
+                            .map(diagnostic_attempt_timestamp)
+                    })
+                    .unwrap_or_else(|| now.clone()),
+                message: "Signed-in Account data could not be refreshed.".into(),
+            });
+        }
+
+        let dirty_ranges = self
+            .state
+            .dirty_usage_ranges()
+            .map_err(|_| BackendError::unavailable())?;
+        let outbox_count = self
+            .state
+            .outbox_entries()
+            .map_err(|_| BackendError::unavailable())?
+            .len() as i64;
+        let uploadable_dirty_count = uploadable_dirty_range_count(&dirty_ranges, Utc::now());
+        let upload_facts = self
+            .state
+            .diagnostic_attempt_facts(
+                DiagnosticAttemptKind::UsageUpload,
+                DiagnosticSource::Account,
+                None,
+            )
+            .map_err(|_| BackendError::unavailable())?;
+        let latest_upload = upload_facts.latest_completed.as_ref();
+        let upload_waiting = outbox_count + uploadable_dirty_count > 0;
+        let unresolved_upload_problem = latest_upload
+            .filter(|attempt| {
+                matches!(
+                    attempt.outcome,
+                    DiagnosticAttemptOutcome::Failed
+                        | DiagnosticAttemptOutcome::Interrupted
+                        | DiagnosticAttemptOutcome::Partial
+                )
+            })
+            .or_else(|| {
+                upload_waiting.then_some(())?;
+                upload_facts.latest_problem_after_success.as_ref()
+            });
+        let sync_failed =
+            account_active && usage_upload_enabled && unresolved_upload_problem.is_some();
+        let sync_blocked = sync_failed
+            && unresolved_upload_problem
+                .is_some_and(|attempt| attempt.code == Some(DiagnosticAttemptCode::InvalidState));
+        let sync_mode = if account_active && usage_upload_enabled {
+            DiagnosticMode::Required
+        } else {
+            DiagnosticMode::Inactive
+        };
+        checks.push(DiagnosticCheck {
+            name: "usage_upload".into(),
+            source: DiagnosticSource::Account,
+            subject: None,
+            mode: sync_mode,
+            operation: if sync_blocked {
+                DiagnosticOperation::Blocked
+            } else if sync_failed {
+                DiagnosticOperation::Degraded
+            } else {
+                DiagnosticOperation::Healthy
+            },
+            data: if upload_waiting {
+                DiagnosticDataState::Partial
+            } else {
+                DiagnosticDataState::Current
+            },
+            last_attempt_at: latest_upload.map(|attempt| {
+                attempt
+                    .completed_at
+                    .clone()
+                    .unwrap_or_else(|| attempt.started_at.clone())
+            }),
+            last_success_at: upload_facts
+                .latest_success
+                .as_ref()
+                .map(diagnostic_attempt_timestamp),
+            metrics: metrics([
+                ("enabled", i64::from(usage_upload_enabled)),
+                ("dirty_ranges", dirty_ranges.len() as i64),
+                ("uploadable_dirty_ranges", uploadable_dirty_count),
+                ("outbox", outbox_count),
+                ("waiting", i64::from(upload_waiting)),
+            ]),
+        });
+        if sync_failed {
+            let code = unresolved_upload_problem
+                .and_then(|attempt| attempt.code)
+                .map(diagnostic_attempt_code_wire)
+                .unwrap_or("unavailable");
+            findings.push(DiagnosticFinding {
+                component: "usage_upload".into(),
+                source: DiagnosticSource::Account,
+                subject: None,
+                code: code.into(),
+                severity: if sync_blocked {
+                    DiagnosticSeverity::Error
+                } else {
+                    DiagnosticSeverity::Warning
+                },
+                impact: if sync_blocked {
+                    DiagnosticImpact::System
+                } else {
+                    DiagnosticImpact::Source
+                },
+                recovery: unresolved_upload_problem
+                    .map(|attempt| attempt.recovery)
+                    .unwrap_or(DiagnosticRecovery::Retry),
+                count: 1,
+                observed_at: unresolved_upload_problem
+                    .and_then(|attempt| attempt.completed_at.clone())
+                    .unwrap_or_else(|| now.clone()),
+                message: "A completed Usage upload attempt did not make progress.".into(),
+            });
+        }
+
+        let pricing_value = pricing.as_ref().and_then(|value| value.value.as_ref());
+        let pricing_metrics = pricing_diagnostic_metrics(pricing_value);
+        let pricing_valid = pricing_metrics.get("catalog_valid") == Some(&1);
+        let pricing_required = record_count > 0;
+        let pricing_facts = self
+            .state
+            .diagnostic_attempt_facts(
+                DiagnosticAttemptKind::PricingRefresh,
+                DiagnosticSource::System,
+                None,
+            )
+            .map_err(|_| BackendError::unavailable())?;
+        let pricing_attempt_failed =
+            pricing_facts
+                .latest_completed
+                .as_ref()
+                .is_some_and(|attempt| {
+                    matches!(
+                        attempt.outcome,
+                        DiagnosticAttemptOutcome::Failed | DiagnosticAttemptOutcome::Interrupted
+                    )
+                });
+        checks.push(DiagnosticCheck {
+            name: "pricing_catalog".into(),
+            source: DiagnosticSource::System,
+            subject: None,
+            mode: if pricing_required {
+                DiagnosticMode::Required
+            } else {
+                DiagnosticMode::Inactive
+            },
+            operation: if pricing_required
+                && ((pricing_value.is_some() && !pricing_valid) || pricing_attempt_failed)
+            {
+                DiagnosticOperation::Degraded
+            } else {
+                DiagnosticOperation::Healthy
+            },
+            data: if pricing_valid {
+                DiagnosticDataState::Current
+            } else {
+                DiagnosticDataState::Empty
+            },
+            last_attempt_at: pricing_facts
+                .latest_completed
+                .as_ref()
+                .map(diagnostic_attempt_timestamp),
+            last_success_at: pricing_facts
+                .latest_success
+                .as_ref()
+                .map(diagnostic_attempt_timestamp),
+            metrics: pricing_metrics,
+        });
+        if pricing_required
+            && ((pricing_value.is_some() && !pricing_valid) || pricing_attempt_failed)
+        {
+            findings.push(DiagnosticFinding {
+                component: "pricing_catalog".into(),
+                source: DiagnosticSource::System,
+                subject: None,
+                code: "invalid_catalog".into(),
+                severity: DiagnosticSeverity::Warning,
+                impact: DiagnosticImpact::Surface,
+                recovery: DiagnosticRecovery::Retry,
+                count: 1,
+                observed_at: pricing_facts
+                    .latest_completed
+                    .as_ref()
+                    .map(diagnostic_attempt_timestamp)
+                    .unwrap_or_else(|| now.clone()),
+                message: "The pricing catalog is invalid; Usage totals remain available.".into(),
+            });
+        }
+
+        let mut operation = DiagnosticOperation::Healthy;
+        for surface in &surfaces {
+            operation = worst_operation(operation, surface.operation);
+        }
+        for check in &checks {
+            if check.mode == DiagnosticMode::Required {
+                operation = worst_operation(operation, check.operation);
+            }
+        }
+        let data = if usage_partial {
+            DiagnosticDataState::Partial
+        } else if quota_data == DiagnosticDataState::Stale
+            || account_data == DiagnosticDataState::Stale
+        {
+            DiagnosticDataState::Stale
+        } else if quota_data == DiagnosticDataState::Current
+            || local_usage_data == DiagnosticDataState::Current
+            || account_data == DiagnosticDataState::Current
+        {
+            DiagnosticDataState::Current
+        } else {
+            DiagnosticDataState::Empty
+        };
+        let attention = if findings.iter().any(|finding| {
+            finding.severity == DiagnosticSeverity::Error
+                || (finding.severity == DiagnosticSeverity::Warning
+                    && finding.recovery != DiagnosticRecovery::Retry)
+        }) || usage_requires_attention
+        {
+            DiagnosticAttention::Required
+        } else if findings
+            .iter()
+            .any(|finding| finding.severity == DiagnosticSeverity::Warning)
+        {
+            DiagnosticAttention::Automatic
+        } else if findings
+            .iter()
+            .any(|finding| finding.severity == DiagnosticSeverity::Info)
+        {
+            DiagnosticAttention::Optional
+        } else if account_active
+            && usage_upload_enabled
+            && outbox_count + uploadable_dirty_count > 0
+        {
+            DiagnosticAttention::Automatic
+        } else {
+            DiagnosticAttention::None
+        };
+        let next_due_at = DateTime::parse_from_rfc3339(&now)
+            .ok()
+            .map(|value| (value + Duration::minutes(5)).to_rfc3339_opts(SecondsFormat::Secs, true));
+        Ok(DiagnosticReport {
+            schema_version: 2,
+            summary: DiagnosticSummary {
+                operation,
+                data,
+                attention,
+            },
+            refresh: DiagnosticRefresh {
+                phase: DiagnosticRefreshPhase::Idle,
+                revision: snapshot.revision,
+                as_of: now.clone(),
+                started_at: None,
+                next_due_at,
+            },
+            generated_at: now,
+            client: self.diagnostic_client(),
+            surfaces,
+            checks: checks.into_iter().take(128).collect(),
+            findings: findings.into_iter().take(256).collect(),
+            recent_activity,
+        })
     }
 
     /// Collect only the selected providers through the local-only path.  This keeps CLI status
@@ -925,26 +1194,150 @@ impl NativeBackend {
     ) -> Result<Value, BackendError> {
         let context = self.collection_context(cancel.clone())?;
         let captured_at = context.observed_at();
-        let results = thread::scope(|scope| {
-            let jobs = provider_ids.iter().copied().map(|provider| {
-                let context = context.clone();
-                (
-                    provider,
-                    scope.spawn(move || collect_one_provider(provider, &context)),
-                )
-            });
-            jobs.into_iter()
-                .map(|(provider, job)| {
-                    job.join().unwrap_or_else(|_| {
-                        json!({
-                            "provider": provider,
-                            "outcome": "error",
-                            "snapshots": []
-                        })
+        let diagnostic_snapshot = self
+            .state
+            .snapshot_for_diagnostics()
+            .map_err(|_| BackendError::unavailable())?;
+        let configured = diagnostic_snapshot
+            .providers
+            .into_iter()
+            .filter(|value| value.configured)
+            .map(|value| value.provider)
+            .chain(
+                diagnostic_snapshot
+                    .provider_browser_sessions
+                    .into_iter()
+                    .filter(|value| value.configured)
+                    .map(|value| value.provider),
+            )
+            .collect::<HashSet<_>>();
+        let attempts =
+            thread::scope(|scope| {
+                let mut jobs = Vec::with_capacity(provider_ids.len());
+                for provider in provider_ids.iter().copied() {
+                    let context = context.clone();
+                    let mode = if configured.contains(provider.as_str()) {
+                        DiagnosticMode::Required
+                    } else {
+                        DiagnosticMode::Opportunistic
+                    };
+                    let sessions = providers::discover(provider, &context);
+                    let source_count = sessions.len() as i64;
+                    if sessions.is_empty() && mode == DiagnosticMode::Opportunistic {
+                        jobs.push((provider, mode, None, source_count, None));
+                        continue;
+                    }
+                    let subject = format!("provider:{}", provider.as_str());
+                    let handle = self.begin_attempt(
+                        DiagnosticAttemptKind::QuotaCollection,
+                        DiagnosticSource::ThisDevice,
+                        Some(&subject),
+                        mode,
+                    )?;
+                    jobs.push((
+                        provider,
+                        mode,
+                        Some(handle),
+                        source_count,
+                        Some(scope.spawn(move || {
+                            collect_discovered_provider(provider, sessions, &context)
+                        })),
+                    ));
+                }
+                let joined = jobs
+                    .into_iter()
+                    .map(|(provider, mode, handle, source_count, job)| match job {
+                        Some(job) => match job.join() {
+                            Ok(result) => (provider, mode, handle, source_count, result, false),
+                            Err(_) => (
+                                provider,
+                                mode,
+                                handle,
+                                source_count,
+                                json!({
+                                    "provider": provider,
+                                    "outcome": "error",
+                                    "snapshots": []
+                                }),
+                                true,
+                            ),
+                        },
+                        None => (
+                            provider,
+                            mode,
+                            None,
+                            source_count,
+                            json!({
+                                "provider": provider,
+                                "outcome": "auth_required",
+                                "snapshots": []
+                            }),
+                            false,
+                        ),
                     })
-                })
-                .collect::<Vec<_>>()
-        });
+                    .collect::<Vec<_>>();
+                Ok::<_, BackendError>(joined)
+            });
+        let attempts = attempts?;
+        let cancelled = cancel.load(Ordering::Acquire);
+        let mut results = Vec::with_capacity(attempts.len());
+        for (_, mode, handle, source_count, result, panicked) in attempts {
+            let snapshot_count = result
+                .get("snapshots")
+                .and_then(Value::as_array)
+                .map(|values| values.len() as i64)
+                .unwrap_or(0);
+            let result_outcome = result
+                .get("outcome")
+                .and_then(Value::as_str)
+                .unwrap_or("error");
+            let (outcome, code, recovery) = if cancelled {
+                (
+                    DiagnosticAttemptOutcome::Cancelled,
+                    Some(DiagnosticAttemptCode::Cancelled),
+                    DiagnosticRecovery::None,
+                )
+            } else if panicked {
+                (
+                    DiagnosticAttemptOutcome::Failed,
+                    Some(DiagnosticAttemptCode::Unavailable),
+                    DiagnosticRecovery::Retry,
+                )
+            } else {
+                match result_outcome {
+                    "success" => (
+                        DiagnosticAttemptOutcome::Success,
+                        None,
+                        DiagnosticRecovery::None,
+                    ),
+                    "auth_required" if mode == DiagnosticMode::Opportunistic => (
+                        DiagnosticAttemptOutcome::NoWork,
+                        Some(DiagnosticAttemptCode::AuthenticationRequired),
+                        DiagnosticRecovery::None,
+                    ),
+                    "auth_required" => (
+                        DiagnosticAttemptOutcome::Failed,
+                        Some(DiagnosticAttemptCode::AuthenticationRequired),
+                        DiagnosticRecovery::ConfigureProvider,
+                    ),
+                    _ => (
+                        DiagnosticAttemptOutcome::Failed,
+                        Some(DiagnosticAttemptCode::ProviderError),
+                        DiagnosticRecovery::Retry,
+                    ),
+                }
+            };
+            if let Some(handle) = handle {
+                self.finish_attempt(
+                    handle,
+                    outcome,
+                    code,
+                    recovery,
+                    metrics([("sources", source_count), ("snapshots", snapshot_count)]),
+                )?;
+            }
+            results.push(result);
+        }
         if cancel.load(Ordering::Acquire) {
             return Err(BackendError::cancelled());
         }
@@ -991,6 +1384,17 @@ impl NativeBackend {
             if cancel.load(Ordering::Acquire) {
                 return Err(BackendError::cancelled());
             }
+            let file_index = self
+                .state
+                .usage_file_index(agent)
+                .map_err(|_| BackendError::unavailable())?;
+            let subject = format!("agent:{}", agent.as_str());
+            let attempt = self.begin_attempt(
+                DiagnosticAttemptKind::UsageScan,
+                DiagnosticSource::ThisDevice,
+                Some(&subject),
+                DiagnosticMode::Required,
+            )?;
             let options = UsageScanOptions {
                 home_directory: Some(self.home.clone()),
                 environment: self.environment.clone(),
@@ -1001,10 +1405,7 @@ impl NativeBackend {
                 end_at: end_at.clone(),
                 cancelled: Some(cancel.clone()),
                 parser_revision: FILE_INDEX_PARSER_REVISION.to_owned(),
-                file_index: self
-                    .state
-                    .usage_file_index(agent)
-                    .map_err(|_| BackendError::unavailable())?,
+                file_index,
                 ..UsageScanOptions::default()
             };
             let scan = match usage::scan_local_usage(agent, &options) {
@@ -1020,6 +1421,13 @@ impl NativeBackend {
                             "reason_counts": {"scan_failed": 1}
                         }),
                     );
+                    self.finish_attempt(
+                        attempt,
+                        DiagnosticAttemptOutcome::Failed,
+                        Some(DiagnosticAttemptCode::Unavailable),
+                        DiagnosticRecovery::Retry,
+                        metrics([("scanned_sources", 0), ("indexed_records", 0)]),
+                    )?;
                     return Err(BackendError {
                         error: IpcError::new(ErrorCode::Unavailable, RecoveryAction::Retry),
                     });
@@ -1044,8 +1452,80 @@ impl NativeBackend {
                         "reason_counts": {"state_apply_failed": 1}
                     }),
                 );
+                self.finish_attempt(
+                    attempt,
+                    DiagnosticAttemptOutcome::Failed,
+                    Some(DiagnosticAttemptCode::InvalidState),
+                    DiagnosticRecovery::Retry,
+                    metrics([
+                        ("scanned_sources", scan.scanned_source_count as i64),
+                        ("indexed_records", scan.records.len() as i64),
+                    ]),
+                )?;
                 return Err(BackendError::unavailable());
             }
+            let (outcome, code, recovery) = if scan.scanned_source_count == 0
+                && scan.skipped_source_count == 0
+                && scan.deleted_source_file_ids.is_empty()
+            {
+                (
+                    DiagnosticAttemptOutcome::NoWork,
+                    Some(DiagnosticAttemptCode::NoWork),
+                    DiagnosticRecovery::None,
+                )
+            } else if scan.coverage.status == CoverageStatus::Partial {
+                let transient = scan.coverage.reasons.iter().all(|reason| {
+                    matches!(
+                        reason.code,
+                        CoverageReasonCode::TruncatedTail | CoverageReasonCode::SourceChanged
+                    )
+                });
+                let malformed = scan.coverage.reasons.iter().any(|reason| {
+                    matches!(
+                        reason.code,
+                        CoverageReasonCode::MalformedJson
+                            | CoverageReasonCode::UnknownRecord
+                            | CoverageReasonCode::InvalidTimestamp
+                            | CoverageReasonCode::InvalidModel
+                            | CoverageReasonCode::InvalidUsage
+                    )
+                });
+                (
+                    DiagnosticAttemptOutcome::Partial,
+                    Some(if transient {
+                        DiagnosticAttemptCode::TruncatedActiveSource
+                    } else if malformed {
+                        DiagnosticAttemptCode::MalformedData
+                    } else {
+                        DiagnosticAttemptCode::PartialSource
+                    }),
+                    if transient {
+                        DiagnosticRecovery::Automatic
+                    } else if malformed {
+                        DiagnosticRecovery::UpdateSource
+                    } else {
+                        DiagnosticRecovery::CheckAccess
+                    },
+                )
+            } else {
+                (
+                    DiagnosticAttemptOutcome::Success,
+                    None,
+                    DiagnosticRecovery::None,
+                )
+            };
+            self.finish_attempt(
+                attempt,
+                outcome,
+                code,
+                recovery,
+                metrics([
+                    ("scanned_sources", scan.scanned_source_count as i64),
+                    ("skipped_sources", scan.skipped_source_count as i64),
+                    ("indexed_records", scan.records.len() as i64),
+                    ("reason_count", scan.coverage.reasons.len() as i64),
+                ]),
+            )?;
             agents.push(AgentUsage {
                 coverage: scan.coverage.clone(),
             });
@@ -1139,6 +1619,29 @@ impl NativeBackend {
     }
 
     fn refresh_pricing(&self) -> Result<Value, BackendError> {
+        let attempt = self.begin_attempt(
+            DiagnosticAttemptKind::PricingRefresh,
+            DiagnosticSource::System,
+            None,
+            DiagnosticMode::Required,
+        )?;
+        let result = self.refresh_pricing_inner();
+        let entry_count = result
+            .as_ref()
+            .ok()
+            .and_then(|value| value.get("entries"))
+            .and_then(Value::as_array)
+            .map(|values| values.len() as i64)
+            .unwrap_or(0);
+        self.finish_backend_result_attempt(
+            attempt,
+            &result,
+            metrics([("pricing_catalog", 1), ("entries", entry_count)]),
+        )?;
+        result
+    }
+
+    fn refresh_pricing_inner(&self) -> Result<Value, BackendError> {
         let old = self
             .state
             .component(crate::protocol::ComponentName::Pricing)
@@ -1728,8 +2231,11 @@ fn resolve_timezone(environment: &HashMap<String, String>) -> String {
         .unwrap_or_else(|| DEFAULT_TIMEZONE.to_owned())
 }
 
-fn collect_one_provider(provider: ProviderId, context: &CollectionContext) -> Value {
-    let sessions = providers::discover(provider, context);
+fn collect_discovered_provider(
+    provider: ProviderId,
+    sessions: Vec<ProviderSession>,
+    context: &CollectionContext,
+) -> Value {
     if sessions.is_empty() {
         return json!({
             "provider": provider,
@@ -1762,9 +2268,172 @@ fn collect_one_provider(provider: ProviderId, context: &CollectionContext) -> Va
     }
 }
 
+fn worst_operation(left: DiagnosticOperation, right: DiagnosticOperation) -> DiagnosticOperation {
+    match (left, right) {
+        (DiagnosticOperation::Blocked, _) | (_, DiagnosticOperation::Blocked) => {
+            DiagnosticOperation::Blocked
+        }
+        (DiagnosticOperation::Degraded, _) | (_, DiagnosticOperation::Degraded) => {
+            DiagnosticOperation::Degraded
+        }
+        _ => DiagnosticOperation::Healthy,
+    }
+}
+
 impl LocalBackend for NativeBackend {
     fn diagnose(&self) -> Result<DiagnosticReport, BackendError> {
         self.diagnostic_report()
+    }
+
+    fn complete_diagnostics(&self) -> Result<DiagnosticReport, BackendError> {
+        self.complete_diagnostic_report()
+    }
+
+    fn publish_device_health(&self, report: &DiagnosticReport) -> Result<(), BackendError> {
+        let session = self
+            .state
+            .session_json()
+            .map_err(|_| BackendError::unavailable())?;
+        if !session
+            .as_ref()
+            .is_some_and(|value| value.get("status").and_then(Value::as_str) == Some("active"))
+        {
+            return Ok(());
+        }
+        let usage_upload_enabled = self
+            .state
+            .usage_upload_enabled()
+            .map_err(|_| BackendError::unavailable())?;
+        let last_account_sync = self
+            .state
+            .diagnostic_attempt_facts(
+                DiagnosticAttemptKind::AccountSync,
+                DiagnosticSource::Account,
+                None,
+            )
+            .map_err(|_| BackendError::unavailable())?
+            .latest_success
+            .as_ref()
+            .map(diagnostic_attempt_timestamp);
+        let relevant_attempt = self
+            .state
+            .latest_diagnostic_problem(usage_upload_enabled)
+            .map_err(|_| BackendError::unavailable())?;
+        let summary_is_healthy = report.summary.operation == DiagnosticOperation::Healthy
+            && matches!(
+                report.summary.data,
+                DiagnosticDataState::Current | DiagnosticDataState::Empty
+            )
+            && matches!(
+                report.summary.attention,
+                DiagnosticAttention::None | DiagnosticAttention::Automatic
+            );
+        let top_code = (!summary_is_healthy)
+            .then(|| {
+                relevant_attempt
+                    .as_ref()
+                    .map(device_health_code_for_attempt)
+            })
+            .flatten();
+        let consecutive_failures = self
+            .state
+            .consecutive_refresh_failures()
+            .map_err(|_| BackendError::unavailable())? as i64;
+        let client_product = match self.client_name.as_str() {
+            "QuotaBar" => "quotabar",
+            "QuotaCLI" => "quotacli",
+            _ => return Ok(()),
+        };
+        let platform = match std::env::consts::OS {
+            "macos" => "macos",
+            "linux" => "linux",
+            _ => return Ok(()),
+        };
+        let signal = json!({
+            "schema_version": 1,
+            "client_product": client_product,
+            "client_version": self.client_version,
+            "platform": platform,
+            "summary": report.summary,
+            "top_code": top_code,
+            "consecutive_failures": consecutive_failures,
+            "usage_upload_enabled": usage_upload_enabled,
+            "last_successful_account_sync_at": last_account_sync,
+        });
+        let digest = format!("{:x}", Sha256::digest(signal.to_string().as_bytes()));
+        let observed = Utc::now();
+        if !self
+            .state
+            .device_health_upload_due(&digest, observed)
+            .map_err(|_| BackendError::unavailable())?
+        {
+            return Ok(());
+        }
+        let parent = self
+            .state
+            .latest_refresh_attempt()
+            .map_err(|_| BackendError::unavailable())?;
+        let attempt = self
+            .state
+            .begin_diagnostic_attempt(
+                DiagnosticAttemptKind::DeviceHealthUpload,
+                parent
+                    .map(|(_, trigger)| trigger)
+                    .unwrap_or(DiagnosticAttemptTrigger::Scheduled),
+                DiagnosticSource::Account,
+                None,
+                DiagnosticMode::Required,
+                parent.map(|(handle, _)| handle),
+            )
+            .map_err(|_| BackendError::unavailable())?;
+        let observed_at = observed.to_rfc3339_opts(SecondsFormat::Secs, true);
+        let payload = json!({
+            "protocol_version": 3,
+            "schema_version": 1,
+            "client_product": client_product,
+            "client_version": self.client_version,
+            "platform": platform,
+            "observed_at": observed_at,
+            "refresh_revision": report.refresh.revision,
+            "last_completed_refresh_at": report.refresh.as_of,
+            "last_successful_account_sync_at": last_account_sync,
+            "summary": report.summary,
+            "top_code": top_code,
+            "consecutive_failures": consecutive_failures,
+            "usage_upload_enabled": usage_upload_enabled,
+        });
+        let result = self.account.upload_device_health(&payload);
+        match &result {
+            Ok(response) => {
+                let ignored =
+                    response.get("status").and_then(Value::as_str) == Some("ignored_stale");
+                if !ignored {
+                    let received_at = response
+                        .get("received_at")
+                        .and_then(Value::as_str)
+                        .ok_or_else(BackendError::unavailable)?;
+                    self.state
+                        .record_device_health_upload(report.refresh.revision, &digest, received_at)
+                        .map_err(|_| BackendError::unavailable())?;
+                }
+                self.finish_attempt(
+                    attempt,
+                    if ignored {
+                        DiagnosticAttemptOutcome::NoWork
+                    } else {
+                        DiagnosticAttemptOutcome::Success
+                    },
+                    ignored.then_some(DiagnosticAttemptCode::NoWork),
+                    DiagnosticRecovery::None,
+                    BTreeMap::new(),
+                )?;
+            }
+            Err(error) => {
+                let (outcome, code, recovery) = backend_attempt_error(&error.error);
+                self.finish_attempt(attempt, outcome, Some(code), recovery, BTreeMap::new())?;
+            }
+        }
+        result.map(|_| ())
     }
 
     fn validate_provider_browser_session(
@@ -1860,147 +2529,217 @@ impl LocalBackend for NativeBackend {
             Ok(Some(session))
                 if session.get("status").and_then(Value::as_str) == Some("active") =>
             {
-                match self.account.sync_control_and_update() {
-                    Ok(_) if cancel.load(Ordering::Acquire) => {
-                        account_value = Err(BackendError::cancelled());
-                    }
-                    Ok(_) => {
-                        let current_session =
-                            self.state.session_json().ok().flatten().unwrap_or(session);
-                        let mut account_sync_error = None;
-                        let mut stage_blocked = false;
-                        if let Ok(quota_payload) = &quota_value
-                            && let Err(error) = self.account.upload_quota_report(quota_payload)
-                        {
-                            record_account_sync_error(&mut account_sync_error, error);
+                match self.begin_attempt(
+                    DiagnosticAttemptKind::AccountSync,
+                    DiagnosticSource::Account,
+                    None,
+                    DiagnosticMode::Required,
+                ) {
+                    Ok(account_attempt) => match self.account.sync_control_and_update() {
+                        Ok(_) if cancel.load(Ordering::Acquire) => {
+                            account_value = Err(BackendError::cancelled());
                         }
-                        let usage_upload_enabled = match self.state.usage_upload_enabled() {
-                            Ok(enabled) => enabled,
-                            Err(_) => {
-                                record_account_sync_error(
-                                    &mut account_sync_error,
-                                    BackendError::unavailable(),
-                                );
-                                false
-                            }
-                        };
-                        if usage_upload_enabled
-                            && let Some(usage_collection) = usage_collection.as_ref()
-                        {
-                            let context_result = effective_usage_lower_bound(&current_session)
-                                .and_then(|lower_bound| {
-                                    self.state
-                                        .ensure_usage_context(
-                                            current_session
-                                                .get("account_id")
-                                                .and_then(Value::as_str)
-                                                .unwrap_or_default(),
-                                            current_session
-                                                .get("device_id")
-                                                .and_then(Value::as_str)
-                                                .unwrap_or_default(),
-                                            current_session
-                                                .get("device_generation")
-                                                .and_then(Value::as_u64)
-                                                .unwrap_or_default(),
-                                            &usage_collection.timezone,
-                                            &lower_bound,
-                                        )
-                                        .map_err(|_| BackendError::unavailable())
-                                });
-                            if let Err(error) = context_result {
+                        Ok(_) => {
+                            let current_session =
+                                self.state.session_json().ok().flatten().unwrap_or(session);
+                            let mut account_sync_error = None;
+                            let mut attempt_journal_error = None;
+                            let mut stage_blocked = false;
+                            if let Ok(quota_payload) = &quota_value
+                                && let Err(error) = self.account.upload_quota_report(quota_payload)
+                            {
                                 record_account_sync_error(&mut account_sync_error, error);
-                            } else {
-                                match self.stage_outbox(&usage_collection.timezone) {
-                                    Ok(blocked) => stage_blocked = blocked,
+                            }
+                            let usage_upload_enabled = match self.state.usage_upload_enabled() {
+                                Ok(enabled) => enabled,
+                                Err(_) => {
+                                    record_account_sync_error(
+                                        &mut account_sync_error,
+                                        BackendError::unavailable(),
+                                    );
+                                    false
+                                }
+                            };
+                            if usage_upload_enabled
+                                && let Some(usage_collection) = usage_collection.as_ref()
+                            {
+                                let context_result = effective_usage_lower_bound(&current_session)
+                                    .and_then(|lower_bound| {
+                                        self.state
+                                            .ensure_usage_context(
+                                                current_session
+                                                    .get("account_id")
+                                                    .and_then(Value::as_str)
+                                                    .unwrap_or_default(),
+                                                current_session
+                                                    .get("device_id")
+                                                    .and_then(Value::as_str)
+                                                    .unwrap_or_default(),
+                                                current_session
+                                                    .get("device_generation")
+                                                    .and_then(Value::as_u64)
+                                                    .unwrap_or_default(),
+                                                &usage_collection.timezone,
+                                                &lower_bound,
+                                            )
+                                            .map_err(|_| BackendError::unavailable())
+                                    });
+                                if let Err(error) = context_result {
+                                    record_account_sync_error(&mut account_sync_error, error);
+                                } else {
+                                    match self.stage_outbox(&usage_collection.timezone) {
+                                        Ok(blocked) => stage_blocked = blocked,
+                                        Err(error) => record_account_sync_error(
+                                            &mut account_sync_error,
+                                            error,
+                                        ),
+                                    }
+                                }
+                            }
+                            if usage_upload_enabled && account_sync_error.is_none() {
+                                let before = self
+                                    .state
+                                    .outbox_entries()
+                                    .ok()
+                                    .map(|entries| entries.len() as i64)
+                                    .unwrap_or(0);
+                                match self.begin_attempt(
+                                    DiagnosticAttemptKind::UsageUpload,
+                                    DiagnosticSource::Account,
+                                    None,
+                                    DiagnosticMode::Required,
+                                ) {
+                                    Ok(upload_attempt) => match self.drain_outbox() {
+                                        Ok(rejected) => {
+                                            let pending = self
+                                                .state
+                                                .outbox_entries()
+                                                .ok()
+                                                .map(|entries| entries.len() as i64)
+                                                .unwrap_or(0);
+                                            let attempted = before.saturating_sub(pending);
+                                            let (outcome, code, recovery) = match (
+                                                stage_blocked,
+                                                rejected,
+                                                attempted,
+                                            ) {
+                                                (true, _, _) => (
+                                                    DiagnosticAttemptOutcome::Failed,
+                                                    Some(
+                                                        DiagnosticAttemptCode::UnrepresentableHour,
+                                                    ),
+                                                    DiagnosticRecovery::Feedback,
+                                                ),
+                                                (false, true, _) => (
+                                                    DiagnosticAttemptOutcome::Failed,
+                                                    Some(DiagnosticAttemptCode::InvalidUsageBatch),
+                                                    DiagnosticRecovery::UpdateSource,
+                                                ),
+                                                (false, false, 0) => (
+                                                    DiagnosticAttemptOutcome::NoWork,
+                                                    Some(DiagnosticAttemptCode::NoWork),
+                                                    DiagnosticRecovery::None,
+                                                ),
+                                                (false, false, _) => (
+                                                    DiagnosticAttemptOutcome::Success,
+                                                    None,
+                                                    DiagnosticRecovery::None,
+                                                ),
+                                            };
+                                            let _ = self.finish_attempt(
+                                                upload_attempt,
+                                                outcome,
+                                                code,
+                                                recovery,
+                                                metrics([
+                                                    ("attempted", attempted),
+                                                    ("pending", pending),
+                                                ]),
+                                            );
+                                        }
+                                        Err(error) => {
+                                            let (outcome, code, recovery) =
+                                                backend_attempt_error(&error.error);
+                                            let _ = self.finish_attempt(
+                                                upload_attempt,
+                                                outcome,
+                                                Some(code),
+                                                recovery,
+                                                metrics([("attempted", 0), ("pending", before)]),
+                                            );
+                                            record_account_sync_error(
+                                                &mut account_sync_error,
+                                                error,
+                                            );
+                                        }
+                                    },
                                     Err(error) => {
+                                        attempt_journal_error = Some(error.clone());
                                         record_account_sync_error(&mut account_sync_error, error)
                                     }
                                 }
                             }
-                        }
-                        if usage_upload_enabled && account_sync_error.is_none() {
-                            let before = self
-                                .state
-                                .outbox_entries()
-                                .ok()
-                                .map(|entries| entries.len() as i64)
-                                .unwrap_or(0);
-                            match self.drain_outbox() {
-                                Ok(rejected) => {
-                                    let pending = self
-                                        .state
-                                        .outbox_entries()
-                                        .ok()
-                                        .map(|entries| entries.len() as i64)
-                                        .unwrap_or(0);
-                                    if stage_blocked {
-                                        self.record_sync_diagnostic(json!({
-                                            "status": "blocked",
-                                            "attempted": before.saturating_sub(pending),
-                                            "pending": pending,
-                                            "error": "unrepresentable_hour"
-                                        }));
-                                    } else if rejected {
-                                        self.record_sync_diagnostic(json!({
-                                            "status": "degraded",
-                                            "attempted": before.saturating_sub(pending),
-                                            "pending": pending,
-                                            "error": "invalid_usage_batch"
-                                        }));
-                                    } else {
-                                        self.record_sync_diagnostic(json!({
-                                            "status": "success",
-                                            "attempted": before.saturating_sub(pending),
-                                            "pending": pending
-                                        }));
-                                    }
-                                }
-                                Err(error) => {
-                                    self.record_sync_diagnostic(json!({
-                                        "status": "failed",
-                                        "attempted": before,
-                                        "pending": before,
-                                        "error": error_code_wire(error.error.code)
-                                    }));
-                                    record_account_sync_error(&mut account_sync_error, error);
-                                }
+                            account_value = account_read_after_sync(
+                                account_sync_error,
+                                cancel.load(Ordering::Acquire),
+                                || self.account.refresh_account_state(cancel.as_ref()),
+                            );
+                            if usage_upload_enabled
+                                && let Ok(value) = &account_value
+                                && let Err(error) =
+                                    self.refresh_account_usage_periods(value, cancel.as_ref())
+                                && error.error.code.requires_login()
+                            {
+                                account_value = Err(error);
                             }
-                        } else if let Some(error) = &account_sync_error {
-                            self.record_sync_diagnostic(json!({
-                                "status": "failed",
-                                "attempted": 0,
-                                "pending": self.state.outbox_entries().ok().map(|entries| entries.len()).unwrap_or(0),
-                                "error": error_code_wire(error.error.code)
-                            }));
+                            if account_value
+                                .as_ref()
+                                .err()
+                                .is_some_and(|error| error.error.code.requires_login())
+                            {
+                                self.clear_active_session();
+                            }
+                            let device_count = account_value
+                                .as_ref()
+                                .ok()
+                                .and_then(|value| value.get("account_summary"))
+                                .and_then(|value| value.get("devices"))
+                                .and_then(Value::as_array)
+                                .map(|values| values.len() as i64)
+                                .unwrap_or(0);
+                            if let Some(error) = attempt_journal_error {
+                                let (outcome, code, recovery) = backend_attempt_error(&error.error);
+                                let _ = self.finish_attempt(
+                                    account_attempt,
+                                    outcome,
+                                    Some(code),
+                                    recovery,
+                                    metrics([("devices", device_count)]),
+                                );
+                            } else {
+                                let _ = self.finish_backend_result_attempt(
+                                    account_attempt,
+                                    &account_value,
+                                    metrics([("devices", device_count)]),
+                                );
+                            }
                         }
-                        account_value = account_read_after_sync(
-                            account_sync_error,
-                            cancel.load(Ordering::Acquire),
-                            || self.account.refresh_account_state(cancel.as_ref()),
-                        );
-                        if usage_upload_enabled
-                            && let Ok(value) = &account_value
-                            && let Err(error) =
-                                self.refresh_account_usage_periods(value, cancel.as_ref())
-                            && error.error.code.requires_login()
-                        {
+                        Err(error) => {
+                            let (outcome, code, recovery) = backend_attempt_error(&error.error);
+                            let _ = self.finish_attempt(
+                                account_attempt,
+                                outcome,
+                                Some(code),
+                                recovery,
+                                BTreeMap::new(),
+                            );
+                            if error.error.code.requires_login() {
+                                self.clear_active_session();
+                            }
                             account_value = Err(error);
                         }
-                        if account_value
-                            .as_ref()
-                            .err()
-                            .is_some_and(|error| error.error.code.requires_login())
-                        {
-                            self.clear_active_session();
-                        }
-                    }
-                    Err(error) => {
-                        if error.error.code.requires_login() {
-                            self.clear_active_session();
-                        }
-                        account_value = Err(error);
-                    }
+                    },
+                    Err(error) => account_value = Err(error),
                 }
             }
             Ok(Some(session))
@@ -2056,10 +2795,6 @@ impl LocalBackend for NativeBackend {
 }
 
 impl NativeBackend {
-    fn record_sync_diagnostic(&self, value: Value) {
-        let _ = self.state.write_sync_diagnostic(&value);
-    }
-
     fn clear_active_session(&self) {
         if let Ok(Some((session, epoch))) = self.state.session_snapshot()
             && session.get("status").and_then(Value::as_str) == Some("active")
@@ -2997,6 +3732,39 @@ mod tests {
     }
 
     #[test]
+    fn usage_index_read_failure_does_not_leave_a_running_scan_attempt() {
+        let root = std::env::temp_dir().join(format!("quota-usage-index-{}", uuid::Uuid::new_v4()));
+        let home = root.join("home");
+        fs::create_dir_all(&home).expect("home");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        state
+            .make_usage_file_index_unreadable_for_test()
+            .expect("break index read");
+        let relay = Arc::new(RelayClient::new().expect("relay"));
+        let mut backend = NativeBackend::new(state.clone(), relay, "QuotaTest", "test");
+        backend.home = home;
+        backend.environment.clear();
+
+        let error = match backend.collect_usage(Arc::new(AtomicBool::new(false))) {
+            Ok(_) => panic!("index read must fail before scanning"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.error.code, ErrorCode::Unavailable);
+        assert!(
+            state
+                .diagnostic_recent_activity()
+                .expect("activity")
+                .attempts
+                .iter()
+                .all(|attempt| attempt.kind != DiagnosticAttemptKind::UsageScan)
+        );
+        drop(backend);
+        drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
     fn local_quota_collection_does_not_require_or_modify_account_state() {
         let root =
             std::env::temp_dir().join(format!("quota-local-status-{}", uuid::Uuid::new_v4()));
@@ -3020,6 +3788,18 @@ mod tests {
             report.get("protocol_version").and_then(Value::as_u64),
             Some(2)
         );
+        for result in report
+            .get("results")
+            .and_then(Value::as_array)
+            .expect("quota results")
+        {
+            let result = result.as_object().expect("quota result object");
+            assert_eq!(result.len(), 3);
+            assert!(result.contains_key("provider"));
+            assert!(result.contains_key("outcome"));
+            assert!(result.contains_key("snapshots"));
+            assert!(!result.contains_key("sources"));
+        }
         assert!(state.session_json().expect("session state").is_none());
         drop(backend);
         fs::remove_dir_all(root).expect("cleanup");
@@ -3065,7 +3845,7 @@ mod tests {
     }
 
     #[test]
-    fn diagnostic_report_is_bounded_without_source_details() {
+    fn diagnostics_v2_treats_empty_and_inactive_as_healthy() {
         let root = std::env::temp_dir().join(format!("quota-diagnostics-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).expect("root");
         let state = Arc::new(StateStore::open(&root).expect("state"));
@@ -3073,144 +3853,396 @@ mod tests {
         let mut backend = NativeBackend::new(state.clone(), relay, "QuotaTest", "test");
         backend.home = root.join("home");
         backend.environment.clear();
-        state
-            .write_sync_diagnostic(&json!({
-                "status": "blocked",
-                "error": "unrepresentable_hour"
-            }))
-            .expect("sync diagnostic");
         let report = backend.diagnostic_report().expect("diagnostics");
-        assert_eq!(report.schema_version, 1);
-        assert_eq!(report.components.len(), 6);
-        assert_eq!(
-            report
-                .components
-                .iter()
-                .map(|component| component.name.as_str())
-                .collect::<Vec<_>>(),
-            ["providers", "quota", "usage", "pricing", "account", "sync"]
-        );
+        assert_eq!(report.schema_version, 2);
+        assert_eq!(report.summary.operation, DiagnosticOperation::Healthy);
+        assert_eq!(report.summary.data, DiagnosticDataState::Empty);
+        assert_eq!(report.summary.attention, DiagnosticAttention::None);
         let serialized = serde_json::to_string(&report).expect("serialize");
         assert!(!serialized.contains("source_file_id"));
         assert!(!serialized.contains("/tmp"));
-        assert!(
-            report
-                .issues
-                .iter()
-                .any(|issue| issue.component == "sync" && issue.code == "unrepresentable_hour")
-        );
-        assert!(report.issues.iter().any(|issue| {
-            issue.component == "quota"
-                && issue.code == "not_configured"
-                && issue.message == "recovery_configure_provider"
-        }));
-        assert_eq!(
-            report
-                .issues
-                .iter()
-                .filter(|issue| issue.component == "quota")
-                .count(),
-            1
-        );
-        assert_eq!(
-            report
-                .components
-                .iter()
-                .find(|component| component.name == "sync")
-                .map(|component| component.status.as_str()),
-            Some("blocked")
-        );
-        state
-            .write_sync_diagnostic(&json!({
-                "status": "degraded",
-                "error": "invalid_usage_batch"
-            }))
-            .expect("degraded sync diagnostic");
-        let degraded = backend.diagnostic_report().expect("degraded diagnostics");
-        assert_eq!(
-            degraded
-                .components
-                .iter()
-                .find(|component| component.name == "sync")
-                .map(|component| component.status.as_str()),
-            Some("degraded")
-        );
-        assert!(
-            degraded
-                .issues
-                .iter()
-                .any(|issue| issue.component == "sync" && issue.code == "invalid_usage_batch")
-        );
         state
             .set_usage_upload_enabled(false)
             .expect("disable Usage upload");
         assert!(!backend.stage_outbox("UTC").expect("staging disabled"));
         assert!(!backend.drain_outbox().expect("upload disabled"));
-        let disabled = backend.diagnostic_report().expect("disabled diagnostics");
+        let disabled = backend
+            .complete_diagnostic_report()
+            .expect("disabled diagnostics");
         let sync = disabled
-            .components
+            .checks
             .iter()
-            .find(|component| component.name == "sync")
-            .expect("sync component");
-        assert_eq!(sync.status, "ready");
-        assert_eq!(sync.metrics.get("usage_upload_enabled"), Some(&0));
+            .find(|check| check.name == "usage_upload")
+            .expect("sync check");
+        assert_eq!(sync.mode, DiagnosticMode::Inactive);
+        assert_eq!(sync.operation, DiagnosticOperation::Healthy);
+        drop(backend);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn account_quota_masks_opportunistic_local_auth_failure() {
+        let root = std::env::temp_dir().join(format!("quota-diagnostics-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        let attempt = state
+            .begin_diagnostic_attempt(
+                DiagnosticAttemptKind::QuotaCollection,
+                DiagnosticAttemptTrigger::Scheduled,
+                DiagnosticSource::ThisDevice,
+                Some("provider:codex"),
+                DiagnosticMode::Opportunistic,
+                None,
+            )
+            .expect("quota attempt");
+        state
+            .finish_diagnostic_attempt(
+                attempt,
+                &DiagnosticAttemptCompletion {
+                    outcome: DiagnosticAttemptOutcome::NoWork,
+                    code: Some(DiagnosticAttemptCode::AuthenticationRequired),
+                    recovery: DiagnosticRecovery::None,
+                    metrics: metrics([("sources", 1), ("snapshots", 0)]),
+                },
+            )
+            .expect("finish quota attempt");
+        state
+            .set_component(
+                crate::protocol::ComponentName::Quota,
+                crate::protocol::ComponentStatus::Ready,
+                Some(json!({"results":[{
+                    "provider":"codex","outcome":"auth_required","snapshots":[]
+                }]})),
+                Some("2026-08-15T08:00:00Z".into()),
+                None,
+                false,
+            )
+            .expect("quota");
+        state
+            .set_overview(&[QuotaOverviewItem {
+                identity: QuotaOverviewIdentity {
+                    provider: "codex".into(),
+                    fingerprint: "account".into(),
+                    scope: "global".into(),
+                    source_id: None,
+                },
+                snapshot: json!({}),
+                sources: vec![QuotaOverviewSource {
+                    source_id: "redacted-in-report".into(),
+                    kind: "device".into(),
+                    device_id: Some("redacted-in-report".into()),
+                    display_name: "Other device".into(),
+                    observed_at: "2026-08-15T08:00:00Z".into(),
+                    is_stale: false,
+                }],
+                selected_source_id: "redacted-in-report".into(),
+                selected_source_display_name: "Other device".into(),
+                is_stale: false,
+            }])
+            .expect("overview");
+        let backend = NativeBackend::new(
+            state,
+            Arc::new(RelayClient::new().expect("relay")),
+            "QuotaTest",
+            "test",
+        );
+        let report = backend.diagnostic_report().expect("diagnostics");
+        assert_eq!(report.summary.operation, DiagnosticOperation::Healthy);
+        assert_eq!(report.summary.data, DiagnosticDataState::Current);
+        assert!(report.findings.iter().any(|finding| {
+            finding.subject.as_deref() == Some("provider:codex")
+                && finding.severity == DiagnosticSeverity::Info
+                && finding.impact == DiagnosticImpact::None
+                && finding.recovery == DiagnosticRecovery::None
+        }));
+        let serialized = serde_json::to_string(&report).expect("serialize");
+        assert!(!serialized.contains("redacted-in-report"));
+        drop(backend);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn explicit_local_provider_failure_remains_actionable_with_remote_data() {
+        let root = std::env::temp_dir().join(format!("quota-diagnostics-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        state
+            .set_provider_config("openrouter", "test-key", None)
+            .expect("provider config");
+        state
+            .set_component(
+                crate::protocol::ComponentName::Quota,
+                crate::protocol::ComponentStatus::Ready,
+                Some(json!({"results":[{
+                    "provider":"openrouter","outcome":"auth_required","snapshots":[]
+                }]})),
+                Some("2026-08-15T08:00:00Z".into()),
+                None,
+                false,
+            )
+            .expect("quota");
+        state
+            .set_overview(&[QuotaOverviewItem {
+                identity: QuotaOverviewIdentity {
+                    provider: "openrouter".into(),
+                    fingerprint: "account".into(),
+                    scope: "global".into(),
+                    source_id: None,
+                },
+                snapshot: json!({}),
+                sources: vec![QuotaOverviewSource {
+                    source_id: "private-device".into(),
+                    kind: "device".into(),
+                    device_id: Some("private-device".into()),
+                    display_name: "Other device".into(),
+                    observed_at: "2026-08-15T08:00:00Z".into(),
+                    is_stale: false,
+                }],
+                selected_source_id: "private-device".into(),
+                selected_source_display_name: "Other device".into(),
+                is_stale: false,
+            }])
+            .expect("overview");
+        let backend = NativeBackend::new(
+            state,
+            Arc::new(RelayClient::new().expect("relay")),
+            "QuotaTest",
+            "test",
+        );
+
+        let report = backend.diagnostic_report().expect("diagnostics");
+
+        assert_eq!(report.summary.operation, DiagnosticOperation::Degraded);
+        assert_eq!(report.summary.data, DiagnosticDataState::Current);
+        assert_eq!(report.summary.attention, DiagnosticAttention::Required);
+        assert!(report.findings.iter().any(|finding| {
+            finding.subject.as_deref() == Some("provider:openrouter")
+                && finding.severity == DiagnosticSeverity::Warning
+                && finding.recovery == DiagnosticRecovery::ConfigureProvider
+        }));
         assert!(
-            !disabled
-                .issues
-                .iter()
-                .any(|issue| issue.component == "sync" && issue.code == "invalid_usage_batch")
+            !serde_json::to_string(&report)
+                .unwrap()
+                .contains("private-device")
         );
         drop(backend);
         fs::remove_dir_all(root).expect("cleanup");
     }
 
     #[test]
-    fn quota_diagnostics_classify_all_failed_and_mixed_outcomes() {
-        let all_auth = json!({
-            "results": [
-                {"provider": "codex", "outcome": "auth_required", "snapshots": []},
-                {"provider": "claude", "outcome": "auth_required", "snapshots": []}
-            ]
-        });
-        let monitored = HashSet::from([ProviderId::Codex, ProviderId::Claude]);
-        let metrics = quota_diagnostic_metrics(Some(&all_auth), &monitored);
-        assert_eq!(quota_collection_status(&metrics), "blocked");
+    fn invalid_explicit_provider_configuration_is_scoped_and_redacted() {
+        let root = std::env::temp_dir().join(format!("quota-diagnostics-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        fs::write(
+            root.join("providers.json"),
+            br#"{"api_key":"secret-value","path":"/Users/private""#,
+        )
+        .expect("invalid provider configuration");
+        let backend = NativeBackend::new(
+            state,
+            Arc::new(RelayClient::new().expect("relay")),
+            "QuotaTest",
+            "test",
+        );
 
-        let all_unavailable = json!({
-            "results": [
-                {"provider": "codex", "outcome": "unavailable", "snapshots": []},
-                {"provider": "claude", "outcome": "error", "snapshots": []}
-            ]
-        });
-        let metrics = quota_diagnostic_metrics(Some(&all_unavailable), &monitored);
-        assert_eq!(quota_collection_status(&metrics), "blocked");
+        let report = backend.diagnostic_report().expect("diagnostics");
 
-        let mixed = json!({
-            "results": [
-                {"provider": "codex", "outcome": "success", "snapshots": [{}]},
-                {"provider": "claude", "outcome": "unavailable", "snapshots": []}
-            ]
-        });
-        let metrics = quota_diagnostic_metrics(Some(&mixed), &monitored);
-        assert_eq!(quota_collection_status(&metrics), "degraded");
-        assert_eq!(metrics["success"], 1);
-        assert_eq!(metrics["unavailable"], 1);
+        assert_eq!(report.summary.operation, DiagnosticOperation::Degraded);
+        assert_eq!(report.summary.attention, DiagnosticAttention::Required);
+        assert!(report.checks.iter().any(|check| {
+            check.name == "provider_configuration"
+                && check.mode == DiagnosticMode::Required
+                && check.operation == DiagnosticOperation::Degraded
+        }));
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|finding| finding.code == "config_unreadable")
+        );
+        let serialized = serde_json::to_string(&report).expect("serialize");
+        assert!(!serialized.contains("secret-value"));
+        assert!(!serialized.contains("/Users/private"));
+        drop(backend);
+        fs::remove_dir_all(root).expect("cleanup");
     }
 
     #[test]
-    fn quota_diagnostics_ignore_optional_unconfigured_providers() {
-        let report = json!({
-            "results": [
-                {"provider": "codex", "outcome": "success", "snapshots": [{}]},
-                {"provider": "claude", "outcome": "auth_required", "snapshots": []},
-                {"provider": "kimi", "outcome": "auth_required", "snapshots": []}
-            ]
-        });
-        let metrics = quota_diagnostic_metrics(Some(&report), &HashSet::from([ProviderId::Codex]));
-        assert_eq!(quota_collection_status(&metrics), "ready");
-        assert_eq!(metrics["results"], 1);
-        assert_eq!(metrics["success"], 1);
-        assert_eq!(metrics["auth_required"], 0);
+    fn pending_upload_waits_normally_until_a_completed_attempt_fails() {
+        let root = std::env::temp_dir().join(format!("quota-diagnostics-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        state
+            .write_session_json(&json!({"status":"active"}))
+            .expect("session");
+        state
+            .insert_usage_dirty_range_for_test(&UsageDirtyRange {
+                agent: UsageAgent::Codex,
+                start_at: "2026-08-10T12:00:00Z".into(),
+                end_at: "2026-08-10T13:00:00Z".into(),
+            })
+            .expect("dirty range");
+        let backend = NativeBackend::new(
+            state.clone(),
+            Arc::new(RelayClient::new().expect("relay")),
+            "QuotaTest",
+            "test",
+        );
+
+        let waiting = backend.evaluate_diagnostic_report().expect("waiting");
+        let upload = waiting
+            .checks
+            .iter()
+            .find(|check| check.name == "usage_upload")
+            .expect("upload check");
+        assert_eq!(upload.operation, DiagnosticOperation::Healthy);
+        assert_eq!(upload.metrics.get("waiting"), Some(&1));
+        assert!(
+            !waiting
+                .findings
+                .iter()
+                .any(|finding| finding.component == "usage_upload")
+        );
+
+        let attempt = state
+            .begin_diagnostic_attempt(
+                DiagnosticAttemptKind::UsageUpload,
+                DiagnosticAttemptTrigger::Scheduled,
+                DiagnosticSource::Account,
+                None,
+                DiagnosticMode::Required,
+                None,
+            )
+            .expect("upload attempt");
+        state
+            .finish_diagnostic_attempt(
+                attempt,
+                &DiagnosticAttemptCompletion {
+                    outcome: DiagnosticAttemptOutcome::Failed,
+                    code: Some(DiagnosticAttemptCode::NetworkError),
+                    recovery: DiagnosticRecovery::Retry,
+                    metrics: metrics([("attempted", 1), ("pending", 1)]),
+                },
+            )
+            .expect("upload failure");
+        let failed = backend.evaluate_diagnostic_report().expect("failed");
+        assert_eq!(failed.summary.operation, DiagnosticOperation::Degraded);
+        assert!(
+            failed
+                .findings
+                .iter()
+                .any(|finding| finding.component == "usage_upload")
+        );
+
+        let retry = state
+            .begin_diagnostic_attempt(
+                DiagnosticAttemptKind::UsageUpload,
+                DiagnosticAttemptTrigger::Scheduled,
+                DiagnosticSource::Account,
+                None,
+                DiagnosticMode::Required,
+                None,
+            )
+            .expect("retry attempt");
+        state
+            .finish_diagnostic_attempt(
+                retry,
+                &DiagnosticAttemptCompletion {
+                    outcome: DiagnosticAttemptOutcome::NoWork,
+                    code: Some(DiagnosticAttemptCode::NoWork),
+                    recovery: DiagnosticRecovery::None,
+                    metrics: metrics([("attempted", 0), ("pending", 0)]),
+                },
+            )
+            .expect("finish retry");
+        let still_failed = backend.evaluate_diagnostic_report().expect("still failed");
+        assert_eq!(
+            still_failed.summary.operation,
+            DiagnosticOperation::Degraded
+        );
+        assert!(
+            still_failed
+                .findings
+                .iter()
+                .any(|finding| finding.component == "usage_upload")
+        );
+
+        let success = state
+            .begin_diagnostic_attempt(
+                DiagnosticAttemptKind::UsageUpload,
+                DiagnosticAttemptTrigger::Scheduled,
+                DiagnosticSource::Account,
+                None,
+                DiagnosticMode::Required,
+                None,
+            )
+            .expect("success attempt");
+        state
+            .finish_diagnostic_attempt(
+                success,
+                &DiagnosticAttemptCompletion {
+                    outcome: DiagnosticAttemptOutcome::Success,
+                    code: None,
+                    recovery: DiagnosticRecovery::None,
+                    metrics: metrics([("attempted", 1), ("pending", 1)]),
+                },
+            )
+            .expect("finish success");
+        let recovered = backend.evaluate_diagnostic_report().expect("recovered");
+        assert_eq!(recovered.summary.operation, DiagnosticOperation::Healthy);
+        assert!(
+            !recovered
+                .findings
+                .iter()
+                .any(|finding| finding.component == "usage_upload")
+        );
+        drop(backend);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn usage_findings_are_scoped_and_not_repeated_as_rollups() {
+        let root = std::env::temp_dir().join(format!("quota-diagnostics-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        state
+            .write_usage_scan_diagnostics(
+                UsageAgent::Cursor,
+                &json!({
+                    "status":"partial","scanned_files":2,"partial_files":1,"valid_records":9,
+                    "reason_counts":{"malformed_json":4,"truncated_tail":1}
+                }),
+            )
+            .expect("scan diagnostics");
+        let backend = NativeBackend::new(
+            state,
+            Arc::new(RelayClient::new().expect("relay")),
+            "QuotaTest",
+            "test",
+        );
+
+        let report = backend.diagnostic_report().expect("diagnostics");
+
+        assert!(
+            report
+                .findings
+                .iter()
+                .all(|finding| { finding.subject.as_deref() == Some("agent:cursor") })
+        );
+        assert_eq!(
+            report
+                .findings
+                .iter()
+                .map(|finding| finding.code.as_str())
+                .collect::<HashSet<_>>(),
+            HashSet::from(["malformed_json", "truncated_tail"])
+        );
+        assert!(!report.findings.iter().any(|finding| {
+            matches!(finding.code.as_str(), "scan_partial" | "partial_sources")
+        }));
+        drop(backend);
+        fs::remove_dir_all(root).expect("cleanup");
     }
 
     #[test]

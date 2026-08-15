@@ -17,6 +17,7 @@ pub const MAXIMUM_REQUEST_ID_BYTES: usize = 128;
 pub enum Operation {
     GetState,
     Diagnose,
+    RecheckDiagnostics,
     Refresh,
     Login,
     CancelLogin,
@@ -435,31 +436,130 @@ impl UsagePeriodValues {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum DiagnosticStatus {
+pub enum DiagnosticOperation {
     Healthy,
     Degraded,
     Blocked,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiagnosticDataState {
+    Current,
+    Stale,
+    Partial,
+    Empty,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiagnosticAttention {
+    None,
+    Automatic,
+    Optional,
+    Required,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DiagnosticSummary {
+    pub operation: DiagnosticOperation,
+    pub data: DiagnosticDataState,
+    pub attention: DiagnosticAttention,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiagnosticRefreshPhase {
+    Idle,
+    Running,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DiagnosticRefresh {
+    pub phase: DiagnosticRefreshPhase,
+    pub revision: u64,
+    pub as_of: String,
+    pub started_at: Option<String>,
+    pub next_due_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiagnosticSource {
+    ThisDevice,
+    Account,
+    System,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiagnosticMode {
+    Inactive,
+    Opportunistic,
+    Required,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiagnosticImpact {
+    None,
+    Source,
+    Surface,
+    System,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiagnosticRecovery {
+    None,
+    Automatic,
+    Login,
+    ConfigureProvider,
+    Retry,
+    UpdateSource,
+    CheckAccess,
+    Upgrade,
+    Reinstall,
+    Feedback,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct DiagnosticClient {
     pub name: String,
     pub version: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct DiagnosticComponent {
+pub struct DiagnosticSurface {
     pub name: String,
-    pub status: String,
-    pub message: Option<String>,
+    pub operation: DiagnosticOperation,
+    pub data: DiagnosticDataState,
+    pub source: Option<DiagnosticSource>,
     pub metrics: BTreeMap<String, i64>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DiagnosticCheck {
+    pub name: String,
+    pub source: DiagnosticSource,
+    pub subject: Option<String>,
+    pub mode: DiagnosticMode,
+    pub operation: DiagnosticOperation,
+    pub data: DiagnosticDataState,
+    pub last_attempt_at: Option<String>,
+    pub last_success_at: Option<String>,
+    pub metrics: BTreeMap<String, i64>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DiagnosticSeverity {
     Info,
@@ -467,25 +567,117 @@ pub enum DiagnosticSeverity {
     Error,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct DiagnosticIssue {
+pub struct DiagnosticFinding {
     pub component: String,
+    pub source: DiagnosticSource,
+    pub subject: Option<String>,
     pub code: String,
     pub severity: DiagnosticSeverity,
+    pub impact: DiagnosticImpact,
+    pub recovery: DiagnosticRecovery,
     pub count: i64,
+    pub observed_at: String,
     pub message: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiagnosticAttemptKind {
+    Refresh,
+    QuotaCollection,
+    UsageScan,
+    UsageUpload,
+    AccountSync,
+    PricingRefresh,
+    DeviceHealthUpload,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiagnosticAttemptTrigger {
+    Manual,
+    Scheduled,
+    Startup,
+    Recheck,
+    SettingsChange,
+    AccountChange,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiagnosticAttemptOutcome {
+    Running,
+    Success,
+    Partial,
+    NoWork,
+    Failed,
+    Interrupted,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiagnosticAttemptCode {
+    ProcessInterrupted,
+    Cancelled,
+    NoWork,
+    AuthenticationRequired,
+    NetworkError,
+    Unavailable,
+    InvalidResponse,
+    InvalidState,
+    ProviderError,
+    PartialSource,
+    MalformedData,
+    TruncatedActiveSource,
+    InvalidUsageBatch,
+    UnrepresentableHour,
+    DeviceDeleted,
+    UploadDisabled,
+    SignedOut,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DiagnosticAttempt {
+    pub kind: DiagnosticAttemptKind,
+    pub trigger: DiagnosticAttemptTrigger,
+    pub source: DiagnosticSource,
+    pub subject: Option<String>,
+    pub mode: DiagnosticMode,
+    pub started_at: String,
+    pub completed_at: Option<String>,
+    pub duration_ms: Option<u64>,
+    pub outcome: DiagnosticAttemptOutcome,
+    pub code: Option<DiagnosticAttemptCode>,
+    pub recovery: DiagnosticRecovery,
+    pub metrics: BTreeMap<String, i64>,
+    pub start_revision: u64,
+    pub end_revision: Option<u64>,
+    pub parent_refresh_started_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DiagnosticRecentActivity {
+    pub attempts: Vec<DiagnosticAttempt>,
+    pub history_truncated: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct DiagnosticReport {
     pub schema_version: u32,
-    pub status: DiagnosticStatus,
+    pub summary: DiagnosticSummary,
+    pub refresh: DiagnosticRefresh,
     pub generated_at: String,
     pub client: DiagnosticClient,
-    pub components: Vec<DiagnosticComponent>,
-    pub issues: Vec<DiagnosticIssue>,
+    pub surfaces: Vec<DiagnosticSurface>,
+    pub checks: Vec<DiagnosticCheck>,
+    pub findings: Vec<DiagnosticFinding>,
+    pub recent_activity: DiagnosticRecentActivity,
 }
 
 #[cfg(test)]

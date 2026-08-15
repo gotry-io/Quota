@@ -175,7 +175,7 @@
       Issue.record("Expected Diagnostics content fixture.")
       return
     }
-    #expect(contentReport.status == .healthy)
+    #expect(contentReport.summary.operation == .healthy)
     #expect(content.showsHeaderActions)
 
     let stale = try configuration(fixture: .cachedRefreshError, referenceDate: referenceDate)

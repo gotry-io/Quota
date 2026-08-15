@@ -12,7 +12,7 @@ use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Duration, SecondsFormat, Timelike};
-use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, Transaction, params};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
@@ -20,15 +20,38 @@ use uuid::Uuid;
 
 use crate::migration;
 use crate::protocol::{
-    ComponentName, ComponentState, ComponentStatus, ErrorCode, IPC_VERSION, IpcError,
-    ProviderBrowserSessionView, ProviderConfigView, QuotaOverviewItem, RecoveryAction,
-    StateSnapshot, UsagePeriod, UsagePeriodCache, UsageSource,
+    ComponentName, ComponentState, ComponentStatus, DiagnosticAttempt, DiagnosticAttemptCode,
+    DiagnosticAttemptKind, DiagnosticAttemptOutcome, DiagnosticAttemptTrigger, DiagnosticMode,
+    DiagnosticRecentActivity, DiagnosticRecovery, DiagnosticReport, DiagnosticSource, ErrorCode,
+    IPC_VERSION, IpcError, ProviderBrowserSessionView, ProviderConfigView, QuotaOverviewItem,
+    RecoveryAction, StateSnapshot, UsagePeriod, UsagePeriodCache, UsageSource,
 };
 use crate::usage::{NormalizedUsageEvent, UsageAgent, UsageFileIndex, UsageScanResult};
 
 const STATE_DB_NAME: &str = "state.sqlite";
 const PROVIDER_CONFIG_NAME: &str = "providers.json";
 const MAX_USAGE_OUTBOX_ENTRIES: i64 = 64;
+const MAX_DIAGNOSTIC_ATTEMPTS: i64 = 50_000;
+const MAX_SUPPORT_ATTEMPTS: usize = 512;
+const DIAGNOSTIC_ATTEMPT_RETENTION_DAYS: i64 = 7;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DiagnosticAttemptHandle(i64);
+
+#[derive(Debug, Clone)]
+pub struct DiagnosticAttemptCompletion {
+    pub outcome: DiagnosticAttemptOutcome,
+    pub code: Option<DiagnosticAttemptCode>,
+    pub recovery: DiagnosticRecovery,
+    pub metrics: BTreeMap<String, i64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DiagnosticAttemptFacts {
+    pub latest_completed: Option<DiagnosticAttempt>,
+    pub latest_success: Option<DiagnosticAttempt>,
+    pub latest_problem_after_success: Option<DiagnosticAttempt>,
+}
 
 #[derive(Debug, Error)]
 pub enum StateError {
@@ -301,6 +324,7 @@ impl StateStore {
              PRAGMA journal_mode = WAL;",
         )?;
         migration::apply(&mut connection)?;
+        recover_interrupted_attempts(&mut connection)?;
         Ok(Self {
             root,
             db: Mutex::new(connection),
@@ -313,6 +337,17 @@ impl StateStore {
     }
 
     pub fn snapshot(&self) -> Result<StateSnapshot, StateError> {
+        self.snapshot_with_provider_policy(false)
+    }
+
+    pub fn snapshot_for_diagnostics(&self) -> Result<StateSnapshot, StateError> {
+        self.snapshot_with_provider_policy(true)
+    }
+
+    fn snapshot_with_provider_policy(
+        &self,
+        tolerate_invalid_provider_config: bool,
+    ) -> Result<StateSnapshot, StateError> {
         let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
         let revision = metadata_u64(&conn, "revision")?;
         let usage_upload_enabled = metadata_bool(&conn, "usage_upload_enabled")?;
@@ -344,7 +379,11 @@ impl StateStore {
             usage_periods.account = Default::default();
         }
         let pricing = read_component(&conn, ComponentName::Pricing)?;
-        let providers = read_provider_views(&self.root)?;
+        let providers = match read_provider_views(&self.root) {
+            Ok(providers) => providers,
+            Err(_) if tolerate_invalid_provider_config => Vec::new(),
+            Err(error) => return Err(error),
+        };
         let provider_browser_sessions = read_provider_browser_session_views(&conn)?;
         let overview = read_overview(&conn)?;
         Ok(StateSnapshot {
@@ -366,6 +405,14 @@ impl StateStore {
             provider_browser_sessions,
             overview,
         })
+    }
+
+    pub fn provider_config_status(&self) -> (bool, bool) {
+        match fs::symlink_metadata(self.root.join(PROVIDER_CONFIG_NAME)) {
+            Ok(_) => (true, read_provider_file(&self.root).is_ok()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => (false, true),
+            Err(_) => (true, false),
+        }
     }
 
     pub fn component(&self, name: ComponentName) -> Result<Option<ComponentRecord>, StateError> {
@@ -429,10 +476,11 @@ impl StateStore {
         Ok(())
     }
 
-    pub fn usage_scan_diagnostics(&self) -> Result<Vec<(UsageAgent, Value)>, StateError> {
+    pub fn usage_scan_diagnostics(&self) -> Result<Vec<(UsageAgent, Value, String)>, StateError> {
         let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        let mut statement =
-            conn.prepare("SELECT agent, payload_json FROM usage_scan_diagnostics ORDER BY agent")?;
+        let mut statement = conn.prepare(
+            "SELECT agent, payload_json, updated_at FROM usage_scan_diagnostics ORDER BY agent",
+        )?;
         let rows = statement.query_map([], |row| {
             let agent: String = row.get(0)?;
             let agent = parse_usage_agent(&agent).ok_or_else(|| {
@@ -450,7 +498,7 @@ impl StateStore {
                     rusqlite::types::Type::Text,
                 )
             })?;
-            Ok((agent, value))
+            Ok((agent, value, row.get(2)?))
         })?;
         let mut diagnostics = Vec::new();
         for row in rows {
@@ -475,17 +523,394 @@ impl StateStore {
         Ok(())
     }
 
-    pub fn sync_diagnostic(&self) -> Result<Option<Value>, StateError> {
+    pub fn sync_diagnostic(&self) -> Result<Option<(Value, String)>, StateError> {
+        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        let raw: Option<(String, String)> = conn
+            .query_row(
+                "SELECT payload_json, updated_at FROM sync_diagnostics WHERE id = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        raw.map(|(value, updated_at)| Ok((serde_json::from_str(&value)?, updated_at)))
+            .transpose()
+    }
+
+    pub fn write_diagnostic_snapshot(&self, report: &DiagnosticReport) -> Result<(), StateError> {
+        let raw = serde_json::to_string(report)?;
+        if raw.len() > crate::protocol::MAXIMUM_LINE_BYTES {
+            return Err(StateError::InvalidState);
+        }
+        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        conn.execute(
+            "INSERT INTO diagnostic_snapshot(id, payload_json, completed_at)
+             VALUES (1, ?1, ?2)
+             ON CONFLICT(id) DO UPDATE SET payload_json = excluded.payload_json,
+             completed_at = excluded.completed_at",
+            params![raw, report.refresh.as_of],
+        )?;
+        Ok(())
+    }
+
+    pub fn diagnostic_snapshot(&self) -> Result<Option<DiagnosticReport>, StateError> {
         let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
         let raw: Option<String> = conn
             .query_row(
-                "SELECT payload_json FROM sync_diagnostics WHERE id = 1",
+                "SELECT payload_json FROM diagnostic_snapshot WHERE id = 1",
                 [],
                 |row| row.get(0),
             )
             .optional()?;
         raw.map(|value| serde_json::from_str(&value).map_err(StateError::from))
             .transpose()
+    }
+
+    pub fn begin_diagnostic_attempt(
+        &self,
+        kind: DiagnosticAttemptKind,
+        trigger: DiagnosticAttemptTrigger,
+        source: DiagnosticSource,
+        subject: Option<&str>,
+        mode: DiagnosticMode,
+        parent_refresh: Option<DiagnosticAttemptHandle>,
+    ) -> Result<DiagnosticAttemptHandle, StateError> {
+        if subject.is_some_and(|value| !valid_diagnostic_subject(value)) {
+            return Err(StateError::InvalidState);
+        }
+        let mut conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        let tx = conn.transaction()?;
+        prune_diagnostic_attempts(&tx)?;
+        let revision = metadata_u64(&tx, "revision")?;
+        tx.execute(
+            "INSERT INTO diagnostic_attempts(
+               parent_refresh_id, kind, trigger, source, subject, mode, started_at,
+               recovery, metrics_json, start_revision
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'none', '{}', ?8)",
+            params![
+                parent_refresh.map(|value| value.0),
+                diagnostic_attempt_kind_key(kind),
+                diagnostic_attempt_trigger_key(trigger),
+                diagnostic_source_key(source),
+                subject,
+                diagnostic_mode_key(mode),
+                now_rfc3339(),
+                revision,
+            ],
+        )?;
+        let handle = DiagnosticAttemptHandle(tx.last_insert_rowid());
+        tx.commit()?;
+        Ok(handle)
+    }
+
+    pub fn running_refresh_attempt(
+        &self,
+    ) -> Result<Option<(DiagnosticAttemptHandle, DiagnosticAttemptTrigger)>, StateError> {
+        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        conn.query_row(
+            "SELECT id, trigger FROM diagnostic_attempts
+             WHERE kind = 'refresh' AND outcome IS NULL ORDER BY id DESC LIMIT 1",
+            [],
+            |row| {
+                let handle = DiagnosticAttemptHandle(row.get(0)?);
+                let trigger = parse_diagnostic_attempt_trigger(&row.get::<_, String>(1)?)?;
+                Ok((handle, trigger))
+            },
+        )
+        .optional()
+        .map_err(StateError::from)
+    }
+
+    pub fn latest_refresh_attempt(
+        &self,
+    ) -> Result<Option<(DiagnosticAttemptHandle, DiagnosticAttemptTrigger)>, StateError> {
+        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        conn.query_row(
+            "SELECT id, trigger FROM diagnostic_attempts
+             WHERE kind = 'refresh' ORDER BY id DESC LIMIT 1",
+            [],
+            |row| {
+                let handle = DiagnosticAttemptHandle(row.get(0)?);
+                let trigger = parse_diagnostic_attempt_trigger(&row.get::<_, String>(1)?)?;
+                Ok((handle, trigger))
+            },
+        )
+        .optional()
+        .map_err(StateError::from)
+    }
+
+    pub fn device_health_upload_due(
+        &self,
+        digest: &str,
+        now: DateTime<chrono::Utc>,
+    ) -> Result<bool, StateError> {
+        if digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(StateError::InvalidState);
+        }
+        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        let previous_digest = metadata_value(&conn, "device_health_last_digest")?;
+        let previous_at = metadata_value(&conn, "device_health_last_uploaded_at")?
+            .and_then(|value| DateTime::parse_from_rfc3339(&value).ok())
+            .map(|value| value.with_timezone(&chrono::Utc));
+        Ok(previous_digest.as_deref() != Some(digest)
+            || previous_at.is_none_or(|value| now - value >= Duration::minutes(15)))
+    }
+
+    pub fn record_device_health_upload(
+        &self,
+        revision: u64,
+        digest: &str,
+        uploaded_at: &str,
+    ) -> Result<(), StateError> {
+        if digest.len() != 64
+            || !digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+            || DateTime::parse_from_rfc3339(uploaded_at).is_err()
+        {
+            return Err(StateError::InvalidState);
+        }
+        let mut conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        let tx = conn.transaction()?;
+        for (key, value) in [
+            ("device_health_last_revision", revision.to_string()),
+            ("device_health_last_digest", digest.to_owned()),
+            ("device_health_last_uploaded_at", uploaded_at.to_owned()),
+        ] {
+            tx.execute(
+                "INSERT INTO metadata(key, value) VALUES (?1, ?2)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                params![key, value],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn finish_diagnostic_attempt(
+        &self,
+        handle: DiagnosticAttemptHandle,
+        completion: &DiagnosticAttemptCompletion,
+    ) -> Result<bool, StateError> {
+        self.finish_diagnostic_attempt_internal(handle, completion, false)
+    }
+
+    pub fn finish_diagnostic_attempt_with_interrupted_children(
+        &self,
+        handle: DiagnosticAttemptHandle,
+        completion: &DiagnosticAttemptCompletion,
+    ) -> Result<bool, StateError> {
+        self.finish_diagnostic_attempt_internal(handle, completion, true)
+    }
+
+    fn finish_diagnostic_attempt_internal(
+        &self,
+        handle: DiagnosticAttemptHandle,
+        completion: &DiagnosticAttemptCompletion,
+        interrupt_running_children: bool,
+    ) -> Result<bool, StateError> {
+        if completion.outcome == DiagnosticAttemptOutcome::Running
+            || completion.metrics.len() > 16
+            || completion.metrics.iter().any(|(key, value)| {
+                !valid_diagnostic_label(key) || *value < 0 || *value > 9_007_199_254_740_991
+            })
+        {
+            return Err(StateError::InvalidState);
+        }
+        let metrics_json = serde_json::to_string(&completion.metrics)?;
+        if metrics_json.len() > 2_048 {
+            return Err(StateError::InvalidState);
+        }
+        let completed_at = now_rfc3339();
+        let mut conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        let tx = conn.transaction()?;
+        let revision = metadata_u64(&tx, "revision")?;
+        if interrupt_running_children {
+            tx.execute(
+                "UPDATE diagnostic_attempts SET
+                   completed_at = ?2,
+                   duration_ms = MIN(86400000, MAX(0,
+                     CAST((julianday(?2) - julianday(started_at)) * 86400000 AS INTEGER))),
+                   outcome = 'interrupted', code = 'process_interrupted', recovery = 'retry',
+                   end_revision = ?3
+                 WHERE parent_refresh_id = ?1 AND outcome IS NULL",
+                params![handle.0, completed_at, revision],
+            )?;
+        }
+        let changed = tx.execute(
+            "UPDATE diagnostic_attempts SET
+               completed_at = ?2,
+               duration_ms = MIN(86400000, MAX(0,
+                 CAST((julianday(?2) - julianday(started_at)) * 86400000 AS INTEGER))),
+               outcome = ?3, code = ?4, recovery = ?5, metrics_json = ?6, end_revision = ?7
+             WHERE id = ?1 AND outcome IS NULL",
+            params![
+                handle.0,
+                completed_at,
+                diagnostic_attempt_outcome_key(completion.outcome),
+                completion.code.map(diagnostic_attempt_code_key),
+                diagnostic_recovery_key(completion.recovery),
+                metrics_json,
+                revision,
+            ],
+        )? > 0;
+        prune_diagnostic_attempts(&tx)?;
+        tx.commit()?;
+        Ok(changed)
+    }
+
+    pub fn diagnostic_recent_activity(&self) -> Result<DiagnosticRecentActivity, StateError> {
+        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        let failure_cutoff =
+            (chrono::Utc::now() - Duration::hours(24)).to_rfc3339_opts(SecondsFormat::Secs, true);
+        let mut statement = conn.prepare(
+            "SELECT attempts.kind, attempts.trigger, attempts.source, attempts.subject,
+                    attempts.mode, attempts.started_at, attempts.completed_at,
+                    attempts.duration_ms, attempts.outcome, attempts.code, attempts.recovery,
+                    attempts.metrics_json, attempts.start_revision, attempts.end_revision,
+                    parent.started_at
+             FROM diagnostic_attempts AS attempts
+             LEFT JOIN diagnostic_attempts AS parent ON parent.id = attempts.parent_refresh_id
+             WHERE attempts.outcome IS NULL
+                OR attempts.id IN (
+                  SELECT id FROM diagnostic_attempts WHERE kind = 'refresh'
+                  ORDER BY id DESC LIMIT 20
+                )
+                OR attempts.parent_refresh_id IN (
+                  SELECT id FROM diagnostic_attempts WHERE kind = 'refresh'
+                  ORDER BY id DESC LIMIT 20
+                )
+                OR (attempts.outcome IN ('failed', 'interrupted') AND attempts.started_at >= ?1)
+             ORDER BY attempts.id DESC LIMIT 513",
+        )?;
+        let rows = statement.query_map([failure_cutoff], diagnostic_attempt_from_row)?;
+        let mut attempts = Vec::new();
+        for row in rows {
+            attempts.push(row?);
+        }
+        let capped = attempts.len() > MAX_SUPPORT_ATTEMPTS;
+        attempts.truncate(MAX_SUPPORT_ATTEMPTS);
+        attempts.reverse();
+        let history_truncated = capped || metadata_bool(&conn, "attempt_history_truncated")?;
+        Ok(DiagnosticRecentActivity {
+            attempts,
+            history_truncated,
+        })
+    }
+
+    pub fn diagnostic_attempt_facts(
+        &self,
+        kind: DiagnosticAttemptKind,
+        source: DiagnosticSource,
+        subject: Option<&str>,
+    ) -> Result<DiagnosticAttemptFacts, StateError> {
+        if subject.is_some_and(|value| !valid_diagnostic_subject(value)) {
+            return Err(StateError::InvalidState);
+        }
+        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        let read = |success_only: bool| -> Result<Option<DiagnosticAttempt>, StateError> {
+            conn.query_row(
+                "SELECT attempts.kind, attempts.trigger, attempts.source, attempts.subject,
+                        attempts.mode, attempts.started_at, attempts.completed_at,
+                        attempts.duration_ms, attempts.outcome, attempts.code, attempts.recovery,
+                        attempts.metrics_json, attempts.start_revision, attempts.end_revision,
+                        parent.started_at
+                 FROM diagnostic_attempts AS attempts
+                 LEFT JOIN diagnostic_attempts AS parent ON parent.id = attempts.parent_refresh_id
+                 WHERE attempts.kind = ?1 AND attempts.source = ?2
+                   AND ((?3 IS NULL AND attempts.subject IS NULL) OR attempts.subject = ?3)
+                   AND attempts.outcome IS NOT NULL
+                   AND (?4 = 0 OR attempts.outcome = 'success')
+                 ORDER BY attempts.id DESC LIMIT 1",
+                params![
+                    diagnostic_attempt_kind_key(kind),
+                    diagnostic_source_key(source),
+                    subject,
+                    i64::from(success_only),
+                ],
+                diagnostic_attempt_from_row,
+            )
+            .optional()
+            .map_err(StateError::from)
+        };
+        let latest_problem_after_success = conn
+            .query_row(
+                "SELECT attempts.kind, attempts.trigger, attempts.source, attempts.subject,
+                        attempts.mode, attempts.started_at, attempts.completed_at,
+                        attempts.duration_ms, attempts.outcome, attempts.code, attempts.recovery,
+                        attempts.metrics_json, attempts.start_revision, attempts.end_revision,
+                        parent.started_at
+                 FROM diagnostic_attempts AS attempts
+                 LEFT JOIN diagnostic_attempts AS parent ON parent.id = attempts.parent_refresh_id
+                 WHERE attempts.kind = ?1 AND attempts.source = ?2
+                   AND ((?3 IS NULL AND attempts.subject IS NULL) OR attempts.subject = ?3)
+                   AND attempts.outcome IN ('partial', 'failed', 'interrupted')
+                   AND attempts.id > COALESCE((
+                     SELECT MAX(success.id) FROM diagnostic_attempts AS success
+                     WHERE success.kind = ?1 AND success.source = ?2
+                       AND ((?3 IS NULL AND success.subject IS NULL) OR success.subject = ?3)
+                       AND success.outcome = 'success'
+                   ), 0)
+                 ORDER BY attempts.id DESC LIMIT 1",
+                params![
+                    diagnostic_attempt_kind_key(kind),
+                    diagnostic_source_key(source),
+                    subject,
+                ],
+                diagnostic_attempt_from_row,
+            )
+            .optional()?;
+        Ok(DiagnosticAttemptFacts {
+            latest_completed: read(false)?,
+            latest_success: read(true)?,
+            latest_problem_after_success,
+        })
+    }
+
+    pub fn latest_diagnostic_problem(
+        &self,
+        include_usage: bool,
+    ) -> Result<Option<DiagnosticAttempt>, StateError> {
+        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        conn.query_row(
+            "WITH latest AS (
+               SELECT MAX(id) AS id
+               FROM diagnostic_attempts
+               WHERE outcome IS NOT NULL AND kind != 'device_health_upload'
+                 AND (?1 != 0 OR kind NOT IN ('usage_scan', 'usage_upload'))
+               GROUP BY kind, source, COALESCE(subject, '')
+             )
+             SELECT attempts.kind, attempts.trigger, attempts.source, attempts.subject,
+                    attempts.mode, attempts.started_at, attempts.completed_at,
+                    attempts.duration_ms, attempts.outcome, attempts.code, attempts.recovery,
+                    attempts.metrics_json, attempts.start_revision, attempts.end_revision,
+                    parent.started_at
+             FROM diagnostic_attempts AS attempts
+             LEFT JOIN diagnostic_attempts AS parent ON parent.id = attempts.parent_refresh_id
+             WHERE attempts.id IN (SELECT id FROM latest)
+               AND attempts.outcome IN ('partial', 'failed', 'interrupted')
+             ORDER BY attempts.id DESC LIMIT 1",
+            [i64::from(include_usage)],
+            diagnostic_attempt_from_row,
+        )
+        .optional()
+        .map_err(StateError::from)
+    }
+
+    pub fn consecutive_refresh_failures(&self) -> Result<u64, StateError> {
+        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        let mut statement = conn.prepare(
+            "SELECT outcome FROM diagnostic_attempts
+             WHERE kind = 'refresh' AND outcome IS NOT NULL
+             ORDER BY id DESC LIMIT 1001",
+        )?;
+        let outcomes = statement.query_map([], |row| row.get::<_, String>(0))?;
+        let mut failures = 0_u64;
+        for outcome in outcomes {
+            if matches!(outcome?.as_str(), "failed" | "interrupted") {
+                failures += 1;
+            } else {
+                break;
+            }
+        }
+        Ok(failures.min(1_000))
     }
 
     pub fn pricing_etag(&self) -> Result<Option<String>, StateError> {
@@ -1377,6 +1802,13 @@ impl StateStore {
         Ok(result)
     }
 
+    #[cfg(test)]
+    pub fn make_usage_file_index_unreadable_for_test(&self) -> Result<(), StateError> {
+        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        conn.execute("DROP TABLE usage_file_index", [])?;
+        Ok(())
+    }
+
     pub fn usage_events(&self) -> Result<Vec<NormalizedUsageEvent>, StateError> {
         let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
         let mut statement = conn.prepare(
@@ -1423,6 +1855,20 @@ impl StateStore {
             ranges.push(row?);
         }
         Ok(ranges)
+    }
+
+    #[cfg(test)]
+    pub fn insert_usage_dirty_range_for_test(
+        &self,
+        range: &UsageDirtyRange,
+    ) -> Result<(), StateError> {
+        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        conn.execute(
+            "INSERT OR IGNORE INTO usage_dirty_ranges(agent, start_at, end_at)
+             VALUES (?1, ?2, ?3)",
+            params![range.agent.as_str(), range.start_at, range.end_at],
+        )?;
+        Ok(())
     }
 
     /// Returns UTC hours whose indexed source is known to be partial. These markers prevent a
@@ -2547,6 +2993,359 @@ fn ensure_owner_only_directory(path: &Path) -> Result<(), StateError> {
     Ok(())
 }
 
+fn recover_interrupted_attempts(conn: &mut Connection) -> Result<(), StateError> {
+    let completed_at = now_rfc3339();
+    let tx = conn.transaction()?;
+    let revision = metadata_u64(&tx, "revision")?;
+    tx.execute(
+        "UPDATE diagnostic_attempts SET
+           completed_at = ?1,
+           duration_ms = MIN(86400000, MAX(0,
+             CAST((julianday(?1) - julianday(started_at)) * 86400000 AS INTEGER))),
+           outcome = 'interrupted', code = 'process_interrupted', recovery = 'retry',
+           end_revision = ?2
+         WHERE outcome IS NULL",
+        params![completed_at, revision],
+    )?;
+    prune_diagnostic_attempts(&tx)?;
+    tx.commit()?;
+    Ok(())
+}
+
+fn prune_diagnostic_attempts(tx: &Transaction<'_>) -> Result<(), StateError> {
+    let cutoff = (chrono::Utc::now() - Duration::days(DIAGNOSTIC_ATTEMPT_RETENTION_DAYS))
+        .to_rfc3339_opts(SecondsFormat::Secs, true);
+    let expired = tx.execute(
+        "DELETE FROM diagnostic_attempts WHERE outcome IS NOT NULL AND started_at < ?1",
+        [cutoff],
+    )?;
+    let overflow = tx.execute(
+        "DELETE FROM diagnostic_attempts WHERE id IN (
+           SELECT id FROM diagnostic_attempts WHERE outcome IS NOT NULL
+           ORDER BY id DESC LIMIT -1 OFFSET ?1
+         )",
+        [MAX_DIAGNOSTIC_ATTEMPTS],
+    )?;
+    if expired + overflow > 0 {
+        tx.execute(
+            "INSERT INTO metadata(key, value) VALUES ('attempt_history_truncated', '1')
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [],
+        )?;
+    }
+    Ok(())
+}
+
+fn diagnostic_attempt_from_row(
+    row: &rusqlite::Row<'_>,
+) -> Result<DiagnosticAttempt, rusqlite::Error> {
+    let kind = parse_diagnostic_attempt_kind(&row.get::<_, String>(0)?)?;
+    let trigger = parse_diagnostic_attempt_trigger(&row.get::<_, String>(1)?)?;
+    let source = parse_diagnostic_source(&row.get::<_, String>(2)?)?;
+    let mode = parse_diagnostic_mode(&row.get::<_, String>(4)?)?;
+    let outcome = match row.get::<_, Option<String>>(8)? {
+        Some(value) => parse_diagnostic_attempt_outcome(&value)?,
+        None => DiagnosticAttemptOutcome::Running,
+    };
+    let code = row
+        .get::<_, Option<String>>(9)?
+        .map(|value| parse_diagnostic_attempt_code(&value))
+        .transpose()?;
+    let recovery = parse_diagnostic_recovery(&row.get::<_, String>(10)?)?;
+    let raw_metrics = row.get::<_, String>(11)?;
+    let metrics = serde_json::from_str::<BTreeMap<String, i64>>(&raw_metrics).map_err(|_| {
+        rusqlite::Error::InvalidColumnType(11, "metrics_json".into(), rusqlite::types::Type::Text)
+    })?;
+    let subject = row.get::<_, Option<String>>(3)?;
+    if subject
+        .as_deref()
+        .is_some_and(|value| !valid_diagnostic_subject(value))
+    {
+        return Err(rusqlite::Error::InvalidColumnType(
+            3,
+            "subject".into(),
+            rusqlite::types::Type::Text,
+        ));
+    }
+    if metrics.len() > 16
+        || metrics.iter().any(|(key, value)| {
+            !valid_diagnostic_label(key) || *value < 0 || *value > 9_007_199_254_740_991
+        })
+    {
+        return Err(rusqlite::Error::InvalidColumnType(
+            11,
+            "metrics_json".into(),
+            rusqlite::types::Type::Text,
+        ));
+    }
+    let started_at = row.get::<_, String>(5)?;
+    let completed_at = row.get::<_, Option<String>>(6)?;
+    let parent_refresh_started_at = row.get::<_, Option<String>>(14)?;
+    if DateTime::parse_from_rfc3339(&started_at).is_err()
+        || completed_at
+            .as_deref()
+            .is_some_and(|value| DateTime::parse_from_rfc3339(value).is_err())
+        || parent_refresh_started_at
+            .as_deref()
+            .is_some_and(|value| DateTime::parse_from_rfc3339(value).is_err())
+    {
+        return Err(rusqlite::Error::InvalidColumnType(
+            5,
+            "started_at".into(),
+            rusqlite::types::Type::Text,
+        ));
+    }
+    let duration_ms = row
+        .get::<_, Option<i64>>(7)?
+        .map(|value| {
+            u64::try_from(value).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(7, value))
+        })
+        .transpose()?;
+    let end_revision = row
+        .get::<_, Option<i64>>(13)?
+        .map(|value| {
+            u64::try_from(value).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(13, value))
+        })
+        .transpose()?;
+    let running = outcome == DiagnosticAttemptOutcome::Running;
+    if running != (completed_at.is_none() && duration_ms.is_none() && end_revision.is_none()) {
+        return Err(rusqlite::Error::InvalidColumnType(
+            8,
+            "outcome".into(),
+            rusqlite::types::Type::Text,
+        ));
+    }
+    Ok(DiagnosticAttempt {
+        kind,
+        trigger,
+        source,
+        subject,
+        mode,
+        started_at,
+        completed_at,
+        duration_ms,
+        outcome,
+        code,
+        recovery,
+        metrics,
+        start_revision: u64::try_from(row.get::<_, i64>(12)?)
+            .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(12, -1))?,
+        end_revision,
+        parent_refresh_started_at,
+    })
+}
+
+fn valid_diagnostic_label(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 96
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b':' | b'-'))
+}
+
+fn valid_diagnostic_subject(value: &str) -> bool {
+    let identity = value
+        .strip_prefix("provider:")
+        .or_else(|| value.strip_prefix("agent:"));
+    identity.is_some_and(|identity| {
+        !identity.is_empty()
+            && value.len() <= 96
+            && identity
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+    })
+}
+
+fn invalid_diagnostic_column(index: usize, value: &str) -> rusqlite::Error {
+    rusqlite::Error::InvalidColumnType(index, value.into(), rusqlite::types::Type::Text)
+}
+
+fn diagnostic_attempt_kind_key(value: DiagnosticAttemptKind) -> &'static str {
+    match value {
+        DiagnosticAttemptKind::Refresh => "refresh",
+        DiagnosticAttemptKind::QuotaCollection => "quota_collection",
+        DiagnosticAttemptKind::UsageScan => "usage_scan",
+        DiagnosticAttemptKind::UsageUpload => "usage_upload",
+        DiagnosticAttemptKind::AccountSync => "account_sync",
+        DiagnosticAttemptKind::PricingRefresh => "pricing_refresh",
+        DiagnosticAttemptKind::DeviceHealthUpload => "device_health_upload",
+    }
+}
+
+fn parse_diagnostic_attempt_kind(value: &str) -> Result<DiagnosticAttemptKind, rusqlite::Error> {
+    match value {
+        "refresh" => Ok(DiagnosticAttemptKind::Refresh),
+        "quota_collection" => Ok(DiagnosticAttemptKind::QuotaCollection),
+        "usage_scan" => Ok(DiagnosticAttemptKind::UsageScan),
+        "usage_upload" => Ok(DiagnosticAttemptKind::UsageUpload),
+        "account_sync" => Ok(DiagnosticAttemptKind::AccountSync),
+        "pricing_refresh" => Ok(DiagnosticAttemptKind::PricingRefresh),
+        "device_health_upload" => Ok(DiagnosticAttemptKind::DeviceHealthUpload),
+        _ => Err(invalid_diagnostic_column(0, value)),
+    }
+}
+
+fn diagnostic_attempt_trigger_key(value: DiagnosticAttemptTrigger) -> &'static str {
+    match value {
+        DiagnosticAttemptTrigger::Manual => "manual",
+        DiagnosticAttemptTrigger::Scheduled => "scheduled",
+        DiagnosticAttemptTrigger::Startup => "startup",
+        DiagnosticAttemptTrigger::Recheck => "recheck",
+        DiagnosticAttemptTrigger::SettingsChange => "settings_change",
+        DiagnosticAttemptTrigger::AccountChange => "account_change",
+    }
+}
+
+fn parse_diagnostic_attempt_trigger(
+    value: &str,
+) -> Result<DiagnosticAttemptTrigger, rusqlite::Error> {
+    match value {
+        "manual" => Ok(DiagnosticAttemptTrigger::Manual),
+        "scheduled" => Ok(DiagnosticAttemptTrigger::Scheduled),
+        "startup" => Ok(DiagnosticAttemptTrigger::Startup),
+        "recheck" => Ok(DiagnosticAttemptTrigger::Recheck),
+        "settings_change" => Ok(DiagnosticAttemptTrigger::SettingsChange),
+        "account_change" => Ok(DiagnosticAttemptTrigger::AccountChange),
+        _ => Err(invalid_diagnostic_column(1, value)),
+    }
+}
+
+fn diagnostic_source_key(value: DiagnosticSource) -> &'static str {
+    match value {
+        DiagnosticSource::ThisDevice => "this_device",
+        DiagnosticSource::Account => "account",
+        DiagnosticSource::System => "system",
+    }
+}
+
+fn parse_diagnostic_source(value: &str) -> Result<DiagnosticSource, rusqlite::Error> {
+    match value {
+        "this_device" => Ok(DiagnosticSource::ThisDevice),
+        "account" => Ok(DiagnosticSource::Account),
+        "system" => Ok(DiagnosticSource::System),
+        _ => Err(invalid_diagnostic_column(2, value)),
+    }
+}
+
+fn diagnostic_mode_key(value: DiagnosticMode) -> &'static str {
+    match value {
+        DiagnosticMode::Inactive => "inactive",
+        DiagnosticMode::Opportunistic => "opportunistic",
+        DiagnosticMode::Required => "required",
+    }
+}
+
+fn parse_diagnostic_mode(value: &str) -> Result<DiagnosticMode, rusqlite::Error> {
+    match value {
+        "inactive" => Ok(DiagnosticMode::Inactive),
+        "opportunistic" => Ok(DiagnosticMode::Opportunistic),
+        "required" => Ok(DiagnosticMode::Required),
+        _ => Err(invalid_diagnostic_column(4, value)),
+    }
+}
+
+fn diagnostic_attempt_outcome_key(value: DiagnosticAttemptOutcome) -> &'static str {
+    match value {
+        DiagnosticAttemptOutcome::Running => "running",
+        DiagnosticAttemptOutcome::Success => "success",
+        DiagnosticAttemptOutcome::Partial => "partial",
+        DiagnosticAttemptOutcome::NoWork => "no_work",
+        DiagnosticAttemptOutcome::Failed => "failed",
+        DiagnosticAttemptOutcome::Interrupted => "interrupted",
+        DiagnosticAttemptOutcome::Cancelled => "cancelled",
+    }
+}
+
+fn parse_diagnostic_attempt_outcome(
+    value: &str,
+) -> Result<DiagnosticAttemptOutcome, rusqlite::Error> {
+    match value {
+        "success" => Ok(DiagnosticAttemptOutcome::Success),
+        "partial" => Ok(DiagnosticAttemptOutcome::Partial),
+        "no_work" => Ok(DiagnosticAttemptOutcome::NoWork),
+        "failed" => Ok(DiagnosticAttemptOutcome::Failed),
+        "interrupted" => Ok(DiagnosticAttemptOutcome::Interrupted),
+        "cancelled" => Ok(DiagnosticAttemptOutcome::Cancelled),
+        _ => Err(invalid_diagnostic_column(8, value)),
+    }
+}
+
+fn diagnostic_attempt_code_key(value: DiagnosticAttemptCode) -> &'static str {
+    match value {
+        DiagnosticAttemptCode::ProcessInterrupted => "process_interrupted",
+        DiagnosticAttemptCode::Cancelled => "cancelled",
+        DiagnosticAttemptCode::NoWork => "no_work",
+        DiagnosticAttemptCode::AuthenticationRequired => "authentication_required",
+        DiagnosticAttemptCode::NetworkError => "network_error",
+        DiagnosticAttemptCode::Unavailable => "unavailable",
+        DiagnosticAttemptCode::InvalidResponse => "invalid_response",
+        DiagnosticAttemptCode::InvalidState => "invalid_state",
+        DiagnosticAttemptCode::ProviderError => "provider_error",
+        DiagnosticAttemptCode::PartialSource => "partial_source",
+        DiagnosticAttemptCode::MalformedData => "malformed_data",
+        DiagnosticAttemptCode::TruncatedActiveSource => "truncated_active_source",
+        DiagnosticAttemptCode::InvalidUsageBatch => "invalid_usage_batch",
+        DiagnosticAttemptCode::UnrepresentableHour => "unrepresentable_hour",
+        DiagnosticAttemptCode::DeviceDeleted => "device_deleted",
+        DiagnosticAttemptCode::UploadDisabled => "upload_disabled",
+        DiagnosticAttemptCode::SignedOut => "signed_out",
+    }
+}
+
+fn parse_diagnostic_attempt_code(value: &str) -> Result<DiagnosticAttemptCode, rusqlite::Error> {
+    match value {
+        "process_interrupted" => Ok(DiagnosticAttemptCode::ProcessInterrupted),
+        "cancelled" => Ok(DiagnosticAttemptCode::Cancelled),
+        "no_work" => Ok(DiagnosticAttemptCode::NoWork),
+        "authentication_required" => Ok(DiagnosticAttemptCode::AuthenticationRequired),
+        "network_error" => Ok(DiagnosticAttemptCode::NetworkError),
+        "unavailable" => Ok(DiagnosticAttemptCode::Unavailable),
+        "invalid_response" => Ok(DiagnosticAttemptCode::InvalidResponse),
+        "invalid_state" => Ok(DiagnosticAttemptCode::InvalidState),
+        "provider_error" => Ok(DiagnosticAttemptCode::ProviderError),
+        "partial_source" => Ok(DiagnosticAttemptCode::PartialSource),
+        "malformed_data" => Ok(DiagnosticAttemptCode::MalformedData),
+        "truncated_active_source" => Ok(DiagnosticAttemptCode::TruncatedActiveSource),
+        "invalid_usage_batch" => Ok(DiagnosticAttemptCode::InvalidUsageBatch),
+        "unrepresentable_hour" => Ok(DiagnosticAttemptCode::UnrepresentableHour),
+        "device_deleted" => Ok(DiagnosticAttemptCode::DeviceDeleted),
+        "upload_disabled" => Ok(DiagnosticAttemptCode::UploadDisabled),
+        "signed_out" => Ok(DiagnosticAttemptCode::SignedOut),
+        _ => Err(invalid_diagnostic_column(9, value)),
+    }
+}
+
+fn diagnostic_recovery_key(value: DiagnosticRecovery) -> &'static str {
+    match value {
+        DiagnosticRecovery::None => "none",
+        DiagnosticRecovery::Automatic => "automatic",
+        DiagnosticRecovery::Login => "login",
+        DiagnosticRecovery::ConfigureProvider => "configure_provider",
+        DiagnosticRecovery::Retry => "retry",
+        DiagnosticRecovery::UpdateSource => "update_source",
+        DiagnosticRecovery::CheckAccess => "check_access",
+        DiagnosticRecovery::Upgrade => "upgrade",
+        DiagnosticRecovery::Reinstall => "reinstall",
+        DiagnosticRecovery::Feedback => "feedback",
+    }
+}
+
+fn parse_diagnostic_recovery(value: &str) -> Result<DiagnosticRecovery, rusqlite::Error> {
+    match value {
+        "none" => Ok(DiagnosticRecovery::None),
+        "automatic" => Ok(DiagnosticRecovery::Automatic),
+        "login" => Ok(DiagnosticRecovery::Login),
+        "configure_provider" => Ok(DiagnosticRecovery::ConfigureProvider),
+        "retry" => Ok(DiagnosticRecovery::Retry),
+        "update_source" => Ok(DiagnosticRecovery::UpdateSource),
+        "check_access" => Ok(DiagnosticRecovery::CheckAccess),
+        "upgrade" => Ok(DiagnosticRecovery::Upgrade),
+        "reinstall" => Ok(DiagnosticRecovery::Reinstall),
+        "feedback" => Ok(DiagnosticRecovery::Feedback),
+        _ => Err(invalid_diagnostic_column(10, value)),
+    }
+}
+
 fn set_owner_permissions(path: &Path) -> Result<(), StateError> {
     #[cfg(unix)]
     {
@@ -2602,6 +3401,238 @@ mod tests {
         let value = now_rfc3339();
         assert!(value.ends_with('Z'));
         assert_eq!(value.len(), 20);
+    }
+
+    #[test]
+    fn diagnostic_attempts_recover_running_and_keep_canonical_success_facts() {
+        let root = std::env::temp_dir().join(format!("quota-attempts-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let store = StateStore::open(&root).expect("state");
+        assert!(
+            store
+                .begin_diagnostic_attempt(
+                    DiagnosticAttemptKind::UsageScan,
+                    DiagnosticAttemptTrigger::Scheduled,
+                    DiagnosticSource::ThisDevice,
+                    Some("agent:/Users/private"),
+                    DiagnosticMode::Required,
+                    None,
+                )
+                .is_err()
+        );
+        let account = store
+            .begin_diagnostic_attempt(
+                DiagnosticAttemptKind::AccountSync,
+                DiagnosticAttemptTrigger::Startup,
+                DiagnosticSource::Account,
+                None,
+                DiagnosticMode::Required,
+                None,
+            )
+            .expect("account attempt");
+        store
+            .finish_diagnostic_attempt(
+                account,
+                &DiagnosticAttemptCompletion {
+                    outcome: DiagnosticAttemptOutcome::Success,
+                    code: None,
+                    recovery: DiagnosticRecovery::None,
+                    metrics: BTreeMap::new(),
+                },
+            )
+            .expect("account success");
+        for _ in 0..21 {
+            let refresh = store
+                .begin_diagnostic_attempt(
+                    DiagnosticAttemptKind::Refresh,
+                    DiagnosticAttemptTrigger::Scheduled,
+                    DiagnosticSource::System,
+                    None,
+                    DiagnosticMode::Required,
+                    None,
+                )
+                .expect("refresh");
+            store
+                .finish_diagnostic_attempt(
+                    refresh,
+                    &DiagnosticAttemptCompletion {
+                        outcome: DiagnosticAttemptOutcome::Success,
+                        code: None,
+                        recovery: DiagnosticRecovery::None,
+                        metrics: BTreeMap::new(),
+                    },
+                )
+                .expect("refresh success");
+        }
+        let facts = store
+            .diagnostic_attempt_facts(
+                DiagnosticAttemptKind::AccountSync,
+                DiagnosticSource::Account,
+                None,
+            )
+            .expect("facts");
+        assert_eq!(
+            facts.latest_success.as_ref().map(|value| value.kind),
+            Some(DiagnosticAttemptKind::AccountSync)
+        );
+        assert!(
+            !store
+                .diagnostic_recent_activity()
+                .expect("support projection")
+                .attempts
+                .iter()
+                .any(|attempt| attempt.kind == DiagnosticAttemptKind::AccountSync)
+        );
+
+        store
+            .begin_diagnostic_attempt(
+                DiagnosticAttemptKind::Refresh,
+                DiagnosticAttemptTrigger::Manual,
+                DiagnosticSource::System,
+                None,
+                DiagnosticMode::Required,
+                None,
+            )
+            .expect("running attempt");
+        drop(store);
+
+        let reopened = StateStore::open(&root).expect("reopen");
+        let recent = reopened
+            .diagnostic_recent_activity()
+            .expect("recovered activity");
+        assert!(recent.attempts.iter().any(|attempt| {
+            attempt.kind == DiagnosticAttemptKind::Refresh
+                && attempt.outcome == DiagnosticAttemptOutcome::Interrupted
+                && attempt.code == Some(DiagnosticAttemptCode::ProcessInterrupted)
+        }));
+        assert!(
+            reopened
+                .running_refresh_attempt()
+                .expect("running")
+                .is_none()
+        );
+        let conn = reopened.db.lock().expect("database");
+        conn.execute("PRAGMA ignore_check_constraints = ON", [])
+            .expect("test corruption mode");
+        conn.execute(
+            "INSERT INTO diagnostic_attempts(
+                   kind, trigger, source, subject, mode, started_at, completed_at, duration_ms,
+                   outcome, code, recovery, metrics_json, start_revision, end_revision
+                 ) VALUES ('usage_scan','scheduled','this_device','agent:/Users/private',
+                   'required',?1,?1,0,'failed','malformed_data','update_source','{}',0,0)",
+            [now_rfc3339()],
+        )
+        .expect("corrupt unsafe subject");
+        conn.execute("PRAGMA ignore_check_constraints = OFF", [])
+            .expect("restore constraints");
+        drop(conn);
+        assert!(reopened.diagnostic_recent_activity().is_err());
+        drop(reopened);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn diagnostic_retention_keeps_running_marks_truncation_and_detaches_children() {
+        let root = std::env::temp_dir().join(format!("quota-attempt-cap-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let store = StateStore::open(&root).expect("state");
+        let old = (chrono::Utc::now() - Duration::days(DIAGNOSTIC_ATTEMPT_RETENTION_DAYS + 1))
+            .to_rfc3339_opts(SecondsFormat::Secs, true);
+        let current = now_rfc3339();
+        let child_id;
+        {
+            let conn = store.db.lock().expect("database");
+            conn.execute(
+                "INSERT INTO diagnostic_attempts(
+                   kind, trigger, source, subject, mode, started_at, completed_at, duration_ms,
+                   outcome, code, recovery, metrics_json, start_revision, end_revision
+                 ) VALUES ('refresh','scheduled','system',NULL,'required',?1,?1,0,
+                   'success',NULL,'none','{}',0,0)",
+                [&old],
+            )
+            .expect("old parent");
+            let parent_id = conn.last_insert_rowid();
+            conn.execute(
+                "INSERT INTO diagnostic_attempts(
+                   kind, trigger, source, subject, mode, started_at, completed_at, duration_ms,
+                   outcome, code, recovery, metrics_json, start_revision, end_revision
+                 ) VALUES ('refresh','manual','system',NULL,'required',?1,NULL,NULL,
+                   NULL,NULL,'none','{}',0,NULL)",
+                [&old],
+            )
+            .expect("old running");
+            conn.execute(
+                "WITH RECURSIVE counter(value) AS (
+                   VALUES(1) UNION ALL SELECT value + 1 FROM counter WHERE value < 50001
+                 )
+                 INSERT INTO diagnostic_attempts(
+                   kind, trigger, source, subject, mode, started_at, completed_at, duration_ms,
+                   outcome, code, recovery, metrics_json, start_revision, end_revision
+                 ) SELECT 'quota_collection','scheduled','this_device','provider:codex',
+                   'opportunistic',?1,?1,0,'success',NULL,'none','{}',0,0 FROM counter",
+                [&current],
+            )
+            .expect("bounded history seed");
+            conn.execute(
+                "INSERT INTO diagnostic_attempts(
+                   parent_refresh_id, kind, trigger, source, subject, mode, started_at,
+                   completed_at, duration_ms, outcome, code, recovery, metrics_json,
+                   start_revision, end_revision
+                 ) VALUES (?1,'pricing_refresh','scheduled','system',NULL,'required',?2,?2,0,
+                   'success',NULL,'none','{}',0,0)",
+                params![parent_id, current],
+            )
+            .expect("current child");
+            child_id = conn.last_insert_rowid();
+        }
+
+        store
+            .begin_diagnostic_attempt(
+                DiagnosticAttemptKind::Refresh,
+                DiagnosticAttemptTrigger::Scheduled,
+                DiagnosticSource::System,
+                None,
+                DiagnosticMode::Required,
+                None,
+            )
+            .expect("trigger prune");
+        let conn = store.db.lock().expect("database");
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM diagnostic_attempts WHERE outcome IS NOT NULL",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("completed count"),
+            MAX_DIAGNOSTIC_ATTEMPTS
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM diagnostic_attempts WHERE outcome IS NULL",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("running count"),
+            2
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT parent_refresh_id FROM diagnostic_attempts WHERE id = ?1",
+                [child_id],
+                |row| row.get::<_, Option<i64>>(0),
+            )
+            .expect("detached child"),
+            None
+        );
+        drop(conn);
+        assert!(
+            store
+                .diagnostic_recent_activity()
+                .expect("recent")
+                .history_truncated
+        );
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
     }
 
     #[test]

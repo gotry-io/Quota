@@ -294,10 +294,25 @@ fn run_doctor(options: OutputOptions, output: &mut dyn CliOutput) -> i32 {
 }
 
 fn render_diagnostics_text(report: &Value, output: &mut dyn CliOutput) {
+    let summary = report.get("summary").and_then(Value::as_object);
     output.stdout(&format!(
         "Diagnostics: {}",
-        report
-            .get("status")
+        summary
+            .and_then(|value| value.get("operation"))
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+    ));
+    output.stdout(&format!(
+        "Data: {}",
+        summary
+            .and_then(|value| value.get("data"))
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+    ));
+    output.stdout(&format!(
+        "Attention: {}",
+        summary
+            .and_then(|value| value.get("attention"))
             .and_then(Value::as_str)
             .unwrap_or("unknown")
     ));
@@ -306,6 +321,17 @@ fn render_diagnostics_text(report: &Value, output: &mut dyn CliOutput) {
     }
     if let Some(generated_at) = report.get("generated_at").and_then(Value::as_str) {
         output.stdout(&format!("Generated at: {generated_at}"));
+    }
+    if let Some(refresh) = report.get("refresh").and_then(Value::as_object) {
+        let phase = refresh
+            .get("phase")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        let as_of = refresh
+            .get("as_of")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        output.stdout(&format!("Refresh: {phase} (as of {as_of})"));
     }
     if let Some(client) = report.get("client").and_then(Value::as_object) {
         let name = client
@@ -318,61 +344,188 @@ fn render_diagnostics_text(report: &Value, output: &mut dyn CliOutput) {
             .unwrap_or("unknown");
         output.stdout(&format!("Client: {name} {version}"));
     }
-    output.stdout("Components:");
-    render_diagnostic_components(report.get("components"), output);
-    if let Some(issues) = report.get("issues").and_then(Value::as_array) {
-        if issues.is_empty() {
-            output.stdout("Issues: none");
+    output.stdout("Surfaces:");
+    render_diagnostic_surfaces(report.get("surfaces"), output);
+    output.stdout("Checks:");
+    render_diagnostic_checks(report.get("checks"), output);
+    if let Some(findings) = report.get("findings").and_then(Value::as_array) {
+        if findings.is_empty() {
+            output.stdout("Findings: none");
         } else {
-            output.stdout("Issues:");
-            for issue in issues {
-                let component = issue
+            output.stdout("Findings:");
+            for finding in findings {
+                let component = finding
                     .get("component")
                     .and_then(Value::as_str)
                     .unwrap_or("unknown");
-                let code = issue
+                let subject = finding
+                    .get("subject")
+                    .and_then(Value::as_str)
+                    .map(|value| format!("/{value}"))
+                    .unwrap_or_default();
+                let code = finding
                     .get("code")
                     .and_then(Value::as_str)
                     .unwrap_or("unknown");
-                let severity = issue
+                let severity = finding
                     .get("severity")
                     .and_then(Value::as_str)
                     .unwrap_or("unknown");
-                let count = issue.get("count").and_then(Value::as_u64);
-                let message = issue.get("message").and_then(Value::as_str).unwrap_or("");
+                let count = finding.get("count").and_then(Value::as_u64);
+                let message = finding.get("message").and_then(Value::as_str).unwrap_or("");
+                let recovery = finding
+                    .get("recovery")
+                    .and_then(Value::as_str)
+                    .unwrap_or("none");
+                let source = finding
+                    .get("source")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown");
+                let impact = finding
+                    .get("impact")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown");
+                let observed_at = finding
+                    .get("observed_at")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown");
                 let suffix = count.map(|count| format!(" ({count})")).unwrap_or_default();
                 output.stdout(&format!(
-                    "  [{severity}] {component}/{code}{suffix}\t{message}"
+                    "  [{severity}] {component}{subject}/{code}{suffix}\t{message}\tsource={source}\timpact={impact}\tobserved_at={observed_at}\trecovery={recovery}"
                 ));
             }
         }
     }
+    render_diagnostic_activity(report.get("recent_activity"), output);
 }
 
-fn render_diagnostic_components(value: Option<&Value>, output: &mut dyn CliOutput) {
-    let Some(Value::Array(components)) = value else {
-        output.stdout("  unavailable");
+fn render_diagnostic_activity(value: Option<&Value>, output: &mut dyn CliOutput) {
+    let Some(activity) = value.and_then(Value::as_object) else {
+        output.stdout("Recent activity: unavailable");
         return;
     };
-    for component in components {
-        let name = component
-            .get("name")
-            .and_then(Value::as_str)
-            .unwrap_or("unknown");
-        render_diagnostic_component(name, component, output);
+    let Some(attempts) = activity.get("attempts").and_then(Value::as_array) else {
+        output.stdout("Recent activity: unavailable");
+        return;
+    };
+    if attempts.is_empty() {
+        output.stdout("Recent activity: none");
+    } else {
+        output.stdout("Recent activity:");
+        for attempt in attempts {
+            let kind = attempt
+                .get("kind")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            let subject = attempt
+                .get("subject")
+                .and_then(Value::as_str)
+                .map(|value| format!("/{value}"))
+                .unwrap_or_default();
+            let outcome = attempt
+                .get("outcome")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            let trigger = attempt
+                .get("trigger")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            let source = attempt
+                .get("source")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            let started_at = attempt
+                .get("started_at")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            let code = attempt
+                .get("code")
+                .and_then(Value::as_str)
+                .map(|value| format!("\tcode={value}"))
+                .unwrap_or_default();
+            output.stdout(&format!(
+                "  {kind}{subject}\t{outcome}\ttrigger={trigger}\tsource={source}\tstarted_at={started_at}{code}"
+            ));
+        }
+    }
+    if activity.get("history_truncated").and_then(Value::as_bool) == Some(true) {
+        output.stdout("  Older activity was removed by bounded retention.");
     }
 }
 
-fn render_diagnostic_component(name: &str, component: &Value, output: &mut dyn CliOutput) {
-    let status = component
-        .get("status")
-        .and_then(Value::as_str)
-        .unwrap_or("unknown");
-    let message = component
-        .get("message")
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    let mut metrics = component
+fn render_diagnostic_surfaces(value: Option<&Value>, output: &mut dyn CliOutput) {
+    let Some(Value::Array(surfaces)) = value else {
+        output.stdout("  unavailable");
+        return;
+    };
+    for surface in surfaces {
+        let name = surface
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        let operation = surface
+            .get("operation")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        let data = surface
+            .get("data")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        let source = surface
+            .get("source")
+            .and_then(Value::as_str)
+            .map(|value| format!("\tsource={value}"))
+            .unwrap_or_default();
+        output.stdout(&format!(
+            "  {name}\t{operation}\tdata={data}{source}{}",
+            diagnostic_metrics_suffix(surface)
+        ));
+    }
+}
+
+fn render_diagnostic_checks(value: Option<&Value>, output: &mut dyn CliOutput) {
+    let Some(Value::Array(checks)) = value else {
+        output.stdout("  unavailable");
+        return;
+    };
+    if checks.is_empty() {
+        output.stdout("  none");
+    }
+    for check in checks {
+        let name = check
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        let subject = check
+            .get("subject")
+            .and_then(Value::as_str)
+            .map(|value| format!("/{value}"))
+            .unwrap_or_default();
+        let source = check
+            .get("source")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        let mode = check
+            .get("mode")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        let operation = check
+            .get("operation")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        let data = check
+            .get("data")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        output.stdout(&format!(
+            "  {name}{subject}\t{source}\t{mode}\t{operation}\tdata={data}{}",
+            diagnostic_metrics_suffix(check)
+        ));
+    }
+}
+
+fn diagnostic_metrics_suffix(value: &Value) -> String {
+    let metrics = value
         .get("metrics")
         .and_then(Value::as_object)
         .map(|metrics| {
@@ -388,22 +541,32 @@ fn render_diagnostic_component(name: &str, component: &Value, output: &mut dyn C
                 .join(",")
         })
         .unwrap_or_default();
-    if !metrics.is_empty() {
-        metrics.insert(0, '\t');
+    if metrics.is_empty() {
+        String::new()
+    } else {
+        format!("\t{metrics}")
     }
-    output.stdout(&format!(
-        "  {name}\t{status}{message_suffix}{metrics}",
-        message_suffix = if message.is_empty() {
-            String::new()
-        } else {
-            format!("\t{message}")
-        }
-    ));
 }
 
 fn diagnostics_exit_code(report: &Value) -> i32 {
-    let status = report.get("status").and_then(Value::as_str);
-    if status == Some("healthy") { 0 } else { 1 }
+    let summary = report.get("summary");
+    let operation = summary
+        .and_then(|value| value.get("operation"))
+        .and_then(Value::as_str);
+    let data = summary
+        .and_then(|value| value.get("data"))
+        .and_then(Value::as_str);
+    let attention = summary
+        .and_then(|value| value.get("attention"))
+        .and_then(Value::as_str);
+    if operation == Some("healthy")
+        && !matches!(data, Some("partial" | "stale" | "unknown"))
+        && attention != Some("required")
+    {
+        0
+    } else {
+        1
+    }
 }
 
 fn run_login(options: OutputOptions, output: &mut dyn CliOutput, cancel: &AtomicBool) -> i32 {
@@ -934,35 +1097,52 @@ mod tests {
     }
 
     #[test]
-    fn diagnostics_render_all_components_and_fail_when_degraded() {
+    fn diagnostics_render_v2_surfaces_checks_and_findings() {
         let report = json!({
-            "schema_version": 1,
-            "status": "degraded",
+            "schema_version": 2,
+            "summary": {"operation":"healthy","data":"partial","attention":"required"},
+            "refresh": {"phase":"idle","revision":7,"as_of":"2026-08-11T00:00:00Z"},
             "generated_at": "2026-08-11T00:00:00Z",
             "client": {"name": "QuotaCLI", "version": "0.0.7"},
-            "components": [
-                {"name": "providers", "status": "ready", "message": null, "metrics": {}},
-                {"name": "quota", "status": "ready", "message": null, "metrics": {}},
-                {"name": "usage", "status": "degraded", "message": "55 records skipped", "metrics": {"records": 55}},
-                {"name": "pricing", "status": "ready", "message": null, "metrics": {}},
-                {"name": "account", "status": "ready", "message": null, "metrics": {}},
-                {"name": "sync", "status": "ready", "message": null, "metrics": {}}
-            ],
-            "issues": [{
-                "component": "usage",
-                "code": "invalid_record",
+            "surfaces": [{"name":"usage_this_device","operation":"healthy","data":"partial","source":"this_device","metrics":{"records":55}}],
+            "checks": [{"name":"usage_scan","subject":"agent:cursor","source":"this_device","mode":"required","operation":"healthy","data":"partial","metrics":{"valid_records":55}}],
+            "findings": [{
+                "component": "usage_scan",
+                "subject": "agent:cursor",
+                "source": "this_device",
+                "code": "malformed_json",
                 "severity": "warning",
+                "impact": "surface",
+                "recovery": "update_source",
                 "count": 55,
+                "observed_at": "2026-08-11T00:00:00Z",
                 "message": "Invalid records were isolated."
-            }]
+            }],
+            "recent_activity": {
+                "attempts": [{
+                    "kind": "usage_scan",
+                    "subject": "agent:cursor",
+                    "outcome": "partial",
+                    "trigger": "scheduled",
+                    "source": "this_device",
+                    "started_at": "2026-08-11T00:00:00Z",
+                    "code": "malformed_data"
+                }],
+                "history_truncated": true
+            }
         });
         let mut output = BufferOutput::default();
         render_diagnostics_text(&report, &mut output);
         assert_eq!(diagnostics_exit_code(&report), 1);
         let text = output.stdout.join("\n");
-        assert!(text.contains("usage\tdegraded\t55 records skipped"));
+        assert!(text.contains("usage_this_device\thealthy\tdata=partial"));
         assert!(text.contains("records=55"));
-        assert!(text.contains("usage/invalid_record (55)"));
+        assert!(text.contains("usage_scan/agent:cursor/malformed_json (55)"));
+        assert!(text.contains("source=this_device"));
+        assert!(text.contains("impact=surface"));
+        assert!(text.contains("observed_at=2026-08-11T00:00:00Z"));
+        assert!(text.contains("usage_scan/agent:cursor\tpartial\ttrigger=scheduled"));
+        assert!(text.contains("Older activity was removed"));
         assert!(!text.contains("/Users/"));
         assert!(!text.contains("token"));
     }
@@ -970,9 +1150,11 @@ mod tests {
     #[test]
     fn healthy_diagnostics_are_successful_and_json_is_pretty_when_requested() {
         let report = json!({
-            "schema_version": 1,
-            "status": "healthy",
-            "components": []
+            "schema_version": 2,
+            "summary": {"operation":"healthy","data":"empty","attention":"none"},
+            "surfaces": [],
+            "checks": [],
+            "findings": []
         });
         let mut output = BufferOutput::default();
         assert_eq!(diagnostics_exit_code(&report), 0);

@@ -4,6 +4,37 @@ import Testing
 
 struct DecodingTests {
   @Test
+  func deviceHealthOptInRequiresNullableKeyAndStrictBoundedPayload() throws {
+    let data = try Fixtures.accountSummaryJSON(
+      devices: [Fixtures.accountDevice(health: Fixtures.deviceHealth())]
+    )
+    let summary = try WireCodec.decode(AccountSummary.self, from: data)
+    #expect(summary.devices.first?.health?.refreshRevision == 42)
+    #expect(summary.devices.first?.health?.clientVersion == "0.0.16")
+
+    let nullHealth = try Fixtures.accountSummaryJSON(devices: [Fixtures.accountDevice()])
+    #expect(try WireCodec.decode(AccountSummary.self, from: nullHealth).devices.first?.health == nil)
+
+    var missing = Fixtures.accountDevice()
+    missing.removeValue(forKey: "health")
+    #expect(throws: DecodingError.self) {
+      _ = try WireCodec.decode(
+        AccountSummary.self,
+        from: Fixtures.accountSummaryJSON(devices: [missing])
+      )
+    }
+
+    var unsafe = Fixtures.deviceHealth()
+    unsafe["client_version"] = "0.0.16 /Users/private"
+    #expect(throws: DecodingError.self) {
+      _ = try WireCodec.decode(
+        AccountSummary.self,
+        from: Fixtures.accountSummaryJSON(devices: [Fixtures.accountDevice(health: unsafe)])
+      )
+    }
+  }
+
+  @Test
   func decodesAccountSummaryAndRejectsUnknownFields() throws {
     let data = try Fixtures.accountSummaryJSON(quota: [Fixtures.quotaObservation()])
     let summary = try WireCodec.decode(AccountSummary.self, from: data)

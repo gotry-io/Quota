@@ -122,6 +122,7 @@ public struct RelayClient: Sendable {
         ("usage_agents", "all"),
         ("usage_clients", "1"),
         ("model_catalog", "1"),
+        ("device_health", "1"),
       ],
       body: nil,
       bearer: accessToken,

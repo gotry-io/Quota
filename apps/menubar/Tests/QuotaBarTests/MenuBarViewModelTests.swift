@@ -287,15 +287,28 @@ private struct StubLocalService: LocalServiceServing {
   func state() async throws -> LocalServiceState { stateValue }
 
   func diagnose() async throws -> LocalServiceDiagnosticReport {
-    LocalServiceDiagnosticReport(
-      schemaVersion: 1,
-      status: .healthy,
-      generatedAt: Date(timeIntervalSince1970: 0),
+    let date = Date()
+    return LocalServiceDiagnosticReport(
+      schemaVersion: 2,
+      summary: LocalServiceDiagnosticSummary(
+        operation: .healthy, data: .empty, attention: .none),
+      refresh: LocalServiceDiagnosticRefresh(
+        phase: .idle, asOf: date, startedAt: nil, nextDueAt: nil),
+      generatedAt: date,
       client: LocalServiceDiagnosticClient(name: "test", version: "1"),
-      components: ["providers", "quota", "usage", "pricing", "account", "sync"].map {
-        LocalServiceDiagnosticComponent(name: $0, status: .ready, message: nil, metrics: [:])
-      },
-      issues: []
+      surfaces: [
+        LocalServiceDiagnosticSurface(
+          name: "quota_overview", operation: .healthy, data: .empty, source: nil, metrics: [:]),
+        LocalServiceDiagnosticSurface(
+          name: "usage_this_device", operation: .healthy, data: .empty,
+          source: .thisDevice, metrics: [:]),
+        LocalServiceDiagnosticSurface(
+          name: "usage_account", operation: .healthy, data: .empty, source: .account, metrics: [:]),
+        LocalServiceDiagnosticSurface(
+          name: "account", operation: .healthy, data: .empty, source: .account, metrics: [:]),
+      ],
+      checks: [],
+      findings: []
     )
   }
   func refresh() async throws -> LocalServiceRefreshResult {

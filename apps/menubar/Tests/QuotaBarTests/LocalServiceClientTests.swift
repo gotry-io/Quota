@@ -6,7 +6,7 @@ import Testing
 @Suite(.serialized)
 struct LocalServiceClientTests {
   @Test(.enabled(if: ProcessInfo.processInfo.environment["QUOTA_LIVE_HELPER"] != nil))
-  func decodesInstalledServiceStateWhenRequested() async throws {
+  func decodesInstalledServiceStateBeforeAndAfterRefresh() async throws {
     guard
       let path = ProcessInfo.processInfo.environment["QUOTA_LIVE_HELPER"],
       !path.isEmpty
@@ -17,6 +17,22 @@ struct LocalServiceClientTests {
     defer { Task { await client.shutdown() } }
 
     _ = try await client.state()
+    let refresh = try await client.refresh()
+    #expect(refresh.accepted || refresh.pending)
+
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: .seconds(15))
+    while clock.now < deadline {
+      let state = try await client.state()
+      if state.revision > refresh.revision,
+        !state.quota.refreshing,
+        state.quota.value != nil
+      {
+        return
+      }
+      try await Task.sleep(for: .milliseconds(20))
+    }
+    Issue.record("The installed service did not complete a quota refresh")
   }
 
   @Test
@@ -103,17 +119,21 @@ struct LocalServiceClientTests {
 
         request = json.loads(sys.stdin.readline())
         if request["operation"] == "diagnose":
-            components = [
-                {"name": name, "status": "ready", "message": None, "metrics": {}}
-                for name in ["providers", "quota", "usage", "pricing", "account", "sync"]
-            ]
             result = {
-                "schema_version": 1,
-                "status": "healthy",
+                "schema_version": 2,
+                "summary": {"operation": "healthy", "data": "empty", "attention": "none"},
+                "refresh": {"phase": "idle", "revision": 7, "as_of": "2026-08-11T00:00:00Z", "started_at": None, "next_due_at": None},
                 "generated_at": "2026-08-11T00:00:00Z",
                 "client": {"name": "QuotaBar", "version": "0.0.7"},
-                "components": components,
-                "issues": [],
+                "surfaces": [
+                    {"name": "quota_overview", "operation": "healthy", "data": "empty", "source": None, "metrics": {}},
+                    {"name": "usage_this_device", "operation": "healthy", "data": "empty", "source": "this_device", "metrics": {}},
+                    {"name": "usage_account", "operation": "healthy", "data": "empty", "source": "account", "metrics": {}},
+                    {"name": "account", "operation": "healthy", "data": "empty", "source": "account", "metrics": {}},
+                ],
+                "checks": [],
+                "findings": [],
+                "recent_activity": {"attempts": [], "history_truncated": False},
             }
         else:
             result = {}
@@ -127,8 +147,8 @@ struct LocalServiceClientTests {
     defer { service.remove() }
     let client = try LocalServiceClient(executableURL: service.executableURL)
     let report = try await client.diagnose()
-    #expect(report.status == .healthy)
-    #expect(report.components.count == 6)
+    #expect(report.summary.operation == .healthy)
+    #expect(report.surfaces.count == 4)
     await client.shutdown()
   }
 

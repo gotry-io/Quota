@@ -151,7 +151,26 @@ enum VisualFixture: String, CaseIterable, Sendable {
             createdAt: date.addingTimeInterval(-30 * 86_400),
             lastLoginAt: date.addingTimeInterval(-5 * 86_400),
             lastSeenAt: date.addingTimeInterval(-45),
-            signedOutAt: nil
+            signedOutAt: nil,
+            health: AccountDeviceHealth(
+              clientProduct: .quotaBar,
+              clientVersion: "0.0.16",
+              platform: .macos,
+              observedAt: date.addingTimeInterval(-45),
+              refreshRevision: 42,
+              lastCompletedRefreshAt: date.addingTimeInterval(-60),
+              lastSuccessfulAccountSyncAt: date.addingTimeInterval(-65),
+              summary: AccountDeviceHealthSummary(
+                operation: .healthy,
+                data: .current,
+                attention: .none
+              ),
+              topCode: nil,
+              consecutiveFailures: 0,
+              usageUploadEnabled: true,
+              receivedAt: date.addingTimeInterval(-40),
+              freshUntil: date.addingTimeInterval(20 * 60)
+            )
           )
         ],
         quota: observations,

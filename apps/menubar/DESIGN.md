@@ -89,10 +89,12 @@ The header shows:
 - Child page: Back and page title. Usage may place its Account/This Mac source menu at the trailing
   edge because the choice changes the whole page. Diagnostics places icon-only **Recheck**
   (`arrow.clockwise`) then **Copy** (`doc.on.doc`) actions there only after a report exists; initial
-  loading and full-page failure leave the header action area empty. Recheck runs only the private
-  `diagnose` check (not a full quota/Usage refresh); while checking, its icon becomes a small spinner
-  and the action is disabled. Copy writes the human-readable text report, shows a `checkmark` for
-  about two seconds after success, and remains available while an existing report is rechecked.
+  loading and full-page failure leave the header action area empty. Recheck starts or joins the real
+  private-service refresh and waits for a newer completed diagnostic revision; while checking, its
+  icon becomes a small spinner and the action is disabled. If the bounded UI wait ends first, show
+  that refresh is still running and keep the prior completed snapshot. Copy writes the human-readable
+  text report, shows a `checkmark` for about two seconds after success, and remains available while an
+  existing report is rechecked.
 - Settings root: Back, **Settings**, and an overflow menu containing **Quit QuotaBar**.
 
 The footer is a single quiet button showing the sync-completion clock as locale-shortened time only
@@ -180,18 +182,27 @@ totals while signed in with Usage sync enabled, and local totals otherwise. Gene
 native mini **Launch at Login** and **Sync Usage** switches followed by the **Support** destination.
 Support contains Diagnostics, Feedback, Website, version, and **Check for Updates**. That row
 opens Sparkle's standard updater. Sparkle also checks on a daily schedule after launch. Diagnostics
-remains backed by the private `diagnose` operation and shows one bounded status for Providers, Quota,
-Usage, Pricing, Account, and Sync. Issues appear before Components in error, warning, then info order
-and explain both the problem and the next recovery step using the report's recovery guidance.
-Components show only concise user-facing summaries; their trailing state is a semantic icon (accent
-check, orange warning, or red blocked mark), never a raw state word or metric key. The report age is
-a fixed locale-shortened check time (`Checked 3:40 PM`), not relative age. Recheck and Copy live only
-in the page header; opening Diagnostics resets and runs a fresh check so re-entry never silently
-shows a previous report. That initial check uses a centered page Loading state. Its failure uses a
-centered Error state with **Retry** as the only recovery action and no header actions. A later
-Recheck preserves the last good report; failure adds a fixed inline warning above the report's
-scrolling content instead of replacing the page, keeps Copy available, and enables Recheck again.
-The Usage source control is not repeated in Settings.
+remains backed by the private `diagnose` operation and shows the report's independent operation, data,
+and attention result. **Findings** appear before **Data** in error, warning, then info order and explain
+the root problem and next recovery step. **Data** contains Quota Overview, This Mac Usage, Account
+Usage, and Account only; each row shows a concise user-facing summary and semantic icon (accent check,
+orange warning, or red blocked mark), never a raw state word or metric key. Provider and agent source
+checks remain in copied diagnostics rather than becoming another settings list. The report time is a
+fixed locale-shortened completed-refresh time (`Checked 3:40 PM`), not relative age. A running refresh
+adds **Refresh still running · showing the last completed check**. Recheck and Copy live only in the
+page header; opening Diagnostics resets and requests a real refresh so re-entry never silently shows a
+previous report. That initial check uses a centered page Loading state. Its failure uses a centered
+Error state with **Retry** as the only recovery action and no header actions. A later Recheck preserves
+the last completed report; failure adds a fixed inline warning above the report's scrolling content
+instead of replacing the page, keeps Copy available, and enables Recheck again. The Usage source
+control is not repeated in Settings. **Show in Overview** remains presentation-only and has no
+diagnostic or local-collection meaning.
+
+**Recent Activity** follows Data as a disclosure group. It renders the service-owned bounded attempt
+projection with kind, trigger, source/subject, running/completed time, duration, typed outcome/code,
+recovery, and bounded metrics. `running`, `interrupted`, `partial`, and normal `no_work` remain
+visually distinct. A truncated-history note is informational. Copy includes the same attempts in
+human-readable text and strict JSON; Swift does not reinterpret them.
 
 Page navigation animates an immutable presentation snapshot. Async work and model updates continue
 during the transition, while the shared page host coalesces presentation changes and publishes only
@@ -202,12 +213,16 @@ published page state. Reduce Motion skips the transition and publishes updates i
 
 ### Devices
 
-Devices is read-only in QuotaBar. Show account device display name, platform, Active/Offline/Signed
-out state, and compact last-seen age. Never display raw device ids. Empty and signed-out states point
-back to the Account action in Settings using the shared centered Empty state. An unavailable account
-with no device content uses the centered Error state and Retry; a refresh warning with cached device
-content uses an inline notice. Device deletion and account administration live on the web account
-surface.
+Devices is read-only in QuotaBar. Show account device display name, platform, app product/version,
+and compact last report/refresh/sync age. A server-fresh report is **Healthy** only when operation is
+healthy, data is current or empty, and attention is none or automatic. Other fresh problem states are
+**Needs attention** or **Check device** and say **Review Diagnostics on this device**. An expired or
+absent report is **Not recently active** or **Unknown**, never a claim that a sleeping or closed app
+is broken. Signed-out remains explicit. Never display raw Device IDs or request a provider login for
+another Device. Empty and signed-out states point back to the Account action in Settings using the
+shared centered Empty state. An unavailable account with no device content uses the centered Error
+state and Retry; a refresh warning with cached device content uses an inline notice. Device deletion
+and account administration live on the Web account surface.
 
 ### Usage
 
@@ -334,8 +349,8 @@ share tokens and accessibility semantics but do not own tasks or form a generic 
 - Every icon-only button has an accessibility label and Help tooltip.
 - Diagnostics Recheck and Copy header icons announce their actions; Copy uses **Copy diagnostics**
   and **Diagnostics copied**. The status line VoiceOver label includes the fixed check time.
-  Component status icons use distinct shapes and announce Working, Needs attention, or Unavailable;
-  issue rows announce severity and recovery instructions without exposing wire codes.
+  Data status icons use distinct shapes and announce Working, Needs attention, or Unavailable;
+  finding rows announce severity and recovery instructions without exposing wire codes.
 - Rows combine or replace child accessibility deliberately; never announce raw opaque identifiers.
 - Disclosure rows announce their destination and current summary.
 - Login exposes a real Cancel action while the service's browser flow runs.

@@ -9,6 +9,29 @@ private enum AccountDevicesPageState: Equatable {
   case content(summary: AccountSummary, refreshWarning: String?)
 }
 
+enum AccountDeviceHealthPresentation: String, Equatable, Sendable {
+  case healthy = "Healthy"
+  case needsAttention = "Needs attention"
+  case checkDevice = "Check device"
+  case notRecentlyActive = "Not recently active"
+  case unknown = "Unknown"
+  case signedOut = "Signed out"
+
+  static func status(for device: AccountDevice, now: Date) -> Self {
+    if device.status == .signedOut { return .signedOut }
+    guard let health = device.health else { return .unknown }
+    guard now <= health.freshUntil else { return .notRecentlyActive }
+    guard health.summary.operation == .healthy,
+      health.summary.data == .current || health.summary.data == .empty
+    else { return .needsAttention }
+    switch health.summary.attention {
+    case .none, .automatic: return .healthy
+    case .optional: return .checkDevice
+    case .required: return .needsAttention
+    }
+  }
+}
+
 struct AccountDevicesView: View {
   @Bindable var model: MenuBarViewModel
 
@@ -58,7 +81,8 @@ struct AccountDevicesView: View {
   }
 
   private func loadedDevices(_ summary: AccountSummary, refreshWarning: String?) -> some View {
-    ScrollView {
+    let now = Date()
+    return ScrollView {
       VStack(alignment: .leading, spacing: QuotaDesign.Spacing.md) {
         if let refreshWarning {
           QuotaInlineNotice(message: refreshWarning)
@@ -74,16 +98,18 @@ struct AccountDevicesView: View {
               ForEach(summary.devices) { device in
                 SettingsListRow(
                   title: device.displayName,
-                  subtitle: deviceSubtitle(device),
+                  subtitle: deviceSubtitle(device, now: now),
                   systemImage: device.platform == .macos ? "desktopcomputer" : "terminal",
                   height: QuotaDesign.Layout.settingsListRowHeight
                 ) {
-                  Text(statusLabel(device.status))
+                  Text(statusLabel(device, now: now))
                     .quotaListSecondaryStyle()
                 }
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(device.displayName)
-                .accessibilityValue("\(statusLabel(device.status)). \(deviceSubtitle(device))")
+                .accessibilityValue(
+                  "\(statusLabel(device, now: now)). \(deviceSubtitle(device, now: now))"
+                )
               }
             }
           }
@@ -101,24 +127,41 @@ struct AccountDevicesView: View {
       : "Sign in from Settings to view account devices."
   }
 
-  private func deviceSubtitle(_ device: AccountDevice) -> String {
+  private func deviceSubtitle(_ device: AccountDevice, now: Date) -> String {
     let platform =
       switch device.platform {
       case .macos: "macOS"
       case .linux: "Linux"
       case .windows: "Windows"
       }
-    guard let activity = device.lastSeenAt ?? device.signedOutAt else { return platform }
-    return "\(platform) · Seen \(CompactAgeFormat.string(since: activity, now: Date())) ago"
+    var parts = [platform]
+    if let health = device.health {
+      let product = health.clientProduct == .quotaBar ? "QuotaBar" : "QuotaCLI"
+      parts.append("\(product) \(health.clientVersion)")
+      parts.append("Report \(CompactAgeFormat.string(since: health.receivedAt, now: now)) ago")
+      if let refresh = health.lastCompletedRefreshAt {
+        parts.append("Refresh \(CompactAgeFormat.string(since: refresh, now: now)) ago")
+      }
+      if let sync = health.lastSuccessfulAccountSyncAt {
+        parts.append("Sync \(CompactAgeFormat.string(since: sync, now: now)) ago")
+      }
+    } else if let activity = device.lastSeenAt ?? device.signedOutAt {
+      parts.append("Last seen \(CompactAgeFormat.string(since: activity, now: now)) ago")
+    }
+    if matchesAttention(AccountDeviceHealthPresentation.status(for: device, now: now)) {
+      parts.append("Review Diagnostics on this device")
+    }
+    return parts.joined(separator: " · ")
   }
 
-  private func statusLabel(_ status: AccountDeviceStatus) -> String {
-    switch status {
-    case .active: "Active"
-    case .offline: "Offline"
-    case .signedOut: "Signed out"
-    }
+  private func matchesAttention(_ status: AccountDeviceHealthPresentation) -> Bool {
+    status == .needsAttention || status == .checkDevice
   }
+
+  private func statusLabel(_ device: AccountDevice, now: Date) -> String {
+    AccountDeviceHealthPresentation.status(for: device, now: now).rawValue
+  }
+
 }
 
 struct AccountUsageView: View {

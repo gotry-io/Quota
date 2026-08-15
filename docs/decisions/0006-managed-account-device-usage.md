@@ -47,6 +47,13 @@ The installation ID is random user-level state. Relay stores only an account-sco
 the same installation restores the same Device within one Account without becoming a cross-account
 identifier. Snapshot and Usage upload sequences are independent and server-authoritative.
 
+An authenticated collection Device may also replace only its own bounded Device Health snapshot.
+The device token and generation determine the row; a request cannot select another Device. Relay
+uses server receipt time for freshness, retains only the latest monotonic report, and deletes it with
+the Device or Account. Account readers may display that snapshot but cannot write one. The data
+minimization, freshness, and support-report rules are defined by
+[ADR 0015](0015-diagnostic-attempts-and-device-health.md).
+
 The local service converts supported Codex, Claude Code, Grok, OpenCode, Pi, and Cursor records into
 privacy-preserving hourly facts. Uploads contain no prompt, completion, path, session ID,
 conversation ID, raw event, or provider credential. Only a complete UTC-hour scan may replace a
@@ -81,6 +88,8 @@ SQLite adapter, Relay discovery document, arbitrary Relay URL, anonymous owner, 
 - Local collection and cached display continue while signed out or offline; remote sync does not.
 - Local collection and display also continue while Usage upload is disabled; quota/account sync stays
   independent and remote Usage history is not implicitly deleted.
+- Account surfaces can distinguish recent Device Health from an inactive Device without treating
+  sleep, shutdown, or a closed app as a collection failure.
 - The service can aggregate quota and Usage without receiving the underlying work or provider
   credentials.
 - Earlier D1 and protocol cutovers applied only to unreleased data and interfaces. The bounded

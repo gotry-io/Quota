@@ -41,9 +41,10 @@ collection Device and never receives upload authority.
   registered for that public client. Logout and `/oauth/v2/revoke` remain the revocation path and
   recognize `qiar_`. These native account sessions cannot call Web-only management or destructive
   routes and cannot write snapshots or Usage.
-- Account data reads use the current managed-data v3 routes, including
-  `GET /api/v3/account/summary`. OAuth, refresh, and revoke remain on released v2. The client does
-  not call released v2 data routes or change those shipped contracts.
+- Account data reads use the current managed-data v3 routes, including the explicit
+  `GET /api/v3/account/summary?device_health=1` shape defined by
+  [ADR 0015](0015-diagnostic-attempts-and-device-health.md). OAuth, refresh, and revoke remain on
+  released v2. The client does not call released v2 data routes or change those shipped contracts.
 - `quotacli` loopback PKCE and device-code behavior stay the released collection-client contract.
   This change is additive. It is not a compatibility shim and does not dual-write Device rows.
 
@@ -54,7 +55,7 @@ not add collection, upload, or Device capabilities.
 
 - Account summaries list only collection Devices. A `quota-ios` login never adds a Device.
 - A `quota-ios` credential can read Account quota and Usage and can revoke its own session. It
-  cannot write snapshots, Usage, or Device control state.
+  cannot write snapshots, Usage, Device Health, or Device control state.
 - Collection clients continue to use `client_id=quotacli` and the existing token response.
 - Quota iOS and `packages/apple-client` consume the account session as a read-only client. They do
   not gain collection or upload capabilities by shipping.

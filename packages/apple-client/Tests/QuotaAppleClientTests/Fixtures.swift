@@ -134,6 +134,40 @@ enum Fixtures {
     ]
   }
 
+  static func accountDevice(health: Any = NSNull()) -> [String: Any] {
+    [
+      "device_id": "device_01",
+      "display_name": "Studio Mac",
+      "platform": "macos",
+      "device_generation": 1,
+      "status": "active",
+      "created_at": "2026-08-01T00:00:00Z",
+      "last_login_at": "2026-08-14T15:00:00Z",
+      "last_seen_at": "2026-08-14T15:00:05Z",
+      "signed_out_at": NSNull(),
+      "health": health,
+    ]
+  }
+
+  static func deviceHealth() -> [String: Any] {
+    [
+      "schema_version": 1,
+      "client_product": "quotabar",
+      "client_version": "0.0.16",
+      "platform": "macos",
+      "observed_at": "2026-08-14T15:00:00Z",
+      "refresh_revision": 42,
+      "last_completed_refresh_at": "2026-08-14T15:00:00Z",
+      "last_successful_account_sync_at": "2026-08-14T14:59:00Z",
+      "summary": ["operation": "healthy", "data": "current", "attention": "none"],
+      "top_code": NSNull(),
+      "consecutive_failures": 0,
+      "usage_upload_enabled": true,
+      "received_at": "2026-08-14T15:00:05Z",
+      "fresh_until": "2026-08-14T15:20:05Z",
+    ]
+  }
+
   static func tokenResponse(
     access: String = accessToken,
     refresh: String = refreshToken,

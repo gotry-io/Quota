@@ -59,6 +59,9 @@ data requirements. Architecture and product behavior are defined in
   [ADR 0007](decisions/0007-rust-native-local-service.md). The shared
   `providers.json`/`ProviderConfigLock` path and OAuth `client_id=quotacli` remain current collection
   interfaces. The registered `quota-ios` public client is a separate read-only Account interface.
+- SQLite migration v8 stores only the typed diagnostic attempt fields and bounded metrics defined by
+  [ADR 0015](decisions/0015-diagnostic-attempts-and-device-health.md). Completed rows are retained for
+  seven days and capped at 50,000; running rows are recovered or finalized rather than pruned.
 - QuotaBar's private service and Linux `quotacli` use the same owner-only configuration and state
   boundary. The Linux command is a foreground native binary; it is built and tested only and has no
   separate published credential or storage format.
@@ -153,6 +156,11 @@ data requirements. Architecture and product behavior are defined in
 - The device profile endpoint accepts only the current Device's authenticated token and generation.
   It can update only that Device's bounded display name and platform; it cannot select a Device ID,
   read Account data, or change authorization state.
+- The Device Health endpoint derives identity from that same authenticated Device principal. The
+  request has no Device ID, must match current generation/platform, and may replace only the latest
+  row at an equal or greater monotonic refresh revision. Server receipt time, not the device clock,
+  determines freshness. Lower delayed revisions cannot refresh old data. The read-only iOS Account
+  token can read opted-in health but cannot write it.
 - The service returns authoritative independent `next_snapshot_sequence` and
   `next_usage_sequence`. Clients never guess or reset a lost sequence to zero. A conflict fails
   closed because it can indicate a cloned local configuration.
@@ -163,6 +171,9 @@ data requirements. Architecture and product behavior are defined in
   outbox work remains local and resumes after re-enabling. Cached Account Usage is omitted from the
   private state response so the native Usage surface remains local-only. The preference does not delete facts that Relay
   already retained; Device or Account deletion remains the explicit removal boundary.
+- Device Health may still upload the disabled preference and generic three-axis device summary, but
+  it must omit Usage attempts, agent subjects, metrics, and local Usage detail from its signal and
+  top-level code selection.
 - Only a complete collector scan may create authoritative replacement coverage. Permission errors,
   unreadable/changed sources, record limits, malformed or unknown usage records, truncated tails,
   cancellation, or parser uncertainty make coverage partial. Partial coverage never deletes or
@@ -217,14 +228,21 @@ data requirements. Architecture and product behavior are defined in
 - Error output and logs use allowlisted codes and fixed recovery text. Never include raw HTTP bodies,
   subprocess stderr, JWTs, authorization codes, user/device secrets, installation IDs, raw GitHub
   subjects, full email addresses, or local source paths.
-- The service owns one bounded diagnostic report for providers/quota, Usage, pricing, account, and
-  synchronization. QuotaBar's Settings action and Linux `quotacli doctor` consume that same report;
-  they never inspect local state or source logs themselves. The report may contain stable component
-  statuses, bounded counters, safe recovery codes, and age/range summaries, but never paths,
-  filenames, model lists, prompts, completions, session/conversation IDs, device IDs, credentials,
-  tokens, raw provider responses, or parser excerpts. JSON and copied text are equally redacted.
-  The complete-data and partial-merge rules are canonical in
-  [ADR 0008](decisions/0008-data-integrity-and-diagnostics.md).
+- The service owns one bounded diagnostic v2 report for Quota/Usage surfaces and their source checks.
+  QuotaBar's Settings action and Linux `quotacli doctor` consume that same report; they never inspect
+  local state or source logs or derive policy themselves. The report may contain fixed statuses,
+  bounded counters, timestamps, impact/recovery codes, and catalog-owned `provider:<id>` or
+  `agent:<id>` subjects. It must distinguish only `this_device`, `account`, and `system`; account or
+  device display names and IDs never become diagnostic identity. Paths, filenames, model names/lists,
+  prompts, completions, session/conversation/installation/device IDs, credentials, tokens, raw
+  provider responses, and parser excerpts are forbidden. JSON and copied text are equally redacted.
+  A single replaceable SQLite snapshot retains only the last completed report; current refresh phase
+  metadata may be overlaid, but intermediate component values must never be serialized. Its Recent
+  Activity is assembled from the typed local journal, not logs, and is independently bounded. The
+  complete-data, partial-merge, and evaluation rules are canonical in
+  [ADR 0008](decisions/0008-data-integrity-and-diagnostics.md); attempt retention, Support Report,
+  and Device Health minimization are canonical in
+  [ADR 0015](decisions/0015-diagnostic-attempts-and-device-health.md).
 - Account/device display values and provider labels are untrusted presentation data: bound, mask
   where required, render as text rather than HTML, and exclude from security logs.
 - Model diagnostics may expose only bounded resolved/unresolved/ambiguous counts and catalog-revision
@@ -242,9 +260,11 @@ data requirements. Architecture and product behavior are defined in
   rate-limit subjects only as keyed hashes where equality is required. Better Auth session values
   are encrypted at rest. Persist plaintext native tokens only in the one successful issuance
   response, never in D1.
-- Retained business data is limited to Account/Device lifecycle metadata, normalized quota
-  observations, sparse hourly Usage facts, complete coverage, idempotency receipts, and bounded rate
-  limits. Calculated cost is derived from the canonical catalog; it is not persisted as an invoice.
+- Retained business data is limited to Account/Device lifecycle metadata, each Device's latest
+  bounded health snapshot, normalized quota observations, sparse hourly Usage facts, complete
+  coverage, idempotency receipts, and bounded rate limits. Device/Account deletion cascades health;
+  Relay retains no health history. Calculated cost is derived from the canonical catalog; it is not
+  persisted as an invoice.
 - Rate limits use fixed-window counters keyed by hashes of action and subject. Managed anonymous
   network subjects may use only Cloudflare's trusted connecting-IP metadata. Readiness probes and
   the hourly Worker schedule delete at most 100 expired rows from each credential table per run.

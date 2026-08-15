@@ -1,4 +1,5 @@
 import AppKit
+import QuotaPresentation
 import SwiftUI
 
 /// Pure labels and feedback timing for Diagnostics header actions.
@@ -18,138 +19,91 @@ enum DiagnosticsHeaderAction {
 
 /// Turns the bounded wire report into concise, user-facing Diagnostics copy.
 enum DiagnosticsPresentation {
-  struct ComponentSummary: Equatable {
+  struct SurfaceSummary: Equatable {
     let title: String
     let detail: String
   }
 
-  struct IssueSummary: Equatable {
+  struct FindingSummary: Equatable {
     let title: String
     let solution: String
   }
 
-  static func componentSummary(
-    _ component: LocalServiceDiagnosticComponent
-  ) -> ComponentSummary {
-    let metrics = component.metrics
-    switch component.name {
-    case "providers":
-      let configured = metrics["configured", default: 0]
-      let discovered = metrics["discovered", default: 0]
-      let detail = if configured == 0, discovered == 0 {
-        "No providers available"
-      } else if configured > 0, discovered > 0 {
-        "\(count(discovered, singular: "provider")) available · \(count(configured, singular: "setup")) saved"
-      } else if discovered > 0 {
-        "\(count(discovered, singular: "provider")) available"
-      } else {
-        "\(count(configured, singular: "provider setup")) saved"
-      }
-      return ComponentSummary(title: "Providers", detail: detail)
-
-    case "quota":
-      let results = metrics["results", default: 0]
-      let success = metrics["success", default: 0]
-      let detail = if results == 0 {
-        "No provider checks yet"
-      } else if results == success {
-        "All \(count(results, singular: "provider check")) passed"
-      } else {
-        "\(success.formatted()) of \(count(results, singular: "provider check")) passed"
-      }
-      return ComponentSummary(title: "Quota", detail: detail)
-
-    case "usage":
+  static func surfaceSummary(_ surface: LocalServiceDiagnosticSurface) -> SurfaceSummary {
+    let metrics = surface.metrics
+    switch surface.name {
+    case "quota_overview":
+      let items = metrics["items", default: 0]
+      let local = metrics["this_device_sources", default: 0]
+      let account = metrics["account_sources", default: 0]
+      let detail = items == 0
+        ? "No quota data yet"
+        : "\(count(items, singular: "quota")) · \(local.formatted()) this Mac · \(account.formatted()) Account"
+      return SurfaceSummary(title: "Quota Overview", detail: detail)
+    case "usage_this_device":
       let records = metrics["records", default: 0]
-      let files = metrics["files", default: 0]
-      let detail = if records == 0 {
-        "No Usage records yet"
-      } else if files > 0 {
-        "\(count(records, singular: "record")) from \(count(files, singular: "file"))"
-      } else {
-        count(records, singular: "Usage record")
-      }
-      return ComponentSummary(title: "Usage", detail: detail)
-
-    case "pricing":
-      let entries = metrics["entries", default: 0]
-      let isPresent = metrics["catalog_present", default: 0] == 1
-      let isValid = metrics["catalog_valid", default: 0] == 1
-      let detail = if entries > 0 {
-        "\(count(entries, singular: "model price")) available"
-      } else if isPresent, isValid {
-        "Pricing data is available"
-      } else if isPresent {
-        "Pricing data needs attention"
-      } else {
-        "No pricing data yet"
-      }
-      return ComponentSummary(title: "Pricing", detail: detail)
-
+      let partial = metrics["partial_hours", default: 0]
+      let detail = records == 0
+        ? "No local Usage records yet"
+        : "\(count(records, singular: "record"))\(partial > 0 ? " · \(count(partial, singular: "partial hour"))" : "")"
+      return SurfaceSummary(title: "This Mac Usage", detail: detail)
+    case "usage_account":
+      let enabled = metrics["enabled", default: 0] == 1
+      let periods = metrics["periods", default: 0]
+      return SurfaceSummary(
+        title: "Account Usage",
+        detail: enabled ? (periods > 0 ? "\(count(periods, singular: "period")) available" : "No Account Usage yet") : "Usage sync is off"
+      )
     case "account":
       let signedIn = metrics["signed_in", default: 0] == 1
-      let logoutPending = metrics["session_logout_pending", default: 0] == 1
       let devices = metrics["devices", default: 0]
-      let detail = if logoutPending {
-        "Sign-out is waiting to finish"
-      } else if signedIn, devices > 0 {
+      let detail = if signedIn, devices > 0 {
         "Signed in · \(count(devices, singular: "device"))"
       } else if signedIn {
         "Signed in"
       } else {
         "Not signed in"
       }
-      return ComponentSummary(title: "Account", detail: detail)
-
-    case "sync":
-      let isEnabled = metrics["usage_upload_enabled", default: 0] == 1
-      let pending = metrics["uploadable_dirty_ranges", default: 0]
-        + metrics["outbox", default: 0]
-      let failed = metrics["last_upload_failed", default: 0]
-        + metrics["last_upload_degraded", default: 0]
-        + metrics["last_upload_blocked", default: 0]
-      let lastSucceeded = metrics["last_upload_success", default: 0] == 1
-      let detail = if !isEnabled {
-        "Usage sync is off"
-      } else if pending > 0 {
-        "\(count(pending, singular: "upload")) pending"
-      } else if failed > 0 {
-        "Last sync did not finish"
-      } else if lastSucceeded {
-        "Up to date"
-      } else {
-        "Waiting for the first sync"
-      }
-      return ComponentSummary(title: "Sync", detail: detail)
-
+      return SurfaceSummary(title: "Account", detail: detail)
     default:
-      return ComponentSummary(title: component.name.capitalized, detail: "See Issues for details")
+      return SurfaceSummary(title: surface.name.capitalized, detail: dataLabel(surface.data))
     }
   }
 
-  static func issueSummary(
-    _ issue: LocalServiceDiagnosticIssue,
-    component: LocalServiceDiagnosticComponent?
-  ) -> IssueSummary {
-    let hasCachedAccountData = hasCachedAccountData(issue: issue, component: component)
-    return IssueSummary(
-      title: issueTitle(issue, hasCachedAccountData: hasCachedAccountData),
-      solution: recoverySolution(issue, hasCachedAccountData: hasCachedAccountData)
+  static func findingSummary(_ finding: LocalServiceDiagnosticFinding) -> FindingSummary {
+    let subject = finding.subject?.split(separator: ":", maxSplits: 1).last.map(String.init)
+    let label = subject.map { " (\($0.replacingOccurrences(of: "_", with: " ").capitalized))" } ?? ""
+    let title: String = switch finding.code {
+    case "auth_required", "authentication_required": "Sign-in needed\(label)"
+    case "config_unreadable": "Provider settings can’t be read"
+    case "permission_denied": "Usage access was denied\(label)"
+    case "source_unreadable": "Usage source can’t be read\(label)"
+    case "truncated_tail", "source_changed", "scan_cancelled": "Usage source is still changing\(label)"
+    case "malformed_json", "unknown_record", "invalid_timestamp", "invalid_model", "invalid_usage": "Some Usage records are invalid\(label)"
+    case "invalid_catalog": "Pricing data is invalid"
+    case "client_upgrade_required": "QuotaBar needs an update"
+    case "invalid_state": "Local state needs repair"
+    case "unrepresentable_hour", "invalid_usage_batch", "sync_failed": "Usage upload failed"
+    default: "\(componentTitle(finding.component)) needs attention\(label)"
+    }
+    return FindingSummary(
+      title: title,
+      solution: recoverySolution(finding.recovery, source: finding.source)
     )
   }
 
-  static func issueAccessibilityLabel(
-    _ issue: LocalServiceDiagnosticIssue,
-    summary: IssueSummary
+  static func findingAccessibilityLabel(
+    _ finding: LocalServiceDiagnosticFinding,
+    summary: FindingSummary
   ) -> String {
-    "\(severityLabel(issue.severity)): \(summary.title), \(issue.count) occurrence"
-      + "\(issue.count == 1 ? "" : "s"). \(summary.solution)"
+    "\(severityLabel(finding.severity)): \(summary.title), \(finding.count) occurrence"
+      + "\(finding.count == 1 ? "" : "s"). \(summary.solution)"
   }
 
-  static func prioritizedIssues(
-    _ issues: [LocalServiceDiagnosticIssue]
-  ) -> [LocalServiceDiagnosticIssue] {
-    issues.enumerated().sorted { left, right in
+  static func prioritizedFindings(
+    _ findings: [LocalServiceDiagnosticFinding]
+  ) -> [LocalServiceDiagnosticFinding] {
+    findings.enumerated().sorted { left, right in
       let leftPriority = severityPriority(left.element.severity)
       let rightPriority = severityPriority(right.element.severity)
       return leftPriority == rightPriority
@@ -160,134 +114,50 @@ enum DiagnosticsPresentation {
 
   static func componentTitle(_ name: String) -> String {
     switch name {
-    case "providers": "Providers"
-    case "quota": "Quota"
-    case "usage": "Usage"
-    case "pricing": "Pricing"
+    case "quota_collection": "Quota collection"
+    case "usage_scan": "Usage scan"
+    case "usage_upload": "Usage upload"
+    case "pricing_catalog": "Pricing"
+    case "provider_configuration": "Provider settings"
     case "account": "Account"
-    case "sync": "Sync"
     default: name.capitalized
     }
   }
 
-  static func statusLabel(_ status: LocalServiceDiagnosticComponentStatus) -> String {
-    switch status {
-    case .ready: "Working"
+  static func operationLabel(_ operation: LocalServiceDiagnosticOperation) -> String {
+    switch operation {
+    case .healthy: "Working"
     case .degraded: "Needs attention"
     case .blocked: "Unavailable"
     }
   }
 
-  private static func issueTitle(
-    _ issue: LocalServiceDiagnosticIssue,
-    hasCachedAccountData: Bool
-  ) -> String {
-    let component = componentTitle(issue.component)
-    return switch issue.code {
-    case "network_error":
-      issue.component == "account"
-        ? (hasCachedAccountData ? "Account data couldn’t be updated" : "Account is unavailable")
-        : "\(component) update failed"
-    case "authentication_required", "auth_required": "\(component) needs sign-in"
-    case "device_deleted": "This device was removed"
-    case "stale_generation": "The account session expired"
-    case "config_unreadable": "Provider settings can’t be read"
-    case "not_configured": "No providers configured"
-    case "client_upgrade_required": "QuotaBar needs an update"
-    case "unsupported_operation": "\(component) operation isn’t supported"
-    case "pending_upload": "Usage is waiting to sync"
-    case "state_unavailable": "\(component) data can’t be read"
-    case "invalid_catalog": "Pricing data is invalid"
-    case "invalid_model_catalog": "Model data is invalid"
-    case "unavailable": "\(component) is unavailable"
-    case "provider_error": "A provider check failed"
-    case "invalid_response": "\(component) returned invalid data"
-    case "scan_blocked": "Usage scan couldn’t finish"
-    case "scan_partial", "partial_sources": "Some Usage data is incomplete"
-    case "permission_denied": "Usage data access was denied"
-    case "source_unreadable": "Usage data can’t be read"
-    case "source_changed": "Usage data changed during the scan"
-    case "scan_cancelled": "Usage scan was interrupted"
-    case "discovery_limit": "Too many Usage files were found"
-    case "record_limit": "A Usage file is too large"
-    case "line_too_large": "A Usage record is too large"
-    case "truncated_tail": "A Usage file is incomplete"
-    case "malformed_json", "unknown_record", "invalid_timestamp", "invalid_model", "invalid_usage":
-      "Some Usage records couldn’t be read"
-    case "unrepresentable_hour", "invalid_usage_batch", "sync_failed": "Usage couldn’t sync"
-    case "busy": "\(component) is busy"
-    case "cancelled": "\(component) check was cancelled"
-    default: "\(component) needs attention"
+  static func dataLabel(_ data: LocalServiceDiagnosticDataState) -> String {
+    switch data {
+    case .current: "Current data"
+    case .stale: "Saved data is stale"
+    case .partial: "Some data is incomplete"
+    case .empty: "No data yet"
+    case .unknown: "Data has not been checked"
     }
   }
 
   private static func recoverySolution(
-    _ issue: LocalServiceDiagnosticIssue,
-    hasCachedAccountData: Bool
+    _ recovery: LocalServiceDiagnosticRecovery,
+    source: LocalServiceDiagnosticSource
   ) -> String {
-    let recovery = switch issue.message {
-    case "recovery_retry": Recovery.retry
-    case "recovery_login": Recovery.login
-    case "recovery_configure_provider": Recovery.configureProvider
-    case "recovery_upgrade": Recovery.upgrade
-    case "recovery_reinstall": Recovery.reinstall
-    case "recovery_none": Recovery.feedback
-    default: recovery(for: issue.code)
-    }
-
     switch recovery {
-    case .retry:
-      if issue.code == "network_error", issue.component == "account" {
-        let availability = hasCachedAccountData
-          ? "Your saved account data is still available. "
-          : "Account data is currently unavailable. "
-        return availability
-          + "Refresh QuotaBar using the control at the bottom, then recheck in a moment. If this "
-          + "keeps happening, copy the report and send Feedback."
-      }
-      return "Refresh QuotaBar using the control at the bottom, then recheck. If this continues, "
-        + "copy the report and send Feedback."
-    case .login:
-      if issue.component == "quota" || issue.component == "providers" {
-        return "Open Agents in Settings, sign in to the affected provider, then recheck."
-      }
-      return "Open Account in Settings, sign in again, then recheck."
-    case .configureProvider:
-      return "Open Agents in Settings, check the provider sign-in or API key, then recheck."
-    case .upgrade:
-      return "Open Support in Settings, check for updates, then recheck."
-    case .reinstall:
-      return "Reinstall QuotaBar, then recheck."
-    case .feedback:
-      return "Copy the report, then send Feedback from Support."
-    case .dataAccess:
-      return "Check that QuotaBar can access your agent’s Usage data, then refresh and recheck. "
-        + "If this continues, copy the report and send Feedback."
-    case .updateUsageSource:
-      return "Update the app or CLI that produced this Usage data, refresh QuotaBar, then recheck. "
-        + "If this continues, copy the report and send Feedback."
-    }
-  }
-
-  private static func recovery(for code: String) -> Recovery {
-    switch code {
-    case "authentication_required", "auth_required", "device_deleted", "stale_generation":
-      .login
-    case "config_unreadable":
-      .configureProvider
-    case "client_upgrade_required":
-      .upgrade
-    case "permission_denied", "source_unreadable":
-      .dataAccess
-    case "discovery_limit", "record_limit", "line_too_large", "truncated_tail",
-      "malformed_json", "unknown_record", "invalid_timestamp", "invalid_model", "invalid_usage":
-      .updateUsageSource
-    case "network_error", "unavailable", "provider_error", "busy", "cancelled",
-      "pending_upload", "scan_blocked", "scan_partial", "partial_sources", "source_changed",
-      "scan_cancelled":
-      .retry
-    default:
-      .feedback
+    case .none: "No action is needed."
+    case .automatic: "QuotaBar will retry this during the next refresh."
+    case .retry: "Recheck in a moment. If this continues, copy the report and send Feedback."
+    case .login where source == .account: "Reconnect Account in Settings, then recheck."
+    case .login: "Sign in only if you want this Mac to collect this source; Account data remains usable."
+    case .configureProvider: "Open Agents and repair the saved provider setup, then recheck."
+    case .updateSource: "Update the app or CLI that produced this Usage data, then recheck."
+    case .checkAccess: "Check that QuotaBar can access this agent’s Usage data, then recheck."
+    case .upgrade: "Open Support, check for updates, then recheck."
+    case .reinstall: "Reinstall QuotaBar to repair local state, then recheck."
+    case .feedback: "Copy the report, then send Feedback from Support."
     }
   }
 
@@ -311,28 +181,6 @@ enum DiagnosticsPresentation {
     }
   }
 
-  private static func hasCachedAccountData(
-    issue: LocalServiceDiagnosticIssue,
-    component: LocalServiceDiagnosticComponent?
-  ) -> Bool {
-    guard issue.component == "account", issue.severity == .warning,
-          let component, component.name == "account", component.status == .degraded
-    else { return false }
-    return component.metrics["signed_in", default: 0] == 1
-      || component.metrics["devices", default: 0] > 0
-      || component.metrics["observations", default: 0] > 0
-  }
-
-  private enum Recovery {
-    case retry
-    case login
-    case configureProvider
-    case upgrade
-    case reinstall
-    case feedback
-    case dataAccess
-    case updateUsageSource
-  }
 }
 
 /// Owns Diagnostics page state so MenuBarContentView can drive header actions.
@@ -430,6 +278,7 @@ final class DiagnosticsPageModel {
 struct SettingsDiagnosticsView: View {
   let state: DiagnosticsPageState
   let onRetry: () -> Void
+  @State private var recentActivityExpanded = false
 
   var body: some View {
     QuotaNavigationStableContent(state: state) { presentedState in
@@ -459,8 +308,9 @@ struct SettingsDiagnosticsView: View {
         ScrollView {
           VStack(alignment: .leading, spacing: QuotaDesign.Spacing.md) {
             statusView(report)
-            issuesView(report)
-            componentsView(report)
+            findingsView(report)
+            surfacesView(report)
+            recentActivityView(report)
           }
           .frame(maxWidth: .infinity, alignment: .topLeading)
           .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
@@ -470,40 +320,81 @@ struct SettingsDiagnosticsView: View {
     }
   }
 
+  private func recentActivityView(_ report: LocalServiceDiagnosticReport) -> some View {
+    SettingsSection(title: "Support") {
+      DisclosureGroup(isExpanded: $recentActivityExpanded) {
+        VStack(alignment: .leading, spacing: 0) {
+          if report.recentActivity.attempts.isEmpty {
+            Text("No recent activity")
+              .quotaListSecondaryStyle()
+              .padding(QuotaDesign.Spacing.sm)
+          } else {
+            ForEach(Array(report.recentActivity.attempts.suffix(20).reversed().enumerated()), id: \.offset) { _, attempt in
+              SettingsListRow(
+                title: attempt.kind.rawValue.replacingOccurrences(of: "_", with: " ").capitalized,
+                subtitle: "\(attempt.trigger.rawValue.replacingOccurrences(of: "_", with: " ")) · \(CompactAgeFormat.string(since: attempt.startedAt, now: Date())) ago",
+                systemImage: attempt.outcome == .running ? "arrow.triangle.2.circlepath" : "clock.arrow.circlepath"
+              ) {
+                Text(attempt.outcome.rawValue.replacingOccurrences(of: "_", with: " ").capitalized)
+                  .quotaListSecondaryStyle()
+              }
+              .accessibilityElement(children: .combine)
+            }
+          }
+          if report.recentActivity.historyTruncated {
+            Text("Older activity was trimmed by the bounded support history.")
+              .quotaMetaStyle()
+              .padding(QuotaDesign.Spacing.sm)
+          }
+        }
+      } label: {
+        Text("Recent Activity")
+          .quotaSettingsLabelStyle()
+      }
+      .padding(.horizontal, QuotaDesign.Layout.groupContentInset)
+      .padding(.vertical, QuotaDesign.Spacing.sm)
+      .accessibilityHint("Shows structured local operations included in copied diagnostics.")
+    }
+  }
+
   private func statusView(_ report: LocalServiceDiagnosticReport) -> some View {
-    let checked = LastCheckedLabel.checkedStatusString(from: report.generatedAt)
-    let presentation = reportStatusPresentation(report.status)
+    let checked = LastCheckedLabel.checkedStatusString(from: report.refresh.asOf)
+    let presentation = reportStatusPresentation(report.summary)
     return HStack(spacing: QuotaDesign.Spacing.sm) {
       Image(systemName: presentation.symbol)
-        .foregroundStyle(statusColor(presentation.tone))
+        .foregroundStyle(operationColor(presentation.tone))
       VStack(alignment: .leading, spacing: QuotaDesign.Spacing.xxs) {
         Text(presentation.label)
           .quotaFont(.rowTitle)
         Text(checked)
           .quotaMetaStyle()
+        if report.refresh.phase == .running {
+          Text("Refresh still running · showing the last completed check")
+            .quotaMetaStyle()
+        }
       }
     }
     .accessibilityElement(children: .combine)
     .accessibilityLabel("Diagnostics status: \(presentation.label). \(checked)")
   }
 
-  private func componentsView(_ report: LocalServiceDiagnosticReport) -> some View {
-    SettingsSection(title: "Components") {
+  private func surfacesView(_ report: LocalServiceDiagnosticReport) -> some View {
+    SettingsSection(title: "Data") {
       VStack(alignment: .leading, spacing: 0) {
-        ForEach(report.components, id: \.name) { component in
-          let summary = DiagnosticsPresentation.componentSummary(component)
+        ForEach(report.surfaces, id: \.name) { surface in
+          let summary = DiagnosticsPresentation.surfaceSummary(surface)
           SettingsListRow(
             title: summary.title,
             subtitle: summary.detail,
-            systemImage: symbol(for: component.name)
+            systemImage: symbol(for: surface.name)
           ) {
-            Image(systemName: statusSymbol(component.status))
+            Image(systemName: operationSymbol(surface.operation, data: surface.data))
               .quotaFont(.secondary)
-              .foregroundStyle(statusColor(component.status))
+              .foregroundStyle(operationColor(surface.operation, data: surface.data))
           }
           .accessibilityElement(children: .combine)
           .accessibilityLabel(
-            "\(summary.title), \(DiagnosticsPresentation.statusLabel(component.status)). \(summary.detail)"
+            "\(summary.title), \(DiagnosticsPresentation.operationLabel(surface.operation)), \(DiagnosticsPresentation.dataLabel(surface.data)). \(summary.detail)"
           )
         }
       }
@@ -511,18 +402,17 @@ struct SettingsDiagnosticsView: View {
   }
 
   @ViewBuilder
-  private func issuesView(_ report: LocalServiceDiagnosticReport) -> some View {
-    if !report.issues.isEmpty {
-      SettingsSection(title: "Issues") {
-        let issues = DiagnosticsPresentation.prioritizedIssues(report.issues)
+  private func findingsView(_ report: LocalServiceDiagnosticReport) -> some View {
+    if !report.findings.isEmpty {
+      SettingsSection(title: "Findings") {
+        let findings = DiagnosticsPresentation.prioritizedFindings(report.findings)
         VStack(alignment: .leading, spacing: 0) {
-          ForEach(Array(issues.enumerated()), id: \.offset) { _, issue in
-            let component = report.components.first { $0.name == issue.component }
-            let summary = DiagnosticsPresentation.issueSummary(issue, component: component)
+          ForEach(Array(findings.enumerated()), id: \.offset) { _, finding in
+            let summary = DiagnosticsPresentation.findingSummary(finding)
             HStack(alignment: .top, spacing: QuotaDesign.Spacing.sm) {
-              Image(systemName: issueSymbol(issue.severity))
+              Image(systemName: findingSymbol(finding.severity))
                 .quotaFont(.secondary)
-                .foregroundStyle(issueColor(issue.severity))
+                .foregroundStyle(findingColor(finding.severity))
                 .frame(
                   width: QuotaDesign.Layout.settingsIconColumnWidth,
                   height: QuotaDesign.Layout.settingsIconColumnWidth
@@ -534,8 +424,8 @@ struct SettingsDiagnosticsView: View {
                     .quotaSettingsLabelStyle()
                     .fixedSize(horizontal: false, vertical: true)
                   Spacer(minLength: QuotaDesign.Spacing.xs)
-                  if issue.count > 1 {
-                    Text("×\(issue.count.formatted())")
+                  if finding.count > 1 {
+                    Text("×\(finding.count.formatted())")
                       .quotaMonoListValueStyle()
                   }
                 }
@@ -548,7 +438,7 @@ struct SettingsDiagnosticsView: View {
             .padding(.vertical, QuotaDesign.Spacing.sm)
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityElement(children: .combine)
-            .accessibilityLabel(DiagnosticsPresentation.issueAccessibilityLabel(issue, summary: summary))
+            .accessibilityLabel(DiagnosticsPresentation.findingAccessibilityLabel(finding, summary: summary))
           }
         }
       }
@@ -557,33 +447,39 @@ struct SettingsDiagnosticsView: View {
 
   private func symbol(for name: String) -> String {
     switch name {
-    case "providers": "square.grid.2x2"
-    case "quota": "gauge.with.dots.needle.67percent"
-    case "usage": "chart.bar.xaxis"
-    case "pricing": "tag"
+    case "quota_overview": "gauge.with.dots.needle.67percent"
+    case "usage_this_device": "laptopcomputer"
+    case "usage_account": "cloud"
     case "account": "person.crop.circle"
-    case "sync": "arrow.triangle.2.circlepath"
     default: "questionmark.circle"
     }
   }
 
-  private func statusSymbol(_ status: LocalServiceDiagnosticComponentStatus) -> String {
-    switch status {
-    case .ready: "checkmark.circle.fill"
+  private func operationSymbol(
+    _ operation: LocalServiceDiagnosticOperation,
+    data: LocalServiceDiagnosticDataState
+  ) -> String {
+    if data == .partial || data == .stale { return "exclamationmark.triangle.fill" }
+    return switch operation {
+    case .healthy: "checkmark.circle.fill"
     case .degraded: "exclamationmark.triangle.fill"
     case .blocked: "xmark.octagon.fill"
     }
   }
 
-  private func statusColor(_ status: LocalServiceDiagnosticComponentStatus) -> Color {
-    switch status {
-    case .ready: QuotaPalette.accent
+  private func operationColor(
+    _ operation: LocalServiceDiagnosticOperation,
+    data: LocalServiceDiagnosticDataState = .current
+  ) -> Color {
+    if data == .partial || data == .stale { return QuotaPalette.warning }
+    return switch operation {
+    case .healthy: QuotaPalette.accent
     case .degraded: QuotaPalette.warning
     case .blocked: QuotaPalette.critical
     }
   }
 
-  private func issueSymbol(_ severity: LocalServiceDiagnosticSeverity) -> String {
+  private func findingSymbol(_ severity: LocalServiceDiagnosticSeverity) -> String {
     switch severity {
     case .info: "info.circle.fill"
     case .warning: "exclamationmark.triangle.fill"
@@ -591,7 +487,7 @@ struct SettingsDiagnosticsView: View {
     }
   }
 
-  private func issueColor(_ severity: LocalServiceDiagnosticSeverity) -> Color {
+  private func findingColor(_ severity: LocalServiceDiagnosticSeverity) -> Color {
     switch severity {
     case .info: QuotaPalette.body
     case .warning: QuotaPalette.warning
@@ -600,12 +496,16 @@ struct SettingsDiagnosticsView: View {
   }
 
   private func reportStatusPresentation(
-    _ status: LocalServiceDiagnosticStatus
-  ) -> (label: String, symbol: String, tone: LocalServiceDiagnosticComponentStatus) {
-    switch status {
-    case .healthy: ("All systems working", "checkmark.circle.fill", .ready)
-    case .degraded: ("Some checks need attention", "exclamationmark.triangle.fill", .degraded)
-    case .blocked: ("Action needed", "xmark.octagon.fill", .blocked)
+    _ summary: LocalServiceDiagnosticSummary
+  ) -> (label: String, symbol: String, tone: LocalServiceDiagnosticOperation) {
+    if summary.operation == .blocked {
+      return ("Action needed", "xmark.octagon.fill", .blocked)
     }
+    if summary.operation == .degraded || summary.data == .partial || summary.data == .stale
+      || summary.attention == .required
+    {
+      return ("Some checks need attention", "exclamationmark.triangle.fill", .degraded)
+    }
+    return ("All systems working", "checkmark.circle.fill", .healthy)
   }
 }

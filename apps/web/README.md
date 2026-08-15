@@ -36,6 +36,12 @@ sign-out, OAuth state/PKCE, account deletion, and standard auth-route origin val
 authorization decision and Device deletion routes additionally require a recent session and an
 exact same-origin request.
 
+The signed-in dashboard opts into managed-data v3 Device Health and strictly shows each Device's app
+version, platform, server-authoritative last report/refresh/sync, and health/staleness presentation.
+It is read-only: remediation points to Diagnostics on that Device, and absent or expired reports do
+not imply the Device is broken. The default non-opted-in Account summary remains compatible with
+released strict clients.
+
 New files under `static/` other than `logo.svg`, `logo-monochrome.svg`, `og.png`, and `schema/`
 need a matching `!/filename` negation in `apps/relay/wrangler.jsonc`.
 

@@ -43,6 +43,18 @@ The provider catalog records both whether a provider synchronizes (`account_sync
 managed-data version that accepts it (`account_sync_protocol`). Generated v2 and v3 provider enums
 come from that source. Cursor starts at version 3.
 
+Managed-data v3 itself shipped with QuotaBar 0.0.12, including a strict Device shape in Account
+summary. Device Health therefore does not add a field to the default response. A new client requests
+`GET /api/v3/account/summary?device_health=1`; only that opt-in response uses the strict extended
+Device shape where `health` is required but nullable. Without the opt-in the `health` key is absent,
+preserving the released response exactly. QuotaBar, Quota Web, and the read-only iOS Account client
+opt in; write authority remains limited to the authenticated collection Device. The health contract
+is defined by [ADR 0015](0015-diagnostic-attempts-and-device-health.md).
+
+Because a packaged native client can update before Relay, ADR 0015 also defines the narrow released-
+Relay fallback for `400 invalid_request`. The fallback retries the unchanged default v3 response and
+locally represents its absent health as unknown; it does not weaken the opted-in wire schema.
+
 ## Consequences
 
 - Released v2 clients continue to decode every response they can receive.
@@ -51,4 +63,6 @@ come from that source. Cursor starts at version 3.
   derived Account presentation make local quota unavailable.
 - A future closed-enum addition must declare a new first-supported protocol version instead of
   mutating a shipped enum.
+- Optional response expansion must remain explicit when a released strict client would reject an
+  unknown field; Device Health's query opt-in is the current example.
 - V2 remains only for concrete shipped compatibility; new feature work targets v3.

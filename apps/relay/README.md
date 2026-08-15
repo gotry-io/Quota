@@ -10,6 +10,14 @@ QuotaBar 0.0.12 and Quota Web use managed-data v3 so Cursor can synchronize. Rel
 remain supported and receive only the provider and BillingAgent values defined by v2. See
 [ADR 0012](../../docs/decisions/0012-managed-data-v3.md) for the route and compatibility boundary.
 
+Authenticated collection Devices publish only their own latest sanitized Device Health at
+`PUT /api/v3/device/health`. D1 uses the monotonic diagnostics refresh revision to reject delayed
+older reports and server receipt time for freshness; Device/Account deletion cascades the row.
+`GET /api/v3/account/summary` keeps its shipped v3 Device shape unless a client explicitly sends
+`device_health=1`, in which case every Device has a required nullable `health` field. Relay stores no
+health history. See
+[ADR 0015](../../docs/decisions/0015-diagnostic-attempts-and-device-health.md).
+
 Apply local D1 migrations before starting Wrangler:
 
 ```bash

@@ -43,7 +43,8 @@ boundary is [ADR 0006](decisions/0006-managed-account-device-usage.md); managed-
 [ADR 0012](decisions/0012-managed-data-v3.md); the read-only iOS account client is
 [ADR 0013](decisions/0013-readonly-ios-account-client.md); the non-secret iOS widget
 snapshot is [ADR 0014](decisions/0014-nonsecret-ios-widget-snapshot.md); the local runtime decision is
-[ADR 0007](decisions/0007-rust-native-local-service.md).
+[ADR 0007](decisions/0007-rust-native-local-service.md); diagnostic attempts, Support Report, and
+Device Health are [ADR 0015](decisions/0015-diagnostic-attempts-and-device-health.md).
 
 ## Local runtime and IPC
 
@@ -64,7 +65,7 @@ official provider sessions       agent JSON/JSONL logs
 
 QuotaBar launches the fixed signed `Contents/Helpers/quota-service` path once. Requests, responses,
 and state-change events are newline-delimited `snake_case` JSON with a 1 MiB line limit and request
-IDs. Supported operations are state read, diagnose, refresh, login/cancel, logout, provider
+IDs. Supported operations are state read, diagnose/recheck, refresh, login/cancel, logout, provider
 configuration, provider browser-session validate/commit/remove, Usage upload configuration, and
 shutdown. Browser-session validate is non-mutating; commit revalidates and transactionally replaces
 the Rust-owned SQLite session. `get_state` performs no collection or
@@ -80,14 +81,24 @@ continues after QuotaBar exits. A second installed client may acquire the same o
 the first process releases it; there is no multi-process coordination protocol beyond serialized
 ownership.
 
-The private `diagnose` operation is the single local health boundary for both products. It returns a
-bounded, redacted report for the fixed capabilities `providers`, `quota`, `usage`, `pricing`,
-`account`, and `sync`. QuotaBar exposes it from Settings as a copyable report; Linux `quotacli doctor`
-renders the same service result as text or JSON. Neither client reads SQLite or source logs, and the
-service never includes paths, raw provider output, prompts, completions, session identifiers,
-credentials, tokens, or device identifiers. Report status is `healthy`, `degraded`, or `blocked`;
-only `healthy` is a successful CLI exit. The lossless partition and partial-merge semantics are
-canonical in [ADR 0008](decisions/0008-data-integrity-and-diagnostics.md).
+The private `diagnose` operation is the single local diagnostic boundary for both products. Its v2
+report evaluates the fixed user-visible Quota Overview, This Device Usage, Account Usage, and Account
+surfaces, then explains them with source checks and root-cause findings. Checks distinguish
+`this_device`, `account`, and `system` work and whether each path is inactive, opportunistic, or
+required. QuotaBar exposes the report from Settings; Linux `quotacli doctor` renders the same service
+result as text or JSON. Neither client reads SQLite or source logs or reimplements policy.
+
+Diagnostics never evaluate a refresh in flight. Migration v7 stores one completed report snapshot;
+after every refresh, the service replaces it only after quota, Usage, Account, pricing, Overview, and
+sync state have been applied. While another refresh runs, `diagnose` returns that completed snapshot
+with current `running` phase/start metadata. QuotaBar Recheck starts or joins the real single-flight
+refresh and waits for a newer completed revision, bounded by its UI wait. The service never includes
+paths, filenames, raw provider output, parser excerpts, model lists, prompts, completions, session or
+device identifiers, credentials, or tokens. The evaluator and exact v2 semantics are canonical in
+[ADR 0008](decisions/0008-data-integrity-and-diagnostics.md). Migration v8's structured attempt
+journal supplies full retained latest-attempt/latest-success facts and the bounded recent activity
+projection; its retention and redaction are canonical in
+[ADR 0015](decisions/0015-diagnostic-attempts-and-device-health.md).
 
 Rust returns the merged Overview directly. Global fingerprints merge local and account-device
 observations; source-scoped fingerprints remain separate. Selection favors a valid non-expired
@@ -106,8 +117,8 @@ the released shared owner-only configuration root and `providers.json`; QuotaBar
 over the child process's stdin, never argv or preferences. Environment variables remain supported
 inputs. Operational state has one owner: `state.sqlite` stores installation/account state, component
 last-good values, file index, normalized Usage facts, fixed-period presentation cache, pricing state,
-sequences, and the durable outbox and Usage upload setting. SQLite migrations are explicit and
-append-only.
+sequences, the durable outbox and Usage upload setting, and the single last-completed diagnostic
+snapshot plus bounded structured attempt journal. SQLite migrations are explicit and append-only.
 
 Catalog browser-session capability contains an HTTPS login URL, exact Cookie hosts/names, and a
 browser-priority prefix. QuotaBar pins login and discovery to one selected supported browser;
@@ -123,7 +134,10 @@ Cursor from their responses. The private local collection schema continues to us
 The local SQLite v6 migration handles the shipped v2-to-v3 cutover: v2 Usage outbox payloads are
 promoted in place because v3 preserves their identity, sequence, coverage, and row invariants, while
 the derived v2 Account summary and Account period caches are discarded and rebuilt from Relay. Raw
-indexed Usage facts, provider state, sessions, quota, and upload identity are not removed.
+indexed Usage facts, provider state, sessions, quota, and upload identity are not removed. Migration
+v7 adds only the replaceable last-completed diagnostics snapshot used by `diagnose`; migration v8
+adds the seven-day/50,000-completed-row diagnostic attempt journal and clears only the derived
+pre-Device-Health Account summary so strict upgraded clients cannot receive its old Device shape.
 
 Usage indexing is the final file-level invalidation design. Each refresh performs bounded source
 discovery, records parser revision plus file identity, size, and modification time, skips unchanged
@@ -190,7 +204,7 @@ GitHub ── Better Auth web OAuth ──► QuotaRelay ──► browser accou
 browser PKCE authorization                │ account + device token families
 quota-ios PKCE (account session only)     │
                                           ▼
-Rust service ─ quota snapshots + hourly facts ─► D1
+Rust service ─ quota snapshots + hourly facts + latest Device Health ─► D1
         ▲                                           │
         └──────── account summary / pricing ───────┘
                              │
@@ -220,7 +234,8 @@ PKCE route with the exact redirect `io.gotry.quota:/oauth/callback`. Its token e
 installation identity and Device fields and returns only an account session. It is not a collection
 Device, is absent from `PlatformSchema`, and never receives snapshot or Usage write authority. Quota
 iOS consumes that session through `packages/apple-client` and fetches
-`GET /api/v3/account/summary` for Today. The app process alone holds OAuth and network authority.
+`GET /api/v3/account/summary?device_health=1` for Today and read-only Device Health. The app process
+alone holds OAuth and network authority.
 After a trusted summary is available it projects a non-secret `WidgetSnapshot` into the App Group
 `group.io.gotry.quota` for the embedded `QuotaWidgets` extension; the extension reads only that
 protected file and never calls Relay. See
@@ -234,6 +249,15 @@ than double counting. A deletion watermark rebuilds only permitted facts under t
 generation. Disabling Usage upload is a local Device preference: native Usage presentation becomes
 local-only, while already uploaded account history remains subject to the existing Device and Account
 deletion controls.
+
+After an authenticated Device completes a refresh, the service uploads a sanitized health snapshot
+on change or a bounded heartbeat. The Device token determines the row; D1 stores only the latest
+monotonic revision and uses server receipt time for freshness. QuotaBar, Quota Web, and Quota iOS
+request the strict `device_health=1` Account-summary shape and display health, version, platform, and
+last report/refresh/sync. The shipped default managed-data v3 response remains unchanged. A report
+older than the freshness window means only not recently active. Upload failure is local diagnostic
+evidence and does not fail collection or synchronization. See
+[ADR 0015](decisions/0015-diagnostic-attempts-and-device-health.md).
 
 Pricing is versioned and effective-dated with ETag caching. Rust calculates local cost; Relay keeps
 the equivalent server-side TypeScript calculation for account summaries. Exact
@@ -309,10 +333,11 @@ protocol + quota-model + relay-core
 
 QuotaRelay mounts OAuth and Device control at `/oauth/v2` and `/api/v2`, quota/Usage managed data at
 both compatible `/api/v2` and current `/api/v3` routes, Better Auth at `/api/auth/v2`, and health
-routes at their documented paths. It authenticates each route with the minimum account, device, or
-browser scope and performs Device/Account deletion, rotation/revocation, and Usage replacement in
-storage transactions. Relay serves the current Usage agents and pricing catalog without the ended
-0.0.5 response variant; current clients explicitly send `usage_agents=all`.
+routes including self-owned `/api/v3/device/health`. It authenticates each route with the minimum
+account, device, or browser scope and performs Device/Account deletion, rotation/revocation, and
+Usage replacement in storage transactions. Relay serves the current Usage agents and pricing
+catalog without the ended 0.0.5 response variant; current clients explicitly send
+`usage_agents=all`.
 
 Quota Web is a SvelteKit app. Hashed `/_app/immutable/*` CSS and JS stay asset-first. Document
 navigations run the existing Relay Worker first: `apps/relay/src/cloudflare.ts` stays Wrangler
@@ -321,10 +346,10 @@ request is rendered by SvelteKit `Server.respond`. The Worker reads the Better A
 cookie through `WebDocumentPort` and writes the signed-in header into the first HTML byte.
 Session cookies remain HttpOnly. `/` offers the QuotaBar `.dmg` and Homebrew install command.
 GitHub sign-in is in the header; `/my` is a server redirect when unsigned and otherwise a
-streaming dashboard. Its document load starts the existing `GET /api/v3/account/summary` handler
-inside the composed Worker and reuses the request's memoized Better Auth session, so Account data
-can resolve in parallel with hydration without a second browser round trip. The API schema and
-Relay/Web source boundary remain unchanged.
+streaming dashboard. Its document load starts the existing
+`GET /api/v3/account/summary?device_health=1` handler inside the composed Worker and reuses the
+request's memoized Better Auth session, so Account data can resolve in parallel with hydration
+without a second browser round trip. The API schema and Relay/Web source boundary remain unchanged.
 `/u/{username}` is the public projection for that GitHub username. `/activate` approves or
 denies native authorization. `/app` is a server redirect to `/my`. Better Auth owns GitHub
 login and browser sessions. Production Web and Worker deploy together only through
@@ -336,4 +361,5 @@ use Wrangler dry-run and local D1 migration verification. Manual remote migratio
 not a development command.
 
 The shipped compatibility and route split are canonical in
-[ADR 0012](decisions/0012-managed-data-v3.md).
+[ADR 0012](decisions/0012-managed-data-v3.md); latest-only Device Health storage is canonical in
+[ADR 0015](decisions/0015-diagnostic-attempts-and-device-health.md).

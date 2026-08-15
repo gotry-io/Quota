@@ -298,7 +298,19 @@ final class MenuBarViewModel {
     guard let client else {
       throw LocalServiceClientError.serviceMissing
     }
-    return try await client.diagnose()
+    let previous = try await client.diagnose()
+    let refresh = try await client.recheckDiagnostics()
+    guard refresh.accepted || refresh.pending else { return previous }
+    let deadline = Date().addingTimeInterval(12)
+    var latest = previous
+    repeat {
+      try await Task.sleep(for: .milliseconds(150))
+      latest = try await client.diagnose()
+      if latest.refresh.phase == .idle, latest.refresh.revision != previous.refresh.revision {
+        return latest
+      }
+    } while Date() < deadline
+    return latest
   }
 
   func usageDetail(source: UsageSource, period: UsagePeriod) -> LocalServiceUsageDetail? {

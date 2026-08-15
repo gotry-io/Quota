@@ -40,11 +40,16 @@ printed. Use a browser on another device to open the displayed URL when the CLI 
 and compare-and-swap state path.
 
 `doctor` consumes the shared service diagnostic report. It covers provider discovery and quota,
-Usage parsing and coverage, pricing, account state, and synchronization. Text is intended for a
-terminal; JSON is bounded and safe to attach to a bug report. `--pretty` only changes JSON
-whitespace. The command exits `0` only when the report is `healthy`; `degraded` and `blocked` exit
-with `1`. Paths, source filenames, raw logs, prompts, completions, session identifiers, device IDs,
-credentials, and tokens are never printed.
+Usage parsing and coverage, pricing, account state, and synchronization through the v2
+surface/check/finding contract. Source checks distinguish this device, Account, and system work;
+missing optional setup and waiting for the next scheduler opportunity are normal. Text is intended
+for a terminal; JSON is bounded and safe to attach to a bug report. Both include the same
+service-owned recent attempts: running work, the latest 20 refresh trees, recent failures, and a
+history-truncated marker, capped at 512 entries. `--pretty` only changes JSON
+whitespace. The command exits `0` when operation is healthy, data is current or empty, and attention
+is not required. Degraded/blocked operation, stale/partial/unknown data, or required attention exits
+with `1`. Paths, source filenames, model lists, raw logs/responses, parser excerpts, prompts,
+completions, session or device identifiers, credentials, and tokens are never printed.
 
 ## Development
 
