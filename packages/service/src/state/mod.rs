@@ -50,6 +50,7 @@ pub struct DiagnosticAttemptCompletion {
 pub struct DiagnosticAttemptFacts {
     pub latest_completed: Option<DiagnosticAttempt>,
     pub latest_success: Option<DiagnosticAttempt>,
+    pub latest_problem_after_success: Option<DiagnosticAttempt>,
 }
 
 #[derive(Debug, Error)]
@@ -829,9 +830,37 @@ impl StateStore {
             .optional()
             .map_err(StateError::from)
         };
+        let latest_problem_after_success = conn
+            .query_row(
+                "SELECT attempts.kind, attempts.trigger, attempts.source, attempts.subject,
+                        attempts.mode, attempts.started_at, attempts.completed_at,
+                        attempts.duration_ms, attempts.outcome, attempts.code, attempts.recovery,
+                        attempts.metrics_json, attempts.start_revision, attempts.end_revision,
+                        parent.started_at
+                 FROM diagnostic_attempts AS attempts
+                 LEFT JOIN diagnostic_attempts AS parent ON parent.id = attempts.parent_refresh_id
+                 WHERE attempts.kind = ?1 AND attempts.source = ?2
+                   AND ((?3 IS NULL AND attempts.subject IS NULL) OR attempts.subject = ?3)
+                   AND attempts.outcome IN ('partial', 'failed', 'interrupted')
+                   AND attempts.id > COALESCE((
+                     SELECT MAX(success.id) FROM diagnostic_attempts AS success
+                     WHERE success.kind = ?1 AND success.source = ?2
+                       AND ((?3 IS NULL AND success.subject IS NULL) OR success.subject = ?3)
+                       AND success.outcome = 'success'
+                   ), 0)
+                 ORDER BY attempts.id DESC LIMIT 1",
+                params![
+                    diagnostic_attempt_kind_key(kind),
+                    diagnostic_source_key(source),
+                    subject,
+                ],
+                diagnostic_attempt_from_row,
+            )
+            .optional()?;
         Ok(DiagnosticAttemptFacts {
             latest_completed: read(false)?,
             latest_success: read(true)?,
+            latest_problem_after_success,
         })
     }
 

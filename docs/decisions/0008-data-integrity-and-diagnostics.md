@@ -84,8 +84,10 @@ Diagnostic intent follows product behavior:
 - Signed-out Account state and disabled Usage upload are inactive/healthy. A closed dirty range or
   outbox entry that is waiting for the next scheduler opportunity is normal automatic work, not a
   failed upload. Only a recorded completed attempt that failed, was rejected, or found an
-  unrepresentable partition degrades the required upload check. The still-changing open UTC hour is
-  not uploadable pending work.
+  unrepresentable partition degrades the required upload check. While uploadable work remains, a
+  later `no_work` attempt does not erase that failure; a successful attempt does. With no uploadable
+  work left, `no_work` is sufficient evidence that the path is healthy. The still-changing open UTC
+  hour is not uploadable pending work.
 - Usage findings are emitted once per agent and root parser/access reason. Aggregate
   `scan_partial`/`partial_sources` duplicates are not emitted. A truncated active tail, source change,
   or cancelled scan is transient automatic work; stable malformed input or access failure is an

@@ -947,18 +947,24 @@ impl NativeBackend {
             )
             .map_err(|_| BackendError::unavailable())?;
         let latest_upload = upload_facts.latest_completed.as_ref();
-        let sync_failed = account_active
-            && usage_upload_enabled
-            && latest_upload.is_some_and(|attempt| {
+        let upload_waiting = outbox_count + uploadable_dirty_count > 0;
+        let unresolved_upload_problem = latest_upload
+            .filter(|attempt| {
                 matches!(
                     attempt.outcome,
                     DiagnosticAttemptOutcome::Failed
                         | DiagnosticAttemptOutcome::Interrupted
                         | DiagnosticAttemptOutcome::Partial
                 )
+            })
+            .or_else(|| {
+                upload_waiting.then_some(())?;
+                upload_facts.latest_problem_after_success.as_ref()
             });
+        let sync_failed =
+            account_active && usage_upload_enabled && unresolved_upload_problem.is_some();
         let sync_blocked = sync_failed
-            && latest_upload
+            && unresolved_upload_problem
                 .is_some_and(|attempt| attempt.code == Some(DiagnosticAttemptCode::InvalidState));
         let sync_mode = if account_active && usage_upload_enabled {
             DiagnosticMode::Required
@@ -977,7 +983,7 @@ impl NativeBackend {
             } else {
                 DiagnosticOperation::Healthy
             },
-            data: if outbox_count + uploadable_dirty_count > 0 {
+            data: if upload_waiting {
                 DiagnosticDataState::Partial
             } else {
                 DiagnosticDataState::Current
@@ -997,14 +1003,11 @@ impl NativeBackend {
                 ("dirty_ranges", dirty_ranges.len() as i64),
                 ("uploadable_dirty_ranges", uploadable_dirty_count),
                 ("outbox", outbox_count),
-                (
-                    "waiting",
-                    i64::from(outbox_count + uploadable_dirty_count > 0),
-                ),
+                ("waiting", i64::from(upload_waiting)),
             ]),
         });
         if sync_failed {
-            let code = latest_upload
+            let code = unresolved_upload_problem
                 .and_then(|attempt| attempt.code)
                 .map(diagnostic_attempt_code_wire)
                 .unwrap_or("unavailable");
@@ -1023,11 +1026,11 @@ impl NativeBackend {
                 } else {
                     DiagnosticImpact::Source
                 },
-                recovery: latest_upload
+                recovery: unresolved_upload_problem
                     .map(|attempt| attempt.recovery)
                     .unwrap_or(DiagnosticRecovery::Retry),
                 count: 1,
-                observed_at: latest_upload
+                observed_at: unresolved_upload_problem
                     .and_then(|attempt| attempt.completed_at.clone())
                     .unwrap_or_else(|| now.clone()),
                 message: "A completed Usage upload attempt did not make progress.".into(),
@@ -4153,6 +4156,39 @@ mod tests {
                 },
             )
             .expect("finish retry");
+        let still_failed = backend.evaluate_diagnostic_report().expect("still failed");
+        assert_eq!(
+            still_failed.summary.operation,
+            DiagnosticOperation::Degraded
+        );
+        assert!(
+            still_failed
+                .findings
+                .iter()
+                .any(|finding| finding.component == "usage_upload")
+        );
+
+        let success = state
+            .begin_diagnostic_attempt(
+                DiagnosticAttemptKind::UsageUpload,
+                DiagnosticAttemptTrigger::Scheduled,
+                DiagnosticSource::Account,
+                None,
+                DiagnosticMode::Required,
+                None,
+            )
+            .expect("success attempt");
+        state
+            .finish_diagnostic_attempt(
+                success,
+                &DiagnosticAttemptCompletion {
+                    outcome: DiagnosticAttemptOutcome::Success,
+                    code: None,
+                    recovery: DiagnosticRecovery::None,
+                    metrics: metrics([("attempted", 1), ("pending", 1)]),
+                },
+            )
+            .expect("finish success");
         let recovered = backend.evaluate_diagnostic_report().expect("recovered");
         assert_eq!(recovered.summary.operation, DiagnosticOperation::Healthy);
         assert!(
