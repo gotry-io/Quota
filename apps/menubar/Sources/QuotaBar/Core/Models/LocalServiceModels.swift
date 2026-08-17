@@ -117,6 +117,7 @@ struct LocalServiceRepairSession: Decodable, Equatable, Sendable {
     }
     if startedAt == nil || heartbeatAt == nil { return false }
     if recoveryAction != nil && status != .stuck && status != .failed { return false }
+    if stuck && status != .stuck && status != .failed { return false }
     return true
   }
 

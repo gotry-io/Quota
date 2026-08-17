@@ -344,10 +344,7 @@ impl LocalService {
         let repair = self.inner.state.repair_session();
         if matches!(
             repair.status,
-            crate::protocol::RepairStatus::Repairing
-                | crate::protocol::RepairStatus::Checking
-                | crate::protocol::RepairStatus::Stuck
-                | crate::protocol::RepairStatus::Failed
+            crate::protocol::RepairStatus::Repairing | crate::protocol::RepairStatus::Checking
         ) {
             report.refresh.phase = DiagnosticRefreshPhase::Running;
             if report.refresh.started_at.is_none() {
@@ -729,7 +726,7 @@ impl LocalService {
             }
             Ok(_) => {
                 if self.inner.state.repair_session().status != crate::protocol::RepairStatus::Idle {
-                    self.emit(vec![ComponentName::Repair]);
+                    self.emit_repair();
                 }
             }
         }
@@ -1303,6 +1300,13 @@ impl LocalService {
             .event(IpcEvent::state_changed(revision, components));
     }
 
+    fn emit_repair(&self) {
+        self.inner.sink.event(IpcEvent::state_changed(
+            self.inner.state.remembered_revision(),
+            vec![ComponentName::Repair],
+        ));
+    }
+
     fn reject_if_durable_repair(&self) -> Result<(), IpcError> {
         let repair = self.inner.state.repair_session();
         if repair.severity == crate::protocol::RepairSeverity::Durable
@@ -1328,47 +1332,36 @@ impl LocalService {
         let _ = thread::Builder::new()
             .name("quota-repair-watchdog".to_owned())
             .spawn(move || {
-                let heartbeat = Duration::from_secs(2);
                 let stuck_after = Duration::from_secs(45);
                 let failed_after = Duration::from_secs(30);
                 let completed_flash = Duration::from_millis(1500);
                 let tick = Duration::from_millis(200);
-                let mut last_heartbeat = Instant::now();
                 loop {
                     thread::sleep(tick);
                     if service.is_shutdown() {
                         break;
                     }
                     let now = Instant::now();
-                    let session = service.inner.state.repair_session();
-                    if session.status == crate::protocol::RepairStatus::Repairing
-                        && now.duration_since(last_heartbeat) >= heartbeat
-                    {
-                        service.inner.state.increment_repair_heartbeat_seq();
-                        service.inner.state.persist_repair_heartbeat_best_effort();
-                        service.emit(vec![ComponentName::Repair]);
-                        last_heartbeat = now;
-                    }
                     if service
                         .inner
                         .state
                         .mark_repair_stuck_if_silent(now, stuck_after)
                     {
-                        service.emit(vec![ComponentName::Repair]);
+                        service.emit_repair();
                     }
                     if service
                         .inner
                         .state
                         .mark_repair_failed_if_stuck_expired(now, failed_after)
                     {
-                        service.emit(vec![ComponentName::Repair]);
+                        service.emit_repair();
                     }
                     if service
                         .inner
                         .state
                         .mark_repair_idle_if_completed_expired(now, completed_flash)
                     {
-                        service.emit(vec![ComponentName::Repair]);
+                        service.emit_repair();
                     }
                 }
             });
@@ -1879,7 +1872,8 @@ mod tests {
         let sink = Arc::new(RecordingSink::default());
         let service = LocalService::new(state.clone(), sink.clone(), Arc::new(UnavailableBackend));
         let result = service.request_refresh_with_trigger(DiagnosticAttemptTrigger::Startup);
-        assert!(result.accepted || !result.accepted);
+        assert!(result.accepted);
+        assert!(!result.pending);
         let session = state.repair_session();
         assert_eq!(session.severity, crate::protocol::RepairSeverity::Durable);
         let events = sink.0.lock().expect("events");

@@ -47,6 +47,7 @@ protocol LocalServiceServing: Sendable {
   var events: AsyncStream<LocalServiceEvent> { get }
 
   func state() async throws -> LocalServiceState
+  func probeStatePreservingHelper() async throws -> LocalServiceState
   func diagnose() async throws -> LocalServiceDiagnosticReport
   func recheckDiagnostics() async throws -> LocalServiceRefreshResult
   func refresh() async throws -> LocalServiceRefreshResult
@@ -76,6 +77,10 @@ extension LocalServiceServing {
   func recheckDiagnostics() async throws -> LocalServiceRefreshResult {
     try await refresh()
   }
+
+  func probeStatePreservingHelper() async throws -> LocalServiceState {
+    try await state()
+  }
 }
 
 actor LocalServiceClient: LocalServiceServing {
@@ -94,6 +99,7 @@ actor LocalServiceClient: LocalServiceServing {
   private var receiveBuffer = Data()
   private var connectionGeneration = 0
   private var pending: [String: CheckedContinuation<Data, any Error>] = [:]
+  private var ignoredRequestIDs: Set<String> = []
 
   init(
     executableURL: URL? = nil,
@@ -133,6 +139,15 @@ actor LocalServiceClient: LocalServiceServing {
   func state() async throws -> LocalServiceState {
     let state: LocalServiceState = try await request(
       operation: "get_state", payload: EmptyPayload())
+    guard state.isValid else {
+      throw LocalServiceClientError.invalidMessage
+    }
+    return state
+  }
+
+  func probeStatePreservingHelper() async throws -> LocalServiceState {
+    let state: LocalServiceState = try await request(
+      operation: "get_state", payload: EmptyPayload(), terminateOnTimeout: false)
     guard state.isValid else {
       throw LocalServiceClientError.invalidMessage
     }
@@ -244,7 +259,8 @@ actor LocalServiceClient: LocalServiceServing {
 
   private func request<Result: Decodable, Payload: Encodable>(
     operation: String,
-    payload: Payload
+    payload: Payload,
+    terminateOnTimeout: Bool = true
   ) async throws -> Result {
     try startIfNeeded()
     let requestID = UUID().uuidString.lowercased()
@@ -267,7 +283,7 @@ actor LocalServiceClient: LocalServiceServing {
       } catch {
         return
       }
-      await self?.expire(requestID: requestID)
+      await self?.expire(requestID: requestID, terminate: terminateOnTimeout)
     }
     defer { timeoutTask.cancel() }
 
@@ -379,7 +395,14 @@ actor LocalServiceClient: LocalServiceServing {
       }
       // Old-process replies are filtered by connectionGeneration. An unknown ID in the active
       // generation therefore violates the private protocol; fail closed and wake every waiter.
-      guard let requestID = object["request_id"] as? String, pending[requestID] != nil else {
+      // Timed-out repair probes leave the helper running, so a late reply for that ID is ignored.
+      guard let requestID = object["request_id"] as? String else {
+        throw LocalServiceClientError.invalidMessage
+      }
+      if ignoredRequestIDs.remove(requestID) != nil {
+        return
+      }
+      guard pending[requestID] != nil else {
         throw LocalServiceClientError.invalidMessage
       }
       let response: Result<Data, any Error>
@@ -426,9 +449,15 @@ actor LocalServiceClient: LocalServiceServing {
     closeConnection(terminate: false, error: LocalServiceClientError.connectionClosed)
   }
 
-  private func expire(requestID: String) {
-    guard pending[requestID] != nil else { return }
-    closeConnection(terminate: true, error: LocalServiceClientError.requestTimedOut)
+  private func expire(requestID: String, terminate: Bool = true) {
+    guard let continuation = pending.removeValue(forKey: requestID) else { return }
+    if terminate {
+      pending[requestID] = continuation
+      closeConnection(terminate: true, error: LocalServiceClientError.requestTimedOut)
+      return
+    }
+    ignoredRequestIDs.insert(requestID)
+    continuation.resume(throwing: LocalServiceClientError.requestTimedOut)
   }
 
   private func closeConnection(terminate: Bool, error: any Error) {

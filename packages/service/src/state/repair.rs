@@ -108,27 +108,45 @@ pub(super) struct RepairRuntime {
     seq: AtomicU64,
     last_seq: AtomicU64,
     last_seq_at: Mutex<Option<Instant>>,
+    last_revision: AtomicU64,
     live: Mutex<RepairSession>,
     last_error: Mutex<Option<PersistenceClass>>,
     stuck_at: Mutex<Option<Instant>>,
     completed_at: Mutex<Option<Instant>>,
+    remapped_on_load: bool,
 }
 
 impl RepairRuntime {
     pub(super) fn from_persisted(persisted: PersistedRepair) -> Self {
-        let session = persisted
+        let loaded = persisted
             .session
             .filter(|session| session.is_valid())
             .unwrap_or_else(RepairSession::idle);
+        let remapped_on_load = matches!(
+            loaded.status,
+            RepairStatus::Completed | RepairStatus::Repairing | RepairStatus::Checking
+        );
+        let session = reconcile_loaded_session(loaded);
+        let stuck_at = (session.status == RepairStatus::Stuck).then(Instant::now);
         Self {
             seq: AtomicU64::new(persisted.seq),
             last_seq: AtomicU64::new(persisted.seq),
             last_seq_at: Mutex::new(Some(Instant::now())),
+            last_revision: AtomicU64::new(0),
             live: Mutex::new(session),
             last_error: Mutex::new(None),
-            stuck_at: Mutex::new(None),
+            stuck_at: Mutex::new(stuck_at),
             completed_at: Mutex::new(None),
+            remapped_on_load,
         }
+    }
+}
+
+fn reconcile_loaded_session(session: RepairSession) -> RepairSession {
+    match session.status {
+        RepairStatus::Completed => RepairSession::idle(),
+        RepairStatus::Repairing | RepairStatus::Checking => stuck_session(&session),
+        _ => session,
     }
 }
 
@@ -178,6 +196,17 @@ impl StateStore {
             .unwrap_or_else(|_| RepairSession::idle())
     }
 
+    pub(crate) fn persist_reconciled_repair(&self) -> Result<(), StateError> {
+        if !self.repair.remapped_on_load {
+            return Ok(());
+        }
+        self.persist_live_session()
+    }
+
+    pub(super) fn store_remembered_revision(&self, revision: u64) {
+        self.repair.last_revision.store(revision, Ordering::Release);
+    }
+
     pub fn increment_repair_heartbeat_seq(&self) -> u64 {
         let seq = self.repair.seq.fetch_add(1, Ordering::AcqRel) + 1;
         if let Ok(mut session) = self.repair.live.lock()
@@ -193,13 +222,17 @@ impl StateStore {
     }
 
     pub fn persist_repair_heartbeat_best_effort(&self) {
-        let Ok(conn) = self.db.try_lock() else {
-            return;
-        };
-        let session = self.repair_session();
-        let seq = self.repair.seq.load(Ordering::Acquire);
-        let _ = persist_session_on(&conn, seq, &session);
-        let _ = bump_revision(&conn);
+        self.persist_live_session_best_effort();
+    }
+
+    pub fn remembered_revision(&self) -> u64 {
+        if let Ok(conn) = self.db.try_lock()
+            && let Ok(revision) = super::metadata_u64(&conn, "revision")
+        {
+            self.repair.last_revision.store(revision, Ordering::Release);
+            return revision;
+        }
+        self.repair.last_revision.load(Ordering::Acquire)
     }
 
     pub fn mark_repair_stuck_if_silent(&self, now: Instant, timeout: Duration) -> bool {
@@ -221,7 +254,7 @@ impl StateStore {
         if let Ok(mut stuck_at) = self.repair.stuck_at.lock() {
             *stuck_at = Some(now);
         }
-        let _ = self.persist_live_session();
+        self.persist_live_session_best_effort();
         true
     }
 
@@ -237,7 +270,7 @@ impl StateStore {
             return false;
         }
         self.apply_live_session(failed_session(&session, RepairRecoveryAction::Reinstall));
-        let _ = self.persist_live_session();
+        self.persist_live_session_best_effort();
         true
     }
 
@@ -259,7 +292,7 @@ impl StateStore {
             return false;
         }
         self.apply_live_session(RepairSession::idle());
-        let _ = self.persist_live_session();
+        self.persist_live_session_best_effort();
         true
     }
 
@@ -286,7 +319,8 @@ impl StateStore {
         self.record_automatic_salvage_day()?;
         let now = now_rfc3339();
         self.apply_live_session(completed_durable_session(&now));
-        self.persist_live_session()
+        // Flash is process-local; persist idle so the next process does not resume Repairing.
+        self.persist_session_snapshot(&RepairSession::idle())
     }
 
     fn repair_open(&self) -> Result<RepairReport, StateError> {
@@ -336,7 +370,16 @@ impl StateStore {
             == Some(RepairRecoveryAction::Retry);
         match self.persist_probe() {
             Ok(()) => {
-                if user_retry {
+                let session = self.repair_session();
+                let should_idle = matches!(
+                    session.status,
+                    RepairStatus::Repairing
+                        | RepairStatus::Checking
+                        | RepairStatus::Completed
+                        | RepairStatus::Stuck
+                ) || (session.status == RepairStatus::Failed
+                    && session.recovery_action == Some(RepairRecoveryAction::Retry));
+                if should_idle {
                     self.apply_live_session(RepairSession::idle());
                     let _ = self.persist_live_session();
                 }
@@ -461,8 +504,18 @@ impl StateStore {
     }
 
     fn salvage_durable_if_allowed(&self, automatic: bool) -> Result<SalvageOutcome, StateError> {
+        let current = self.repair_session();
+        if automatic
+            && current.status == RepairStatus::Failed
+            && current.recovery_action == Some(RepairRecoveryAction::Reinstall)
+        {
+            return Ok(SalvageOutcome::FailedClosed);
+        }
         if automatic && self.automatic_salvage_used_today()? {
             return Ok(SalvageOutcome::Capped);
+        }
+        if automatic {
+            let _ = self.record_automatic_salvage_day();
         }
         let now = now_rfc3339();
         self.apply_live_session(durable_repairing_session(
@@ -472,6 +525,7 @@ impl StateStore {
             Some(0),
             Some(REQUIRED_COPY_PROGRESS_TOTAL),
         ));
+        self.increment_repair_heartbeat_seq();
         let _ = self.persist_live_session();
         match self.replace_connection_with_salvage() {
             Ok(()) => {
@@ -487,6 +541,7 @@ impl StateStore {
                     Some(REQUIRED_COPY_PROGRESS_TOTAL),
                     Some(REQUIRED_COPY_PROGRESS_TOTAL),
                 ));
+                self.increment_repair_heartbeat_seq();
                 self.apply_live_session(completed_durable_session(
                     self.repair_session()
                         .started_at
@@ -499,6 +554,9 @@ impl StateStore {
             }
             Err(error) if sqlite_io_or_full_error(&error) => Err(StateError::Unavailable),
             Err(_) => {
+                if automatic {
+                    let _ = self.record_automatic_salvage_day();
+                }
                 let started = self.repair_session().started_at.unwrap_or_else(now_rfc3339);
                 self.apply_live_session(failed_session(
                     &durable_repairing_session(
@@ -582,14 +640,28 @@ impl StateStore {
     }
 
     fn persist_live_session(&self) -> Result<(), StateError> {
+        self.persist_session_snapshot(&self.repair_session())
+    }
+
+    fn persist_session_snapshot(&self, session: &RepairSession) -> Result<(), StateError> {
         let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        persist_session_on(
-            &conn,
-            self.repair.seq.load(Ordering::Acquire),
-            &self.repair_session(),
-        )?;
-        bump_revision(&conn)?;
+        persist_session_on(&conn, self.repair.seq.load(Ordering::Acquire), session)?;
+        let revision = bump_revision(&conn)?;
+        self.store_remembered_revision(revision);
         Ok(())
+    }
+
+    fn persist_live_session_best_effort(&self) {
+        let Ok(conn) = self.db.try_lock() else {
+            return;
+        };
+        let session = self.repair_session();
+        let seq = self.repair.seq.load(Ordering::Acquire);
+        if persist_session_on(&conn, seq, &session).is_ok()
+            && let Ok(revision) = bump_revision(&conn)
+        {
+            self.store_remembered_revision(revision);
+        }
     }
 
     fn stuck_report(&self, site: RepairSite, executed: Vec<RepairAction>) -> RepairReport {
@@ -661,6 +733,15 @@ impl StateStore {
             Some(0),
             Some(REQUIRED_COPY_PROGRESS_TOTAL),
         ));
+        self.persist_live_session()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn persist_session_for_test(
+        &self,
+        session: RepairSession,
+    ) -> Result<(), StateError> {
+        self.apply_live_session(session);
         self.persist_live_session()
     }
 }
@@ -904,6 +985,66 @@ mod tests {
             .expect("second detect");
         assert!(!report.executed.contains(&RepairAction::SalvageDurableImage));
         assert_eq!(store.repair_session().status, RepairStatus::Stuck);
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn persisted_completed_loads_as_idle() {
+        let (root, store) = temp_store();
+        store
+            .persist_session_for_test(completed_durable_session("2026-08-17T01:00:00Z"))
+            .expect("persist completed");
+        drop(store);
+        let store = StateStore::open(&root).expect("reopen");
+        assert_eq!(store.repair_session(), RepairSession::idle());
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn persisted_repairing_loads_as_stuck() {
+        let (root, store) = temp_store();
+        store
+            .start_durable_repairing_for_test()
+            .expect("persist repairing");
+        drop(store);
+        let store = StateStore::open(&root).expect("reopen");
+        let session = store.repair_session();
+        assert_eq!(session.status, RepairStatus::Stuck);
+        assert!(!session.blocks_quit);
+        assert_eq!(session.recovery_action, Some(RepairRecoveryAction::Retry));
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn failed_reinstall_does_not_retry_automatic_salvage() {
+        let (root, store) = temp_store();
+        let now = now_rfc3339();
+        store
+            .persist_session_for_test(failed_session(
+                &durable_repairing_session(
+                    &now,
+                    RepairPhase::RebuildingStorage,
+                    "Rebuilding storage",
+                    None,
+                    None,
+                ),
+                RepairRecoveryAction::Reinstall,
+            ))
+            .expect("persist failed");
+        store
+            .fail_persist_probe_with_corruption_for_test()
+            .expect("poison");
+        let report = store
+            .run_repair(RepairSite::RefreshStart)
+            .expect("refresh start");
+        assert!(!report.executed.contains(&RepairAction::SalvageDurableImage));
+        assert!(report.fail_closed);
+        assert!(store.state_salvaged_at().expect("marker").is_none());
+        assert!(!root.join("state.sqlite.broken").exists());
+        assert_eq!(store.repair_session().status, RepairStatus::Failed);
         drop(store);
         fs::remove_dir_all(root).expect("cleanup");
     }

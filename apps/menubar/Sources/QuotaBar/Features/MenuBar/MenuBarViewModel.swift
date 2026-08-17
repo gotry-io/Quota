@@ -817,11 +817,14 @@ final class MenuBarViewModel {
 
   private func checkRepairLiveness() async {
     guard let client else { return }
+    guard presentedRepair.status == .repairing || presentedRepair.status == .checking else {
+      return
+    }
     let now = Date()
     let lastSignal = [lastRepairEventAt, lastSuccessfulStateAt].compactMap { $0 }.max()
     if let lastSignal, now.timeIntervalSince(lastSignal) < 20 { return }
     do {
-      apply(try await client.state())
+      apply(try await client.probeStatePreservingHelper())
       lastSuccessfulStateAt = Date()
       if let heartbeat = presentedRepair.heartbeatAt,
         Date().timeIntervalSince(heartbeat) > 45

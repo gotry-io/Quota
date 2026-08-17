@@ -181,7 +181,16 @@ fn run_status(options: StatusOptions, output: &mut dyn CliOutput) -> i32 {
             );
         }
     };
-    let repair = load_repair(&context);
+    let repair = match load_repair(&context) {
+        Ok(repair) => repair,
+        Err(_) => {
+            return report_failure(
+                Failure,
+                output,
+                "QuotaCLI could not read local repair state.",
+            );
+        }
+    };
     if options.output.format == OutputFormat::Json {
         write_json(
             output,
@@ -295,7 +304,16 @@ fn run_doctor(options: OutputOptions, output: &mut dyn CliOutput) -> i32 {
             );
         }
     };
-    let repair = load_repair(&context);
+    let repair = match load_repair(&context) {
+        Ok(repair) => repair,
+        Err(_) => {
+            return report_failure(
+                Failure,
+                output,
+                "QuotaCLI could not read local repair state.",
+            );
+        }
+    };
     if options.format == OutputFormat::Json {
         write_json(output, &merge_repair(&report, &repair), options.pretty);
     } else {
@@ -564,29 +582,12 @@ fn diagnostic_metrics_suffix(value: &Value) -> String {
     }
 }
 
-fn load_repair(context: &ServiceContext) -> Value {
-    invoke(context, Operation::GetState, json!({}))
-        .ok()
-        .and_then(|value| value.get("repair").cloned())
-        .unwrap_or_else(idle_repair_json)
+fn load_repair(context: &ServiceContext) -> Result<Value, Failure> {
+    repair_from_state(&invoke(context, Operation::GetState, json!({}))?)
 }
 
-fn idle_repair_json() -> Value {
-    json!({
-        "status": "idle",
-        "severity": "none",
-        "phase": null,
-        "title": null,
-        "guidance": null,
-        "activity": null,
-        "started_at": null,
-        "heartbeat_at": null,
-        "progress_current": null,
-        "progress_total": null,
-        "stuck": false,
-        "blocks_quit": false,
-        "recovery_action": null
-    })
+fn repair_from_state(snapshot: &Value) -> Result<Value, Failure> {
+    snapshot.get("repair").cloned().ok_or(Failure)
 }
 
 fn merge_repair(value: &Value, repair: &Value) -> Value {
@@ -1268,6 +1269,12 @@ mod tests {
         assert!(text.contains("Older activity was removed"));
         assert!(!text.contains("/Users/"));
         assert!(!text.contains("token"));
+    }
+
+    #[test]
+    fn missing_repair_object_is_an_error() {
+        assert!(repair_from_state(&json!({"ipc_version": 1})).is_err());
+        assert!(repair_from_state(&json!({"repair": {"status": "repairing"}})).is_ok());
     }
 
     #[test]

@@ -451,6 +451,17 @@ func decodesRepairSessionAndRejectsUnknownKeys() throws {
     _ = try QuotaWireCodec.makeDecoder().decode(
       LocalServiceRepairSession.self, from: invalidProgress)
   }
+
+  let stuckWhileRepairing = Data(
+    String(decoding: data, as: UTF8.self).replacingOccurrences(
+      of: "\"stuck\": false",
+      with: "\"stuck\": true"
+    ).utf8
+  )
+  #expect(throws: DecodingError.self) {
+    _ = try QuotaWireCodec.makeDecoder().decode(
+      LocalServiceRepairSession.self, from: stuckWhileRepairing)
+  }
 }
 
 @Test

@@ -340,6 +340,8 @@ impl StateStore {
             _owner_lock: owner_lock,
             repair: repair::RepairRuntime::from_persisted(persisted),
         };
+        let _ = store.remembered_revision();
+        store.persist_reconciled_repair()?;
         if salvaged {
             store.record_open_salvage_session()?;
         }
@@ -1247,7 +1249,9 @@ impl StateStore {
 
     pub fn current_revision(&self) -> Result<u64, StateError> {
         let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        metadata_u64(&conn, "revision")
+        let revision = metadata_u64(&conn, "revision")?;
+        self.store_remembered_revision(revision);
+        Ok(revision)
     }
 
     pub fn usage_upload_enabled(&self) -> Result<bool, StateError> {
@@ -2962,7 +2966,7 @@ fn write_provider_file(root: &Path, value: &ProviderFile) -> Result<(), StateErr
     Ok(())
 }
 
-fn metadata_u64(conn: &Connection, key: &str) -> Result<u64, StateError> {
+pub(super) fn metadata_u64(conn: &Connection, key: &str) -> Result<u64, StateError> {
     let raw: String = conn.query_row(
         "SELECT value FROM metadata WHERE key = ?1",
         params![key],
