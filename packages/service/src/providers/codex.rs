@@ -258,6 +258,10 @@ fn map_usage(value: &Value) -> MappedUsage {
         value,
         &["additional_rate_limits", "additionalRateLimits"],
     )));
+    windows.extend(map_code_review(obj_get_any(
+        value,
+        &["code_review_rate_limit", "codeReviewRateLimit"],
+    )));
     let primary_present = rate_limit
         .and_then(|v| obj_get_any(v, &["primary_window", "primaryWindow"]))
         .map(|v| !v.is_null())
@@ -404,19 +408,15 @@ fn map_additional(value: Option<&Value>) -> Vec<QuotaWindow> {
             .flatten()
             .any(|value| value.to_ascii_lowercase().contains("spark"));
         if spark {
-            for (candidate, fallback) in [(primary, "five"), (secondary, "weekly")] {
-                let kind = spark_kind(candidate, fallback);
-                let (id, title) = if kind == "five" {
-                    ("codex-spark", "Codex Spark 5-hour")
-                } else {
-                    ("codex-spark-weekly", "Codex Spark Weekly")
-                };
-                if let Some(window) = candidate.and_then(|v| map_window(v, id, title, false))
-                    && used.insert(id.to_owned())
-                {
-                    windows.push(window);
-                }
-            }
+            windows.extend(map_named_windows(
+                primary,
+                secondary,
+                "codex-spark",
+                "Codex Spark 5-hour",
+                "codex-spark-weekly",
+                "Codex Spark Weekly",
+                &mut used,
+            ));
             continue;
         }
         let Some(source) = metered.as_deref().or(limit_name.as_deref()) else {
@@ -444,7 +444,49 @@ fn map_additional(value: Option<&Value>) -> Vec<QuotaWindow> {
     windows
 }
 
-fn spark_kind(value: Option<&Value>, fallback: &str) -> &'static str {
+fn map_code_review(value: Option<&Value>) -> Vec<QuotaWindow> {
+    let Some(value) = value.filter(|value| value.is_object()) else {
+        return Vec::new();
+    };
+    let mut used = std::collections::HashSet::<String>::new();
+    map_named_windows(
+        obj_get_any(value, &["primary_window", "primaryWindow"]),
+        obj_get_any(value, &["secondary_window", "secondaryWindow"]),
+        "codex-code-review",
+        "Code Review 5-hour",
+        "codex-code-review-weekly",
+        "Code Review Weekly",
+        &mut used,
+    )
+}
+
+fn map_named_windows(
+    primary: Option<&Value>,
+    secondary: Option<&Value>,
+    five_id: &str,
+    five_title: &str,
+    weekly_id: &str,
+    weekly_title: &str,
+    used: &mut std::collections::HashSet<String>,
+) -> Vec<QuotaWindow> {
+    let mut windows = Vec::new();
+    for (candidate, fallback) in [(primary, "five"), (secondary, "weekly")] {
+        let kind = window_kind(candidate, fallback);
+        let (id, title) = if kind == "five" {
+            (five_id, five_title)
+        } else {
+            (weekly_id, weekly_title)
+        };
+        if let Some(window) = candidate.and_then(|v| map_window(v, id, title, false))
+            && used.insert(id.to_owned())
+        {
+            windows.push(window);
+        }
+    }
+    windows
+}
+
+fn window_kind(value: Option<&Value>, fallback: &str) -> &'static str {
     let seconds = value
         .and_then(|v| obj_get_any(v, &["limit_window_seconds", "limitWindowSeconds"]))
         .and_then(|v| number(Some(v)))
@@ -764,6 +806,79 @@ mod tests {
                 .map(|window| window.id.as_str())
                 .collect::<Vec<_>>(),
             ["five_hour", "weekly"]
+        );
+        assert!(!usage.malformed_success);
+    }
+
+    #[test]
+    fn maps_code_review_rate_limit_when_present() {
+        let usage = map_usage(&serde_json::json!({
+            "rate_limit": {
+                "primary_window": {"used_percent": 12, "limit_window_seconds": 18000},
+                "secondary_window": {"used_percent": 33, "limit_window_seconds": 604800}
+            },
+            "code_review_rate_limit": {
+                "allowed": true,
+                "limit_reached": false,
+                "primary_window": {"used_percent": 8, "limit_window_seconds": 604800},
+                "secondary_window": null
+            }
+        }));
+        assert_eq!(
+            usage
+                .windows
+                .iter()
+                .map(|window| (
+                    window.id.as_str(),
+                    window.title.as_str(),
+                    window.used_percent
+                ))
+                .collect::<Vec<_>>(),
+            [
+                ("five_hour", "5 hour", 12.0),
+                ("weekly", "Weekly", 33.0),
+                ("codex-code-review-weekly", "Code Review Weekly", 8.0),
+            ]
+        );
+        assert!(!usage.malformed_success);
+    }
+
+    #[test]
+    fn maps_code_review_five_hour_and_weekly_windows() {
+        let usage = map_usage(&serde_json::json!({
+            "codeReviewRateLimit": {
+                "primaryWindow": {"usedPercent": 4, "limitWindowSeconds": 18000},
+                "secondaryWindow": {"usedPercent": 19, "limitWindowSeconds": 604800}
+            }
+        }));
+        assert_eq!(
+            usage
+                .windows
+                .iter()
+                .map(|window| window.id.as_str())
+                .collect::<Vec<_>>(),
+            ["codex-code-review", "codex-code-review-weekly"]
+        );
+        assert_eq!(usage.windows[0].title, "Code Review 5-hour");
+        assert_eq!(usage.windows[1].title, "Code Review Weekly");
+        assert!(!usage.malformed_success);
+    }
+
+    #[test]
+    fn ignores_null_code_review_rate_limit() {
+        let usage = map_usage(&serde_json::json!({
+            "rate_limit": {
+                "primary_window": {"used_percent": 12, "limit_window_seconds": 18000}
+            },
+            "code_review_rate_limit": null
+        }));
+        assert_eq!(
+            usage
+                .windows
+                .iter()
+                .map(|window| window.id.as_str())
+                .collect::<Vec<_>>(),
+            ["five_hour"]
         );
         assert!(!usage.malformed_success);
     }
