@@ -210,7 +210,6 @@ fn open_existing_or_salvage(
         Ok(connection) => connection,
         Err(error) if sqlite_io_or_full_error(&error) => return Err(StateError::Unavailable),
         Err(error) if sqlite_durable_corruption_error(&error) => {
-            // Present header-valid live: park this image, never resume from a stale .broken.
             return Ok((salvage_once(root, live_path)?, true));
         }
         Err(StateError::ClientUpgradeRequired) => return Err(StateError::ClientUpgradeRequired),
@@ -229,7 +228,7 @@ fn open_existing_or_salvage(
         }
         Err(error) => return Err(map_open_failure(error)),
     };
-    let broken_identity = if broken_path.exists() {
+    let broken_identity = if broken_path.exists() && live_needs_broken_identity(&live_identity) {
         Some(read_broken_identity(broken_path)?)
     } else {
         None
@@ -278,6 +277,10 @@ fn salvage_if_identity_ok(
         }
     }
     Ok((salvage_once(root, live_path)?, true))
+}
+
+fn live_needs_broken_identity(live: &ImageIdentity) -> bool {
+    live.installation_id.is_none() || (live.salvaged_at.is_some() && !live.has_session)
 }
 
 fn is_create_migrate_race(live: &ImageIdentity, broken: &ImageIdentity) -> bool {
@@ -734,8 +737,13 @@ fn classify_live_path(path: &Path) -> Result<LiveKind, StateError> {
 }
 
 fn last_good_is_restorable(root: &Path) -> Result<bool, StateError> {
-    Ok(usable_last_good_image(&root.join(GOOD_RESTORE_NAME))?
-        || usable_last_good_image(&root.join(GOOD_NAME))?)
+    let leftover = usable_last_good_image(&root.join(GOOD_RESTORE_NAME));
+    let good = usable_last_good_image(&root.join(GOOD_NAME));
+    match (leftover, good) {
+        (Ok(true), _) | (_, Ok(true)) => Ok(true),
+        (Ok(false), Ok(false)) => Ok(false),
+        (Err(error), Ok(false)) | (Ok(false), Err(error)) | (Err(error), Err(_)) => Err(error),
+    }
 }
 
 fn usable_last_good_image(path: &Path) -> Result<bool, StateError> {
@@ -744,6 +752,7 @@ fn usable_last_good_image(path: &Path) -> Result<bool, StateError> {
     }
     match read_broken_identity(path) {
         Ok(identity) => Ok(identity.installation_id.is_some()),
+        Err(StateError::Unavailable) => Err(StateError::Unavailable),
         Err(error)
             if sqlite_io_or_full_error(&error) || sqlite_durable_corruption_error(&error) =>
         {
@@ -772,14 +781,19 @@ fn restore_last_good_snapshot(root: &Path, live_path: &Path) -> Result<Connectio
 
 fn last_good_restore_source(root: &Path) -> Result<PathBuf, StateError> {
     let leftover = root.join(GOOD_RESTORE_NAME);
-    if usable_last_good_image(&leftover)? {
+    let leftover_ok = usable_last_good_image(&leftover);
+    if leftover_ok.as_ref().is_ok_and(|usable| *usable) {
         return Ok(leftover);
     }
     let good = root.join(GOOD_NAME);
-    if usable_last_good_image(&good)? {
+    let good_ok = usable_last_good_image(&good);
+    if good_ok.as_ref().is_ok_and(|usable| *usable) {
         return Ok(good);
     }
-    Err(StateError::InvalidState)
+    match (leftover_ok, good_ok) {
+        (Err(error), _) | (_, Err(error)) => Err(error),
+        _ => Err(StateError::InvalidState),
+    }
 }
 
 fn copy_into_owner_only_file(from: &Path, to: &Path) -> Result<(), StateError> {
@@ -1574,36 +1588,68 @@ mod tests {
         fs::remove_dir_all(root).expect("cleanup");
     }
 
-    #[test]
-    fn unreadable_broken_identity_does_not_park_or_mint() {
-        let root = temp_root();
-        let store = StateStore::open(&root).expect("state");
-        let installation = store.installation_id().expect("installation");
-        write_session(&store);
-        drop(store);
-        let live = root.join(LIVE_NAME);
-        let broken = root.join(BROKEN_NAME);
+    fn write_unreadable_sqlite(path: &Path) {
         fs::write(
-            &broken,
+            path,
             SQLITE_HEADER
                 .iter()
                 .copied()
                 .chain([0xFF; 64])
                 .collect::<Vec<_>>(),
         )
-        .expect("junk broken");
-        set_owner_file_mode(&broken);
+        .expect("junk sqlite");
+        set_owner_file_mode(path);
+    }
+
+    #[test]
+    fn leftover_unreadable_broken_is_ignored_when_live_identity_is_complete() {
+        let root = temp_root();
+        let store = StateStore::open(&root).expect("state");
+        let installation = store.installation_id().expect("installation");
+        write_session(&store);
+        drop(store);
+        write_unreadable_sqlite(&root.join(BROKEN_NAME));
+
+        let store = StateStore::open(&root).expect("healthy live");
+        assert_eq!(store.installation_id().expect("id"), installation);
+        assert_eq!(session_status(&store), Some("active".into()));
+        assert!(root.join(BROKEN_NAME).exists());
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn unreadable_broken_identity_does_not_park_or_mint() {
+        let root = temp_root();
+        let store = StateStore::open(&root).expect("state");
+        write_session(&store);
+        drop(store);
+        let live = root.join(LIVE_NAME);
+        let broken = root.join(BROKEN_NAME);
+        let conn = Connection::open(&live).expect("raw");
+        conn.execute("DELETE FROM installation", [])
+            .expect("drop installation");
+        drop(conn);
+        write_unreadable_sqlite(&broken);
 
         assert!(matches!(
             StateStore::open(&root),
             Err(StateError::Unavailable)
         ));
-        assert_eq!(
-            installation_in(&live).as_deref(),
-            Some(installation.as_str())
-        );
+        assert!(installation_in(&live).is_none());
         assert!(broken.exists());
-        assert_eq!(session_status_in(&live).as_deref(), Some("active"));
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn unreadable_good_does_not_first_install_when_live_is_missing() {
+        let root = temp_root();
+        write_unreadable_sqlite(&root.join(GOOD_NAME));
+        assert!(matches!(
+            StateStore::open(&root),
+            Err(StateError::Unavailable)
+        ));
+        assert!(!root.join(LIVE_NAME).exists());
         fs::remove_dir_all(root).expect("cleanup");
     }
 }
