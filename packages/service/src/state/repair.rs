@@ -1,7 +1,7 @@
 //! Repair classification, session persistence, and the single `run_repair` entry.
 
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use rusqlite::Connection;
@@ -109,6 +109,7 @@ pub(super) struct RepairRuntime {
     last_revision: AtomicU64,
     live: Mutex<RepairSession>,
     last_error: Mutex<Option<PersistenceClass>>,
+    image_unwritable: AtomicBool,
     stuck_at: Mutex<Option<Instant>>,
     completed_at: Mutex<Option<Instant>>,
     remapped_on_load: bool,
@@ -132,6 +133,7 @@ impl RepairRuntime {
             last_revision: AtomicU64::new(0),
             live: Mutex::new(session),
             last_error: Mutex::new(None),
+            image_unwritable: AtomicBool::new(false),
             stuck_at: Mutex::new(None),
             completed_at: Mutex::new(None),
             remapped_on_load,
@@ -294,6 +296,28 @@ impl StateStore {
     }
 
     pub fn note_persistence_failure(&self, error: &StateError) {
+        match self.try_lock_conn() {
+            Ok(conn) => self.note_write_failure(&conn, error),
+            Err(_) => {
+                self.record_persistence_class(error);
+            }
+        }
+    }
+
+    pub(super) fn note_write_failure(&self, conn: &Connection, error: &StateError) {
+        let class = self.record_persistence_class(error);
+        if matches!(
+            class,
+            PersistenceClass::Durable | PersistenceClass::IoOrFull
+        ) {
+            let _ = write_metadata_flag(conn, "snapshot_untrusted", true);
+        }
+        if class == PersistenceClass::UsageIsolated {
+            let _ = write_metadata_flag(conn, USAGE_ISOLATED_KEY, true);
+        }
+    }
+
+    fn record_persistence_class(&self, error: &StateError) -> PersistenceClass {
         let class = classify_persistence_error(error);
         if let Ok(mut last) = self.repair.last_error.lock() {
             *last = Some(class);
@@ -301,15 +325,50 @@ impl StateStore {
         if matches!(
             class,
             PersistenceClass::Durable | PersistenceClass::IoOrFull
-        ) && let Ok(conn) = self.db.try_lock()
-        {
-            let _ = write_metadata_flag(&conn, "snapshot_untrusted", true);
+        ) {
+            self.repair.image_unwritable.store(true, Ordering::Release);
         }
-        if class == PersistenceClass::UsageIsolated
-            && let Ok(conn) = self.db.try_lock()
-        {
-            let _ = write_metadata_flag(&conn, USAGE_ISOLATED_KEY, true);
+        class
+    }
+
+    pub fn image_unwritable(&self) -> bool {
+        self.repair.image_unwritable.load(Ordering::Acquire)
+    }
+
+    pub(super) fn clear_image_unwritable(&self) {
+        self.repair.image_unwritable.store(false, Ordering::Release);
+    }
+
+    fn take_last_persistence_class(&self) -> PersistenceClass {
+        self.repair
+            .last_error
+            .lock()
+            .ok()
+            .and_then(|mut guard| guard.take())
+            .unwrap_or(PersistenceClass::Other)
+    }
+
+    pub(super) fn clear_last_persistence_error(&self) {
+        if let Ok(mut last) = self.repair.last_error.lock() {
+            *last = None;
         }
+    }
+
+    pub(crate) fn last_persistence_requires_abort(&self) -> bool {
+        matches!(
+            self.repair.last_error.lock().ok().and_then(|guard| *guard),
+            Some(
+                PersistenceClass::Durable
+                    | PersistenceClass::IoOrFull
+                    | PersistenceClass::UsageIsolated
+            )
+        ) || self.image_unwritable()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_db_lock_held_for_test<R>(&self, f: impl FnOnce() -> R) -> R {
+        let _guard = self.lock_conn().expect("db lock");
+        f()
     }
 
     pub(crate) fn record_open_salvage_session(&self) -> Result<(), StateError> {
@@ -436,34 +495,25 @@ impl StateStore {
     }
 
     fn repair_write_failure(&self) -> Result<RepairReport, StateError> {
-        let class = self
-            .repair
-            .last_error
-            .lock()
-            .ok()
-            .and_then(|guard| *guard)
-            .unwrap_or(PersistenceClass::Other);
+        let class = self.take_last_persistence_class();
         match class {
-            PersistenceClass::Durable => {
-                let now = now_rfc3339();
-                if self.automatic_salvage_used_today().unwrap_or(false) {
-                    return Ok(self.stuck_report(RepairSite::WriteFailure, Vec::new()));
+            PersistenceClass::Durable => match self.salvage_durable_if_allowed(true)? {
+                SalvageOutcome::Ran => Ok(RepairReport {
+                    site: RepairSite::WriteFailure,
+                    executed: vec![RepairAction::SalvageDurableImage],
+                    changed: true,
+                    fail_closed: false,
+                }),
+                SalvageOutcome::Capped => {
+                    Ok(self.stuck_report(RepairSite::WriteFailure, Vec::new()))
                 }
-                self.apply_live_session(durable_repairing_session(
-                    &now,
-                    RepairPhase::PreservingAccount,
-                    "Copying account",
-                    Some(0),
-                    Some(REQUIRED_COPY_PROGRESS_TOTAL),
-                ));
-                let _ = self.persist_live_session();
-                Ok(RepairReport {
+                SalvageOutcome::FailedClosed => Ok(RepairReport {
                     site: RepairSite::WriteFailure,
                     executed: Vec::new(),
                     changed: true,
-                    fail_closed: false,
-                })
-            }
+                    fail_closed: true,
+                }),
+            },
             PersistenceClass::UsageIsolated => match self.persist_probe() {
                 Ok(()) => {
                     self.discard_unreadable_derived_index()?;
@@ -479,24 +529,23 @@ impl StateStore {
                 }
                 Err(error) if sqlite_io_or_full_error(&error) => Err(StateError::Unavailable),
                 Err(error) if sqlite_durable_corruption_error(&error) => {
-                    let now = now_rfc3339();
-                    if self.automatic_salvage_used_today().unwrap_or(false) {
-                        return Ok(self.stuck_report(RepairSite::WriteFailure, Vec::new()));
+                    match self.salvage_durable_if_allowed(true)? {
+                        SalvageOutcome::Ran => Ok(RepairReport {
+                            site: RepairSite::WriteFailure,
+                            executed: vec![RepairAction::SalvageDurableImage],
+                            changed: true,
+                            fail_closed: false,
+                        }),
+                        SalvageOutcome::Capped => {
+                            Ok(self.stuck_report(RepairSite::WriteFailure, Vec::new()))
+                        }
+                        SalvageOutcome::FailedClosed => Ok(RepairReport {
+                            site: RepairSite::WriteFailure,
+                            executed: Vec::new(),
+                            changed: true,
+                            fail_closed: true,
+                        }),
                     }
-                    self.apply_live_session(durable_repairing_session(
-                        &now,
-                        RepairPhase::PreservingAccount,
-                        "Copying account",
-                        Some(0),
-                        Some(REQUIRED_COPY_PROGRESS_TOTAL),
-                    ));
-                    let _ = self.persist_live_session();
-                    Ok(RepairReport {
-                        site: RepairSite::WriteFailure,
-                        executed: Vec::new(),
-                        changed: true,
-                        fail_closed: false,
-                    })
                 }
                 Err(error) => Err(error),
             },
@@ -533,11 +582,14 @@ impl StateStore {
             self.note_persistence_failure(&error);
         }
         let mut executed = Vec::new();
+        if self
+            .with_conn_mut(|conn| {
+                salvage::checkpoint_wal(conn)?;
+                Ok(())
+            })
+            .is_ok()
         {
-            let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-            if salvage::checkpoint_wal(&conn).is_ok() {
-                executed.push(RepairAction::CheckpointWal);
-            }
+            executed.push(RepairAction::CheckpointWal);
         }
         if salvage::write_last_good_if_space(&self.root).unwrap_or(false) {
             executed.push(RepairAction::RefreshLastGoodSnapshot);
@@ -631,7 +683,7 @@ impl StateStore {
     }
 
     fn replace_connection_with_salvage(&self) -> Result<(), StateError> {
-        let mut guard = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        let mut guard = self.lock_conn()?;
         drop(std::mem::replace(
             &mut *guard,
             Connection::open_in_memory()?,
@@ -639,6 +691,8 @@ impl StateStore {
         match salvage::salvage_existing(&self.root) {
             Ok(connection) => {
                 *guard = connection;
+                self.clear_image_unwritable();
+                self.clear_last_persistence_error();
                 Ok(())
             }
             Err(error) => {
@@ -651,16 +705,14 @@ impl StateStore {
     }
 
     fn recover_process_residue(&self) -> Result<(), StateError> {
-        let mut conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        recover_interrupted_attempts(&mut conn)
+        self.with_conn_mut(recover_interrupted_attempts)
     }
 
     fn discard_unreadable_derived_index(&self) -> Result<(), StateError> {
         self.begin_derived_reindex_session();
         self.increment_repair_heartbeat_seq();
         let _ = self.persist_live_session();
-        {
-            let mut conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        self.with_conn_mut(|conn| {
             let tx = conn.transaction()?;
             crate::migration::recreate_usage_index_tables(&tx)?;
             write_metadata_flag(&tx, "usage_reindex_pending", true)?;
@@ -668,7 +720,8 @@ impl StateStore {
             write_metadata_flag(&tx, DERIVED_DROP_PENDING_KEY, false)?;
             write_metadata_flag(&tx, USAGE_ISOLATED_KEY, false)?;
             tx.commit()?;
-        }
+            Ok(())
+        })?;
         self.apply_live_session(derived_repairing_session(
             self.repair_session()
                 .started_at
@@ -740,11 +793,12 @@ impl StateStore {
     }
 
     fn persist_session_snapshot(&self, session: &RepairSession) -> Result<(), StateError> {
-        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        persist_session_on(&conn, self.repair.seq.load(Ordering::Acquire), session)?;
-        let revision = bump_revision(&conn)?;
-        self.store_remembered_revision(revision);
-        Ok(())
+        self.with_conn_mut(|conn| {
+            persist_session_on(conn, self.repair.seq.load(Ordering::Acquire), session)?;
+            let revision = bump_revision(conn)?;
+            self.store_remembered_revision(revision);
+            Ok(())
+        })
     }
 
     fn persist_live_session_best_effort(&self) {
@@ -753,10 +807,14 @@ impl StateStore {
         };
         let session = self.repair_session();
         let seq = self.repair.seq.load(Ordering::Acquire);
-        if persist_session_on(&conn, seq, &session).is_ok()
-            && let Ok(revision) = bump_revision(&conn)
-        {
+        let result = (|| {
+            persist_session_on(&conn, seq, &session)?;
+            let revision = bump_revision(&conn)?;
             self.store_remembered_revision(revision);
+            Ok(())
+        })();
+        if let Err(ref error) = result {
+            self.note_write_failure(&conn, error);
         }
     }
 
@@ -781,32 +839,32 @@ impl StateStore {
     }
 
     fn automatic_salvage_used_today(&self) -> Result<bool, StateError> {
-        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        Ok(metadata_value(&conn, AUTOMATIC_SALVAGE_DAY_KEY)?
-            .is_some_and(|value| value == utc_day_from_rfc3339(&now_rfc3339())))
+        self.with_conn(|conn| {
+            Ok(metadata_value(conn, AUTOMATIC_SALVAGE_DAY_KEY)?
+                .is_some_and(|value| value == utc_day_from_rfc3339(&now_rfc3339())))
+        })
     }
 
     fn record_automatic_salvage_day(&self) -> Result<(), StateError> {
-        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        conn.execute(
-            "INSERT INTO metadata(key, value) VALUES (?1, ?2)
-             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            rusqlite::params![
-                AUTOMATIC_SALVAGE_DAY_KEY,
-                utc_day_from_rfc3339(&now_rfc3339())
-            ],
-        )?;
-        Ok(())
+        self.with_conn_mut(|conn| {
+            conn.execute(
+                "INSERT INTO metadata(key, value) VALUES (?1, ?2)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                rusqlite::params![
+                    AUTOMATIC_SALVAGE_DAY_KEY,
+                    utc_day_from_rfc3339(&now_rfc3339())
+                ],
+            )?;
+            Ok(())
+        })
     }
 
     fn usage_isolated_flag(&self) -> Result<bool, StateError> {
-        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        metadata_flag(&conn, USAGE_ISOLATED_KEY)
+        self.with_conn(|conn| metadata_flag(conn, USAGE_ISOLATED_KEY))
     }
 
     fn set_metadata_flag(&self, key: &str, value: bool) -> Result<(), StateError> {
-        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        write_metadata_flag(&conn, key, value)
+        self.with_conn_mut(|conn| write_metadata_flag(conn, key, value))
     }
 
     #[cfg(test)]
@@ -1217,6 +1275,99 @@ mod tests {
         assert!(store.state_salvaged_at().expect("marker").is_some());
         drop(store);
         fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn persist_probe_and_snapshot_return_unavailable_while_db_lock_held() {
+        let (root, store) = temp_store();
+        let started = Instant::now();
+        store.with_db_lock_held_for_test(|| {
+            assert!(matches!(
+                store.persist_probe(),
+                Err(StateError::Unavailable)
+            ));
+            assert!(matches!(store.snapshot(), Err(StateError::Unavailable)));
+            assert!(matches!(
+                store.snapshot_for_diagnostics(),
+                Err(StateError::Unavailable)
+            ));
+            assert!(matches!(
+                store.diagnostic_snapshot(),
+                Err(StateError::Unavailable)
+            ));
+            assert!(matches!(
+                store.diagnostic_recent_activity(),
+                Err(StateError::Unavailable)
+            ));
+            assert_eq!(
+                store.health_evidence_trust(),
+                crate::state::HealthEvidenceTrust::PersistRetry
+            );
+        });
+        assert!(started.elapsed() < Duration::from_secs(2));
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn mutator_wrapper_notes_persistence_failure() {
+        let (root, store) = temp_store();
+        store
+            .fail_persist_probe_with_corruption_for_test()
+            .expect("poison");
+        assert!(store.persist_probe().is_err());
+        assert!(store.image_unwritable());
+        assert!(store.snapshot_untrusted().expect("untrusted"));
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn persist_probe_success_keeps_usage_isolated_abort_signal() {
+        let (root, store) = temp_store();
+        let isolated = StateError::Sql(rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error {
+                code: rusqlite::ErrorCode::ConstraintViolation,
+                extended_code: 19,
+            },
+            Some("usage_file_records unique constraint".into()),
+        ));
+        store.note_persistence_failure(&isolated);
+        store.persist_probe().expect("probe still works");
+        assert!(store.last_persistence_requires_abort());
+        assert!(!store.image_unwritable());
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn public_mutators_use_with_conn_mut() {
+        for src in [include_str!("mod.rs"), include_str!("repair.rs")] {
+            let src = src.split("\nmod tests {").next().unwrap_or(src);
+            let mut in_allowed = false;
+            for line in src.lines() {
+                if line.contains("fn lock_conn(")
+                    || line.contains("fn try_lock_conn(")
+                    || line.contains("fn persist_live_session_best_effort(")
+                    || line.contains("fn remembered_revision(")
+                {
+                    in_allowed = true;
+                }
+                if line.contains("self.db.lock()") && !in_allowed {
+                    panic!("unwrapped StateStore lock: {line}");
+                }
+                if line.contains("self.db.try_lock()") && !in_allowed {
+                    panic!("unwrapped StateStore try_lock: {line}");
+                }
+                if in_allowed && line.trim() == "}" {
+                    in_allowed = false;
+                }
+            }
+        }
+        assert!(
+            include_str!("repair.rs").contains("self.note_write_failure(&conn, error)"),
+            "heartbeat writer must note persistence failure"
+        );
     }
 
     #[test]

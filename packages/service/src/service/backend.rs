@@ -29,8 +29,8 @@ use crate::providers::{self, CollectionContext};
 use crate::relay::{AccountManager, RelayClient};
 use crate::service::{BackendError, LocalBackend, LoginOutcome, RefreshOutcome};
 use crate::state::{
-    DiagnosticAttemptCompletion, DiagnosticAttemptHandle, HealthEvidenceTrust, StateStore,
-    UsageDirtyRange, now_rfc3339,
+    DiagnosticAttemptCompletion, DiagnosticAttemptHandle, HealthEvidenceTrust, RepairSite,
+    StateStore, UsageDirtyRange, now_rfc3339,
 };
 use crate::usage::{
     self, CoverageReasonCode, CoverageStatus, UsageAgent, UsageHourlyFact, UsageScanOptions,
@@ -367,9 +367,10 @@ impl NativeBackend {
             HealthEvidenceTrust::PersistRetry => Err(BackendError::unavailable()),
             HealthEvidenceTrust::TrustedSnapshot | HealthEvidenceTrust::EvaluateLive => {
                 let report = self.evaluate_diagnostic_report(true)?;
-                self.state
-                    .write_diagnostic_snapshot(&report)
-                    .map_err(|_| BackendError::unavailable())?;
+                if self.state.write_diagnostic_snapshot(&report).is_err() {
+                    let _ = self.state.run_repair(RepairSite::WriteFailure);
+                    let _ = self.state.write_diagnostic_snapshot(&report);
+                }
                 Ok(report)
             }
         }
@@ -1543,6 +1544,9 @@ impl NativeBackend {
             if cancel.load(Ordering::Acquire) {
                 return Err(BackendError::cancelled());
             }
+            if self.state.last_persistence_requires_abort() {
+                return Err(BackendError::unavailable());
+            }
             let file_index = self
                 .state
                 .usage_file_index(agent)
@@ -2649,6 +2653,23 @@ impl LocalBackend for NativeBackend {
                 .then(|| serde_json::from_value(value).ok())
                 .flatten()
         });
+        if self.state.last_persistence_requires_abort() {
+            let usage_value = match usage.as_ref().ok() {
+                Some(value) => self.usage_report(
+                    value,
+                    cached_catalog.as_ref(),
+                    cached_model_catalog.as_ref(),
+                ),
+                None => Err(BackendError::unavailable()),
+            };
+            return RefreshOutcome {
+                quota,
+                usage: usage_value,
+                account: Err(BackendError::unavailable()),
+                pricing: Err(BackendError::unavailable()),
+                overview: None,
+            };
+        }
         let (pricing, model_catalog_refresh) = thread::scope(|scope| {
             let pricing_job = scope.spawn(|| self.refresh_pricing());
             let model_catalog_job = scope.spawn(|| self.refresh_model_catalog());
@@ -2677,6 +2698,15 @@ impl LocalBackend for NativeBackend {
             None => Err(BackendError::unavailable()),
         };
         let quota_value = quota;
+        if self.state.last_persistence_requires_abort() {
+            return RefreshOutcome {
+                quota: quota_value,
+                usage: usage_value,
+                account: Err(BackendError::unavailable()),
+                pricing: Err(BackendError::unavailable()),
+                overview: None,
+            };
+        }
         let mut account_value: Result<Value, BackendError> = Err(BackendError {
             error: IpcError::new(ErrorCode::AuthenticationRequired, RecoveryAction::Login),
         });

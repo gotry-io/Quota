@@ -7,9 +7,9 @@ use std::os::fd::AsRawFd;
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard, TryLockError};
 use std::thread;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Duration, SecondsFormat, Timelike};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
@@ -338,6 +338,84 @@ impl StateStore {
         &self.root
     }
 
+    pub(super) fn lock_conn(&self) -> Result<MutexGuard<'_, Connection>, StateError> {
+        self.db.lock().map_err(|_| StateError::Unavailable)
+    }
+
+    pub(super) fn try_lock_conn(&self) -> Result<MutexGuard<'_, Connection>, StateError> {
+        let deadline = Instant::now() + std::time::Duration::from_millis(150);
+        loop {
+            match self.db.try_lock() {
+                Ok(conn) => return Ok(conn),
+                Err(TryLockError::Poisoned(_)) => return Err(StateError::Unavailable),
+                Err(TryLockError::WouldBlock) => {
+                    if Instant::now() >= deadline {
+                        return Err(StateError::Unavailable);
+                    }
+                    thread::sleep(std::time::Duration::from_millis(10));
+                }
+            }
+        }
+    }
+
+    pub(super) fn with_conn_mut<T>(
+        &self,
+        f: impl FnOnce(&mut Connection) -> Result<T, StateError>,
+    ) -> Result<T, StateError> {
+        self.with_conn_mut_mode(false, f)
+    }
+
+    fn with_conn_mut_try<T>(
+        &self,
+        f: impl FnOnce(&mut Connection) -> Result<T, StateError>,
+    ) -> Result<T, StateError> {
+        self.with_conn_mut_mode(true, f)
+    }
+
+    fn with_conn_mut_mode<T>(
+        &self,
+        request_thread: bool,
+        f: impl FnOnce(&mut Connection) -> Result<T, StateError>,
+    ) -> Result<T, StateError> {
+        if !request_thread && self.image_unwritable() {
+            return Err(StateError::Unavailable);
+        }
+        let mut conn = match if request_thread {
+            self.try_lock_conn()
+        } else {
+            self.lock_conn()
+        } {
+            Ok(conn) => conn,
+            Err(error) => {
+                if !request_thread {
+                    self.note_persistence_failure(&error);
+                }
+                return Err(error);
+            }
+        };
+        let result = f(&mut conn);
+        if let Err(ref error) = result {
+            self.note_write_failure(&conn, error);
+        }
+        result
+    }
+
+    pub(super) fn with_conn<T>(
+        &self,
+        f: impl FnOnce(&Connection) -> Result<T, StateError>,
+    ) -> Result<T, StateError> {
+        let conn = self.lock_conn()?;
+        f(&conn)
+    }
+
+    pub(super) fn with_conn_try<T>(
+        &self,
+        f: impl FnOnce(&Connection) -> Result<T, StateError>,
+    ) -> Result<T, StateError> {
+        let conn = self.try_lock_conn()?;
+        f(&conn)
+    }
+
     pub fn snapshot(&self) -> Result<StateSnapshot, StateError> {
         self.snapshot_with_provider_policy(false)
     }
@@ -350,64 +428,64 @@ impl StateStore {
         &self,
         tolerate_invalid_provider_config: bool,
     ) -> Result<StateSnapshot, StateError> {
-        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        let revision = metadata_u64(&conn, "revision")?;
-        let usage_upload_enabled = metadata_bool(&conn, "usage_upload_enabled")?;
-        let quota = read_component(&conn, ComponentName::Quota)?;
-        let usage = read_component(&conn, ComponentName::Usage)?;
-        let account =
-            read_component(&conn, ComponentName::Account)?.unwrap_or_else(|| ComponentRecord {
-                status: ComponentStatus::SignedOut,
-                value: Some(serde_json::json!({
-                    "auth_status": "signed_out",
-                    "account_id": null,
-                    "device_id": null,
-                    "device_generation": null,
-                    "account_summary": null
-                })),
-                updated_at: None,
-                last_error: None,
-                refreshing: false,
-            });
-        let mut usage_periods = read_usage_periods(&conn)?;
-        let account_usage_available = usage_upload_enabled
-            && account
-                .value
-                .as_ref()
-                .and_then(|value| value.get("auth_status"))
-                .and_then(Value::as_str)
-                == Some("signed_in");
-        if !account_usage_available {
-            usage_periods.account = Default::default();
-        }
-        let pricing = read_component(&conn, ComponentName::Pricing)?;
-        let providers = match read_provider_views(&self.root) {
-            Ok(providers) => providers,
-            Err(_) if tolerate_invalid_provider_config => Vec::new(),
-            Err(error) => return Err(error),
-        };
-        let provider_browser_sessions = read_provider_browser_session_views(&conn)?;
-        let overview = read_overview(&conn)?;
-        drop(conn);
-        Ok(StateSnapshot {
-            ipc_version: IPC_VERSION,
-            revision,
-            usage_upload_enabled,
-            usage_periods,
-            quota: quota
-                .unwrap_or_else(|| ComponentRecord::empty(ComponentStatus::Unavailable))
-                .to_wire(),
-            usage: usage
-                .unwrap_or_else(|| ComponentRecord::empty(ComponentStatus::Unavailable))
-                .to_wire(),
-            account: account.to_wire(),
-            pricing: pricing
-                .unwrap_or_else(|| ComponentRecord::empty(ComponentStatus::Unavailable))
-                .to_wire(),
-            providers,
-            provider_browser_sessions,
-            overview,
-            repair: self.repair_session(),
+        self.with_conn_try(|conn| {
+            let revision = metadata_u64(conn, "revision")?;
+            let usage_upload_enabled = metadata_bool(conn, "usage_upload_enabled")?;
+            let quota = read_component(conn, ComponentName::Quota)?;
+            let usage = read_component(conn, ComponentName::Usage)?;
+            let account =
+                read_component(conn, ComponentName::Account)?.unwrap_or_else(|| ComponentRecord {
+                    status: ComponentStatus::SignedOut,
+                    value: Some(serde_json::json!({
+                        "auth_status": "signed_out",
+                        "account_id": null,
+                        "device_id": null,
+                        "device_generation": null,
+                        "account_summary": null
+                    })),
+                    updated_at: None,
+                    last_error: None,
+                    refreshing: false,
+                });
+            let mut usage_periods = read_usage_periods(conn)?;
+            let account_usage_available = usage_upload_enabled
+                && account
+                    .value
+                    .as_ref()
+                    .and_then(|value| value.get("auth_status"))
+                    .and_then(Value::as_str)
+                    == Some("signed_in");
+            if !account_usage_available {
+                usage_periods.account = Default::default();
+            }
+            let pricing = read_component(conn, ComponentName::Pricing)?;
+            let providers = match read_provider_views(&self.root) {
+                Ok(providers) => providers,
+                Err(_) if tolerate_invalid_provider_config => Vec::new(),
+                Err(error) => return Err(error),
+            };
+            let provider_browser_sessions = read_provider_browser_session_views(conn)?;
+            let overview = read_overview(conn)?;
+            Ok(StateSnapshot {
+                ipc_version: IPC_VERSION,
+                revision,
+                usage_upload_enabled,
+                usage_periods,
+                quota: quota
+                    .unwrap_or_else(|| ComponentRecord::empty(ComponentStatus::Unavailable))
+                    .to_wire(),
+                usage: usage
+                    .unwrap_or_else(|| ComponentRecord::empty(ComponentStatus::Unavailable))
+                    .to_wire(),
+                account: account.to_wire(),
+                pricing: pricing
+                    .unwrap_or_else(|| ComponentRecord::empty(ComponentStatus::Unavailable))
+                    .to_wire(),
+                providers,
+                provider_browser_sessions,
+                overview,
+                repair: self.repair_session(),
+            })
         })
     }
 
@@ -420,8 +498,7 @@ impl StateStore {
     }
 
     pub fn component(&self, name: ComponentName) -> Result<Option<ComponentRecord>, StateError> {
-        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        read_component(&conn, name)
+        self.with_conn_try(|conn| read_component(conn, name))
     }
 
     pub fn replace_usage_periods(
@@ -440,24 +517,25 @@ impl StateStore {
         {
             return Err(StateError::InvalidState);
         }
-        let mut conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        let tx = conn.transaction()?;
-        let source = usage_source_key(source);
-        tx.execute("DELETE FROM usage_period_cache WHERE source = ?1", [source])?;
-        for (period, value) in values {
-            let raw = serde_json::to_string(value)?;
-            if raw.len() > crate::protocol::MAXIMUM_LINE_BYTES {
-                return Err(StateError::InvalidState);
-            }
-            tx.execute(
-                "INSERT INTO usage_period_cache(source, period, value_json)
+        self.with_conn_mut(|conn| {
+            let tx = conn.transaction()?;
+            let source = usage_source_key(source);
+            tx.execute("DELETE FROM usage_period_cache WHERE source = ?1", [source])?;
+            for (period, value) in values {
+                let raw = serde_json::to_string(value)?;
+                if raw.len() > crate::protocol::MAXIMUM_LINE_BYTES {
+                    return Err(StateError::InvalidState);
+                }
+                tx.execute(
+                    "INSERT INTO usage_period_cache(source, period, value_json)
                  VALUES (?1, ?2, ?3)",
-                params![source, usage_period_key(*period), raw],
-            )?;
-        }
-        let revision = bump_revision(&tx)?;
-        tx.commit()?;
-        Ok(revision)
+                    params![source, usage_period_key(*period), raw],
+                )?;
+            }
+            let revision = bump_revision(&tx)?;
+            tx.commit()?;
+            Ok(revision)
+        })
     }
 
     pub fn write_usage_scan_diagnostics(
@@ -469,46 +547,48 @@ impl StateStore {
         if raw.len() > 64 * 1024 {
             return Err(StateError::InvalidState);
         }
-        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        conn.execute(
-            "INSERT INTO usage_scan_diagnostics(agent, payload_json, updated_at)
+        self.with_conn_mut(|conn| {
+            conn.execute(
+                "INSERT INTO usage_scan_diagnostics(agent, payload_json, updated_at)
              VALUES (?1, ?2, ?3)
              ON CONFLICT(agent) DO UPDATE SET payload_json = excluded.payload_json,
              updated_at = excluded.updated_at",
-            params![agent.as_str(), raw, now_rfc3339()],
-        )?;
-        Ok(())
+                params![agent.as_str(), raw, now_rfc3339()],
+            )?;
+            Ok(())
+        })
     }
 
     pub fn usage_scan_diagnostics(&self) -> Result<Vec<(UsageAgent, Value, String)>, StateError> {
-        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        let mut statement = conn.prepare(
-            "SELECT agent, payload_json, updated_at FROM usage_scan_diagnostics ORDER BY agent",
-        )?;
-        let rows = statement.query_map([], |row| {
-            let agent: String = row.get(0)?;
-            let agent = parse_usage_agent(&agent).ok_or_else(|| {
-                rusqlite::Error::InvalidColumnType(
-                    0,
-                    "agent".to_owned(),
-                    rusqlite::types::Type::Text,
-                )
+        self.with_conn_try(|conn| {
+            let mut statement = conn.prepare(
+                "SELECT agent, payload_json, updated_at FROM usage_scan_diagnostics ORDER BY agent",
+            )?;
+            let rows = statement.query_map([], |row| {
+                let agent: String = row.get(0)?;
+                let agent = parse_usage_agent(&agent).ok_or_else(|| {
+                    rusqlite::Error::InvalidColumnType(
+                        0,
+                        "agent".to_owned(),
+                        rusqlite::types::Type::Text,
+                    )
+                })?;
+                let value: String = row.get(1)?;
+                let value = serde_json::from_str(&value).map_err(|_| {
+                    rusqlite::Error::InvalidColumnType(
+                        1,
+                        "payload_json".to_owned(),
+                        rusqlite::types::Type::Text,
+                    )
+                })?;
+                Ok((agent, value, row.get(2)?))
             })?;
-            let value: String = row.get(1)?;
-            let value = serde_json::from_str(&value).map_err(|_| {
-                rusqlite::Error::InvalidColumnType(
-                    1,
-                    "payload_json".to_owned(),
-                    rusqlite::types::Type::Text,
-                )
-            })?;
-            Ok((agent, value, row.get(2)?))
-        })?;
-        let mut diagnostics = Vec::new();
-        for row in rows {
-            diagnostics.push(row?);
-        }
-        Ok(diagnostics)
+            let mut diagnostics = Vec::new();
+            for row in rows {
+                diagnostics.push(row?);
+            }
+            Ok(diagnostics)
+        })
     }
 
     pub fn write_sync_diagnostic(&self, value: &Value) -> Result<(), StateError> {
@@ -516,28 +596,30 @@ impl StateStore {
         if raw.len() > 64 * 1024 {
             return Err(StateError::InvalidState);
         }
-        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        conn.execute(
-            "INSERT INTO sync_diagnostics(id, payload_json, updated_at)
+        self.with_conn_mut(|conn| {
+            conn.execute(
+                "INSERT INTO sync_diagnostics(id, payload_json, updated_at)
              VALUES (1, ?1, ?2)
              ON CONFLICT(id) DO UPDATE SET payload_json = excluded.payload_json,
              updated_at = excluded.updated_at",
-            params![raw, now_rfc3339()],
-        )?;
-        Ok(())
+                params![raw, now_rfc3339()],
+            )?;
+            Ok(())
+        })
     }
 
     pub fn sync_diagnostic(&self) -> Result<Option<(Value, String)>, StateError> {
-        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        let raw: Option<(String, String)> = conn
-            .query_row(
-                "SELECT payload_json, updated_at FROM sync_diagnostics WHERE id = 1",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .optional()?;
-        raw.map(|(value, updated_at)| Ok((serde_json::from_str(&value)?, updated_at)))
-            .transpose()
+        self.with_conn_try(|conn| {
+            let raw: Option<(String, String)> = conn
+                .query_row(
+                    "SELECT payload_json, updated_at FROM sync_diagnostics WHERE id = 1",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?;
+            raw.map(|(value, updated_at)| Ok((serde_json::from_str(&value)?, updated_at)))
+                .transpose()
+        })
     }
 
     pub fn write_diagnostic_snapshot(&self, report: &DiagnosticReport) -> Result<(), StateError> {
@@ -545,41 +627,41 @@ impl StateStore {
         if raw.len() > crate::protocol::MAXIMUM_LINE_BYTES {
             return Err(StateError::InvalidState);
         }
-        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        conn.execute(
-            "INSERT INTO diagnostic_snapshot(id, payload_json, completed_at)
+        self.with_conn_mut(|conn| {
+            conn.execute(
+                "INSERT INTO diagnostic_snapshot(id, payload_json, completed_at)
              VALUES (1, ?1, ?2)
              ON CONFLICT(id) DO UPDATE SET payload_json = excluded.payload_json,
              completed_at = excluded.completed_at",
-            params![raw, report.refresh.as_of],
-        )?;
-        write_metadata_flag(&conn, "snapshot_untrusted", false)?;
-        Ok(())
+                params![raw, report.refresh.as_of],
+            )?;
+            write_metadata_flag(conn, "snapshot_untrusted", false)?;
+            Ok(())
+        })
     }
 
     pub fn persist_probe(&self) -> Result<(), StateError> {
-        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        salvage::persist_probe_on(&conn)
+        let result = self.with_conn_mut_try(|conn| salvage::persist_probe_on(conn));
+        if result.is_ok() {
+            self.clear_image_unwritable();
+        }
+        result
     }
 
     pub fn usage_reindex_pending(&self) -> Result<bool, StateError> {
-        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        metadata_flag(&conn, "usage_reindex_pending")
+        self.with_conn_try(|conn| metadata_flag(conn, "usage_reindex_pending"))
     }
 
     pub fn snapshot_untrusted(&self) -> Result<bool, StateError> {
-        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        metadata_flag(&conn, "snapshot_untrusted")
+        self.with_conn_try(|conn| metadata_flag(conn, "snapshot_untrusted"))
     }
 
     pub fn state_salvaged_at(&self) -> Result<Option<String>, StateError> {
-        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        metadata_value(&conn, "state_salvaged_at")
+        self.with_conn_try(|conn| metadata_value(conn, "state_salvaged_at"))
     }
 
     pub fn diagnose_forces_usage_partial(&self) -> Result<bool, StateError> {
-        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        diagnose_forces_usage_partial_on(&conn)
+        self.with_conn_try(|conn| diagnose_forces_usage_partial_on(conn))
     }
 
     pub fn health_evidence_trust(&self) -> HealthEvidenceTrust {
@@ -590,74 +672,74 @@ impl StateStore {
             Err(_) => HealthEvidenceTrust::PersistRetry,
             Ok(()) => match self.trusted_snapshot_ready() {
                 Ok(true) => HealthEvidenceTrust::TrustedSnapshot,
+                Err(StateError::Unavailable) => HealthEvidenceTrust::PersistRetry,
                 _ => HealthEvidenceTrust::EvaluateLive,
             },
         }
     }
 
     fn trusted_snapshot_ready(&self) -> Result<bool, StateError> {
-        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        if diagnose_forces_usage_partial_on(&conn)? {
-            return Ok(false);
-        }
-        let completed_at: Option<String> = conn
-            .query_row(
-                "SELECT completed_at FROM diagnostic_snapshot WHERE id = 1",
-                [],
-                |row| row.get(0),
-            )
-            .optional()?;
-        let Some(completed_at) = completed_at else {
-            return Ok(false);
-        };
-        if let Some(salvaged_at) = metadata_value(&conn, "state_salvaged_at")?
-            && completed_at < salvaged_at
-        {
-            return Ok(false);
-        }
-        Ok(true)
+        self.with_conn_try(|conn| {
+            if diagnose_forces_usage_partial_on(conn)? {
+                return Ok(false);
+            }
+            let completed_at: Option<String> = conn
+                .query_row(
+                    "SELECT completed_at FROM diagnostic_snapshot WHERE id = 1",
+                    [],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let Some(completed_at) = completed_at else {
+                return Ok(false);
+            };
+            if let Some(salvaged_at) = metadata_value(conn, "state_salvaged_at")?
+                && completed_at < salvaged_at
+            {
+                return Ok(false);
+            }
+            Ok(true)
+        })
     }
 
     pub fn derived_drop_pending(&self) -> Result<bool, StateError> {
-        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        metadata_flag(&conn, "derived_drop_pending")
+        self.with_conn_try(|conn| metadata_flag(conn, "derived_drop_pending"))
     }
 
     #[cfg(test)]
     pub(crate) fn set_usage_reindex_pending(&self, pending: bool) -> Result<(), StateError> {
-        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        write_metadata_flag(&conn, "usage_reindex_pending", pending)
+        self.with_conn_mut(|conn| write_metadata_flag(conn, "usage_reindex_pending", pending))
     }
 
     #[cfg(test)]
     pub(crate) fn set_snapshot_untrusted(&self, untrusted: bool) -> Result<(), StateError> {
-        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        write_metadata_flag(&conn, "snapshot_untrusted", untrusted)
+        self.with_conn_mut(|conn| write_metadata_flag(conn, "snapshot_untrusted", untrusted))
     }
 
     #[cfg(test)]
     pub(crate) fn set_state_salvaged_at(&self, value: Option<&str>) -> Result<(), StateError> {
-        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        match value {
-            Some(value) => {
-                conn.execute(
-                    "INSERT INTO metadata(key, value) VALUES ('state_salvaged_at', ?1)
+        self.with_conn_mut(|conn| {
+            match value {
+                Some(value) => {
+                    conn.execute(
+                        "INSERT INTO metadata(key, value) VALUES ('state_salvaged_at', ?1)
                      ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                    params![value],
-                )?;
+                        params![value],
+                    )?;
+                }
+                None => {
+                    conn.execute("DELETE FROM metadata WHERE key = 'state_salvaged_at'", [])?;
+                }
             }
-            None => {
-                conn.execute("DELETE FROM metadata WHERE key = 'state_salvaged_at'", [])?;
-            }
-        }
-        Ok(())
+            Ok(())
+        })
     }
 
     #[cfg(test)]
     pub(crate) fn fail_persist_probe_with_corruption_for_test(&self) -> Result<(), StateError> {
-        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        conn.execute_batch(
-            "CREATE TRIGGER diagnostics_persist_probe_insert
+        self.with_conn_mut(|conn| {
+            conn.execute_batch(
+                "CREATE TRIGGER diagnostics_persist_probe_insert
              BEFORE INSERT ON metadata
              WHEN NEW.key = 'diagnostics_persist_probe'
              BEGIN
@@ -669,39 +751,42 @@ impl StateStore {
              BEGIN
                SELECT RAISE(ABORT, 'database disk image is malformed');
              END;",
-        )?;
-        Ok(())
+            )?;
+            Ok(())
+        })
     }
 
     #[cfg(test)]
     pub(crate) fn insert_usage_file_record_for_test(&self) -> Result<(), StateError> {
-        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        conn.execute(
-            "INSERT OR REPLACE INTO usage_file_index(
+        self.with_conn_mut(|conn| {
+            conn.execute(
+                "INSERT OR REPLACE INTO usage_file_index(
                agent, source_file_id, identity, size, modified_ns, parser_revision
              ) VALUES ('codex', 'source-1', 'identity-1', 1, '1', 'test')",
-            [],
-        )?;
-        conn.execute(
-            "INSERT OR REPLACE INTO usage_file_records(
+                [],
+            )?;
+            conn.execute(
+                "INSERT OR REPLACE INTO usage_file_records(
                agent, source_file_id, record_index, occurred_at, event_json, record_key
              ) VALUES ('codex', 'source-1', 0, '2026-08-10T12:15:00Z', '{}', 'line:0:0')",
-            [],
-        )?;
-        Ok(())
+                [],
+            )?;
+            Ok(())
+        })
     }
 
     pub fn diagnostic_snapshot(&self) -> Result<Option<DiagnosticReport>, StateError> {
-        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        let raw: Option<String> = conn
-            .query_row(
-                "SELECT payload_json FROM diagnostic_snapshot WHERE id = 1",
-                [],
-                |row| row.get(0),
-            )
-            .optional()?;
-        raw.map(|value| serde_json::from_str(&value).map_err(StateError::from))
-            .transpose()
+        self.with_conn_try(|conn| {
+            let raw: Option<String> = conn
+                .query_row(
+                    "SELECT payload_json FROM diagnostic_snapshot WHERE id = 1",
+                    [],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            raw.map(|value| serde_json::from_str(&value).map_err(StateError::from))
+                .transpose()
+        })
     }
 
     pub fn begin_diagnostic_attempt(
@@ -716,65 +801,68 @@ impl StateStore {
         if subject.is_some_and(|value| !valid_diagnostic_subject(value)) {
             return Err(StateError::InvalidState);
         }
-        let mut conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        let tx = conn.transaction()?;
-        prune_diagnostic_attempts(&tx)?;
-        let revision = metadata_u64(&tx, "revision")?;
-        tx.execute(
-            "INSERT INTO diagnostic_attempts(
+        self.with_conn_mut(|conn| {
+            let tx = conn.transaction()?;
+            prune_diagnostic_attempts(&tx)?;
+            let revision = metadata_u64(&tx, "revision")?;
+            tx.execute(
+                "INSERT INTO diagnostic_attempts(
                parent_refresh_id, kind, trigger, source, subject, mode, started_at,
                recovery, metrics_json, start_revision
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'none', '{}', ?8)",
-            params![
-                parent_refresh.map(|value| value.0),
-                diagnostic_attempt_kind_key(kind),
-                diagnostic_attempt_trigger_key(trigger),
-                diagnostic_source_key(source),
-                subject,
-                diagnostic_mode_key(mode),
-                now_rfc3339(),
-                revision,
-            ],
-        )?;
-        let handle = DiagnosticAttemptHandle(tx.last_insert_rowid());
-        tx.commit()?;
-        Ok(handle)
+                params![
+                    parent_refresh.map(|value| value.0),
+                    diagnostic_attempt_kind_key(kind),
+                    diagnostic_attempt_trigger_key(trigger),
+                    diagnostic_source_key(source),
+                    subject,
+                    diagnostic_mode_key(mode),
+                    now_rfc3339(),
+                    revision,
+                ],
+            )?;
+            let handle = DiagnosticAttemptHandle(tx.last_insert_rowid());
+            tx.commit()?;
+            Ok(handle)
+        })
     }
 
     pub fn running_refresh_attempt(
         &self,
     ) -> Result<Option<(DiagnosticAttemptHandle, DiagnosticAttemptTrigger)>, StateError> {
-        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        conn.query_row(
-            "SELECT id, trigger FROM diagnostic_attempts
+        self.with_conn_try(|conn| {
+            conn.query_row(
+                "SELECT id, trigger FROM diagnostic_attempts
              WHERE kind = 'refresh' AND outcome IS NULL ORDER BY id DESC LIMIT 1",
-            [],
-            |row| {
-                let handle = DiagnosticAttemptHandle(row.get(0)?);
-                let trigger = parse_diagnostic_attempt_trigger(&row.get::<_, String>(1)?)?;
-                Ok((handle, trigger))
-            },
-        )
-        .optional()
-        .map_err(StateError::from)
+                [],
+                |row| {
+                    let handle = DiagnosticAttemptHandle(row.get(0)?);
+                    let trigger = parse_diagnostic_attempt_trigger(&row.get::<_, String>(1)?)?;
+                    Ok((handle, trigger))
+                },
+            )
+            .optional()
+            .map_err(StateError::from)
+        })
     }
 
     pub fn latest_refresh_attempt(
         &self,
     ) -> Result<Option<(DiagnosticAttemptHandle, DiagnosticAttemptTrigger)>, StateError> {
-        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        conn.query_row(
-            "SELECT id, trigger FROM diagnostic_attempts
+        self.with_conn_try(|conn| {
+            conn.query_row(
+                "SELECT id, trigger FROM diagnostic_attempts
              WHERE kind = 'refresh' ORDER BY id DESC LIMIT 1",
-            [],
-            |row| {
-                let handle = DiagnosticAttemptHandle(row.get(0)?);
-                let trigger = parse_diagnostic_attempt_trigger(&row.get::<_, String>(1)?)?;
-                Ok((handle, trigger))
-            },
-        )
-        .optional()
-        .map_err(StateError::from)
+                [],
+                |row| {
+                    let handle = DiagnosticAttemptHandle(row.get(0)?);
+                    let trigger = parse_diagnostic_attempt_trigger(&row.get::<_, String>(1)?)?;
+                    Ok((handle, trigger))
+                },
+            )
+            .optional()
+            .map_err(StateError::from)
+        })
     }
 
     pub fn device_health_upload_due(
@@ -785,13 +873,14 @@ impl StateStore {
         if digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             return Err(StateError::InvalidState);
         }
-        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        let previous_digest = metadata_value(&conn, "device_health_last_digest")?;
-        let previous_at = metadata_value(&conn, "device_health_last_uploaded_at")?
-            .and_then(|value| DateTime::parse_from_rfc3339(&value).ok())
-            .map(|value| value.with_timezone(&chrono::Utc));
-        Ok(previous_digest.as_deref() != Some(digest)
-            || previous_at.is_none_or(|value| now - value >= Duration::minutes(15)))
+        self.with_conn_try(|conn| {
+            let previous_digest = metadata_value(conn, "device_health_last_digest")?;
+            let previous_at = metadata_value(conn, "device_health_last_uploaded_at")?
+                .and_then(|value| DateTime::parse_from_rfc3339(&value).ok())
+                .map(|value| value.with_timezone(&chrono::Utc));
+            Ok(previous_digest.as_deref() != Some(digest)
+                || previous_at.is_none_or(|value| now - value >= Duration::minutes(15)))
+        })
     }
 
     pub fn record_device_health_upload(
@@ -806,21 +895,22 @@ impl StateStore {
         {
             return Err(StateError::InvalidState);
         }
-        let mut conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        let tx = conn.transaction()?;
-        for (key, value) in [
-            ("device_health_last_revision", revision.to_string()),
-            ("device_health_last_digest", digest.to_owned()),
-            ("device_health_last_uploaded_at", uploaded_at.to_owned()),
-        ] {
-            tx.execute(
-                "INSERT INTO metadata(key, value) VALUES (?1, ?2)
+        self.with_conn_mut(|conn| {
+            let tx = conn.transaction()?;
+            for (key, value) in [
+                ("device_health_last_revision", revision.to_string()),
+                ("device_health_last_digest", digest.to_owned()),
+                ("device_health_last_uploaded_at", uploaded_at.to_owned()),
+            ] {
+                tx.execute(
+                    "INSERT INTO metadata(key, value) VALUES (?1, ?2)
                  ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                params![key, value],
-            )?;
-        }
-        tx.commit()?;
-        Ok(())
+                    params![key, value],
+                )?;
+            }
+            tx.commit()?;
+            Ok(())
+        })
     }
 
     pub fn finish_diagnostic_attempt(
@@ -858,66 +948,67 @@ impl StateStore {
             return Err(StateError::InvalidState);
         }
         let completed_at = now_rfc3339();
-        let mut conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        let tx = conn.transaction()?;
-        let revision = metadata_u64(&tx, "revision")?;
-        if interrupt_running_children {
-            tx.execute(
-                "UPDATE diagnostic_attempts SET
+        self.with_conn_mut(|conn| {
+            let tx = conn.transaction()?;
+            let revision = metadata_u64(&tx, "revision")?;
+            if interrupt_running_children {
+                tx.execute(
+                    "UPDATE diagnostic_attempts SET
                    completed_at = ?2,
                    duration_ms = MIN(86400000, MAX(0,
                      CAST((julianday(?2) - julianday(started_at)) * 86400000 AS INTEGER))),
                    outcome = 'interrupted', code = 'process_interrupted', recovery = 'retry',
                    end_revision = ?3
                  WHERE parent_refresh_id = ?1 AND outcome IS NULL",
-                params![handle.0, completed_at, revision],
-            )?;
-        }
-        let changed = tx.execute(
-            "UPDATE diagnostic_attempts SET
+                    params![handle.0, completed_at, revision],
+                )?;
+            }
+            let changed = tx.execute(
+                "UPDATE diagnostic_attempts SET
                completed_at = ?2,
                duration_ms = MIN(86400000, MAX(0,
                  CAST((julianday(?2) - julianday(started_at)) * 86400000 AS INTEGER))),
                outcome = ?3, code = ?4, recovery = ?5, metrics_json = ?6, end_revision = ?7
              WHERE id = ?1 AND outcome IS NULL",
-            params![
-                handle.0,
-                completed_at,
-                diagnostic_attempt_outcome_key(completion.outcome),
-                completion.code.map(diagnostic_attempt_code_key),
-                diagnostic_recovery_key(completion.recovery),
-                metrics_json,
-                revision,
-            ],
-        )? > 0;
-        prune_diagnostic_attempts(&tx)?;
-        if changed
-            && matches!(
-                completion.outcome,
-                DiagnosticAttemptOutcome::Success | DiagnosticAttemptOutcome::Partial
-            )
-        {
-            let kind: Option<String> = tx
-                .query_row(
-                    "SELECT kind FROM diagnostic_attempts WHERE id = ?1",
-                    [handle.0],
-                    |row| row.get(0),
+                params![
+                    handle.0,
+                    completed_at,
+                    diagnostic_attempt_outcome_key(completion.outcome),
+                    completion.code.map(diagnostic_attempt_code_key),
+                    diagnostic_recovery_key(completion.recovery),
+                    metrics_json,
+                    revision,
+                ],
+            )? > 0;
+            prune_diagnostic_attempts(&tx)?;
+            if changed
+                && matches!(
+                    completion.outcome,
+                    DiagnosticAttemptOutcome::Success | DiagnosticAttemptOutcome::Partial
                 )
-                .optional()?;
-            if kind.as_deref() == Some("usage_scan") {
-                write_metadata_flag(&tx, "usage_reindex_pending", false)?;
+            {
+                let kind: Option<String> = tx
+                    .query_row(
+                        "SELECT kind FROM diagnostic_attempts WHERE id = ?1",
+                        [handle.0],
+                        |row| row.get(0),
+                    )
+                    .optional()?;
+                if kind.as_deref() == Some("usage_scan") {
+                    write_metadata_flag(&tx, "usage_reindex_pending", false)?;
+                }
             }
-        }
-        tx.commit()?;
-        Ok(changed)
+            tx.commit()?;
+            Ok(changed)
+        })
     }
 
     pub fn diagnostic_recent_activity(&self) -> Result<DiagnosticRecentActivity, StateError> {
-        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        let failure_cutoff =
-            (chrono::Utc::now() - Duration::hours(24)).to_rfc3339_opts(SecondsFormat::Secs, true);
-        let mut statement = conn.prepare(
-            "SELECT attempts.kind, attempts.trigger, attempts.source, attempts.subject,
+        self.with_conn_try(|conn| {
+            let failure_cutoff = (chrono::Utc::now() - Duration::hours(24))
+                .to_rfc3339_opts(SecondsFormat::Secs, true);
+            let mut statement = conn.prepare(
+                "SELECT attempts.kind, attempts.trigger, attempts.source, attempts.subject,
                     attempts.mode, attempts.started_at, attempts.completed_at,
                     attempts.duration_ms, attempts.outcome, attempts.code, attempts.recovery,
                     attempts.metrics_json, attempts.start_revision, attempts.end_revision,
@@ -935,19 +1026,20 @@ impl StateStore {
                 )
                 OR (attempts.outcome IN ('failed', 'interrupted') AND attempts.started_at >= ?1)
              ORDER BY attempts.id DESC LIMIT 513",
-        )?;
-        let rows = statement.query_map([failure_cutoff], diagnostic_attempt_from_row)?;
-        let mut attempts = Vec::new();
-        for row in rows {
-            attempts.push(row?);
-        }
-        let capped = attempts.len() > MAX_SUPPORT_ATTEMPTS;
-        attempts.truncate(MAX_SUPPORT_ATTEMPTS);
-        attempts.reverse();
-        let history_truncated = capped || metadata_bool(&conn, "attempt_history_truncated")?;
-        Ok(DiagnosticRecentActivity {
-            attempts,
-            history_truncated,
+            )?;
+            let rows = statement.query_map([failure_cutoff], diagnostic_attempt_from_row)?;
+            let mut attempts = Vec::new();
+            for row in rows {
+                attempts.push(row?);
+            }
+            let capped = attempts.len() > MAX_SUPPORT_ATTEMPTS;
+            attempts.truncate(MAX_SUPPORT_ATTEMPTS);
+            attempts.reverse();
+            let history_truncated = capped || metadata_bool(conn, "attempt_history_truncated")?;
+            Ok(DiagnosticRecentActivity {
+                attempts,
+                history_truncated,
+            })
         })
     }
 
@@ -960,10 +1052,10 @@ impl StateStore {
         if subject.is_some_and(|value| !valid_diagnostic_subject(value)) {
             return Err(StateError::InvalidState);
         }
-        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        let read = |success_only: bool| -> Result<Option<DiagnosticAttempt>, StateError> {
-            conn.query_row(
-                "SELECT attempts.kind, attempts.trigger, attempts.source, attempts.subject,
+        self.with_conn_try(|conn| {
+            let read = |success_only: bool| -> Result<Option<DiagnosticAttempt>, StateError> {
+                conn.query_row(
+                    "SELECT attempts.kind, attempts.trigger, attempts.source, attempts.subject,
                         attempts.mode, attempts.started_at, attempts.completed_at,
                         attempts.duration_ms, attempts.outcome, attempts.code, attempts.recovery,
                         attempts.metrics_json, attempts.start_revision, attempts.end_revision,
@@ -975,20 +1067,20 @@ impl StateStore {
                    AND attempts.outcome IS NOT NULL
                    AND (?4 = 0 OR attempts.outcome = 'success')
                  ORDER BY attempts.id DESC LIMIT 1",
-                params![
-                    diagnostic_attempt_kind_key(kind),
-                    diagnostic_source_key(source),
-                    subject,
-                    i64::from(success_only),
-                ],
-                diagnostic_attempt_from_row,
-            )
-            .optional()
-            .map_err(StateError::from)
-        };
-        let latest_problem_after_success = conn
-            .query_row(
-                "SELECT attempts.kind, attempts.trigger, attempts.source, attempts.subject,
+                    params![
+                        diagnostic_attempt_kind_key(kind),
+                        diagnostic_source_key(source),
+                        subject,
+                        i64::from(success_only),
+                    ],
+                    diagnostic_attempt_from_row,
+                )
+                .optional()
+                .map_err(StateError::from)
+            };
+            let latest_problem_after_success = conn
+                .query_row(
+                    "SELECT attempts.kind, attempts.trigger, attempts.source, attempts.subject,
                         attempts.mode, attempts.started_at, attempts.completed_at,
                         attempts.duration_ms, attempts.outcome, attempts.code, attempts.recovery,
                         attempts.metrics_json, attempts.start_revision, attempts.end_revision,
@@ -1005,18 +1097,19 @@ impl StateStore {
                        AND success.outcome = 'success'
                    ), 0)
                  ORDER BY attempts.id DESC LIMIT 1",
-                params![
-                    diagnostic_attempt_kind_key(kind),
-                    diagnostic_source_key(source),
-                    subject,
-                ],
-                diagnostic_attempt_from_row,
-            )
-            .optional()?;
-        Ok(DiagnosticAttemptFacts {
-            latest_completed: read(false)?,
-            latest_success: read(true)?,
-            latest_problem_after_success,
+                    params![
+                        diagnostic_attempt_kind_key(kind),
+                        diagnostic_source_key(source),
+                        subject,
+                    ],
+                    diagnostic_attempt_from_row,
+                )
+                .optional()?;
+            Ok(DiagnosticAttemptFacts {
+                latest_completed: read(false)?,
+                latest_success: read(true)?,
+                latest_problem_after_success,
+            })
         })
     }
 
@@ -1024,9 +1117,9 @@ impl StateStore {
         &self,
         include_usage: bool,
     ) -> Result<Option<DiagnosticAttempt>, StateError> {
-        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        conn.query_row(
-            "WITH latest AS (
+        self.with_conn_try(|conn| {
+            conn.query_row(
+                "WITH latest AS (
                SELECT MAX(id) AS id
                FROM diagnostic_attempts
                WHERE outcome IS NOT NULL AND kind != 'device_health_upload'
@@ -1043,35 +1136,36 @@ impl StateStore {
              WHERE attempts.id IN (SELECT id FROM latest)
                AND attempts.outcome IN ('partial', 'failed', 'interrupted')
              ORDER BY attempts.id DESC LIMIT 1",
-            [i64::from(include_usage)],
-            diagnostic_attempt_from_row,
-        )
-        .optional()
-        .map_err(StateError::from)
+                [i64::from(include_usage)],
+                diagnostic_attempt_from_row,
+            )
+            .optional()
+            .map_err(StateError::from)
+        })
     }
 
     pub fn consecutive_refresh_failures(&self) -> Result<u64, StateError> {
-        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        let mut statement = conn.prepare(
-            "SELECT outcome FROM diagnostic_attempts
+        self.with_conn_try(|conn| {
+            let mut statement = conn.prepare(
+                "SELECT outcome FROM diagnostic_attempts
              WHERE kind = 'refresh' AND outcome IS NOT NULL
              ORDER BY id DESC LIMIT 1001",
-        )?;
-        let outcomes = statement.query_map([], |row| row.get::<_, String>(0))?;
-        let mut failures = 0_u64;
-        for outcome in outcomes {
-            if matches!(outcome?.as_str(), "failed" | "interrupted") {
-                failures += 1;
-            } else {
-                break;
+            )?;
+            let outcomes = statement.query_map([], |row| row.get::<_, String>(0))?;
+            let mut failures = 0_u64;
+            for outcome in outcomes {
+                if matches!(outcome?.as_str(), "failed" | "interrupted") {
+                    failures += 1;
+                } else {
+                    break;
+                }
             }
-        }
-        Ok(failures.min(1_000))
+            Ok(failures.min(1_000))
+        })
     }
 
     pub fn pricing_etag(&self) -> Result<Option<String>, StateError> {
-        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        metadata_value(&conn, "pricing_etag")
+        self.with_conn_try(|conn| metadata_value(conn, "pricing_etag"))
     }
 
     pub fn commit_pricing_catalog(
@@ -1086,7 +1180,7 @@ impl StateStore {
         if raw.len() > crate::protocol::MAXIMUM_LINE_BYTES {
             return Err(StateError::InvalidState);
         }
-        let mut conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        self.with_conn_mut(|conn| {
         let tx = conn.transaction()?;
         tx.execute(
             "INSERT INTO components(name,status,value_json,updated_at,last_error_code,last_error_action,refreshing)
@@ -1110,31 +1204,34 @@ impl StateStore {
         let revision = bump_revision(&tx)?;
         tx.commit()?;
         Ok(revision)
+        })
     }
 
     pub fn model_catalog_etag(&self) -> Result<Option<String>, StateError> {
-        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        conn.query_row(
-            "SELECT etag FROM model_catalog_cache WHERE id = 1",
-            [],
-            |row| row.get::<_, Option<String>>(0),
-        )
-        .optional()
-        .map(|value| value.flatten())
-        .map_err(StateError::from)
+        self.with_conn_try(|conn| {
+            conn.query_row(
+                "SELECT etag FROM model_catalog_cache WHERE id = 1",
+                [],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()
+            .map(|value| value.flatten())
+            .map_err(StateError::from)
+        })
     }
 
     pub fn model_catalog(&self) -> Result<Option<Value>, StateError> {
-        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        let raw: Option<String> = conn
-            .query_row(
-                "SELECT payload_json FROM model_catalog_cache WHERE id = 1",
-                [],
-                |row| row.get(0),
-            )
-            .optional()?;
-        raw.map(|value| serde_json::from_str(&value).map_err(StateError::from))
-            .transpose()
+        self.with_conn_try(|conn| {
+            let raw: Option<String> = conn
+                .query_row(
+                    "SELECT payload_json FROM model_catalog_cache WHERE id = 1",
+                    [],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            raw.map(|value| serde_json::from_str(&value).map_err(StateError::from))
+                .transpose()
+        })
     }
 
     /// Atomically replace the model catalog payload and its validator cache tag. An invalid
@@ -1155,18 +1252,19 @@ impl StateStore {
         if raw.len() > crate::protocol::MAXIMUM_LINE_BYTES {
             return Err(StateError::InvalidState);
         }
-        let mut conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        let tx = conn.transaction()?;
-        tx.execute(
-            "INSERT INTO model_catalog_cache(id, payload_json, etag)
+        self.with_conn_mut(|conn| {
+            let tx = conn.transaction()?;
+            tx.execute(
+                "INSERT INTO model_catalog_cache(id, payload_json, etag)
              VALUES (1, ?1, ?2)
              ON CONFLICT(id) DO UPDATE SET payload_json = excluded.payload_json,
              etag = excluded.etag",
-            params![raw, etag],
-        )?;
-        let revision = bump_revision(&tx)?;
-        tx.commit()?;
-        Ok(revision)
+                params![raw, etag],
+            )?;
+            let revision = bump_revision(&tx)?;
+            tx.commit()?;
+            Ok(revision)
+        })
     }
 
     pub fn set_component(
@@ -1178,7 +1276,7 @@ impl StateStore {
         last_error: Option<IpcError>,
         refreshing: bool,
     ) -> Result<u64, StateError> {
-        let mut conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        self.with_conn_mut(|conn| {
         let tx = conn.transaction()?;
         tx.execute(
             "INSERT INTO components(name,status,value_json,updated_at,last_error_code,last_error_action,refreshing)
@@ -1199,6 +1297,7 @@ impl StateStore {
         let revision = bump_revision(&tx)?;
         tx.commit()?;
         Ok(revision)
+        })
     }
 
     pub fn set_refreshing(&self, name: ComponentName, refreshing: bool) -> Result<u64, StateError> {
@@ -1221,106 +1320,111 @@ impl StateStore {
 
     pub fn set_overview(&self, overview: &[QuotaOverviewItem]) -> Result<u64, StateError> {
         let value = serde_json::to_string(overview)?;
-        let mut conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        let tx = conn.transaction()?;
-        tx.execute(
-            "INSERT INTO metadata(key,value) VALUES ('overview_json',?1)
+        self.with_conn_mut(|conn| {
+            let tx = conn.transaction()?;
+            tx.execute(
+                "INSERT INTO metadata(key,value) VALUES ('overview_json',?1)
              ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            params![value],
-        )?;
-        let revision = bump_revision(&tx)?;
-        tx.commit()?;
-        Ok(revision)
+                params![value],
+            )?;
+            let revision = bump_revision(&tx)?;
+            tx.commit()?;
+            Ok(revision)
+        })
     }
 
     pub fn current_revision(&self) -> Result<u64, StateError> {
-        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        let revision = metadata_u64(&conn, "revision")?;
-        self.store_remembered_revision(revision);
-        Ok(revision)
+        self.with_conn_try(|conn| {
+            let revision = metadata_u64(conn, "revision")?;
+            self.store_remembered_revision(revision);
+            Ok(revision)
+        })
     }
 
     pub fn usage_upload_enabled(&self) -> Result<bool, StateError> {
-        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        metadata_bool(&conn, "usage_upload_enabled")
+        self.with_conn_try(|conn| metadata_bool(conn, "usage_upload_enabled"))
     }
 
     pub fn set_usage_upload_enabled(&self, enabled: bool) -> Result<u64, StateError> {
-        let mut conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        let tx = conn.transaction()?;
-        if metadata_bool(&tx, "usage_upload_enabled")? == enabled {
-            return metadata_u64(&tx, "revision");
-        }
-        tx.execute(
-            "UPDATE metadata SET value = ?1 WHERE key = 'usage_upload_enabled'",
-            params![if enabled { "1" } else { "0" }],
-        )?;
-        let revision = bump_revision(&tx)?;
-        tx.commit()?;
-        Ok(revision)
+        self.with_conn_mut(|conn| {
+            let tx = conn.transaction()?;
+            if metadata_bool(&tx, "usage_upload_enabled")? == enabled {
+                return metadata_u64(&tx, "revision");
+            }
+            tx.execute(
+                "UPDATE metadata SET value = ?1 WHERE key = 'usage_upload_enabled'",
+                params![if enabled { "1" } else { "0" }],
+            )?;
+            let revision = bump_revision(&tx)?;
+            tx.commit()?;
+            Ok(revision)
+        })
     }
 
     pub fn session_json(&self) -> Result<Option<Value>, StateError> {
-        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        let raw: Option<String> = conn
-            .query_row("SELECT payload_json FROM session WHERE id = 1", [], |row| {
-                row.get::<_, String>(0)
-            })
-            .optional()?;
-        raw.map(|value| serde_json::from_str(&value).map_err(StateError::from))
-            .transpose()
+        self.with_conn_try(|conn| {
+            let raw: Option<String> = conn
+                .query_row("SELECT payload_json FROM session WHERE id = 1", [], |row| {
+                    row.get::<_, String>(0)
+                })
+                .optional()?;
+            raw.map(|value| serde_json::from_str(&value).map_err(StateError::from))
+                .transpose()
+        })
     }
 
     /// Reads the session together with the SQLite compare-and-swap epoch.  The epoch is kept
     /// outside the JSON payload so imported released sessions remain wire-compatible while every
     /// local transition gets a monotonic identity.
     pub fn session_snapshot(&self) -> Result<Option<(Value, u64)>, StateError> {
-        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        let raw: Option<(String, i64)> = conn
-            .query_row(
-                "SELECT payload_json, epoch FROM session WHERE id = 1",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .optional()?;
-        raw.map(|(value, epoch)| {
-            let epoch = u64::try_from(epoch).map_err(|_| StateError::InvalidState)?;
-            Ok((serde_json::from_str(&value)?, epoch))
+        self.with_conn_try(|conn| {
+            let raw: Option<(String, i64)> = conn
+                .query_row(
+                    "SELECT payload_json, epoch FROM session WHERE id = 1",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?;
+            raw.map(|(value, epoch)| {
+                let epoch = u64::try_from(epoch).map_err(|_| StateError::InvalidState)?;
+                Ok((serde_json::from_str(&value)?, epoch))
+            })
+            .transpose()
         })
-        .transpose()
     }
 
     /// Returns true only while the same active session is still installed.  Callers use this
     /// immediately before a Relay write so a logout transition cannot revive an old session.
     pub fn active_session_at_epoch(&self, expected_epoch: u64) -> Result<bool, StateError> {
-        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        let raw: Option<(String, i64)> = conn
-            .query_row(
-                "SELECT payload_json, epoch FROM session WHERE id = 1",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .optional()?;
-        let Some((payload, epoch)) = raw else {
-            return Ok(false);
-        };
-        if u64::try_from(epoch).ok() != Some(expected_epoch) {
-            return Ok(false);
-        }
-        Ok(serde_json::from_str::<Value>(&payload)
-            .ok()
-            .and_then(|value| {
-                value
-                    .get("status")
-                    .and_then(Value::as_str)
-                    .map(|status| status == "active")
-            })
-            .unwrap_or(false))
+        self.with_conn_try(|conn| {
+            let raw: Option<(String, i64)> = conn
+                .query_row(
+                    "SELECT payload_json, epoch FROM session WHERE id = 1",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?;
+            let Some((payload, epoch)) = raw else {
+                return Ok(false);
+            };
+            if u64::try_from(epoch).ok() != Some(expected_epoch) {
+                return Ok(false);
+            }
+            Ok(serde_json::from_str::<Value>(&payload)
+                .ok()
+                .and_then(|value| {
+                    value
+                        .get("status")
+                        .and_then(Value::as_str)
+                        .map(|status| status == "active")
+                })
+                .unwrap_or(false))
+        })
     }
 
     pub fn write_session_json(&self, value: &Value) -> Result<u64, StateError> {
         let raw = serde_json::to_string(value)?;
-        let mut conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        self.with_conn_mut(|conn| {
         let tx = conn.transaction()?;
         let epoch: Option<i64> = tx
             .query_row("SELECT epoch FROM session WHERE id = 1", [], |row| {
@@ -1341,6 +1445,7 @@ impl StateStore {
         let revision = bump_revision(&tx)?;
         tx.commit()?;
         Ok(revision)
+        })
     }
 
     /// Replaces the session only if its epoch is unchanged.  The returned epoch is the new
@@ -1351,62 +1456,66 @@ impl StateStore {
         expected_epoch: u64,
     ) -> Result<Option<u64>, StateError> {
         let raw = serde_json::to_string(value)?;
-        let mut conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        let tx = conn.transaction()?;
-        let next_epoch = expected_epoch
-            .checked_add(1)
-            .ok_or(StateError::InvalidState)?;
-        let changed = tx.execute(
-            "UPDATE session SET payload_json = ?1, epoch = ?2 WHERE id = 1 AND epoch = ?3",
-            params![
-                raw,
-                i64::try_from(next_epoch).map_err(|_| StateError::InvalidState)?,
-                i64::try_from(expected_epoch).map_err(|_| StateError::InvalidState)?
-            ],
-        )?;
-        if changed == 0 {
-            tx.rollback()?;
-            return Ok(None);
-        }
-        let _ = bump_revision(&tx)?;
-        tx.commit()?;
-        Ok(Some(next_epoch))
+        self.with_conn_mut(|conn| {
+            let tx = conn.transaction()?;
+            let next_epoch = expected_epoch
+                .checked_add(1)
+                .ok_or(StateError::InvalidState)?;
+            let changed = tx.execute(
+                "UPDATE session SET payload_json = ?1, epoch = ?2 WHERE id = 1 AND epoch = ?3",
+                params![
+                    raw,
+                    i64::try_from(next_epoch).map_err(|_| StateError::InvalidState)?,
+                    i64::try_from(expected_epoch).map_err(|_| StateError::InvalidState)?
+                ],
+            )?;
+            if changed == 0 {
+                tx.rollback()?;
+                return Ok(None);
+            }
+            let _ = bump_revision(&tx)?;
+            tx.commit()?;
+            Ok(Some(next_epoch))
+        })
     }
 
     /// Deletes the session only if the caller still owns the pending epoch.
     pub fn clear_session_if_epoch(&self, expected_epoch: u64) -> Result<bool, StateError> {
-        let mut conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        let tx = conn.transaction()?;
-        let changed = tx.execute(
-            "DELETE FROM session WHERE id = 1 AND epoch = ?1",
-            params![i64::try_from(expected_epoch).map_err(|_| StateError::InvalidState)?],
-        )?;
-        if changed == 0 {
-            tx.rollback()?;
-            return Ok(false);
-        }
-        let _ = bump_revision(&tx)?;
-        tx.commit()?;
-        Ok(true)
+        self.with_conn_mut(|conn| {
+            let tx = conn.transaction()?;
+            let changed = tx.execute(
+                "DELETE FROM session WHERE id = 1 AND epoch = ?1",
+                params![i64::try_from(expected_epoch).map_err(|_| StateError::InvalidState)?],
+            )?;
+            if changed == 0 {
+                tx.rollback()?;
+                return Ok(false);
+            }
+            let _ = bump_revision(&tx)?;
+            tx.commit()?;
+            Ok(true)
+        })
     }
 
     pub fn clear_session(&self) -> Result<u64, StateError> {
-        let mut conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        let tx = conn.transaction()?;
-        tx.execute("DELETE FROM session WHERE id = 1", [])?;
-        let revision = bump_revision(&tx)?;
-        tx.commit()?;
-        Ok(revision)
+        self.with_conn_mut(|conn| {
+            let tx = conn.transaction()?;
+            tx.execute("DELETE FROM session WHERE id = 1", [])?;
+            let revision = bump_revision(&tx)?;
+            tx.commit()?;
+            Ok(revision)
+        })
     }
 
     pub fn installation_id(&self) -> Result<String, StateError> {
-        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        conn.query_row(
-            "SELECT installation_id FROM installation WHERE id = 1",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(StateError::from)
+        self.with_conn_try(|conn| {
+            conn.query_row(
+                "SELECT installation_id FROM installation WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(StateError::from)
+        })
     }
 
     /// Reserves the per-installation Usage privacy lower bound for an account.  The first account
@@ -1422,60 +1531,60 @@ impl StateStore {
         if account_id.is_empty() {
             return Err(StateError::InvalidState);
         }
-        let mut conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        let tx = conn.transaction()?;
-        let (installation_id, payload_json): (String, Option<String>) = tx.query_row(
-            "SELECT installation_id, payload_json FROM installation WHERE id = 1",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )?;
-        let mut payload = payload_json
-            .map(|value| serde_json::from_str::<Value>(&value))
-            .transpose()?
-            .unwrap_or_else(|| {
-                serde_json::json!({
-                    "schema_version": 1,
-                    "installation_id": installation_id,
-                    "account_bindings": []
-                })
-            });
-        let bindings = payload
-            .get_mut("account_bindings")
-            .and_then(Value::as_array_mut)
-            .ok_or(StateError::InvalidState)?;
-        if let Some(existing) = bindings
-            .iter()
-            .find(|binding| binding.get("account_id").and_then(Value::as_str) == Some(account_id))
-        {
-            let lower_bound = existing
-                .get("upload_not_before")
-                .and_then(Value::as_str)
+        self.with_conn_mut(|conn| {
+            let tx = conn.transaction()?;
+            let (installation_id, payload_json): (String, Option<String>) = tx.query_row(
+                "SELECT installation_id, payload_json FROM installation WHERE id = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?;
+            let mut payload = payload_json
+                .map(|value| serde_json::from_str::<Value>(&value))
+                .transpose()?
+                .unwrap_or_else(|| {
+                    serde_json::json!({
+                        "schema_version": 1,
+                        "installation_id": installation_id,
+                        "account_bindings": []
+                    })
+                });
+            let bindings = payload
+                .get_mut("account_bindings")
+                .and_then(Value::as_array_mut)
                 .ok_or(StateError::InvalidState)?;
-            let lower_bound = DateTime::parse_from_rfc3339(lower_bound)
-                .map_err(|_| StateError::InvalidState)?
-                .to_rfc3339_opts(SecondsFormat::AutoSi, true);
+            if let Some(existing) = bindings.iter().find(|binding| {
+                binding.get("account_id").and_then(Value::as_str) == Some(account_id)
+            }) {
+                let lower_bound = existing
+                    .get("upload_not_before")
+                    .and_then(Value::as_str)
+                    .ok_or(StateError::InvalidState)?;
+                let lower_bound = DateTime::parse_from_rfc3339(lower_bound)
+                    .map_err(|_| StateError::InvalidState)?
+                    .to_rfc3339_opts(SecondsFormat::AutoSi, true);
+                tx.commit()?;
+                return Ok(lower_bound);
+            }
+            if bindings.len() >= 32 {
+                return Err(StateError::InvalidState);
+            }
+            let lower_bound = if bindings.is_empty() {
+                "1970-01-01T00:00:00Z".to_owned()
+            } else {
+                login_at
+            };
+            bindings.push(serde_json::json!({
+                "account_id": account_id,
+                "upload_not_before": lower_bound,
+            }));
+            tx.execute(
+                "UPDATE installation SET payload_json = ?1 WHERE id = 1",
+                params![serde_json::to_string(&payload)?],
+            )?;
+            bump_revision(&tx)?;
             tx.commit()?;
-            return Ok(lower_bound);
-        }
-        if bindings.len() >= 32 {
-            return Err(StateError::InvalidState);
-        }
-        let lower_bound = if bindings.is_empty() {
-            "1970-01-01T00:00:00Z".to_owned()
-        } else {
-            login_at
-        };
-        bindings.push(serde_json::json!({
-            "account_id": account_id,
-            "upload_not_before": lower_bound,
-        }));
-        tx.execute(
-            "UPDATE installation SET payload_json = ?1 WHERE id = 1",
-            params![serde_json::to_string(&payload)?],
-        )?;
-        bump_revision(&tx)?;
-        tx.commit()?;
-        Ok(lower_bound)
+            Ok(lower_bound)
+        })
     }
 
     pub fn provider_config(&self, provider: &str) -> Result<Option<ProviderSecret>, StateError> {
@@ -1506,8 +1615,7 @@ impl StateStore {
             },
         );
         write_provider_file(&self.root, &file)?;
-        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        bump_revision(&conn)
+        self.with_conn_mut(|conn| bump_revision(conn))
     }
 
     pub fn remove_provider_config(&self, provider: &str) -> Result<u64, StateError> {
@@ -1516,8 +1624,7 @@ impl StateStore {
         let removed = file.providers.remove(provider).is_some();
         if removed {
             write_provider_file(&self.root, &file)?;
-            let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-            return bump_revision(&conn);
+            return self.with_conn_mut(|conn| bump_revision(conn));
         }
         self.current_revision()
     }
@@ -1526,31 +1633,31 @@ impl StateStore {
         &self,
         provider: &str,
     ) -> Result<Option<ProviderBrowserSession>, StateError> {
-        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        let session = conn
-            .query_row(
-                "SELECT cookie_header, account_fingerprint, account_label
+        self.with_conn_try(|conn| {
+            let session = conn
+                .query_row(
+                    "SELECT cookie_header, account_fingerprint, account_label
              FROM provider_browser_sessions WHERE provider = ?1",
-                [provider],
-                |row| {
-                    Ok(ProviderBrowserSession {
-                        cookie_header: row.get(0)?,
-                        account_fingerprint: row.get(1)?,
-                        account_label: row.get(2)?,
-                    })
-                },
-            )
-            .optional()?;
-        session
-            .map(|session| validate_browser_session(provider, session))
-            .transpose()
+                    [provider],
+                    |row| {
+                        Ok(ProviderBrowserSession {
+                            cookie_header: row.get(0)?,
+                            account_fingerprint: row.get(1)?,
+                            account_label: row.get(2)?,
+                        })
+                    },
+                )
+                .optional()?;
+            session
+                .map(|session| validate_browser_session(provider, session))
+                .transpose()
+        })
     }
 
     pub fn provider_browser_sessions(
         &self,
     ) -> Result<Vec<(crate::catalog::ProviderId, ProviderBrowserSession)>, StateError> {
-        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        read_provider_browser_sessions(&conn)
+        self.with_conn_try(|conn| read_provider_browser_sessions(conn))
     }
 
     pub fn set_provider_browser_session(
@@ -1559,10 +1666,10 @@ impl StateStore {
         session: &ProviderBrowserSession,
     ) -> Result<u64, StateError> {
         validate_browser_session(provider, session.clone())?;
-        let mut conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        let tx = conn.transaction()?;
-        tx.execute(
-            "INSERT INTO provider_browser_sessions(
+        self.with_conn_mut(|conn| {
+            let tx = conn.transaction()?;
+            tx.execute(
+                "INSERT INTO provider_browser_sessions(
                 provider, cookie_header,
                 account_fingerprint, account_label, updated_at
              ) VALUES (?1, ?2, ?3, ?4, ?5)
@@ -1571,37 +1678,39 @@ impl StateStore {
                 account_fingerprint = excluded.account_fingerprint,
                 account_label = excluded.account_label,
                 updated_at = excluded.updated_at",
-            params![
-                provider,
-                session.cookie_header,
-                session.account_fingerprint,
-                session.account_label,
-                now_rfc3339()
-            ],
-        )?;
-        let revision = bump_revision(&tx)?;
-        tx.commit()?;
-        Ok(revision)
+                params![
+                    provider,
+                    session.cookie_header,
+                    session.account_fingerprint,
+                    session.account_label,
+                    now_rfc3339()
+                ],
+            )?;
+            let revision = bump_revision(&tx)?;
+            tx.commit()?;
+            Ok(revision)
+        })
     }
 
     pub fn remove_provider_browser_session(&self, provider: &str) -> Result<u64, StateError> {
-        let mut conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        let tx = conn.transaction()?;
-        let removed = tx.execute(
-            "DELETE FROM provider_browser_sessions WHERE provider = ?1",
-            [provider],
-        )?;
-        let revision = if removed == 0 {
-            metadata_u64(&tx, "revision")?
-        } else {
-            bump_revision(&tx)?
-        };
-        tx.commit()?;
-        Ok(revision)
+        self.with_conn_mut(|conn| {
+            let tx = conn.transaction()?;
+            let removed = tx.execute(
+                "DELETE FROM provider_browser_sessions WHERE provider = ?1",
+                [provider],
+            )?;
+            let revision = if removed == 0 {
+                metadata_u64(&tx, "revision")?
+            } else {
+                bump_revision(&tx)?
+            };
+            tx.commit()?;
+            Ok(revision)
+        })
     }
 
     pub fn outbox_entries(&self) -> Result<Vec<Value>, StateError> {
-        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        self.with_conn_try(|conn| {
         let mut statement = conn.prepare(
             "SELECT payload_json FROM usage_outbox ORDER BY account_id, device_id, generation, sequence",
         )?;
@@ -1611,6 +1720,7 @@ impl StateStore {
             values.push(serde_json::from_str(&row?)?);
         }
         Ok(values)
+        })
     }
 
     pub fn outbox_entries_for(
@@ -1619,20 +1729,21 @@ impl StateStore {
         device_id: &str,
         generation: u64,
     ) -> Result<Vec<Value>, StateError> {
-        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        let mut statement = conn.prepare(
-            "SELECT payload_json FROM usage_outbox
+        self.with_conn_try(|conn| {
+            let mut statement = conn.prepare(
+                "SELECT payload_json FROM usage_outbox
              WHERE account_id = ?1 AND device_id = ?2 AND generation = ?3
              ORDER BY sequence, submission_id",
-        )?;
-        let rows = statement.query_map(params![account_id, device_id, generation], |row| {
-            row.get::<_, String>(0)
-        })?;
-        let mut values = Vec::new();
-        for row in rows {
-            values.push(serde_json::from_str(&row?)?);
-        }
-        Ok(values)
+            )?;
+            let rows = statement.query_map(params![account_id, device_id, generation], |row| {
+                row.get::<_, String>(0)
+            })?;
+            let mut values = Vec::new();
+            for row in rows {
+                values.push(serde_json::from_str(&row?)?);
+            }
+            Ok(values)
+        })
     }
 
     /// Atomically reserves an immutable Usage submission and consumes the exact dirty range that
@@ -1672,7 +1783,7 @@ impl StateStore {
         if raw.len() > crate::relay::MAXIMUM_REQUEST_BYTES {
             return Err(StateError::InvalidState);
         }
-        let mut conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        self.with_conn_mut(|conn| {
         let tx = conn.transaction()?;
         let existing: Option<(String, String, i64, i64, String)> = tx
             .query_row(
@@ -1726,6 +1837,7 @@ impl StateStore {
         bump_revision(&tx)?;
         tx.commit()?;
         Ok(true)
+        })
     }
 
     /// Acknowledges a successful/duplicate Relay response and removes the immutable request in one
@@ -1733,29 +1845,30 @@ impl StateStore {
     /// requests have already consumed their dirty range when all parts are staged, so an ACK never
     /// changes dirty state.
     pub fn acknowledge_outbox_entry(&self, submission_id: &str) -> Result<bool, StateError> {
-        let mut conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        let tx = conn.transaction()?;
-        let exists: Option<i64> = tx
-            .query_row(
-                "SELECT 1
+        self.with_conn_mut(|conn| {
+            let tx = conn.transaction()?;
+            let exists: Option<i64> = tx
+                .query_row(
+                    "SELECT 1
                  FROM usage_outbox WHERE submission_id = ?1",
+                    params![submission_id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let Some(_) = exists else {
+                tx.commit()?;
+                return Ok(false);
+            };
+            let changed = tx.execute(
+                "DELETE FROM usage_outbox WHERE submission_id = ?1",
                 params![submission_id],
-                |row| row.get(0),
-            )
-            .optional()?;
-        let Some(_) = exists else {
+            )?;
+            if changed > 0 {
+                bump_revision(&tx)?;
+            }
             tx.commit()?;
-            return Ok(false);
-        };
-        let changed = tx.execute(
-            "DELETE FROM usage_outbox WHERE submission_id = ?1",
-            params![submission_id],
-        )?;
-        if changed > 0 {
-            bump_revision(&tx)?;
-        }
-        tx.commit()?;
-        Ok(changed > 0)
+            Ok(changed > 0)
+        })
     }
 
     /// Stage every part of one atomic UTC-hour batch in one SQLite transaction. The complete set
@@ -1829,146 +1942,149 @@ impl StateStore {
                 return Err(StateError::InvalidState);
             }
         }
-        let mut conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        let tx = conn.transaction()?;
-        let existing_count: i64 =
-            tx.query_row("SELECT COUNT(*) FROM usage_outbox", [], |row| row.get(0))?;
-        let mut missing = 0i64;
-        let mut pending = Vec::with_capacity(submissions.len());
-        let mut submission_ids = HashSet::with_capacity(submissions.len());
-        for submission in submissions {
-            let submission_id = submission
-                .get("submission_id")
-                .and_then(Value::as_str)
-                .ok_or(StateError::InvalidState)?;
-            if !submission_ids.insert(submission_id.to_owned()) {
-                return Err(StateError::InvalidState);
-            }
-            let raw = serde_json::to_string(submission)?;
-            let existing: Option<(String, String, i64, i64, String)> = tx
-                .query_row(
-                    "SELECT account_id, device_id, generation, sequence, payload_json
-                     FROM usage_outbox WHERE submission_id = ?1",
-                    params![submission_id],
-                    |row| {
-                        Ok((
-                            row.get(0)?,
-                            row.get(1)?,
-                            row.get(2)?,
-                            row.get(3)?,
-                            row.get(4)?,
-                        ))
-                    },
-                )
-                .optional()?;
-            if let Some((
-                stored_account,
-                stored_device,
-                stored_generation,
-                stored_sequence,
-                stored_raw,
-            )) = existing
-            {
-                if stored_account != account_id
-                    || stored_device != device_id
-                    || stored_generation != generation as i64
-                    || stored_sequence
-                        != submission
-                            .get("sequence")
-                            .and_then(Value::as_i64)
-                            .unwrap_or(-1)
-                    || stored_raw != raw
-                {
+        self.with_conn_mut(|conn| {
+            let tx = conn.transaction()?;
+            let existing_count: i64 =
+                tx.query_row("SELECT COUNT(*) FROM usage_outbox", [], |row| row.get(0))?;
+            let mut missing = 0i64;
+            let mut pending = Vec::with_capacity(submissions.len());
+            let mut submission_ids = HashSet::with_capacity(submissions.len());
+            for submission in submissions {
+                let submission_id = submission
+                    .get("submission_id")
+                    .and_then(Value::as_str)
+                    .ok_or(StateError::InvalidState)?;
+                if !submission_ids.insert(submission_id.to_owned()) {
                     return Err(StateError::InvalidState);
                 }
-                continue;
-            }
-            missing = missing.saturating_add(1);
-            pending.push((
-                submission_id.to_owned(),
-                submission
-                    .get("sequence")
-                    .and_then(Value::as_i64)
-                    .ok_or(StateError::InvalidState)?,
-                raw,
-            ));
-        }
-        if existing_count.saturating_add(missing) > MAX_USAGE_OUTBOX_ENTRIES {
-            return Err(StateError::Unavailable);
-        }
-        for (submission_id, sequence, raw) in pending {
-            tx.execute(
-                "INSERT INTO usage_outbox(submission_id, account_id, device_id, generation,
-                    sequence, payload_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![
-                    submission_id,
-                    account_id,
-                    device_id,
-                    generation as i64,
-                    sequence,
+                let raw = serde_json::to_string(submission)?;
+                let existing: Option<(String, String, i64, i64, String)> = tx
+                    .query_row(
+                        "SELECT account_id, device_id, generation, sequence, payload_json
+                     FROM usage_outbox WHERE submission_id = ?1",
+                        params![submission_id],
+                        |row| {
+                            Ok((
+                                row.get(0)?,
+                                row.get(1)?,
+                                row.get(2)?,
+                                row.get(3)?,
+                                row.get(4)?,
+                            ))
+                        },
+                    )
+                    .optional()?;
+                if let Some((
+                    stored_account,
+                    stored_device,
+                    stored_generation,
+                    stored_sequence,
+                    stored_raw,
+                )) = existing
+                {
+                    if stored_account != account_id
+                        || stored_device != device_id
+                        || stored_generation != generation as i64
+                        || stored_sequence
+                            != submission
+                                .get("sequence")
+                                .and_then(Value::as_i64)
+                                .unwrap_or(-1)
+                        || stored_raw != raw
+                    {
+                        return Err(StateError::InvalidState);
+                    }
+                    continue;
+                }
+                missing = missing.saturating_add(1);
+                pending.push((
+                    submission_id.to_owned(),
+                    submission
+                        .get("sequence")
+                        .and_then(Value::as_i64)
+                        .ok_or(StateError::InvalidState)?,
                     raw,
-                ],
-            )?;
-        }
-        // A rescan may dirty an interval while an earlier batch is still in the outbox. In that
-        // case all parts can already exist, but this call must still consume the new dirty range
-        // atomically with the idempotent staging transaction.
-        let consumed_dirty = consume_dirty_usage_range_tx(&tx, consumed)?;
-        let changed = missing > 0 || consumed_dirty > 0;
-        if changed {
-            bump_revision(&tx)?;
-        }
-        tx.commit()?;
-        Ok(changed)
+                ));
+            }
+            if existing_count.saturating_add(missing) > MAX_USAGE_OUTBOX_ENTRIES {
+                return Err(StateError::Unavailable);
+            }
+            for (submission_id, sequence, raw) in pending {
+                tx.execute(
+                    "INSERT INTO usage_outbox(submission_id, account_id, device_id, generation,
+                    sequence, payload_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![
+                        submission_id,
+                        account_id,
+                        device_id,
+                        generation as i64,
+                        sequence,
+                        raw,
+                    ],
+                )?;
+            }
+            // A rescan may dirty an interval while an earlier batch is still in the outbox. In that
+            // case all parts can already exist, but this call must still consume the new dirty range
+            // atomically with the idempotent staging transaction.
+            let consumed_dirty = consume_dirty_usage_range_tx(&tx, consumed)?;
+            let changed = missing > 0 || consumed_dirty > 0;
+            if changed {
+                bump_revision(&tx)?;
+            }
+            tx.commit()?;
+            Ok(changed)
+        })
     }
 
     pub fn usage_file_index(
         &self,
         agent: UsageAgent,
     ) -> Result<HashMap<String, UsageFileIndex>, StateError> {
-        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        let mut statement = conn.prepare(
-            "SELECT source_file_id, identity, size, modified_ns, parser_revision
+        self.with_conn_try(|conn| {
+            let mut statement = conn.prepare(
+                "SELECT source_file_id, identity, size, modified_ns, parser_revision
              FROM usage_file_index WHERE agent = ?1",
-        )?;
-        let rows = statement.query_map(params![agent.as_str()], |row| {
-            let source_file_id: String = row.get(0)?;
-            let modified_ns: String = row.get(3)?;
-            let modified_ns = modified_ns.parse::<u128>().map_err(|_| {
-                rusqlite::Error::InvalidColumnType(
-                    3,
-                    "modified_ns".to_owned(),
-                    rusqlite::types::Type::Text,
-                )
+            )?;
+            let rows = statement.query_map(params![agent.as_str()], |row| {
+                let source_file_id: String = row.get(0)?;
+                let modified_ns: String = row.get(3)?;
+                let modified_ns = modified_ns.parse::<u128>().map_err(|_| {
+                    rusqlite::Error::InvalidColumnType(
+                        3,
+                        "modified_ns".to_owned(),
+                        rusqlite::types::Type::Text,
+                    )
+                })?;
+                Ok((
+                    source_file_id.clone(),
+                    UsageFileIndex {
+                        source_file_id,
+                        identity: row.get(1)?,
+                        size: row.get::<_, i64>(2)? as u64,
+                        modified_ns,
+                        parser_revision: row.get(4)?,
+                    },
+                ))
             })?;
-            Ok((
-                source_file_id.clone(),
-                UsageFileIndex {
-                    source_file_id,
-                    identity: row.get(1)?,
-                    size: row.get::<_, i64>(2)? as u64,
-                    modified_ns,
-                    parser_revision: row.get(4)?,
-                },
-            ))
-        })?;
-        let mut result = HashMap::new();
-        for row in rows {
-            let (id, index) = row?;
-            result.insert(id, index);
-        }
-        Ok(result)
+            let mut result = HashMap::new();
+            for row in rows {
+                let (id, index) = row?;
+                result.insert(id, index);
+            }
+            Ok(result)
+        })
     }
 
     #[cfg(test)]
     pub fn make_usage_file_index_unreadable_for_test(&self) -> Result<(), StateError> {
-        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        conn.execute("DROP TABLE usage_file_index", [])?;
-        Ok(())
+        self.with_conn_mut(|conn| {
+            conn.execute("DROP TABLE usage_file_index", [])?;
+            Ok(())
+        })
     }
 
     pub fn usage_events(&self) -> Result<Vec<NormalizedUsageEvent>, StateError> {
-        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        self.with_conn_try(|conn| {
         let mut statement = conn.prepare(
             "SELECT event_json FROM usage_file_records ORDER BY occurred_at, agent, source_file_id, record_index",
         )?;
@@ -1978,18 +2094,20 @@ impl StateStore {
             events.push(serde_json::from_str(&row?)?);
         }
         Ok(events)
+        })
     }
 
     pub fn usage_event_count(&self) -> Result<u64, StateError> {
-        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        let count = conn.query_row("SELECT COUNT(*) FROM usage_file_records", [], |row| {
-            row.get::<_, i64>(0)
-        })?;
-        u64::try_from(count).map_err(|_| StateError::InvalidState)
+        self.with_conn_try(|conn| {
+            let count = conn.query_row("SELECT COUNT(*) FROM usage_file_records", [], |row| {
+                row.get::<_, i64>(0)
+            })?;
+            u64::try_from(count).map_err(|_| StateError::InvalidState)
+        })
     }
 
     pub fn dirty_usage_ranges(&self) -> Result<Vec<UsageDirtyRange>, StateError> {
-        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        self.with_conn_try(|conn| {
         let mut statement = conn.prepare(
             "SELECT agent, start_at, end_at FROM usage_dirty_ranges ORDER BY start_at, end_at, agent",
         )?;
@@ -2013,6 +2131,7 @@ impl StateStore {
             ranges.push(row?);
         }
         Ok(ranges)
+        })
     }
 
     #[cfg(test)]
@@ -2020,38 +2139,40 @@ impl StateStore {
         &self,
         range: &UsageDirtyRange,
     ) -> Result<(), StateError> {
-        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        conn.execute(
-            "INSERT OR IGNORE INTO usage_dirty_ranges(agent, start_at, end_at)
+        self.with_conn_mut(|conn| {
+            conn.execute(
+                "INSERT OR IGNORE INTO usage_dirty_ranges(agent, start_at, end_at)
              VALUES (?1, ?2, ?3)",
-            params![range.agent.as_str(), range.start_at, range.end_at],
-        )?;
-        Ok(())
+                params![range.agent.as_str(), range.start_at, range.end_at],
+            )?;
+            Ok(())
+        })
     }
 
     /// Returns UTC hours whose indexed source is known to be partial. These markers prevent a
     /// complete upload from replacing remote facts that may be absent from an incomplete source.
     pub fn partial_usage_hours(&self) -> Result<HashSet<(UsageAgent, String)>, StateError> {
-        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        let mut statement = conn.prepare(
-            "SELECT agent, start_at FROM usage_partial_sources ORDER BY agent, start_at",
-        )?;
-        let rows = statement.query_map([], |row| {
-            let agent: String = row.get(0)?;
-            let agent = parse_usage_agent(&agent).ok_or_else(|| {
-                rusqlite::Error::InvalidColumnType(
-                    0,
-                    "agent".to_owned(),
-                    rusqlite::types::Type::Text,
-                )
+        self.with_conn_try(|conn| {
+            let mut statement = conn.prepare(
+                "SELECT agent, start_at FROM usage_partial_sources ORDER BY agent, start_at",
+            )?;
+            let rows = statement.query_map([], |row| {
+                let agent: String = row.get(0)?;
+                let agent = parse_usage_agent(&agent).ok_or_else(|| {
+                    rusqlite::Error::InvalidColumnType(
+                        0,
+                        "agent".to_owned(),
+                        rusqlite::types::Type::Text,
+                    )
+                })?;
+                Ok((agent, row.get::<_, String>(1)?))
             })?;
-            Ok((agent, row.get::<_, String>(1)?))
-        })?;
-        let mut hours = HashSet::new();
-        for row in rows {
-            hours.insert(row?);
-        }
-        Ok(hours)
+            let mut hours = HashSet::new();
+            for row in rows {
+                hours.insert(row?);
+            }
+            Ok(hours)
+        })
     }
 
     /// Switches the upload identity atomically.  A new account/device generation gets a fresh
@@ -2070,49 +2191,49 @@ impl StateStore {
         if account_id.is_empty() || device_id.is_empty() || generation == 0 {
             return Err(StateError::InvalidState);
         }
-        let mut conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        let tx = conn.transaction()?;
-        let current: Option<(String, String, i64, String, String)> = tx
-            .query_row(
-                "SELECT account_id, device_id, generation, aggregation_timezone, lower_bound
+        self.with_conn_mut(|conn| {
+            let tx = conn.transaction()?;
+            let current: Option<(String, String, i64, String, String)> = tx
+                .query_row(
+                    "SELECT account_id, device_id, generation, aggregation_timezone, lower_bound
                  FROM usage_upload_context WHERE id = 1",
-                [],
-                |row| {
-                    Ok((
-                        row.get(0)?,
-                        row.get(1)?,
-                        row.get(2)?,
-                        row.get(3)?,
-                        row.get(4)?,
-                    ))
-                },
-            )
-            .optional()?;
-        let unchanged = current.as_ref().is_some_and(|current| {
-            current.0 == account_id
-                && current.1 == device_id
-                && current.2 == generation as i64
-                && current.3 == aggregation_timezone
-                && current.4 == lower_bound.to_rfc3339_opts(SecondsFormat::AutoSi, true)
-        });
-        if unchanged {
-            let removed = tx.execute(
-                "DELETE FROM usage_outbox
+                    [],
+                    |row| {
+                        Ok((
+                            row.get(0)?,
+                            row.get(1)?,
+                            row.get(2)?,
+                            row.get(3)?,
+                            row.get(4)?,
+                        ))
+                    },
+                )
+                .optional()?;
+            let unchanged = current.as_ref().is_some_and(|current| {
+                current.0 == account_id
+                    && current.1 == device_id
+                    && current.2 == generation as i64
+                    && current.3 == aggregation_timezone
+                    && current.4 == lower_bound.to_rfc3339_opts(SecondsFormat::AutoSi, true)
+            });
+            if unchanged {
+                let removed = tx.execute(
+                    "DELETE FROM usage_outbox
                  WHERE account_id != ?1 OR device_id != ?2 OR generation != ?3",
-                params![account_id, device_id, generation as i64],
-            )?;
-            let revision = if removed > 0 {
-                bump_revision(&tx)?
-            } else {
-                metadata_u64(&tx, "revision")?
-            };
-            tx.commit()?;
-            return Ok(revision);
-        }
-        tx.execute("DELETE FROM usage_outbox", [])?;
-        tx.execute("DELETE FROM usage_dirty_ranges", [])?;
-        tx.execute(
-            "INSERT INTO usage_upload_context(
+                    params![account_id, device_id, generation as i64],
+                )?;
+                let revision = if removed > 0 {
+                    bump_revision(&tx)?
+                } else {
+                    metadata_u64(&tx, "revision")?
+                };
+                tx.commit()?;
+                return Ok(revision);
+            }
+            tx.execute("DELETE FROM usage_outbox", [])?;
+            tx.execute("DELETE FROM usage_dirty_ranges", [])?;
+            tx.execute(
+                "INSERT INTO usage_upload_context(
                 id, account_id, device_id, generation, aggregation_timezone, lower_bound
              ) VALUES (1, ?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(id) DO UPDATE SET
@@ -2121,62 +2242,64 @@ impl StateStore {
                 generation = excluded.generation,
                 aggregation_timezone = excluded.aggregation_timezone,
                 lower_bound = excluded.lower_bound",
-            params![
-                account_id,
-                device_id,
-                generation,
-                aggregation_timezone,
-                lower_bound.to_rfc3339_opts(SecondsFormat::AutoSi, true)
-            ],
-        )?;
-        let mut statement = tx.prepare("SELECT agent, occurred_at FROM usage_file_records")?;
-        let rows = statement
-            .query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-        drop(statement);
-        let mut hours_by_agent: BTreeMap<UsageAgent, Vec<String>> = BTreeMap::new();
-        for (agent_raw, occurred_at) in rows {
-            let Some(agent) = parse_usage_agent(&agent_raw) else {
-                continue;
-            };
-            let Ok(occurred_at) = DateTime::parse_from_rfc3339(&occurred_at) else {
-                continue;
-            };
-            if occurred_at < lower_bound {
-                continue;
+                params![
+                    account_id,
+                    device_id,
+                    generation,
+                    aggregation_timezone,
+                    lower_bound.to_rfc3339_opts(SecondsFormat::AutoSi, true)
+                ],
+            )?;
+            let mut statement = tx.prepare("SELECT agent, occurred_at FROM usage_file_records")?;
+            let rows = statement
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            drop(statement);
+            let mut hours_by_agent: BTreeMap<UsageAgent, Vec<String>> = BTreeMap::new();
+            for (agent_raw, occurred_at) in rows {
+                let Some(agent) = parse_usage_agent(&agent_raw) else {
+                    continue;
+                };
+                let Ok(occurred_at) = DateTime::parse_from_rfc3339(&occurred_at) else {
+                    continue;
+                };
+                if occurred_at < lower_bound {
+                    continue;
+                }
+                hours_by_agent
+                    .entry(agent)
+                    .or_default()
+                    .push(floor_hour(occurred_at).to_rfc3339_opts(SecondsFormat::Secs, true));
             }
-            hours_by_agent
-                .entry(agent)
-                .or_default()
-                .push(floor_hour(occurred_at).to_rfc3339_opts(SecondsFormat::Secs, true));
-        }
-        for (agent, mut hours) in hours_by_agent {
-            hours.sort_unstable();
-            hours.dedup();
-            mark_dirty_hours(&tx, agent, hours)?;
-        }
-        let revision = bump_revision(&tx)?;
-        tx.commit()?;
-        Ok(revision)
+            for (agent, mut hours) in hours_by_agent {
+                hours.sort_unstable();
+                hours.dedup();
+                mark_dirty_hours(&tx, agent, hours)?;
+            }
+            let revision = bump_revision(&tx)?;
+            tx.commit()?;
+            Ok(revision)
+        })
     }
 
     /// Removes only an uploaded portion of a dirty range.  Any not-yet-complete tail is put back
     /// in the table so a refresh before the next UTC hour cannot lose the active hour.
     #[cfg(test)]
     pub fn consume_dirty_usage_range(&self, consumed: &UsageDirtyRange) -> Result<u64, StateError> {
-        let mut conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        let tx = conn.transaction()?;
-        let changed = consume_dirty_usage_range_tx(&tx, consumed)?;
-        if changed == 0 {
-            let revision = metadata_u64(&tx, "revision")?;
+        self.with_conn_mut(|conn| {
+            let tx = conn.transaction()?;
+            let changed = consume_dirty_usage_range_tx(&tx, consumed)?;
+            if changed == 0 {
+                let revision = metadata_u64(&tx, "revision")?;
+                tx.commit()?;
+                return Ok(revision);
+            }
+            let revision = bump_revision(&tx)?;
             tx.commit()?;
-            return Ok(revision);
-        }
-        let revision = bump_revision(&tx)?;
-        tx.commit()?;
-        Ok(revision)
+            Ok(revision)
+        })
     }
 
     pub fn apply_usage_scan(
@@ -2184,110 +2307,107 @@ impl StateStore {
         agent: UsageAgent,
         scan: &UsageScanResult,
     ) -> Result<u64, StateError> {
-        let mut conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
-        let tx = conn.transaction()?;
-        let mut changed = 0usize;
-        for source in &scan.sources {
-            if source.coverage.status != crate::usage::CoverageStatus::Complete {
-                // Preserve the last successful rows and merge newly valid records. This keeps
-                // data useful without allowing an incomplete scan to delete facts. The old file
-                // index remains untouched so the source is retried on the next refresh.
+        self.with_conn_mut(|conn| {
+            let tx = conn.transaction()?;
+            let mut changed = 0usize;
+            for source in &scan.sources {
+                if source.coverage.status != crate::usage::CoverageStatus::Complete {
+                    // Preserve the last successful rows and merge newly valid records. This keeps
+                    // data useful without allowing an incomplete scan to delete facts. The old file
+                    // index remains untouched so the source is retried on the next refresh.
+                    let old_events = record_events(&tx, agent, &source.source.source_file_id)?;
+                    let mut merged = BTreeMap::<String, NormalizedUsageEvent>::new();
+                    for stored in &old_events {
+                        let event: NormalizedUsageEvent = serde_json::from_str(&stored.event_json)?;
+                        merged.insert(stored.record_key.clone(), event);
+                    }
+                    for (record_index, event) in source.records.iter().enumerate() {
+                        merged.insert(source_record_key(source, record_index), event.clone());
+                    }
+                    let merged_events = merged.into_iter().collect::<Vec<_>>();
+                    tx.execute(
+                        "DELETE FROM usage_file_records WHERE agent = ?1 AND source_file_id = ?2",
+                        params![agent.as_str(), source.source.source_file_id],
+                    )?;
+                    for (record_index, (record_key, event)) in merged_events.iter().enumerate() {
+                        let event_json = serde_json::to_string(event)?;
+                        if event_json.len() > crate::relay::MAXIMUM_REQUEST_BYTES {
+                            return Err(StateError::InvalidState);
+                        }
+                        tx.execute(
+                            "INSERT INTO usage_file_records(
+                            agent, source_file_id, record_index, record_key, occurred_at, event_json
+                         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                            params![
+                                agent.as_str(),
+                                source.source.source_file_id,
+                                record_index as i64,
+                                record_key,
+                                event.occurred_at,
+                                event_json,
+                            ],
+                        )?;
+                    }
+                    let hours = merged_events
+                        .iter()
+                        .filter_map(|(_, event)| event_hour(&event.occurred_at).ok())
+                        .collect::<Vec<_>>();
+                    let mut hours = hours;
+                    if source.coverage.reasons.iter().any(|reason| {
+                        reason.code == crate::usage::CoverageReasonCode::InvalidTimestamp
+                    }) && let Ok(start) = event_hour(&source.coverage.start_at)
+                    {
+                        // A malformed record without a usable timestamp cannot be assigned to its
+                        // true hour. Keep one bounded conservative partial marker rather than
+                        // falsely declaring the whole source complete.
+                        hours.push(start);
+                    }
+                    mark_partial_source_hours_tx(
+                        &tx,
+                        agent,
+                        &source.source.source_file_id,
+                        hours.clone(),
+                    )?;
+                    mark_dirty_hours(&tx, agent, hours)?;
+                    changed += 1;
+                    continue;
+                }
                 let old_events = record_events(&tx, agent, &source.source.source_file_id)?;
-                let mut merged = BTreeMap::<String, NormalizedUsageEvent>::new();
-                for stored in &old_events {
-                    let event: NormalizedUsageEvent = serde_json::from_str(&stored.event_json)?;
-                    merged.insert(stored.record_key.clone(), event);
-                }
-                for (record_index, event) in source.records.iter().enumerate() {
-                    merged.insert(source_record_key(source, record_index), event.clone());
-                }
-                let merged_events = merged.into_iter().collect::<Vec<_>>();
+                // A complete rescan also restores the remote replace semantics for every hour that
+                // was previously merged as partial. Even if the repaired rows are byte-identical,
+                // the interval must be uploaded once with `coverage.status=complete` so Relay can
+                // retire its partial marker.
+                let prior_partial_hours =
+                    partial_source_hours_tx(&tx, agent, &source.source.source_file_id)?;
+                tx.execute(
+                    "DELETE FROM usage_partial_sources WHERE agent = ?1 AND source_file_id = ?2",
+                    params![agent.as_str(), source.source.source_file_id],
+                )?;
                 tx.execute(
                     "DELETE FROM usage_file_records WHERE agent = ?1 AND source_file_id = ?2",
                     params![agent.as_str(), source.source.source_file_id],
                 )?;
-                for (record_index, (record_key, event)) in merged_events.iter().enumerate() {
+                for (record_index, event) in source.records.iter().enumerate() {
                     let event_json = serde_json::to_string(event)?;
                     if event_json.len() > crate::relay::MAXIMUM_REQUEST_BYTES {
                         return Err(StateError::InvalidState);
                     }
                     tx.execute(
                         "INSERT INTO usage_file_records(
-                            agent, source_file_id, record_index, record_key, occurred_at, event_json
-                         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                        agent, source_file_id, record_index, record_key, occurred_at, event_json
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                         params![
                             agent.as_str(),
                             source.source.source_file_id,
                             record_index as i64,
-                            record_key,
+                            source_record_key(source, record_index),
                             event.occurred_at,
                             event_json,
                         ],
                     )?;
                 }
-                let hours = merged_events
-                    .iter()
-                    .filter_map(|(_, event)| event_hour(&event.occurred_at).ok())
-                    .collect::<Vec<_>>();
-                let mut hours = hours;
-                if source
-                    .coverage
-                    .reasons
-                    .iter()
-                    .any(|reason| reason.code == crate::usage::CoverageReasonCode::InvalidTimestamp)
-                    && let Ok(start) = event_hour(&source.coverage.start_at)
-                {
-                    // A malformed record without a usable timestamp cannot be assigned to its
-                    // true hour. Keep one bounded conservative partial marker rather than
-                    // falsely declaring the whole source complete.
-                    hours.push(start);
-                }
-                mark_partial_source_hours_tx(
-                    &tx,
-                    agent,
-                    &source.source.source_file_id,
-                    hours.clone(),
-                )?;
-                mark_dirty_hours(&tx, agent, hours)?;
-                changed += 1;
-                continue;
-            }
-            let old_events = record_events(&tx, agent, &source.source.source_file_id)?;
-            // A complete rescan also restores the remote replace semantics for every hour that
-            // was previously merged as partial. Even if the repaired rows are byte-identical,
-            // the interval must be uploaded once with `coverage.status=complete` so Relay can
-            // retire its partial marker.
-            let prior_partial_hours =
-                partial_source_hours_tx(&tx, agent, &source.source.source_file_id)?;
-            tx.execute(
-                "DELETE FROM usage_partial_sources WHERE agent = ?1 AND source_file_id = ?2",
-                params![agent.as_str(), source.source.source_file_id],
-            )?;
-            tx.execute(
-                "DELETE FROM usage_file_records WHERE agent = ?1 AND source_file_id = ?2",
-                params![agent.as_str(), source.source.source_file_id],
-            )?;
-            for (record_index, event) in source.records.iter().enumerate() {
-                let event_json = serde_json::to_string(event)?;
-                if event_json.len() > crate::relay::MAXIMUM_REQUEST_BYTES {
-                    return Err(StateError::InvalidState);
-                }
-                tx.execute(
-                    "INSERT INTO usage_file_records(
-                        agent, source_file_id, record_index, record_key, occurred_at, event_json
-                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                    params![
-                        agent.as_str(),
-                        source.source.source_file_id,
-                        record_index as i64,
-                        source_record_key(source, record_index),
-                        event.occurred_at,
-                        event_json,
-                    ],
-                )?;
-            }
-            changed += tx.execute(
-                "INSERT INTO usage_file_index(
+                changed += tx.execute(
+                    "INSERT INTO usage_file_index(
                     agent, source_file_id, identity, size, modified_ns, parser_revision
                  ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
                  ON CONFLICT(agent, source_file_id) DO UPDATE SET
@@ -2295,45 +2415,46 @@ impl StateStore {
                     size = excluded.size,
                     modified_ns = excluded.modified_ns,
                     parser_revision = excluded.parser_revision",
-                params![
-                    agent.as_str(),
-                    source.source.source_file_id,
-                    source.source.identity,
-                    source.source.size as i64,
-                    source.source.modified_ns.to_string(),
-                    source.index.parser_revision,
-                ],
-            )?;
-            let mut dirty_hours = changed_event_hours(&old_events, &source.records)?;
-            dirty_hours.extend(prior_partial_hours);
-            dirty_hours.sort_unstable();
-            dirty_hours.dedup();
-            mark_dirty_hours(&tx, agent, dirty_hours)?;
-        }
-        for source_file_id in &scan.deleted_source_file_ids {
-            let old_events = record_events(&tx, agent, source_file_id)?;
-            tx.execute(
-                "DELETE FROM usage_partial_sources WHERE agent = ?1 AND source_file_id = ?2",
-                params![agent.as_str(), source_file_id],
-            )?;
-            tx.execute(
-                "DELETE FROM usage_file_records WHERE agent = ?1 AND source_file_id = ?2",
-                params![agent.as_str(), source_file_id],
-            )?;
-            changed += tx.execute(
-                "DELETE FROM usage_file_index WHERE agent = ?1 AND source_file_id = ?2",
-                params![agent.as_str(), source_file_id],
-            )?;
-            mark_dirty_hours(&tx, agent, changed_event_hours(&old_events, &[])?)?;
-        }
-        if changed == 0 {
-            let revision = metadata_u64(&tx, "revision")?;
+                    params![
+                        agent.as_str(),
+                        source.source.source_file_id,
+                        source.source.identity,
+                        source.source.size as i64,
+                        source.source.modified_ns.to_string(),
+                        source.index.parser_revision,
+                    ],
+                )?;
+                let mut dirty_hours = changed_event_hours(&old_events, &source.records)?;
+                dirty_hours.extend(prior_partial_hours);
+                dirty_hours.sort_unstable();
+                dirty_hours.dedup();
+                mark_dirty_hours(&tx, agent, dirty_hours)?;
+            }
+            for source_file_id in &scan.deleted_source_file_ids {
+                let old_events = record_events(&tx, agent, source_file_id)?;
+                tx.execute(
+                    "DELETE FROM usage_partial_sources WHERE agent = ?1 AND source_file_id = ?2",
+                    params![agent.as_str(), source_file_id],
+                )?;
+                tx.execute(
+                    "DELETE FROM usage_file_records WHERE agent = ?1 AND source_file_id = ?2",
+                    params![agent.as_str(), source_file_id],
+                )?;
+                changed += tx.execute(
+                    "DELETE FROM usage_file_index WHERE agent = ?1 AND source_file_id = ?2",
+                    params![agent.as_str(), source_file_id],
+                )?;
+                mark_dirty_hours(&tx, agent, changed_event_hours(&old_events, &[])?)?;
+            }
+            if changed == 0 {
+                let revision = metadata_u64(&tx, "revision")?;
+                tx.commit()?;
+                return Ok(revision);
+            }
+            let revision = bump_revision(&tx)?;
             tx.commit()?;
-            return Ok(revision);
-        }
-        let revision = bump_revision(&tx)?;
-        tx.commit()?;
-        Ok(revision)
+            Ok(revision)
+        })
     }
 }
 
