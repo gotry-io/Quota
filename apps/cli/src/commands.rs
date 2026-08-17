@@ -181,12 +181,31 @@ fn run_status(options: StatusOptions, output: &mut dyn CliOutput) -> i32 {
             );
         }
     };
+    let repair = match load_repair(&context) {
+        Ok(repair) => repair,
+        Err(_) => {
+            return report_failure(
+                Failure,
+                output,
+                "QuotaCLI could not read local repair state.",
+            );
+        }
+    };
     if options.output.format == OutputFormat::Json {
-        write_json(output, &value, options.output.pretty);
+        write_json(
+            output,
+            &merge_repair(&value, &repair),
+            options.output.pretty,
+        );
     } else {
+        render_repair_text(&repair, output);
         render_status_text(&value, output);
     }
-    report_exit_code(&value)
+    if repair_blocks_cli(&repair) {
+        1
+    } else {
+        report_exit_code(&value)
+    }
 }
 
 fn render_status_text(value: &Value, output: &mut dyn CliOutput) {
@@ -285,12 +304,27 @@ fn run_doctor(options: OutputOptions, output: &mut dyn CliOutput) -> i32 {
             );
         }
     };
+    let repair = match load_repair(&context) {
+        Ok(repair) => repair,
+        Err(_) => {
+            return report_failure(
+                Failure,
+                output,
+                "QuotaCLI could not read local repair state.",
+            );
+        }
+    };
     if options.format == OutputFormat::Json {
-        write_json(output, &report, options.pretty);
+        write_json(output, &merge_repair(&report, &repair), options.pretty);
     } else {
+        render_repair_text(&repair, output);
         render_diagnostics_text(&report, output);
     }
-    diagnostics_exit_code(&report)
+    if repair_blocks_cli(&repair) {
+        1
+    } else {
+        diagnostics_exit_code(&report)
+    }
 }
 
 fn render_diagnostics_text(report: &Value, output: &mut dyn CliOutput) {
@@ -546,6 +580,96 @@ fn diagnostic_metrics_suffix(value: &Value) -> String {
     } else {
         format!("\t{metrics}")
     }
+}
+
+fn load_repair(context: &ServiceContext) -> Result<Value, Failure> {
+    repair_from_state(&invoke(context, Operation::GetState, json!({}))?)
+}
+
+fn repair_from_state(snapshot: &Value) -> Result<Value, Failure> {
+    snapshot.get("repair").cloned().ok_or(Failure)
+}
+
+fn merge_repair(value: &Value, repair: &Value) -> Value {
+    let mut object = match value {
+        Value::Object(map) => map.clone(),
+        _ => return value.clone(),
+    };
+    object.insert("repair".to_owned(), repair.clone());
+    Value::Object(object)
+}
+
+fn repair_blocks_cli(repair: &Value) -> bool {
+    matches!(
+        repair.get("status").and_then(Value::as_str),
+        Some("repairing" | "stuck" | "failed")
+    )
+}
+
+fn render_repair_text(repair: &Value, output: &mut dyn CliOutput) {
+    let status = repair
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("idle");
+    let phase = repair.get("phase").and_then(Value::as_str).unwrap_or("-");
+    let title = repair.get("title").and_then(Value::as_str).unwrap_or("-");
+    let stuck = repair
+        .get("stuck")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let elapsed = repair
+        .get("started_at")
+        .and_then(Value::as_str)
+        .and_then(elapsed_label)
+        .unwrap_or_else(|| "-".to_owned());
+    output.stdout(&format!(
+        "Repair: {status}\tphase={phase}\ttitle={title}\telapsed={elapsed}\tstuck={stuck}"
+    ));
+}
+
+fn elapsed_label(started_at: &str) -> Option<String> {
+    let started = parse_rfc3339_secs(started_at)?;
+    let now = parse_rfc3339_secs(&now_rfc3339())?;
+    let seconds = now.saturating_sub(started);
+    Some(if seconds < 60 {
+        format!("{seconds}s")
+    } else {
+        format!("{}m {}s", seconds / 60, seconds % 60)
+    })
+}
+
+fn parse_rfc3339_secs(value: &str) -> Option<u64> {
+    if value.len() < 20 {
+        return None;
+    }
+    let year = value.get(0..4)?.parse::<i64>().ok()?;
+    let month = value.get(5..7)?.parse::<u32>().ok()?;
+    let day = value.get(8..10)?.parse::<u32>().ok()?;
+    let hour = value.get(11..13)?.parse::<u64>().ok()?;
+    let minute = value.get(14..16)?.parse::<u64>().ok()?;
+    let second = value.get(17..19)?.parse::<u64>().ok()?;
+    if month == 0 || month > 12 || day == 0 || day > 31 {
+        return None;
+    }
+    let days = days_from_civil(year, month, day)?;
+    Some(days * 86_400 + hour * 3_600 + minute * 60 + second)
+}
+
+fn days_from_civil(year: i64, month: u32, day: u32) -> Option<u64> {
+    let mut year = year;
+    let mut month = month as i64;
+    if month <= 2 {
+        year -= 1;
+        month += 9;
+    } else {
+        month -= 3;
+    }
+    let era = year.div_euclid(400);
+    let yoe = year.rem_euclid(400);
+    let doy = (153 * month + 2) / 5 + i64::from(day) - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    u64::try_from(days).ok()
 }
 
 fn diagnostics_exit_code(report: &Value) -> i32 {
@@ -1145,6 +1269,52 @@ mod tests {
         assert!(text.contains("Older activity was removed"));
         assert!(!text.contains("/Users/"));
         assert!(!text.contains("token"));
+    }
+
+    #[test]
+    fn missing_repair_object_is_an_error() {
+        assert!(repair_from_state(&json!({"ipc_version": 1})).is_err());
+        assert!(repair_from_state(&json!({"repair": {"status": "repairing"}})).is_ok());
+    }
+
+    #[test]
+    fn repair_print_and_exit_are_table_driven() {
+        let cases = [
+            ("idle", None, None, false),
+            (
+                "repairing",
+                Some("reindexing_usage"),
+                Some("Rebuilding Usage history"),
+                true,
+            ),
+            (
+                "stuck",
+                Some("preserving_account"),
+                Some("Repairing local data"),
+                true,
+            ),
+            (
+                "failed",
+                Some("rebuilding_storage"),
+                Some("Repairing local data"),
+                true,
+            ),
+        ];
+        for (status, phase, title, blocks) in cases {
+            let repair = json!({
+                "status": status,
+                "phase": phase,
+                "title": title,
+                "started_at": "2026-08-17T01:00:00Z",
+                "stuck": status == "stuck" || status == "failed"
+            });
+            let mut output = BufferOutput::default();
+            render_repair_text(&repair, &mut output);
+            assert_eq!(repair_blocks_cli(&repair), blocks);
+            assert!(output.stdout[0].contains(&format!("Repair: {status}")));
+            assert!(output.stdout[0].contains(&format!("phase={}", phase.unwrap_or("-"))));
+            assert!(output.stdout[0].contains(&format!("title={}", title.unwrap_or("-"))));
+        }
     }
 
     #[test]

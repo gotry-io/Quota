@@ -88,8 +88,8 @@ Build the deterministic visual app with `pnpm build:menubar:visual`. It accepts:
 
 ```text
 --data-source fixture|live
---fixture loading|content|cached-refresh-error|empty|unavailable
---route overview|settings|agents|provider-codex|provider-openrouter|provider-cursor|devices|usage|support|diagnostics
+--fixture loading|content|cached-refresh-error|empty|unavailable|repairing-durable|repairing-derived|stuck|failed
+--route overview|settings|agents|provider-codex|provider-openrouter|provider-cursor|devices|usage|support|diagnostics|repair
 --appearance system|light|dark
 --text-size standard|extra-large|accessibility
 ```

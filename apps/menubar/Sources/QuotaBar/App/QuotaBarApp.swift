@@ -1,7 +1,26 @@
 import SwiftUI
 
-#if VISUAL_TEST
-  import AppKit
+import AppKit
+
+#if !VISUAL_TEST
+  @MainActor
+  final class QuotaBarAppDelegate: NSObject, NSApplicationDelegate {
+    weak var model: MenuBarViewModel?
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+      guard let model, model.repairBlocksQuit else { return .terminateNow }
+      model.presentRepairPageFromQuitAttempt()
+      NSAccessibility.post(
+        element: sender,
+        notification: .announcementRequested,
+        userInfo: [
+          .announcement: "QuotaBar is repairing local data. Keep the app open.",
+          .priority: NSAccessibilityPriorityLevel.high.rawValue,
+        ]
+      )
+      return .terminateCancel
+    }
+  }
 #endif
 
 @main
@@ -51,6 +70,7 @@ struct QuotaBarApp: App {
       .windowStyle(.hiddenTitleBar)
     }
   #else
+    @NSApplicationDelegateAdaptor(QuotaBarAppDelegate.self) private var appDelegate
     @State private var model: MenuBarViewModel
 
     init() {
@@ -65,6 +85,7 @@ struct QuotaBarApp: App {
     var body: some Scene {
       MenuBarExtra {
         MenuBarContentView(model: model)
+          .onAppear { appDelegate.model = model }
       } label: {
         QuotaMenuBarIcon()
       }

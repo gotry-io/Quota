@@ -91,16 +91,27 @@ pub(super) fn persist_probe_on(conn: &Connection) -> Result<(), StateError> {
     Ok(())
 }
 
-pub(super) fn open_or_salvage(root: &Path) -> Result<Connection, StateError> {
+pub(super) fn open_or_salvage(root: &Path) -> Result<(Connection, bool), StateError> {
     let live_path = root.join(LIVE_NAME);
     remove_sqlite_image(&root.join(SALVAGE_NAME));
     match open_live_and_probe(&live_path) {
-        Ok(connection) => Ok(connection),
+        Ok(connection) => Ok((connection, false)),
         Err(error) if sqlite_io_or_full_error(&error) => Err(StateError::Unavailable),
-        Err(error) if sqlite_durable_corruption_error(&error) => salvage_once(root, &live_path),
+        Err(error) if sqlite_durable_corruption_error(&error) => {
+            Ok((salvage_once(root, &live_path)?, true))
+        }
         Err(StateError::ClientUpgradeRequired) => Err(StateError::ClientUpgradeRequired),
         Err(error) => Err(map_open_failure(error)),
     }
+}
+
+pub(super) fn salvage_existing(root: &Path) -> Result<Connection, StateError> {
+    let live_path = root.join(LIVE_NAME);
+    salvage_once(root, &live_path)
+}
+
+pub(super) fn reopen_live(root: &Path) -> Result<Connection, StateError> {
+    open_live_and_probe(&root.join(LIVE_NAME))
 }
 
 fn map_open_failure(error: StateError) -> StateError {
