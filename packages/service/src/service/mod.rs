@@ -9,8 +9,8 @@ use std::time::{Duration, Instant};
 
 use crate::protocol::*;
 use crate::state::{
-    DiagnosticAttemptCompletion, DiagnosticAttemptHandle, RepairSite, StateError, StateStore,
-    now_rfc3339, sqlite_durable_corruption_error, sqlite_io_or_full_error,
+    DiagnosticAttemptCompletion, DiagnosticAttemptHandle, RepairAction, RepairSite, StateError,
+    StateStore, now_rfc3339, sqlite_durable_corruption_error, sqlite_io_or_full_error,
 };
 use serde_json::Value;
 
@@ -152,6 +152,7 @@ struct RefreshState {
     active: Option<ActiveRefresh>,
     pending: bool,
     pending_trigger: Option<DiagnosticAttemptTrigger>,
+    aborted: bool,
 }
 
 fn coalesce_refresh_trigger(
@@ -212,6 +213,7 @@ impl LocalService {
                     active: None,
                     pending: false,
                     pending_trigger: None,
+                    aborted: false,
                 }),
                 login: Mutex::new(LoginState { active: None }),
                 scheduler_wakeup: Condvar::new(),
@@ -702,15 +704,28 @@ impl LocalService {
         self.start_repair_watchdog();
         match self.inner.state.run_repair(RepairSite::RefreshStart) {
             Ok(report) if report.fail_closed => {
+                self.persist_refresh_last_error(IpcError::new(
+                    ErrorCode::InvalidState,
+                    RecoveryAction::Reinstall,
+                ));
                 return RefreshResult {
                     accepted: false,
                     pending: false,
                     revision: self.inner.state.current_revision().unwrap_or(0),
                 };
             }
-            Err(error)
-                if sqlite_io_or_full_error(&error) || sqlite_durable_corruption_error(&error) =>
-            {
+            Err(error) if sqlite_io_or_full_error(&error) => {
+                self.persist_refresh_last_error(IpcError::new(
+                    ErrorCode::Unavailable,
+                    RecoveryAction::Retry,
+                ));
+                return RefreshResult {
+                    accepted: false,
+                    pending: false,
+                    revision: self.inner.state.current_revision().unwrap_or(0),
+                };
+            }
+            Err(error) if sqlite_durable_corruption_error(&error) => {
                 return RefreshResult {
                     accepted: false,
                     pending: false,
@@ -731,22 +746,19 @@ impl LocalService {
             }
         }
         let cancel = Arc::new(AtomicBool::new(false));
-        let attempt = self
-            .inner
-            .state
-            .begin_diagnostic_attempt(
-                DiagnosticAttemptKind::Refresh,
-                trigger,
-                DiagnosticSource::System,
-                None,
-                DiagnosticMode::Required,
-                None,
-            )
-            .ok();
+        let attempt = match self.begin_refresh_attempt(trigger) {
+            Ok(handle) => Some(handle),
+            Err(error) if sqlite_durable_corruption_error(&error) => {
+                let _ = self.inner.state.run_repair(RepairSite::WriteFailure);
+                self.begin_refresh_attempt(trigger).ok()
+            }
+            Err(_) => None,
+        };
         refresh.active = Some(ActiveRefresh {
             cancel: cancel.clone(),
             started_at: now_rfc3339(),
         });
+        refresh.aborted = false;
         drop(refresh);
 
         let components = [
@@ -800,7 +812,13 @@ impl LocalService {
                                 );
                         }
                     }
-                    if let Ok(report) = service.inner.backend.complete_diagnostics() {
+                    let aborted = service
+                        .inner
+                        .refresh
+                        .lock()
+                        .map(|refresh| refresh.aborted)
+                        .unwrap_or(false);
+                    if !aborted && let Ok(report) = service.inner.backend.complete_diagnostics() {
                         let _ = service.inner.state.run_repair(RepairSite::PostRefresh);
                         let _ = service.inner.backend.publish_device_health(&report);
                     }
@@ -810,6 +828,7 @@ impl LocalService {
                         .lock()
                         .map(|mut refresh| {
                             refresh.active = None;
+                            refresh.aborted = false;
                             let rerun = refresh.pending.then_some(
                                 refresh
                                     .pending_trigger
@@ -864,8 +883,143 @@ impl LocalService {
         }
     }
 
+    fn begin_refresh_attempt(
+        &self,
+        trigger: DiagnosticAttemptTrigger,
+    ) -> Result<DiagnosticAttemptHandle, StateError> {
+        self.inner.state.begin_diagnostic_attempt(
+            DiagnosticAttemptKind::Refresh,
+            trigger,
+            DiagnosticSource::System,
+            None,
+            DiagnosticMode::Required,
+            None,
+        )
+    }
+
+    fn persist_refresh_last_error(&self, error: IpcError) {
+        for component in [
+            ComponentName::Quota,
+            ComponentName::Usage,
+            ComponentName::Account,
+            ComponentName::Pricing,
+        ] {
+            let current = self.inner.state.component(component).ok().flatten();
+            let status = if current
+                .as_ref()
+                .is_some_and(|record| record.value.is_some())
+            {
+                ComponentStatus::Stale
+            } else {
+                ComponentStatus::Error
+            };
+            let _ = self.inner.state.set_component(
+                component,
+                status,
+                current.as_ref().and_then(|record| record.value.clone()),
+                current
+                    .as_ref()
+                    .and_then(|record| record.updated_at.clone()),
+                Some(error.clone()),
+                false,
+            );
+        }
+    }
+
+    fn finish_aborted_refresh_attempt(&self, attempt: Option<DiagnosticAttemptHandle>) {
+        if let Some(attempt) = attempt {
+            let _ = self
+                .inner
+                .state
+                .finish_diagnostic_attempt_with_interrupted_children(
+                    attempt,
+                    &DiagnosticAttemptCompletion {
+                        outcome: DiagnosticAttemptOutcome::Interrupted,
+                        code: Some(DiagnosticAttemptCode::ProcessInterrupted),
+                        recovery: DiagnosticRecovery::Retry,
+                        metrics: Default::default(),
+                    },
+                );
+        }
+    }
+
+    fn mark_refresh_aborted(&self, pending: bool) {
+        if let Ok(mut refresh) = self.inner.refresh.lock() {
+            refresh.aborted = true;
+            if pending {
+                refresh.pending = true;
+                if refresh.pending_trigger.is_none() {
+                    refresh.pending_trigger = Some(DiagnosticAttemptTrigger::Scheduled);
+                }
+            } else {
+                refresh.pending = false;
+                refresh.pending_trigger = None;
+            }
+        }
+    }
+
+    fn abort_refresh_on_write_failure(&self, attempt: Option<DiagnosticAttemptHandle>) -> bool {
+        if !self.inner.state.last_persistence_requires_abort() {
+            return false;
+        }
+        match self.inner.state.run_repair(RepairSite::WriteFailure) {
+            Ok(report) if report.fail_closed => {
+                self.persist_refresh_last_error(IpcError::new(
+                    ErrorCode::InvalidState,
+                    RecoveryAction::Reinstall,
+                ));
+                self.finish_aborted_refresh_attempt(attempt);
+                self.mark_refresh_aborted(false);
+                true
+            }
+            Ok(report)
+                if report.executed.iter().any(|action| {
+                    matches!(
+                        action,
+                        RepairAction::DiscardUnreadableDerivedIndex
+                            | RepairAction::SalvageDurableImage
+                    )
+                }) =>
+            {
+                self.finish_aborted_refresh_attempt(attempt);
+                self.mark_refresh_aborted(true);
+                true
+            }
+            Err(error) if sqlite_io_or_full_error(&error) => {
+                self.persist_refresh_last_error(IpcError::new(
+                    ErrorCode::Unavailable,
+                    RecoveryAction::Retry,
+                ));
+                self.finish_aborted_refresh_attempt(attempt);
+                self.mark_refresh_aborted(true);
+                true
+            }
+            Err(error) if sqlite_durable_corruption_error(&error) => {
+                self.persist_refresh_last_error(IpcError::new(
+                    ErrorCode::InvalidState,
+                    RecoveryAction::Reinstall,
+                ));
+                self.finish_aborted_refresh_attempt(attempt);
+                self.mark_refresh_aborted(false);
+                true
+            }
+            Ok(_) | Err(_) => {
+                self.persist_refresh_last_error(IpcError::new(
+                    ErrorCode::Unavailable,
+                    RecoveryAction::Retry,
+                ));
+                self.finish_aborted_refresh_attempt(attempt);
+                self.mark_refresh_aborted(false);
+                true
+            }
+        }
+    }
+
     fn run_refresh(&self, cancel: Arc<AtomicBool>, attempt: Option<DiagnosticAttemptHandle>) {
         let _ = self.inner.state.run_repair(RepairSite::RefreshWorker);
+        if self.abort_refresh_on_write_failure(attempt) {
+            return;
+        }
         let outcome = if cancel.load(Ordering::Acquire) || self.is_shutdown() {
             let cancelled = || Err(BackendError::cancelled());
             RefreshOutcome {
@@ -878,6 +1032,9 @@ impl LocalService {
         } else {
             self.inner.backend.refresh(cancel.clone())
         };
+        if self.abort_refresh_on_write_failure(attempt) {
+            return;
+        }
         let session_required = self
             .inner
             .state
@@ -902,6 +1059,9 @@ impl LocalService {
         self.apply_component_result(ComponentName::Pricing, outcome.pricing);
         if let Some(overview) = outcome.overview {
             let _ = self.inner.state.set_overview(&overview);
+        }
+        if self.abort_refresh_on_write_failure(attempt) {
+            return;
         }
         if let Some(attempt) = attempt {
             let _ = self
@@ -1598,6 +1758,7 @@ mod tests {
     use crate::ipc::JsonLineWriter;
     use crate::state::StateStore;
     use std::fs;
+    use std::sync::atomic::AtomicUsize;
     use uuid::Uuid;
 
     #[test]
@@ -2343,6 +2504,352 @@ mod tests {
         }
         assert_eq!(Arc::strong_count(&service.inner), 1);
         drop(service);
+        drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    struct WriteFailureBackend {
+        state: Arc<StateStore>,
+        kind: WriteFailureKind,
+        complete_calls: Arc<std::sync::atomic::AtomicUsize>,
+        publish_calls: Arc<std::sync::atomic::AtomicUsize>,
+        noted: Arc<(Mutex<bool>, std::sync::Condvar)>,
+    }
+
+    #[derive(Clone, Copy)]
+    enum WriteFailureKind {
+        UsageIsolated,
+        DurableFailClosed,
+        Io,
+    }
+
+    impl WriteFailureBackend {
+        fn new(state: Arc<StateStore>, kind: WriteFailureKind) -> Self {
+            Self {
+                state,
+                kind,
+                complete_calls: Arc::new(AtomicUsize::new(0)),
+                publish_calls: Arc::new(AtomicUsize::new(0)),
+                noted: Arc::new((Mutex::new(false), std::sync::Condvar::new())),
+            }
+        }
+
+        fn wait_noted(&self) {
+            let (lock, cond) = &*self.noted;
+            let mut noted = lock.lock().expect("noted");
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while !*noted {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    break;
+                }
+                let (guard, _) = cond.wait_timeout(noted, remaining).expect("wait");
+                noted = guard;
+            }
+            assert!(*noted, "refresh did not note a persistence failure");
+        }
+    }
+
+    impl LocalBackend for WriteFailureBackend {
+        fn refresh(&self, _: Arc<AtomicBool>) -> RefreshOutcome {
+            let error = match self.kind {
+                WriteFailureKind::UsageIsolated => StateError::Sql(rusqlite::Error::SqliteFailure(
+                    rusqlite::ffi::Error {
+                        code: rusqlite::ErrorCode::ConstraintViolation,
+                        extended_code: 19,
+                    },
+                    Some("usage_file_records unique constraint".into()),
+                )),
+                WriteFailureKind::DurableFailClosed => {
+                    StateError::Sql(rusqlite::Error::SqliteFailure(
+                        rusqlite::ffi::Error {
+                            code: rusqlite::ErrorCode::DatabaseCorrupt,
+                            extended_code: 11,
+                        },
+                        Some("database disk image is malformed".into()),
+                    ))
+                }
+                WriteFailureKind::Io => StateError::Io(std::io::Error::new(
+                    std::io::ErrorKind::StorageFull,
+                    "disk full",
+                )),
+            };
+            self.state.note_persistence_failure(&error);
+            *self.noted.0.lock().expect("noted") = true;
+            self.noted.1.notify_all();
+            RefreshOutcome {
+                quota: Ok(serde_json::json!({})),
+                usage: Ok(serde_json::json!({})),
+                account: Ok(serde_json::json!({})),
+                pricing: Ok(serde_json::json!({})),
+                overview: None,
+            }
+        }
+
+        fn diagnose(&self) -> Result<DiagnosticReport, BackendError> {
+            Err(BackendError::unavailable())
+        }
+
+        fn complete_diagnostics(&self) -> Result<DiagnosticReport, BackendError> {
+            self.complete_calls.fetch_add(1, Ordering::SeqCst);
+            Err(BackendError::unavailable())
+        }
+
+        fn publish_device_health(&self, _: &DiagnosticReport) -> Result<(), BackendError> {
+            self.publish_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn login(&self, _: &str, _: Arc<AtomicBool>) -> Result<LoginOutcome, BackendError> {
+            Err(BackendError::unavailable())
+        }
+
+        fn logout(&self, _: &Value) -> Result<(), BackendError> {
+            Err(BackendError::unavailable())
+        }
+
+        fn validate_provider_browser_session(
+            &self,
+            _: crate::catalog::ProviderId,
+            _: &str,
+        ) -> Result<crate::providers::ValidatedBrowserSession, BackendError> {
+            Err(BackendError::unavailable())
+        }
+    }
+
+    fn wait_refresh_idle(service: &LocalService) {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while service
+            .inner
+            .refresh
+            .lock()
+            .expect("refresh")
+            .active
+            .is_some()
+            && Instant::now() < deadline
+        {
+            thread::yield_now();
+        }
+        assert!(
+            service
+                .inner
+                .refresh
+                .lock()
+                .expect("refresh")
+                .active
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn aborted_refresh_skips_diagnostics_and_keeps_last_good_usage() {
+        let root = std::env::temp_dir().join(format!("quota-abort-derived-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        state
+            .insert_usage_file_record_for_test()
+            .expect("usage rows");
+        let usage_value = serde_json::json!({"kept": true});
+        state
+            .set_component(
+                ComponentName::Usage,
+                ComponentStatus::Ready,
+                Some(usage_value.clone()),
+                Some(now_rfc3339()),
+                None,
+                false,
+            )
+            .expect("last-good usage");
+        let planted = DiagnosticReport {
+            schema_version: 2,
+            summary: DiagnosticSummary {
+                operation: DiagnosticOperation::Healthy,
+                data: DiagnosticDataState::Current,
+                attention: DiagnosticAttention::None,
+            },
+            refresh: DiagnosticRefresh {
+                phase: DiagnosticRefreshPhase::Idle,
+                revision: 1,
+                as_of: "2026-08-01T00:00:00Z".into(),
+                started_at: None,
+                next_due_at: None,
+            },
+            generated_at: "2026-08-01T00:00:00Z".into(),
+            client: DiagnosticClient {
+                name: "QuotaTest".into(),
+                version: "test".into(),
+            },
+            surfaces: vec![
+                DiagnosticSurface {
+                    name: "quota_overview".into(),
+                    operation: DiagnosticOperation::Healthy,
+                    data: DiagnosticDataState::Empty,
+                    source: None,
+                    metrics: Default::default(),
+                },
+                DiagnosticSurface {
+                    name: "usage_this_device".into(),
+                    operation: DiagnosticOperation::Healthy,
+                    data: DiagnosticDataState::Current,
+                    source: Some(DiagnosticSource::ThisDevice),
+                    metrics: Default::default(),
+                },
+                DiagnosticSurface {
+                    name: "usage_account".into(),
+                    operation: DiagnosticOperation::Healthy,
+                    data: DiagnosticDataState::Empty,
+                    source: Some(DiagnosticSource::Account),
+                    metrics: Default::default(),
+                },
+                DiagnosticSurface {
+                    name: "account".into(),
+                    operation: DiagnosticOperation::Healthy,
+                    data: DiagnosticDataState::Empty,
+                    source: Some(DiagnosticSource::Account),
+                    metrics: Default::default(),
+                },
+            ],
+            checks: Vec::new(),
+            findings: Vec::new(),
+            recent_activity: DiagnosticRecentActivity {
+                attempts: Vec::new(),
+                history_truncated: false,
+            },
+        };
+        state
+            .write_diagnostic_snapshot(&planted)
+            .expect("plant snapshot");
+        let backend = Arc::new(WriteFailureBackend::new(
+            state.clone(),
+            WriteFailureKind::UsageIsolated,
+        ));
+        let service = LocalService::new(
+            state.clone(),
+            Arc::new(RecordingSink::default()),
+            backend.clone(),
+        );
+
+        let result = service.request_refresh_with_trigger(DiagnosticAttemptTrigger::Recheck);
+        assert!(result.accepted);
+        backend.wait_noted();
+        service.shutdown();
+        wait_refresh_idle(&service);
+
+        assert_eq!(backend.complete_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(backend.publish_calls.load(Ordering::SeqCst), 0);
+        let snapshot = state.diagnostic_snapshot().expect("snapshot").expect("row");
+        assert_eq!(snapshot.refresh.as_of, planted.refresh.as_of);
+        let usage = state
+            .component(ComponentName::Usage)
+            .expect("usage")
+            .expect("record");
+        assert_eq!(usage.value, Some(usage_value));
+        assert!(state.usage_reindex_pending().expect("reindex"));
+        let facts = state
+            .diagnostic_attempt_facts(
+                DiagnosticAttemptKind::Refresh,
+                DiagnosticSource::System,
+                None,
+            )
+            .expect("facts");
+        assert_eq!(
+            facts.latest_completed.map(|attempt| attempt.outcome),
+            Some(DiagnosticAttemptOutcome::Interrupted)
+        );
+
+        drop(service);
+        drop(backend);
+        drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn fail_closed_abort_skips_device_health_and_does_not_rerun() {
+        let root = std::env::temp_dir().join(format!("quota-abort-closed-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        let mut session = crate::protocol::RepairSession::idle();
+        session.status = crate::protocol::RepairStatus::Failed;
+        session.severity = crate::protocol::RepairSeverity::Durable;
+        session.recovery_action = Some(crate::protocol::RepairRecoveryAction::Reinstall);
+        session.started_at = Some(now_rfc3339());
+        session.heartbeat_at = Some(now_rfc3339());
+        session.stuck = true;
+        session.title = Some("Repairing local data".into());
+        session.guidance = Some("Reinstall QuotaBar to repair local data.".into());
+        state
+            .persist_session_for_test(session)
+            .expect("failed session");
+        let backend = Arc::new(WriteFailureBackend::new(
+            state.clone(),
+            WriteFailureKind::DurableFailClosed,
+        ));
+        let service = LocalService::new(
+            state.clone(),
+            Arc::new(RecordingSink::default()),
+            backend.clone(),
+        );
+
+        let result = service.request_refresh_with_trigger(DiagnosticAttemptTrigger::Recheck);
+        assert!(result.accepted);
+        backend.wait_noted();
+        wait_refresh_idle(&service);
+
+        assert_eq!(backend.complete_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(backend.publish_calls.load(Ordering::SeqCst), 0);
+        assert!(state.diagnostic_snapshot().expect("snapshot").is_none());
+        assert!(!service.inner.refresh.lock().expect("refresh").pending);
+        let quota = state
+            .component(ComponentName::Quota)
+            .expect("quota")
+            .expect("record");
+        assert_eq!(
+            quota.last_error.map(|error| error.code),
+            Some(ErrorCode::InvalidState)
+        );
+
+        service.shutdown();
+        drop(service);
+        drop(backend);
+        drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn io_write_failure_sets_pending_and_skips_diagnostics() {
+        let root = std::env::temp_dir().join(format!("quota-abort-io-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        let backend = Arc::new(WriteFailureBackend::new(
+            state.clone(),
+            WriteFailureKind::Io,
+        ));
+        let service = LocalService::new(
+            state.clone(),
+            Arc::new(RecordingSink::default()),
+            backend.clone(),
+        );
+
+        let result = service.request_refresh_with_trigger(DiagnosticAttemptTrigger::Recheck);
+        assert!(result.accepted);
+        backend.wait_noted();
+        service.shutdown();
+        wait_refresh_idle(&service);
+
+        assert_eq!(backend.complete_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(backend.publish_calls.load(Ordering::SeqCst), 0);
+        assert!(state.diagnostic_snapshot().expect("snapshot").is_none());
+        let quota = state
+            .component(ComponentName::Quota)
+            .expect("quota")
+            .expect("record");
+        assert_eq!(
+            quota.last_error.map(|error| error.code),
+            Some(ErrorCode::Unavailable)
+        );
+
+        drop(service);
+        drop(backend);
         drop(state);
         fs::remove_dir_all(root).expect("cleanup");
     }

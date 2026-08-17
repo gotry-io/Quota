@@ -29,8 +29,8 @@ use crate::providers::{self, CollectionContext};
 use crate::relay::{AccountManager, RelayClient};
 use crate::service::{BackendError, LocalBackend, LoginOutcome, RefreshOutcome};
 use crate::state::{
-    DiagnosticAttemptCompletion, DiagnosticAttemptHandle, HealthEvidenceTrust, StateStore,
-    UsageDirtyRange, now_rfc3339,
+    DiagnosticAttemptCompletion, DiagnosticAttemptHandle, HealthEvidenceTrust, RepairSite,
+    StateStore, UsageDirtyRange, now_rfc3339,
 };
 use crate::usage::{
     self, CoverageReasonCode, CoverageStatus, UsageAgent, UsageHourlyFact, UsageScanOptions,
@@ -367,9 +367,10 @@ impl NativeBackend {
             HealthEvidenceTrust::PersistRetry => Err(BackendError::unavailable()),
             HealthEvidenceTrust::TrustedSnapshot | HealthEvidenceTrust::EvaluateLive => {
                 let report = self.evaluate_diagnostic_report(true)?;
-                self.state
-                    .write_diagnostic_snapshot(&report)
-                    .map_err(|_| BackendError::unavailable())?;
+                if self.state.write_diagnostic_snapshot(&report).is_err() {
+                    let _ = self.state.run_repair(RepairSite::WriteFailure);
+                    let _ = self.state.write_diagnostic_snapshot(&report);
+                }
                 Ok(report)
             }
         }
