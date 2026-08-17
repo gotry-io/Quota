@@ -36,9 +36,9 @@ snapshot helpers in `packages/service/src/providers/common.rs`.
 
 1. Discover `$CODEX_HOME/auth.json` or `~/.codex/auth.json`.
 2. Prefer `GET https://chatgpt.com/backend-api/wham/usage` using the local OAuth access token and,
-   when present, `ChatGPT-Account-Id`.
-3. Map primary, secondary, and additional rate-limit windows without changing their used/remaining
-   meaning.
+   when present, `ChatGPT-Account-Id`. Browser cookies are not used.
+3. Map primary, secondary, additional, and dedicated `code_review_rate_limit` windows without
+   changing their used/remaining meaning. A null code-review object is absent, not malformed.
 4. Fall back to `codex -s read-only -a untrusted app-server` and call
    `account/rateLimits/read` when the direct OAuth result is unavailable or rejects the cached
    access token. Codex owns any access-token renewal performed while its app-server starts.
