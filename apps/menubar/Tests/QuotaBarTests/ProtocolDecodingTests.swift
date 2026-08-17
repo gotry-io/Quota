@@ -386,6 +386,75 @@ func rejectsUnknownNestedLocalServiceStateFields() throws {
 }
 
 @Test
+func decodesFailClosedDiagnosticReport() throws {
+  let data = Data(
+    #"""
+    {
+      "schema_version": 2,
+      "summary": { "operation": "blocked", "data": "unknown", "attention": "required" },
+      "refresh": {
+        "phase": "idle",
+        "revision": 0,
+        "as_of": "2026-08-17T00:00:00Z",
+        "started_at": null,
+        "next_due_at": null
+      },
+      "generated_at": "2026-08-17T00:00:00Z",
+      "client": { "name": "QuotaBar", "version": "0.0.17" },
+      "surfaces": [
+        { "name": "quota_overview", "operation": "blocked", "data": "unknown", "source": null, "metrics": {} },
+        { "name": "usage_this_device", "operation": "blocked", "data": "unknown", "source": "this_device", "metrics": {} },
+        { "name": "usage_account", "operation": "blocked", "data": "unknown", "source": "account", "metrics": {} },
+        { "name": "account", "operation": "blocked", "data": "unknown", "source": "account", "metrics": {} }
+      ],
+      "checks": [
+        {
+          "name": "local_state",
+          "source": "system",
+          "subject": null,
+          "mode": "required",
+          "operation": "blocked",
+          "data": "unknown",
+          "last_attempt_at": "2026-08-17T00:00:00Z",
+          "last_success_at": null,
+          "metrics": { "repaired": 0 }
+        }
+      ],
+      "findings": [
+        {
+          "component": "local_state",
+          "source": "system",
+          "subject": null,
+          "code": "invalid_state",
+          "severity": "error",
+          "impact": "system",
+          "recovery": "reinstall",
+          "count": 1,
+          "observed_at": "2026-08-17T00:00:00Z",
+          "message": "Local state cannot be written and could not be repaired automatically."
+        }
+      ],
+      "recent_activity": { "attempts": [], "history_truncated": false }
+    }
+    """#.utf8
+  )
+  let report = try QuotaWireCodec.makeDecoder().decode(
+    LocalServiceDiagnosticReport.self, from: data)
+  #expect(report.isValid)
+  #expect(report.summary.operation == .blocked)
+  #expect(report.summary.data == .unknown)
+  #expect(report.summary.attention == .required)
+  #expect(report.surfaces.count == 4)
+  #expect(Set(report.surfaces.map(\.name)) == Set([
+    "quota_overview", "usage_this_device", "usage_account", "account",
+  ]))
+  #expect(report.findings.count == 1)
+  #expect(report.findings[0].code == "invalid_state")
+  #expect(report.findings[0].recovery == .reinstall)
+  #expect(report.checks[0].metrics["repaired"] == 0)
+}
+
+@Test
 func decodesUnifiedDiagnosticsAndRejectsUnknownFields() throws {
   let data = Data(
     #"""

@@ -678,15 +678,12 @@ impl LocalService {
                 revision: self.inner.state.current_revision().unwrap_or(0),
             };
         }
-        if self
-            .inner
-            .state
-            .diagnostic_snapshot()
-            .ok()
-            .flatten()
-            .is_none()
-        {
-            let _ = self.inner.backend.complete_diagnostics();
+        if let Err(_error) = self.inner.state.repair_if_needed() {
+            return RefreshResult {
+                accepted: false,
+                pending: false,
+                revision: self.inner.state.current_revision().unwrap_or(0),
+            };
         }
         let cancel = Arc::new(AtomicBool::new(false));
         let attempt = self
