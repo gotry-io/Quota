@@ -12,13 +12,12 @@ use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Duration, SecondsFormat, Timelike};
-use rusqlite::{Connection, OpenFlags, OptionalExtension, Transaction, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::migration;
 use crate::protocol::{
     ComponentName, ComponentState, ComponentStatus, DiagnosticAttempt, DiagnosticAttemptCode,
     DiagnosticAttemptKind, DiagnosticAttemptOutcome, DiagnosticAttemptTrigger, DiagnosticMode,
@@ -27,6 +26,8 @@ use crate::protocol::{
     RecoveryAction, StateSnapshot, UsagePeriod, UsagePeriodCache, UsageSource,
 };
 use crate::usage::{NormalizedUsageEvent, UsageAgent, UsageFileIndex, UsageScanResult};
+
+mod salvage;
 
 const STATE_DB_NAME: &str = "state.sqlite";
 const PROVIDER_CONFIG_NAME: &str = "providers.json";
@@ -67,6 +68,14 @@ pub enum StateError {
     Sql(#[from] rusqlite::Error),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HealthEvidenceTrust {
+    TrustedSnapshot,
+    EvaluateLive,
+    FailClosed,
+    PersistRetry,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -314,16 +323,7 @@ impl StateStore {
         }
         database_file.set_permissions(Permissions::from_mode(0o600))?;
         drop(database_file);
-        let mut connection = Connection::open_with_flags(
-            &database_path,
-            OpenFlags::default() | OpenFlags::SQLITE_OPEN_NOFOLLOW,
-        )?;
-        connection.execute_batch(
-            "PRAGMA foreign_keys = ON;
-             PRAGMA busy_timeout = 5000;
-             PRAGMA journal_mode = WAL;",
-        )?;
-        migration::apply(&mut connection)?;
+        let mut connection = salvage::open_or_salvage(&root)?;
         recover_interrupted_attempts(&mut connection)?;
         Ok(Self {
             root,
@@ -549,6 +549,147 @@ impl StateStore {
              completed_at = excluded.completed_at",
             params![raw, report.refresh.as_of],
         )?;
+        write_metadata_flag(&conn, "snapshot_untrusted", false)?;
+        Ok(())
+    }
+
+    pub fn persist_probe(&self) -> Result<(), StateError> {
+        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        salvage::persist_probe_on(&conn)
+    }
+
+    pub fn usage_reindex_pending(&self) -> Result<bool, StateError> {
+        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        metadata_flag(&conn, "usage_reindex_pending")
+    }
+
+    pub fn snapshot_untrusted(&self) -> Result<bool, StateError> {
+        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        metadata_flag(&conn, "snapshot_untrusted")
+    }
+
+    pub fn state_salvaged_at(&self) -> Result<Option<String>, StateError> {
+        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        metadata_value(&conn, "state_salvaged_at")
+    }
+
+    pub fn diagnose_forces_usage_partial(&self) -> Result<bool, StateError> {
+        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        diagnose_forces_usage_partial_on(&conn)
+    }
+
+    pub fn health_evidence_trust(&self) -> HealthEvidenceTrust {
+        match self.persist_probe() {
+            Err(error) if salvage::sqlite_durable_corruption_error(&error) => {
+                HealthEvidenceTrust::FailClosed
+            }
+            Err(_) => HealthEvidenceTrust::PersistRetry,
+            Ok(()) => match self.trusted_snapshot_ready() {
+                Ok(true) => HealthEvidenceTrust::TrustedSnapshot,
+                _ => HealthEvidenceTrust::EvaluateLive,
+            },
+        }
+    }
+
+    fn trusted_snapshot_ready(&self) -> Result<bool, StateError> {
+        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        if diagnose_forces_usage_partial_on(&conn)? {
+            return Ok(false);
+        }
+        let completed_at: Option<String> = conn
+            .query_row(
+                "SELECT completed_at FROM diagnostic_snapshot WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(completed_at) = completed_at else {
+            return Ok(false);
+        };
+        if let Some(salvaged_at) = metadata_value(&conn, "state_salvaged_at")?
+            && completed_at < salvaged_at
+        {
+            return Ok(false);
+        }
+        Ok(true)
+    }
+
+    pub fn repair_if_needed(&self) -> Result<(), StateError> {
+        match self.persist_probe() {
+            Ok(()) => Ok(()),
+            Err(error) if salvage::sqlite_io_or_full_error(&error) => Err(StateError::Unavailable),
+            Err(error) if salvage::sqlite_durable_corruption_error(&error) => {
+                Err(StateError::InvalidState)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_usage_reindex_pending(&self, pending: bool) -> Result<(), StateError> {
+        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        write_metadata_flag(&conn, "usage_reindex_pending", pending)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_snapshot_untrusted(&self, untrusted: bool) -> Result<(), StateError> {
+        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        write_metadata_flag(&conn, "snapshot_untrusted", untrusted)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_state_salvaged_at(&self, value: Option<&str>) -> Result<(), StateError> {
+        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        match value {
+            Some(value) => {
+                conn.execute(
+                    "INSERT INTO metadata(key, value) VALUES ('state_salvaged_at', ?1)
+                     ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    params![value],
+                )?;
+            }
+            None => {
+                conn.execute("DELETE FROM metadata WHERE key = 'state_salvaged_at'", [])?;
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_persist_probe_with_corruption_for_test(&self) -> Result<(), StateError> {
+        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        conn.execute_batch(
+            "CREATE TRIGGER diagnostics_persist_probe_insert
+             BEFORE INSERT ON metadata
+             WHEN NEW.key = 'diagnostics_persist_probe'
+             BEGIN
+               SELECT RAISE(ABORT, 'database disk image is malformed');
+             END;
+             CREATE TRIGGER diagnostics_persist_probe_update
+             BEFORE UPDATE ON metadata
+             WHEN NEW.key = 'diagnostics_persist_probe'
+             BEGIN
+               SELECT RAISE(ABORT, 'database disk image is malformed');
+             END;",
+        )?;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn insert_usage_file_record_for_test(&self) -> Result<(), StateError> {
+        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        conn.execute(
+            "INSERT OR REPLACE INTO usage_file_index(
+               agent, source_file_id, identity, size, modified_ns, parser_revision
+             ) VALUES ('codex', 'source-1', 'identity-1', 1, '1', 'test')",
+            [],
+        )?;
+        conn.execute(
+            "INSERT OR REPLACE INTO usage_file_records(
+               agent, source_file_id, record_index, occurred_at, event_json, record_key
+             ) VALUES ('codex', 'source-1', 0, '2026-08-10T12:15:00Z', '{}', 'line:0:0')",
+            [],
+        )?;
         Ok(())
     }
 
@@ -752,6 +893,23 @@ impl StateStore {
             ],
         )? > 0;
         prune_diagnostic_attempts(&tx)?;
+        if changed
+            && matches!(
+                completion.outcome,
+                DiagnosticAttemptOutcome::Success | DiagnosticAttemptOutcome::Partial
+            )
+        {
+            let kind: Option<String> = tx
+                .query_row(
+                    "SELECT kind FROM diagnostic_attempts WHERE id = ?1",
+                    [handle.0],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if kind.as_deref() == Some("usage_scan") {
+                write_metadata_flag(&tx, "usage_reindex_pending", false)?;
+            }
+        }
         tx.commit()?;
         Ok(changed)
     }
@@ -2819,6 +2977,46 @@ fn metadata_bool(conn: &Connection, key: &str) -> Result<bool, StateError> {
         Some("0") => Ok(false),
         _ => Err(StateError::InvalidState),
     }
+}
+
+fn metadata_flag(conn: &Connection, key: &str) -> Result<bool, StateError> {
+    match metadata_value(conn, key)?.as_deref() {
+        Some("1") => Ok(true),
+        Some("0") | None => Ok(false),
+        Some(_) => Err(StateError::InvalidState),
+    }
+}
+
+fn write_metadata_flag(conn: &Connection, key: &str, value: bool) -> Result<(), StateError> {
+    conn.execute(
+        "INSERT INTO metadata(key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![key, if value { "1" } else { "0" }],
+    )?;
+    Ok(())
+}
+
+fn diagnose_forces_usage_partial_on(conn: &Connection) -> Result<bool, StateError> {
+    if metadata_flag(conn, "usage_reindex_pending")? || metadata_flag(conn, "snapshot_untrusted")? {
+        return Ok(true);
+    }
+    let Some(salvaged_at) = metadata_value(conn, "state_salvaged_at")? else {
+        return Ok(false);
+    };
+    let completed = conn
+        .query_row(
+            "SELECT 1 FROM diagnostic_attempts
+             WHERE kind = 'usage_scan'
+               AND outcome IN ('success', 'partial')
+               AND completed_at IS NOT NULL
+               AND completed_at >= ?1
+             LIMIT 1",
+            params![salvaged_at],
+            |_| Ok(true),
+        )
+        .optional()?
+        .unwrap_or(false);
+    Ok(!completed)
 }
 
 fn bump_revision(conn: &Connection) -> Result<u64, StateError> {

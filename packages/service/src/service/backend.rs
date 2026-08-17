@@ -29,7 +29,8 @@ use crate::providers::{self, CollectionContext};
 use crate::relay::{AccountManager, RelayClient};
 use crate::service::{BackendError, LocalBackend, LoginOutcome, RefreshOutcome};
 use crate::state::{
-    DiagnosticAttemptCompletion, DiagnosticAttemptHandle, StateStore, UsageDirtyRange, now_rfc3339,
+    DiagnosticAttemptCompletion, DiagnosticAttemptHandle, HealthEvidenceTrust, StateStore,
+    UsageDirtyRange, now_rfc3339,
 };
 use crate::usage::{
     self, CoverageReasonCode, CoverageStatus, UsageAgent, UsageHourlyFact, UsageScanOptions,
@@ -339,28 +340,122 @@ impl NativeBackend {
     }
 
     pub fn diagnostic_report(&self) -> Result<DiagnosticReport, BackendError> {
-        if let Some(mut report) = self
-            .state
-            .diagnostic_snapshot()
-            .map_err(|_| BackendError::unavailable())?
-        {
-            report.generated_at = now_rfc3339();
-            report.client = self.diagnostic_client();
-            report.recent_activity = self
-                .state
-                .diagnostic_recent_activity()
-                .map_err(|_| BackendError::unavailable())?;
-            return Ok(report);
+        match self.state.health_evidence_trust() {
+            HealthEvidenceTrust::FailClosed => Ok(self.fail_closed_report()),
+            HealthEvidenceTrust::PersistRetry => Err(BackendError::unavailable()),
+            HealthEvidenceTrust::TrustedSnapshot => {
+                let mut report = self
+                    .state
+                    .diagnostic_snapshot()
+                    .map_err(|_| BackendError::unavailable())?
+                    .ok_or_else(BackendError::unavailable)?;
+                report.generated_at = now_rfc3339();
+                report.client = self.diagnostic_client();
+                report.recent_activity = self
+                    .state
+                    .diagnostic_recent_activity()
+                    .map_err(|_| BackendError::unavailable())?;
+                Ok(report)
+            }
+            HealthEvidenceTrust::EvaluateLive => self.evaluate_diagnostic_report(false),
         }
-        self.evaluate_diagnostic_report()
     }
 
     pub fn complete_diagnostic_report(&self) -> Result<DiagnosticReport, BackendError> {
-        let report = self.evaluate_diagnostic_report()?;
-        self.state
-            .write_diagnostic_snapshot(&report)
-            .map_err(|_| BackendError::unavailable())?;
-        Ok(report)
+        match self.state.health_evidence_trust() {
+            HealthEvidenceTrust::FailClosed => Ok(self.fail_closed_report()),
+            HealthEvidenceTrust::PersistRetry => Err(BackendError::unavailable()),
+            HealthEvidenceTrust::TrustedSnapshot | HealthEvidenceTrust::EvaluateLive => {
+                let report = self.evaluate_diagnostic_report(true)?;
+                self.state
+                    .write_diagnostic_snapshot(&report)
+                    .map_err(|_| BackendError::unavailable())?;
+                Ok(report)
+            }
+        }
+    }
+
+    fn fail_closed_report(&self) -> DiagnosticReport {
+        let now = now_rfc3339();
+        let revision = self.state.current_revision().unwrap_or(0);
+        let recent_activity = self.state.diagnostic_recent_activity().unwrap_or(
+            crate::protocol::DiagnosticRecentActivity {
+                attempts: Vec::new(),
+                history_truncated: false,
+            },
+        );
+        DiagnosticReport {
+            schema_version: 2,
+            summary: DiagnosticSummary {
+                operation: DiagnosticOperation::Blocked,
+                data: DiagnosticDataState::Unknown,
+                attention: DiagnosticAttention::Required,
+            },
+            refresh: DiagnosticRefresh {
+                phase: DiagnosticRefreshPhase::Idle,
+                revision,
+                as_of: now.clone(),
+                started_at: None,
+                next_due_at: None,
+            },
+            generated_at: now.clone(),
+            client: self.diagnostic_client(),
+            surfaces: vec![
+                DiagnosticSurface {
+                    name: "quota_overview".into(),
+                    operation: DiagnosticOperation::Blocked,
+                    data: DiagnosticDataState::Unknown,
+                    source: None,
+                    metrics: BTreeMap::new(),
+                },
+                DiagnosticSurface {
+                    name: "usage_this_device".into(),
+                    operation: DiagnosticOperation::Blocked,
+                    data: DiagnosticDataState::Unknown,
+                    source: Some(DiagnosticSource::ThisDevice),
+                    metrics: BTreeMap::new(),
+                },
+                DiagnosticSurface {
+                    name: "usage_account".into(),
+                    operation: DiagnosticOperation::Blocked,
+                    data: DiagnosticDataState::Unknown,
+                    source: Some(DiagnosticSource::Account),
+                    metrics: BTreeMap::new(),
+                },
+                DiagnosticSurface {
+                    name: "account".into(),
+                    operation: DiagnosticOperation::Blocked,
+                    data: DiagnosticDataState::Unknown,
+                    source: Some(DiagnosticSource::Account),
+                    metrics: BTreeMap::new(),
+                },
+            ],
+            checks: vec![DiagnosticCheck {
+                name: "local_state".into(),
+                source: DiagnosticSource::System,
+                subject: None,
+                mode: DiagnosticMode::Required,
+                operation: DiagnosticOperation::Blocked,
+                data: DiagnosticDataState::Unknown,
+                last_attempt_at: Some(now.clone()),
+                last_success_at: None,
+                metrics: metrics([("repaired", 0)]),
+            }],
+            findings: vec![DiagnosticFinding {
+                component: "local_state".into(),
+                source: DiagnosticSource::System,
+                subject: None,
+                code: "invalid_state".into(),
+                severity: DiagnosticSeverity::Error,
+                impact: DiagnosticImpact::System,
+                recovery: DiagnosticRecovery::Reinstall,
+                count: 1,
+                observed_at: now,
+                message: "Local state cannot be written and could not be repaired automatically."
+                    .into(),
+            }],
+            recent_activity,
+        }
     }
 
     fn diagnostic_client(&self) -> DiagnosticClient {
@@ -370,7 +465,10 @@ impl NativeBackend {
         }
     }
 
-    fn evaluate_diagnostic_report(&self) -> Result<DiagnosticReport, BackendError> {
+    fn evaluate_diagnostic_report(
+        &self,
+        allow_usage_index_reads: bool,
+    ) -> Result<DiagnosticReport, BackendError> {
         let now = now_rfc3339();
         let snapshot = self
             .state
@@ -639,29 +737,48 @@ impl NativeBackend {
             });
         }
 
-        let mut file_count = 0i64;
-        for agent in UsageAgent::ALL {
-            file_count = file_count.saturating_add(
-                self.state
-                    .usage_file_index(agent)
-                    .map_err(|_| BackendError::unavailable())?
-                    .len() as i64,
-            );
-        }
-        let record_count = self
+        let force_usage_partial = self
             .state
-            .usage_event_count()
-            .map_err(|_| BackendError::unavailable())?
-            .min(i64::MAX as u64) as i64;
-        let partial_hours = self
-            .state
-            .partial_usage_hours()
+            .diagnose_forces_usage_partial()
             .map_err(|_| BackendError::unavailable())?;
-        let scan_diagnostics = self
-            .state
-            .usage_scan_diagnostics()
-            .map_err(|_| BackendError::unavailable())?;
-        let mut usage_partial = !partial_hours.is_empty();
+        let last_good_local_usage = [
+            &snapshot.usage_periods.local.today,
+            &snapshot.usage_periods.local.last_7_days,
+            &snapshot.usage_periods.local.last_30_days,
+            &snapshot.usage_periods.local.all,
+        ]
+        .into_iter()
+        .any(Option::is_some)
+            || usage.as_ref().is_some_and(|record| record.value.is_some());
+        let (file_count, record_count, partial_hours, scan_diagnostics) = if allow_usage_index_reads
+        {
+            let mut file_count = 0i64;
+            for agent in UsageAgent::ALL {
+                file_count = file_count.saturating_add(
+                    self.state
+                        .usage_file_index(agent)
+                        .map_err(|_| BackendError::unavailable())?
+                        .len() as i64,
+                );
+            }
+            let record_count = self
+                .state
+                .usage_event_count()
+                .map_err(|_| BackendError::unavailable())?
+                .min(i64::MAX as u64) as i64;
+            let partial_hours = self
+                .state
+                .partial_usage_hours()
+                .map_err(|_| BackendError::unavailable())?;
+            let scan_diagnostics = self
+                .state
+                .usage_scan_diagnostics()
+                .map_err(|_| BackendError::unavailable())?;
+            (file_count, record_count, partial_hours, scan_diagnostics)
+        } else {
+            (0, 0, HashSet::new(), Vec::new())
+        };
+        let mut usage_partial = force_usage_partial || !partial_hours.is_empty();
         let mut usage_requires_attention = false;
         for (agent, value, observed_at) in &scan_diagnostics {
             let subject = format!("agent:{}", agent.as_str());
@@ -806,7 +923,7 @@ impl NativeBackend {
         };
         let local_usage_data = if usage_partial {
             DiagnosticDataState::Partial
-        } else if record_count > 0 {
+        } else if record_count > 0 || (!allow_usage_index_reads && last_good_local_usage) {
             DiagnosticDataState::Current
         } else {
             DiagnosticDataState::Empty
@@ -1111,6 +1228,41 @@ impl NativeBackend {
             });
         }
 
+        if let Some(salvaged_at) = self
+            .state
+            .state_salvaged_at()
+            .map_err(|_| BackendError::unavailable())?
+        {
+            let within_window = DateTime::parse_from_rfc3339(&salvaged_at)
+                .ok()
+                .is_some_and(|value| Utc::now() - value.with_timezone(&Utc) < Duration::hours(24));
+            if within_window {
+                checks.push(DiagnosticCheck {
+                    name: "local_state".into(),
+                    source: DiagnosticSource::System,
+                    subject: None,
+                    mode: DiagnosticMode::Required,
+                    operation: DiagnosticOperation::Healthy,
+                    data: DiagnosticDataState::Current,
+                    last_attempt_at: Some(salvaged_at.clone()),
+                    last_success_at: Some(salvaged_at.clone()),
+                    metrics: metrics([("repaired", 1)]),
+                });
+                findings.push(DiagnosticFinding {
+                    component: "local_state".into(),
+                    source: DiagnosticSource::System,
+                    subject: None,
+                    code: "state_repaired".into(),
+                    severity: DiagnosticSeverity::Info,
+                    impact: DiagnosticImpact::None,
+                    recovery: DiagnosticRecovery::None,
+                    count: 1,
+                    observed_at: salvaged_at,
+                    message: "Local storage was rebuilt. Quota and Account were preserved.".into(),
+                });
+            }
+        }
+
         let mut operation = DiagnosticOperation::Healthy;
         for surface in &surfaces {
             operation = worst_operation(operation, surface.operation);
@@ -1134,19 +1286,23 @@ impl NativeBackend {
         } else {
             DiagnosticDataState::Empty
         };
-        let attention = if findings.iter().any(|finding| {
+        let attention_findings = findings
+            .iter()
+            .filter(|finding| finding.code != "state_repaired")
+            .collect::<Vec<_>>();
+        let mut attention = if attention_findings.iter().any(|finding| {
             finding.severity == DiagnosticSeverity::Error
                 || (finding.severity == DiagnosticSeverity::Warning
                     && finding.recovery != DiagnosticRecovery::Retry)
         }) || usage_requires_attention
         {
             DiagnosticAttention::Required
-        } else if findings
+        } else if attention_findings
             .iter()
             .any(|finding| finding.severity == DiagnosticSeverity::Warning)
         {
             DiagnosticAttention::Automatic
-        } else if findings
+        } else if attention_findings
             .iter()
             .any(|finding| finding.severity == DiagnosticSeverity::Info)
         {
@@ -1158,6 +1314,9 @@ impl NativeBackend {
             DiagnosticAttention::Automatic
         } else {
             DiagnosticAttention::None
+        };
+        if force_usage_partial && attention != DiagnosticAttention::Required {
+            attention = DiagnosticAttention::Automatic;
         };
         let next_due_at = DateTime::parse_from_rfc3339(&now)
             .ok()
@@ -3881,6 +4040,174 @@ mod tests {
     }
 
     #[test]
+    fn persist_probe_corruption_returns_fail_closed_without_salvage() {
+        let root = std::env::temp_dir().join(format!("quota-fail-closed-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        let backend = NativeBackend::new(
+            state.clone(),
+            Arc::new(RelayClient::new().expect("relay")),
+            "QuotaTest",
+            "test",
+        );
+        backend
+            .complete_diagnostic_report()
+            .expect("plant snapshot");
+        state
+            .fail_persist_probe_with_corruption_for_test()
+            .expect("corrupt writes");
+
+        let report = backend.diagnostic_report().expect("fail closed");
+        assert_eq!(report.summary.operation, DiagnosticOperation::Blocked);
+        assert_eq!(report.summary.data, DiagnosticDataState::Unknown);
+        assert_eq!(report.summary.attention, DiagnosticAttention::Required);
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|finding| finding.code == "invalid_state"
+                    && finding.recovery == DiagnosticRecovery::Reinstall)
+        );
+        assert_eq!(
+            report
+                .surfaces
+                .iter()
+                .map(|surface| surface.name.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "quota_overview",
+                "usage_this_device",
+                "usage_account",
+                "account"
+            ]
+        );
+        assert!(state.state_salvaged_at().expect("marker").is_none());
+        drop(backend);
+        drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn untrusted_snapshot_evaluate_live_skips_usage_counts_and_is_partial() {
+        let root = std::env::temp_dir().join(format!("quota-untrusted-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        state
+            .insert_usage_file_record_for_test()
+            .expect("usage rows");
+        state.set_snapshot_untrusted(true).expect("untrusted");
+        let backend = NativeBackend::new(
+            state,
+            Arc::new(RelayClient::new().expect("relay")),
+            "QuotaTest",
+            "test",
+        );
+        let report = backend.diagnostic_report().expect("live");
+        let usage = report
+            .surfaces
+            .iter()
+            .find(|surface| surface.name == "usage_this_device")
+            .expect("usage surface");
+        assert_eq!(usage.data, DiagnosticDataState::Partial);
+        assert_eq!(usage.metrics.get("files"), Some(&0));
+        assert_eq!(usage.metrics.get("records"), Some(&0));
+        assert_eq!(report.summary.data, DiagnosticDataState::Partial);
+        assert_eq!(report.summary.attention, DiagnosticAttention::Automatic);
+        drop(backend);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn fresh_store_diagnose_is_empty_not_partial() {
+        let root = std::env::temp_dir().join(format!("quota-fresh-diag-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        let backend = NativeBackend::new(
+            state,
+            Arc::new(RelayClient::new().expect("relay")),
+            "QuotaTest",
+            "test",
+        );
+        let report = backend.diagnostic_report().expect("diagnostics");
+        let usage = report
+            .surfaces
+            .iter()
+            .find(|surface| surface.name == "usage_this_device")
+            .expect("usage surface");
+        assert_eq!(usage.data, DiagnosticDataState::Empty);
+        assert_ne!(usage.data, DiagnosticDataState::Partial);
+        assert_eq!(report.summary.data, DiagnosticDataState::Empty);
+        assert_eq!(report.summary.attention, DiagnosticAttention::None);
+        drop(backend);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn state_repaired_finding_is_excluded_from_attention() {
+        let root = std::env::temp_dir().join(format!("quota-repaired-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        state
+            .set_state_salvaged_at(Some(&now_rfc3339()))
+            .expect("salvaged");
+        state
+            .set_usage_reindex_pending(false)
+            .expect("reindex clear");
+        state.set_snapshot_untrusted(false).expect("trusted");
+        let scan = state
+            .begin_diagnostic_attempt(
+                DiagnosticAttemptKind::UsageScan,
+                DiagnosticAttemptTrigger::Startup,
+                DiagnosticSource::ThisDevice,
+                Some("agent:codex"),
+                DiagnosticMode::Required,
+                None,
+            )
+            .expect("scan");
+        state
+            .finish_diagnostic_attempt(
+                scan,
+                &DiagnosticAttemptCompletion {
+                    outcome: DiagnosticAttemptOutcome::Success,
+                    code: None,
+                    recovery: DiagnosticRecovery::None,
+                    metrics: metrics([("valid_records", 0)]),
+                },
+            )
+            .expect("scan done");
+        let backend = NativeBackend::new(
+            state,
+            Arc::new(RelayClient::new().expect("relay")),
+            "QuotaTest",
+            "test",
+        );
+        let report = backend.diagnostic_report().expect("diagnostics");
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|finding| finding.code == "state_repaired"
+                    && finding.severity == DiagnosticSeverity::Info)
+        );
+        assert!(
+            report
+                .checks
+                .iter()
+                .any(|check| check.name == "local_state"
+                    && check.metrics.get("repaired") == Some(&1))
+        );
+        assert_eq!(report.summary.attention, DiagnosticAttention::None);
+        let usage = report
+            .surfaces
+            .iter()
+            .find(|surface| surface.name == "usage_this_device")
+            .expect("usage surface");
+        assert_eq!(usage.data, DiagnosticDataState::Empty);
+        drop(backend);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
     fn account_quota_masks_opportunistic_local_auth_failure() {
         let root = std::env::temp_dir().join(format!("quota-diagnostics-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).expect("root");
@@ -4090,7 +4417,7 @@ mod tests {
             "test",
         );
 
-        let waiting = backend.evaluate_diagnostic_report().expect("waiting");
+        let waiting = backend.evaluate_diagnostic_report(true).expect("waiting");
         let upload = waiting
             .checks
             .iter()
@@ -4126,7 +4453,7 @@ mod tests {
                 },
             )
             .expect("upload failure");
-        let failed = backend.evaluate_diagnostic_report().expect("failed");
+        let failed = backend.evaluate_diagnostic_report(true).expect("failed");
         assert_eq!(failed.summary.operation, DiagnosticOperation::Degraded);
         assert!(
             failed
@@ -4156,7 +4483,9 @@ mod tests {
                 },
             )
             .expect("finish retry");
-        let still_failed = backend.evaluate_diagnostic_report().expect("still failed");
+        let still_failed = backend
+            .evaluate_diagnostic_report(true)
+            .expect("still failed");
         assert_eq!(
             still_failed.summary.operation,
             DiagnosticOperation::Degraded
@@ -4189,7 +4518,7 @@ mod tests {
                 },
             )
             .expect("finish success");
-        let recovered = backend.evaluate_diagnostic_report().expect("recovered");
+        let recovered = backend.evaluate_diagnostic_report(true).expect("recovered");
         assert_eq!(recovered.summary.operation, DiagnosticOperation::Healthy);
         assert!(
             !recovered
@@ -4222,7 +4551,9 @@ mod tests {
             "test",
         );
 
-        let report = backend.diagnostic_report().expect("diagnostics");
+        let report = backend
+            .evaluate_diagnostic_report(true)
+            .expect("diagnostics");
 
         assert!(
             report
