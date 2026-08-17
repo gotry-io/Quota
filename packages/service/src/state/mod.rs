@@ -377,6 +377,9 @@ impl StateStore {
         request_thread: bool,
         f: impl FnOnce(&mut Connection) -> Result<T, StateError>,
     ) -> Result<T, StateError> {
+        if !request_thread && self.image_unwritable() {
+            return Err(StateError::Unavailable);
+        }
         let mut conn = match if request_thread {
             self.try_lock_conn()
         } else {
@@ -405,7 +408,7 @@ impl StateStore {
         f(&conn)
     }
 
-    fn with_conn_try<T>(
+    pub(super) fn with_conn_try<T>(
         &self,
         f: impl FnOnce(&Connection) -> Result<T, StateError>,
     ) -> Result<T, StateError> {
@@ -495,7 +498,7 @@ impl StateStore {
     }
 
     pub fn component(&self, name: ComponentName) -> Result<Option<ComponentRecord>, StateError> {
-        self.with_conn(|conn| read_component(conn, name))
+        self.with_conn_try(|conn| read_component(conn, name))
     }
 
     pub fn replace_usage_periods(
@@ -557,7 +560,7 @@ impl StateStore {
     }
 
     pub fn usage_scan_diagnostics(&self) -> Result<Vec<(UsageAgent, Value, String)>, StateError> {
-        self.with_conn(|conn| {
+        self.with_conn_try(|conn| {
             let mut statement = conn.prepare(
                 "SELECT agent, payload_json, updated_at FROM usage_scan_diagnostics ORDER BY agent",
             )?;
@@ -606,7 +609,7 @@ impl StateStore {
     }
 
     pub fn sync_diagnostic(&self) -> Result<Option<(Value, String)>, StateError> {
-        self.with_conn(|conn| {
+        self.with_conn_try(|conn| {
             let raw: Option<(String, String)> = conn
                 .query_row(
                     "SELECT payload_json, updated_at FROM sync_diagnostics WHERE id = 1",
@@ -646,15 +649,15 @@ impl StateStore {
     }
 
     pub fn usage_reindex_pending(&self) -> Result<bool, StateError> {
-        self.with_conn(|conn| metadata_flag(conn, "usage_reindex_pending"))
+        self.with_conn_try(|conn| metadata_flag(conn, "usage_reindex_pending"))
     }
 
     pub fn snapshot_untrusted(&self) -> Result<bool, StateError> {
-        self.with_conn(|conn| metadata_flag(conn, "snapshot_untrusted"))
+        self.with_conn_try(|conn| metadata_flag(conn, "snapshot_untrusted"))
     }
 
     pub fn state_salvaged_at(&self) -> Result<Option<String>, StateError> {
-        self.with_conn(|conn| metadata_value(conn, "state_salvaged_at"))
+        self.with_conn_try(|conn| metadata_value(conn, "state_salvaged_at"))
     }
 
     pub fn diagnose_forces_usage_partial(&self) -> Result<bool, StateError> {
@@ -700,7 +703,7 @@ impl StateStore {
     }
 
     pub fn derived_drop_pending(&self) -> Result<bool, StateError> {
-        self.with_conn(|conn| metadata_flag(conn, "derived_drop_pending"))
+        self.with_conn_try(|conn| metadata_flag(conn, "derived_drop_pending"))
     }
 
     #[cfg(test)]
@@ -827,7 +830,7 @@ impl StateStore {
     pub fn running_refresh_attempt(
         &self,
     ) -> Result<Option<(DiagnosticAttemptHandle, DiagnosticAttemptTrigger)>, StateError> {
-        self.with_conn(|conn| {
+        self.with_conn_try(|conn| {
             conn.query_row(
                 "SELECT id, trigger FROM diagnostic_attempts
              WHERE kind = 'refresh' AND outcome IS NULL ORDER BY id DESC LIMIT 1",
@@ -846,7 +849,7 @@ impl StateStore {
     pub fn latest_refresh_attempt(
         &self,
     ) -> Result<Option<(DiagnosticAttemptHandle, DiagnosticAttemptTrigger)>, StateError> {
-        self.with_conn(|conn| {
+        self.with_conn_try(|conn| {
             conn.query_row(
                 "SELECT id, trigger FROM diagnostic_attempts
              WHERE kind = 'refresh' ORDER BY id DESC LIMIT 1",
@@ -870,7 +873,7 @@ impl StateStore {
         if digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             return Err(StateError::InvalidState);
         }
-        self.with_conn(|conn| {
+        self.with_conn_try(|conn| {
             let previous_digest = metadata_value(conn, "device_health_last_digest")?;
             let previous_at = metadata_value(conn, "device_health_last_uploaded_at")?
                 .and_then(|value| DateTime::parse_from_rfc3339(&value).ok())
@@ -1001,7 +1004,7 @@ impl StateStore {
     }
 
     pub fn diagnostic_recent_activity(&self) -> Result<DiagnosticRecentActivity, StateError> {
-        self.with_conn(|conn| {
+        self.with_conn_try(|conn| {
             let failure_cutoff = (chrono::Utc::now() - Duration::hours(24))
                 .to_rfc3339_opts(SecondsFormat::Secs, true);
             let mut statement = conn.prepare(
@@ -1049,7 +1052,7 @@ impl StateStore {
         if subject.is_some_and(|value| !valid_diagnostic_subject(value)) {
             return Err(StateError::InvalidState);
         }
-        self.with_conn(|conn| {
+        self.with_conn_try(|conn| {
             let read = |success_only: bool| -> Result<Option<DiagnosticAttempt>, StateError> {
                 conn.query_row(
                     "SELECT attempts.kind, attempts.trigger, attempts.source, attempts.subject,
@@ -1114,7 +1117,7 @@ impl StateStore {
         &self,
         include_usage: bool,
     ) -> Result<Option<DiagnosticAttempt>, StateError> {
-        self.with_conn(|conn| {
+        self.with_conn_try(|conn| {
             conn.query_row(
                 "WITH latest AS (
                SELECT MAX(id) AS id
@@ -1142,7 +1145,7 @@ impl StateStore {
     }
 
     pub fn consecutive_refresh_failures(&self) -> Result<u64, StateError> {
-        self.with_conn(|conn| {
+        self.with_conn_try(|conn| {
             let mut statement = conn.prepare(
                 "SELECT outcome FROM diagnostic_attempts
              WHERE kind = 'refresh' AND outcome IS NOT NULL
@@ -1162,7 +1165,7 @@ impl StateStore {
     }
 
     pub fn pricing_etag(&self) -> Result<Option<String>, StateError> {
-        self.with_conn(|conn| metadata_value(conn, "pricing_etag"))
+        self.with_conn_try(|conn| metadata_value(conn, "pricing_etag"))
     }
 
     pub fn commit_pricing_catalog(
@@ -1205,7 +1208,7 @@ impl StateStore {
     }
 
     pub fn model_catalog_etag(&self) -> Result<Option<String>, StateError> {
-        self.with_conn(|conn| {
+        self.with_conn_try(|conn| {
             conn.query_row(
                 "SELECT etag FROM model_catalog_cache WHERE id = 1",
                 [],
@@ -1218,7 +1221,7 @@ impl StateStore {
     }
 
     pub fn model_catalog(&self) -> Result<Option<Value>, StateError> {
-        self.with_conn(|conn| {
+        self.with_conn_try(|conn| {
             let raw: Option<String> = conn
                 .query_row(
                     "SELECT payload_json FROM model_catalog_cache WHERE id = 1",
@@ -1339,7 +1342,7 @@ impl StateStore {
     }
 
     pub fn usage_upload_enabled(&self) -> Result<bool, StateError> {
-        self.with_conn(|conn| metadata_bool(conn, "usage_upload_enabled"))
+        self.with_conn_try(|conn| metadata_bool(conn, "usage_upload_enabled"))
     }
 
     pub fn set_usage_upload_enabled(&self, enabled: bool) -> Result<u64, StateError> {
@@ -1359,7 +1362,7 @@ impl StateStore {
     }
 
     pub fn session_json(&self) -> Result<Option<Value>, StateError> {
-        self.with_conn(|conn| {
+        self.with_conn_try(|conn| {
             let raw: Option<String> = conn
                 .query_row("SELECT payload_json FROM session WHERE id = 1", [], |row| {
                     row.get::<_, String>(0)
@@ -1374,7 +1377,7 @@ impl StateStore {
     /// outside the JSON payload so imported released sessions remain wire-compatible while every
     /// local transition gets a monotonic identity.
     pub fn session_snapshot(&self) -> Result<Option<(Value, u64)>, StateError> {
-        self.with_conn(|conn| {
+        self.with_conn_try(|conn| {
             let raw: Option<(String, i64)> = conn
                 .query_row(
                     "SELECT payload_json, epoch FROM session WHERE id = 1",
@@ -1393,7 +1396,7 @@ impl StateStore {
     /// Returns true only while the same active session is still installed.  Callers use this
     /// immediately before a Relay write so a logout transition cannot revive an old session.
     pub fn active_session_at_epoch(&self, expected_epoch: u64) -> Result<bool, StateError> {
-        self.with_conn(|conn| {
+        self.with_conn_try(|conn| {
             let raw: Option<(String, i64)> = conn
                 .query_row(
                     "SELECT payload_json, epoch FROM session WHERE id = 1",
@@ -1505,7 +1508,7 @@ impl StateStore {
     }
 
     pub fn installation_id(&self) -> Result<String, StateError> {
-        self.with_conn(|conn| {
+        self.with_conn_try(|conn| {
             conn.query_row(
                 "SELECT installation_id FROM installation WHERE id = 1",
                 [],
@@ -1630,7 +1633,7 @@ impl StateStore {
         &self,
         provider: &str,
     ) -> Result<Option<ProviderBrowserSession>, StateError> {
-        self.with_conn(|conn| {
+        self.with_conn_try(|conn| {
             let session = conn
                 .query_row(
                     "SELECT cookie_header, account_fingerprint, account_label
@@ -1654,7 +1657,7 @@ impl StateStore {
     pub fn provider_browser_sessions(
         &self,
     ) -> Result<Vec<(crate::catalog::ProviderId, ProviderBrowserSession)>, StateError> {
-        self.with_conn(|conn| read_provider_browser_sessions(conn))
+        self.with_conn_try(|conn| read_provider_browser_sessions(conn))
     }
 
     pub fn set_provider_browser_session(
@@ -1707,7 +1710,7 @@ impl StateStore {
     }
 
     pub fn outbox_entries(&self) -> Result<Vec<Value>, StateError> {
-        self.with_conn(|conn| {
+        self.with_conn_try(|conn| {
         let mut statement = conn.prepare(
             "SELECT payload_json FROM usage_outbox ORDER BY account_id, device_id, generation, sequence",
         )?;
@@ -1726,7 +1729,7 @@ impl StateStore {
         device_id: &str,
         generation: u64,
     ) -> Result<Vec<Value>, StateError> {
-        self.with_conn(|conn| {
+        self.with_conn_try(|conn| {
             let mut statement = conn.prepare(
                 "SELECT payload_json FROM usage_outbox
              WHERE account_id = ?1 AND device_id = ?2 AND generation = ?3
@@ -2037,7 +2040,7 @@ impl StateStore {
         &self,
         agent: UsageAgent,
     ) -> Result<HashMap<String, UsageFileIndex>, StateError> {
-        self.with_conn(|conn| {
+        self.with_conn_try(|conn| {
             let mut statement = conn.prepare(
                 "SELECT source_file_id, identity, size, modified_ns, parser_revision
              FROM usage_file_index WHERE agent = ?1",
@@ -2081,7 +2084,7 @@ impl StateStore {
     }
 
     pub fn usage_events(&self) -> Result<Vec<NormalizedUsageEvent>, StateError> {
-        self.with_conn(|conn| {
+        self.with_conn_try(|conn| {
         let mut statement = conn.prepare(
             "SELECT event_json FROM usage_file_records ORDER BY occurred_at, agent, source_file_id, record_index",
         )?;
@@ -2095,7 +2098,7 @@ impl StateStore {
     }
 
     pub fn usage_event_count(&self) -> Result<u64, StateError> {
-        self.with_conn(|conn| {
+        self.with_conn_try(|conn| {
             let count = conn.query_row("SELECT COUNT(*) FROM usage_file_records", [], |row| {
                 row.get::<_, i64>(0)
             })?;
@@ -2104,7 +2107,7 @@ impl StateStore {
     }
 
     pub fn dirty_usage_ranges(&self) -> Result<Vec<UsageDirtyRange>, StateError> {
-        self.with_conn(|conn| {
+        self.with_conn_try(|conn| {
         let mut statement = conn.prepare(
             "SELECT agent, start_at, end_at FROM usage_dirty_ranges ORDER BY start_at, end_at, agent",
         )?;
@@ -2149,7 +2152,7 @@ impl StateStore {
     /// Returns UTC hours whose indexed source is known to be partial. These markers prevent a
     /// complete upload from replacing remote facts that may be absent from an incomplete source.
     pub fn partial_usage_hours(&self) -> Result<HashSet<(UsageAgent, String)>, StateError> {
-        self.with_conn(|conn| {
+        self.with_conn_try(|conn| {
             let mut statement = conn.prepare(
                 "SELECT agent, start_at FROM usage_partial_sources ORDER BY agent, start_at",
             )?;

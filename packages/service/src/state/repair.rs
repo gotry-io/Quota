@@ -337,6 +337,18 @@ impl StateStore {
 
     pub(super) fn clear_image_unwritable(&self) {
         self.repair.image_unwritable.store(false, Ordering::Release);
+    }
+
+    fn take_last_persistence_class(&self) -> PersistenceClass {
+        self.repair
+            .last_error
+            .lock()
+            .ok()
+            .and_then(|mut guard| guard.take())
+            .unwrap_or(PersistenceClass::Other)
+    }
+
+    pub(super) fn clear_last_persistence_error(&self) {
         if let Ok(mut last) = self.repair.last_error.lock() {
             *last = None;
         }
@@ -483,13 +495,7 @@ impl StateStore {
     }
 
     fn repair_write_failure(&self) -> Result<RepairReport, StateError> {
-        let class = self
-            .repair
-            .last_error
-            .lock()
-            .ok()
-            .and_then(|guard| *guard)
-            .unwrap_or(PersistenceClass::Other);
+        let class = self.take_last_persistence_class();
         match class {
             PersistenceClass::Durable => match self.salvage_durable_if_allowed(true)? {
                 SalvageOutcome::Ran => Ok(RepairReport {
@@ -686,6 +692,7 @@ impl StateStore {
             Ok(connection) => {
                 *guard = connection;
                 self.clear_image_unwritable();
+                self.clear_last_persistence_error();
                 Ok(())
             }
             Err(error) => {
@@ -715,7 +722,6 @@ impl StateStore {
             tx.commit()?;
             Ok(())
         })?;
-        self.clear_image_unwritable();
         self.apply_live_session(derived_repairing_session(
             self.repair_session()
                 .started_at
@@ -801,10 +807,14 @@ impl StateStore {
         };
         let session = self.repair_session();
         let seq = self.repair.seq.load(Ordering::Acquire);
-        if persist_session_on(&conn, seq, &session).is_ok()
-            && let Ok(revision) = bump_revision(&conn)
-        {
+        let result = (|| {
+            persist_session_on(&conn, seq, &session)?;
+            let revision = bump_revision(&conn)?;
             self.store_remembered_revision(revision);
+            Ok(())
+        })();
+        if let Err(ref error) = result {
+            self.note_write_failure(&conn, error);
         }
     }
 
@@ -1277,6 +1287,18 @@ mod tests {
                 Err(StateError::Unavailable)
             ));
             assert!(matches!(store.snapshot(), Err(StateError::Unavailable)));
+            assert!(matches!(
+                store.snapshot_for_diagnostics(),
+                Err(StateError::Unavailable)
+            ));
+            assert!(matches!(
+                store.diagnostic_snapshot(),
+                Err(StateError::Unavailable)
+            ));
+            assert!(matches!(
+                store.diagnostic_recent_activity(),
+                Err(StateError::Unavailable)
+            ));
             assert_eq!(
                 store.health_evidence_trust(),
                 crate::state::HealthEvidenceTrust::PersistRetry
@@ -1301,24 +1323,51 @@ mod tests {
     }
 
     #[test]
+    fn persist_probe_success_keeps_usage_isolated_abort_signal() {
+        let (root, store) = temp_store();
+        let isolated = StateError::Sql(rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error {
+                code: rusqlite::ErrorCode::ConstraintViolation,
+                extended_code: 19,
+            },
+            Some("usage_file_records unique constraint".into()),
+        ));
+        store.note_persistence_failure(&isolated);
+        store.persist_probe().expect("probe still works");
+        assert!(store.last_persistence_requires_abort());
+        assert!(!store.image_unwritable());
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
     fn public_mutators_use_with_conn_mut() {
-        let src = include_str!("mod.rs");
-        let impl_src = src
-            .split("impl StateStore {")
-            .nth(1)
-            .expect("StateStore impl");
-        let mut in_lock_helper = false;
-        for line in impl_src.lines() {
-            if line.contains("fn lock_conn(") || line.contains("fn try_lock_conn(") {
-                in_lock_helper = true;
-            }
-            if line.contains("self.db.lock()") && !in_lock_helper {
-                panic!("unwrapped StateStore lock: {line}");
-            }
-            if in_lock_helper && line.contains('}') {
-                in_lock_helper = false;
+        for src in [include_str!("mod.rs"), include_str!("repair.rs")] {
+            let src = src.split("\nmod tests {").next().unwrap_or(src);
+            let mut in_allowed = false;
+            for line in src.lines() {
+                if line.contains("fn lock_conn(")
+                    || line.contains("fn try_lock_conn(")
+                    || line.contains("fn persist_live_session_best_effort(")
+                    || line.contains("fn remembered_revision(")
+                {
+                    in_allowed = true;
+                }
+                if line.contains("self.db.lock()") && !in_allowed {
+                    panic!("unwrapped StateStore lock: {line}");
+                }
+                if line.contains("self.db.try_lock()") && !in_allowed {
+                    panic!("unwrapped StateStore try_lock: {line}");
+                }
+                if in_allowed && line.trim() == "}" {
+                    in_allowed = false;
+                }
             }
         }
+        assert!(
+            include_str!("repair.rs").contains("self.note_write_failure(&conn, error)"),
+            "heartbeat writer must note persistence failure"
+        );
     }
 
     #[test]

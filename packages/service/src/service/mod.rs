@@ -2519,6 +2519,7 @@ mod tests {
     #[derive(Clone, Copy)]
     enum WriteFailureKind {
         UsageIsolated,
+        UsageIsolatedThenProbe,
         DurableFailClosed,
         Io,
     }
@@ -2553,13 +2554,15 @@ mod tests {
     impl LocalBackend for WriteFailureBackend {
         fn refresh(&self, _: Arc<AtomicBool>) -> RefreshOutcome {
             let error = match self.kind {
-                WriteFailureKind::UsageIsolated => StateError::Sql(rusqlite::Error::SqliteFailure(
-                    rusqlite::ffi::Error {
-                        code: rusqlite::ErrorCode::ConstraintViolation,
-                        extended_code: 19,
-                    },
-                    Some("usage_file_records unique constraint".into()),
-                )),
+                WriteFailureKind::UsageIsolated | WriteFailureKind::UsageIsolatedThenProbe => {
+                    StateError::Sql(rusqlite::Error::SqliteFailure(
+                        rusqlite::ffi::Error {
+                            code: rusqlite::ErrorCode::ConstraintViolation,
+                            extended_code: 19,
+                        },
+                        Some("usage_file_records unique constraint".into()),
+                    ))
+                }
                 WriteFailureKind::DurableFailClosed => {
                     StateError::Sql(rusqlite::Error::SqliteFailure(
                         rusqlite::ffi::Error {
@@ -2575,6 +2578,10 @@ mod tests {
                 )),
             };
             self.state.note_persistence_failure(&error);
+            if matches!(self.kind, WriteFailureKind::UsageIsolatedThenProbe) {
+                self.state.persist_probe().expect("probe still works");
+                assert!(self.state.last_persistence_requires_abort());
+            }
             *self.noted.0.lock().expect("noted") = true;
             self.noted.1.notify_all();
             RefreshOutcome {
@@ -2764,6 +2771,96 @@ mod tests {
     }
 
     #[test]
+    fn persist_probe_after_usage_isolated_still_aborts_without_snapshot() {
+        let root = std::env::temp_dir().join(format!("quota-abort-probe-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        let planted = DiagnosticReport {
+            schema_version: 2,
+            summary: DiagnosticSummary {
+                operation: DiagnosticOperation::Healthy,
+                data: DiagnosticDataState::Current,
+                attention: DiagnosticAttention::None,
+            },
+            refresh: DiagnosticRefresh {
+                phase: DiagnosticRefreshPhase::Idle,
+                revision: 1,
+                as_of: "2026-08-01T00:00:00Z".into(),
+                started_at: None,
+                next_due_at: None,
+            },
+            generated_at: "2026-08-01T00:00:00Z".into(),
+            client: DiagnosticClient {
+                name: "QuotaTest".into(),
+                version: "test".into(),
+            },
+            surfaces: vec![
+                DiagnosticSurface {
+                    name: "quota_overview".into(),
+                    operation: DiagnosticOperation::Healthy,
+                    data: DiagnosticDataState::Empty,
+                    source: None,
+                    metrics: Default::default(),
+                },
+                DiagnosticSurface {
+                    name: "usage_this_device".into(),
+                    operation: DiagnosticOperation::Healthy,
+                    data: DiagnosticDataState::Current,
+                    source: Some(DiagnosticSource::ThisDevice),
+                    metrics: Default::default(),
+                },
+                DiagnosticSurface {
+                    name: "usage_account".into(),
+                    operation: DiagnosticOperation::Healthy,
+                    data: DiagnosticDataState::Empty,
+                    source: Some(DiagnosticSource::Account),
+                    metrics: Default::default(),
+                },
+                DiagnosticSurface {
+                    name: "account".into(),
+                    operation: DiagnosticOperation::Healthy,
+                    data: DiagnosticDataState::Empty,
+                    source: Some(DiagnosticSource::Account),
+                    metrics: Default::default(),
+                },
+            ],
+            checks: Vec::new(),
+            findings: Vec::new(),
+            recent_activity: DiagnosticRecentActivity {
+                attempts: Vec::new(),
+                history_truncated: false,
+            },
+        };
+        state
+            .write_diagnostic_snapshot(&planted)
+            .expect("plant snapshot");
+        let backend = Arc::new(WriteFailureBackend::new(
+            state.clone(),
+            WriteFailureKind::UsageIsolatedThenProbe,
+        ));
+        let service = LocalService::new(
+            state.clone(),
+            Arc::new(RecordingSink::default()),
+            backend.clone(),
+        );
+
+        let result = service.request_refresh_with_trigger(DiagnosticAttemptTrigger::Recheck);
+        assert!(result.accepted);
+        backend.wait_noted();
+        service.shutdown();
+        wait_refresh_idle(&service);
+
+        assert_eq!(backend.complete_calls.load(Ordering::SeqCst), 0);
+        let snapshot = state.diagnostic_snapshot().expect("snapshot").expect("row");
+        assert_eq!(snapshot.refresh.as_of, planted.refresh.as_of);
+
+        drop(service);
+        drop(backend);
+        drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
     fn fail_closed_abort_skips_device_health_and_does_not_rerun() {
         let root = std::env::temp_dir().join(format!("quota-abort-closed-{}", Uuid::new_v4()));
         fs::create_dir_all(&root).expect("root");
@@ -2799,14 +2896,7 @@ mod tests {
         assert_eq!(backend.publish_calls.load(Ordering::SeqCst), 0);
         assert!(state.diagnostic_snapshot().expect("snapshot").is_none());
         assert!(!service.inner.refresh.lock().expect("refresh").pending);
-        let quota = state
-            .component(ComponentName::Quota)
-            .expect("quota")
-            .expect("record");
-        assert_eq!(
-            quota.last_error.map(|error| error.code),
-            Some(ErrorCode::InvalidState)
-        );
+        assert!(state.image_unwritable() || state.last_persistence_requires_abort());
 
         service.shutdown();
         drop(service);
@@ -2839,14 +2929,7 @@ mod tests {
         assert_eq!(backend.complete_calls.load(Ordering::SeqCst), 0);
         assert_eq!(backend.publish_calls.load(Ordering::SeqCst), 0);
         assert!(state.diagnostic_snapshot().expect("snapshot").is_none());
-        let quota = state
-            .component(ComponentName::Quota)
-            .expect("quota")
-            .expect("record");
-        assert_eq!(
-            quota.last_error.map(|error| error.code),
-            Some(ErrorCode::Unavailable)
-        );
+        assert!(state.image_unwritable());
 
         drop(service);
         drop(backend);
