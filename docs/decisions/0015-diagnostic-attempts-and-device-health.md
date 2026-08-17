@@ -39,7 +39,9 @@ An attempt is inserted before work begins; if that insert fails, the associated 
 The same row is finalized after success, partial work, no work, failure, cancellation, or a caught
 worker failure. Completing a parent refresh atomically marks any still-running child as
 `interrupted/process_interrupted`, and opening the database performs the same recovery for any
-remaining running rows. `partial` is distinct from `success`:
+remaining running rows. Persist-probe honesty, FailClosed versus PersistRetry, and image salvage
+live in [ADR 0016](0016-local-service-self-repair.md); open still recovers interrupted attempts as
+today. `partial` is distinct from `success`:
 stable malformed Usage or incomplete coverage cannot become a successful scan. Authentication may
 remain the cause of an opportunistic `no_work` attempt without making optional local collection
 unhealthy.

@@ -100,7 +100,9 @@ completed snapshot marked `running`. QuotaBar Recheck requests a real single-fli
 for a newer idle revision, or clearly keeps the last completed snapshot marked as still running if it
 exceeds the UI wait. The structured attempt journal, Support Report projection, snapshot persistence,
 retention, and cross-device Device Health derived from this boundary are defined by
-[ADR 0015](0015-diagnostic-attempts-and-device-health.md).
+[ADR 0015](0015-diagnostic-attempts-and-device-health.md). Snapshot trust after an unwritable
+image, salvage copy policy, and DiagnoseRead honesty are defined by
+[ADR 0016](0016-local-service-self-repair.md).
 
 Names, codes, messages, and identities are control-free and bounded. Provider and Usage-agent IDs are
 the only retained subject identities. Raw paths, filenames, model names/lists, prompts, completions,

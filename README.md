@@ -54,9 +54,10 @@ remain TypeScript. See the canonical
 [non-secret iOS widget snapshot](docs/decisions/0014-nonsecret-ios-widget-snapshot.md), and
 [SvelteKit document Worker composition](docs/decisions/0011-sveltekit-document-worker.md). The data
 integrity and diagnostic contract is [ADR 0008](docs/decisions/0008-data-integrity-and-diagnostics.md),
-report-time model identity is [ADR 0009](docs/decisions/0009-versioned-model-catalog.md), and
+report-time model identity is [ADR 0009](docs/decisions/0009-versioned-model-catalog.md),
 structured attempts, Support Report, and Device Health are
-[ADR 0015](docs/decisions/0015-diagnostic-attempts-and-device-health.md), and provider
+[ADR 0015](docs/decisions/0015-diagnostic-attempts-and-device-health.md), local service self-repair is
+[ADR 0016](docs/decisions/0016-local-service-self-repair.md), and provider
 browser-session authentication is
 [ADR 0010](docs/decisions/0010-provider-browser-session-auth.md).
 
