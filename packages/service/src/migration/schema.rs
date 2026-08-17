@@ -50,6 +50,53 @@ pub fn apply(conn: &mut Connection) -> Result<(), StateError> {
     Ok(())
 }
 
+/// Rebuild Usage index tables in place. Does not re-run migrations or touch identity tables.
+pub(crate) fn recreate_usage_index_tables(tx: &Transaction<'_>) -> Result<(), StateError> {
+    tx.execute_batch(
+        "DROP TABLE IF EXISTS usage_file_records;
+         DROP TABLE IF EXISTS usage_file_index;
+         DROP TABLE IF EXISTS usage_dirty_ranges;
+         DROP TABLE IF EXISTS usage_partial_sources;
+         CREATE TABLE usage_file_index (
+            agent TEXT NOT NULL,
+            source_file_id TEXT NOT NULL,
+            identity TEXT NOT NULL,
+            size INTEGER NOT NULL,
+            modified_ns TEXT NOT NULL,
+            parser_revision TEXT NOT NULL,
+            PRIMARY KEY(agent, source_file_id)
+         );
+         CREATE TABLE usage_file_records (
+            agent TEXT NOT NULL,
+            source_file_id TEXT NOT NULL,
+            record_index INTEGER NOT NULL,
+            occurred_at TEXT NOT NULL,
+            event_json TEXT NOT NULL,
+            record_key TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY(agent, source_file_id, record_index)
+         );
+         CREATE INDEX usage_file_records_time ON usage_file_records(agent, occurred_at);
+         CREATE TABLE usage_dirty_ranges (
+            agent TEXT NOT NULL,
+            start_at TEXT NOT NULL,
+            end_at TEXT NOT NULL,
+            PRIMARY KEY(agent, start_at, end_at)
+         );
+         CREATE TABLE usage_partial_sources (
+            agent TEXT NOT NULL,
+            source_file_id TEXT NOT NULL,
+            start_at TEXT NOT NULL,
+            end_at TEXT NOT NULL,
+            PRIMARY KEY(agent, source_file_id, start_at, end_at)
+         );
+         CREATE INDEX usage_partial_sources_hour
+            ON usage_partial_sources(agent, start_at, end_at);
+         DELETE FROM usage_scan_diagnostics;
+         DELETE FROM sync_diagnostics;",
+    )?;
+    Ok(())
+}
+
 fn migration_v1(tx: &Transaction<'_>) -> Result<(), StateError> {
     tx.execute_batch(
         "CREATE TABLE IF NOT EXISTS metadata (
@@ -683,6 +730,127 @@ mod tests {
                 .expect("period count"),
             2
         );
+    }
+
+    #[test]
+    fn recreate_usage_index_matches_current_schema_and_clears_scan_diagnostics() {
+        let mut conn = Connection::open_in_memory().expect("database");
+        apply(&mut conn).expect("current schema");
+        conn.execute(
+            "INSERT INTO usage_file_records(
+               agent, source_file_id, record_index, occurred_at, event_json, record_key
+             ) VALUES ('codex', 'source-1', 0, '2026-08-10T12:15:00Z', '{}', 'line:0:0')",
+            [],
+        )
+        .expect("usage record");
+        conn.execute(
+            "INSERT INTO usage_scan_diagnostics(agent, payload_json, updated_at)
+             VALUES ('codex', '{}', '2026-08-10T12:15:00Z')",
+            [],
+        )
+        .expect("scan diagnostics");
+        conn.execute(
+            "INSERT INTO sync_diagnostics(id, payload_json, updated_at)
+             VALUES (1, '{}', '2026-08-10T12:15:00Z')",
+            [],
+        )
+        .expect("sync diagnostics");
+        conn.execute(
+            "INSERT INTO session(id, payload_json, epoch) VALUES (1, '{\"status\":\"active\"}', 1)",
+            [],
+        )
+        .expect("session");
+        let installation: String = conn
+            .query_row(
+                "SELECT installation_id FROM installation WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .expect("installation");
+
+        {
+            let tx = conn.transaction().expect("tx");
+            recreate_usage_index_tables(&tx).expect("recreate");
+            tx.rollback().expect("rollback");
+        }
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM usage_file_records", [], |row| row
+                .get::<_, i64>(0))
+                .expect("rolled back records"),
+            1
+        );
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM usage_scan_diagnostics", [], |row| row
+                .get::<_, i64>(0))
+                .expect("rolled back diagnostics"),
+            1
+        );
+
+        {
+            let tx = conn.transaction().expect("tx");
+            recreate_usage_index_tables(&tx).expect("recreate");
+            tx.commit().expect("commit");
+        }
+
+        assert_eq!(
+            columns(&conn, "usage_file_records"),
+            columns_after_fresh_apply("usage_file_records")
+        );
+        assert_eq!(
+            columns(&conn, "usage_file_index"),
+            columns_after_fresh_apply("usage_file_index")
+        );
+        assert_eq!(
+            columns(&conn, "usage_partial_sources"),
+            columns_after_fresh_apply("usage_partial_sources")
+        );
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM usage_file_records", [], |row| row
+                .get::<_, i64>(0))
+                .expect("records"),
+            0
+        );
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM usage_scan_diagnostics", [], |row| row
+                .get::<_, i64>(0))
+                .expect("scan diagnostics"),
+            0
+        );
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM sync_diagnostics", [], |row| row
+                .get::<_, i64>(0))
+                .expect("sync diagnostics"),
+            0
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT installation_id FROM installation WHERE id = 1",
+                [],
+                |row| row.get::<_, String>(0)
+            )
+            .expect("installation after"),
+            installation
+        );
+        assert_eq!(
+            conn.query_row("SELECT epoch FROM session WHERE id = 1", [], |row| row
+                .get::<_, i64>(0))
+                .expect("session after"),
+            1
+        );
+        let versions: Vec<i64> = conn
+            .prepare("SELECT version FROM schema_migrations ORDER BY version")
+            .expect("versions")
+            .query_map([], |row| row.get(0))
+            .expect("rows")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("values");
+        assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8]);
+    }
+
+    fn columns_after_fresh_apply(table: &str) -> Vec<String> {
+        let mut fresh = Connection::open_in_memory().expect("fresh");
+        apply(&mut fresh).expect("fresh apply");
+        columns(&fresh, table)
     }
 
     fn usage_submission(protocol_version: u64, submission_id: &str, agent: &str) -> Value {
