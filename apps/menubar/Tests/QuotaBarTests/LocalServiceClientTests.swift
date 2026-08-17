@@ -67,6 +67,7 @@ struct LocalServiceClientTests {
                     "providers": [],
                     "provider_browser_sessions": [],
                     "overview": [],
+                    "repair": idle_repair(),
                 }
             elif operation == "refresh":
                 assert request["payload"] == {}
@@ -305,6 +306,7 @@ struct LocalServiceClientTests {
                     "providers": [],
                     "provider_browser_sessions": [],
                     "overview": [],
+                    "repair": idle_repair(),
                 },
             }), flush=True)
             break
@@ -360,6 +362,22 @@ private struct TemporaryService {
               "updated_at": None,
               "last_error": None,
               "refreshing": False,
+          }
+      def idle_repair():
+          return {
+              "status": "idle",
+              "severity": "none",
+              "phase": None,
+              "title": None,
+              "guidance": None,
+              "activity": None,
+              "started_at": None,
+              "heartbeat_at": None,
+              "progress_current": None,
+              "progress_total": None,
+              "stuck": False,
+              "blocks_quit": False,
+              "recovery_action": None,
           }
       \(body)
       """

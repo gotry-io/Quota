@@ -27,7 +27,14 @@ use crate::protocol::{
 };
 use crate::usage::{NormalizedUsageEvent, UsageAgent, UsageFileIndex, UsageScanResult};
 
+mod repair;
 mod salvage;
+
+pub use repair::{
+    RepairAction, RepairClass, RepairDisposition, RepairReport, RepairSite,
+    sqlite_durable_corruption, sqlite_durable_corruption_error, sqlite_io_or_full,
+    sqlite_io_or_full_error,
+};
 
 const STATE_DB_NAME: &str = "state.sqlite";
 const PROVIDER_CONFIG_NAME: &str = "providers.json";
@@ -299,6 +306,7 @@ pub struct StateStore {
     db: Mutex<Connection>,
     // Kept in this object for the entire service lifetime.
     _owner_lock: OwnerLock,
+    repair: repair::RepairRuntime,
 }
 
 impl StateStore {
@@ -323,13 +331,19 @@ impl StateStore {
         }
         database_file.set_permissions(Permissions::from_mode(0o600))?;
         drop(database_file);
-        let mut connection = salvage::open_or_salvage(&root)?;
+        let (mut connection, salvaged) = salvage::open_or_salvage(&root)?;
         recover_interrupted_attempts(&mut connection)?;
-        Ok(Self {
+        let persisted = repair::read_persisted_repair(&connection).unwrap_or_default();
+        let store = Self {
             root,
             db: Mutex::new(connection),
             _owner_lock: owner_lock,
-        })
+            repair: repair::RepairRuntime::from_persisted(persisted),
+        };
+        if salvaged {
+            store.record_open_salvage_session()?;
+        }
+        Ok(store)
     }
 
     pub fn root(&self) -> &Path {
@@ -386,6 +400,7 @@ impl StateStore {
         };
         let provider_browser_sessions = read_provider_browser_session_views(&conn)?;
         let overview = read_overview(&conn)?;
+        drop(conn);
         Ok(StateSnapshot {
             ipc_version: IPC_VERSION,
             revision,
@@ -404,6 +419,7 @@ impl StateStore {
             providers,
             provider_browser_sessions,
             overview,
+            repair: self.repair_session(),
         })
     }
 
@@ -614,15 +630,9 @@ impl StateStore {
         Ok(true)
     }
 
-    pub fn repair_if_needed(&self) -> Result<(), StateError> {
-        match self.persist_probe() {
-            Ok(()) => Ok(()),
-            Err(error) if salvage::sqlite_io_or_full_error(&error) => Err(StateError::Unavailable),
-            Err(error) if salvage::sqlite_durable_corruption_error(&error) => {
-                Err(StateError::InvalidState)
-            }
-            Err(error) => Err(error),
-        }
+    pub fn derived_drop_pending(&self) -> Result<bool, StateError> {
+        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        metadata_flag(&conn, "derived_drop_pending")
     }
 
     #[cfg(test)]
@@ -2961,7 +2971,7 @@ fn metadata_u64(conn: &Connection, key: &str) -> Result<u64, StateError> {
     raw.parse().map_err(|_| StateError::InvalidState)
 }
 
-fn metadata_value(conn: &Connection, key: &str) -> Result<Option<String>, StateError> {
+pub(super) fn metadata_value(conn: &Connection, key: &str) -> Result<Option<String>, StateError> {
     conn.query_row(
         "SELECT value FROM metadata WHERE key = ?1",
         params![key],
@@ -2979,7 +2989,7 @@ fn metadata_bool(conn: &Connection, key: &str) -> Result<bool, StateError> {
     }
 }
 
-fn metadata_flag(conn: &Connection, key: &str) -> Result<bool, StateError> {
+pub(super) fn metadata_flag(conn: &Connection, key: &str) -> Result<bool, StateError> {
     match metadata_value(conn, key)?.as_deref() {
         Some("1") => Ok(true),
         Some("0") | None => Ok(false),
@@ -2987,7 +2997,11 @@ fn metadata_flag(conn: &Connection, key: &str) -> Result<bool, StateError> {
     }
 }
 
-fn write_metadata_flag(conn: &Connection, key: &str, value: bool) -> Result<(), StateError> {
+pub(super) fn write_metadata_flag(
+    conn: &Connection,
+    key: &str,
+    value: bool,
+) -> Result<(), StateError> {
     conn.execute(
         "INSERT INTO metadata(key, value) VALUES (?1, ?2)
          ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -3019,7 +3033,7 @@ fn diagnose_forces_usage_partial_on(conn: &Connection) -> Result<bool, StateErro
     Ok(!completed)
 }
 
-fn bump_revision(conn: &Connection) -> Result<u64, StateError> {
+pub(super) fn bump_revision(conn: &Connection) -> Result<u64, StateError> {
     let current = metadata_u64(conn, "revision")?;
     let next = current.checked_add(1).ok_or(StateError::InvalidState)?;
     conn.execute(
@@ -3036,6 +3050,7 @@ fn component_key(value: ComponentName) -> &'static str {
         ComponentName::Account => "account",
         ComponentName::Pricing => "pricing",
         ComponentName::Providers => "providers",
+        ComponentName::Repair => "repair",
     }
 }
 
@@ -3191,7 +3206,7 @@ fn ensure_owner_only_directory(path: &Path) -> Result<(), StateError> {
     Ok(())
 }
 
-fn recover_interrupted_attempts(conn: &mut Connection) -> Result<(), StateError> {
+pub(super) fn recover_interrupted_attempts(conn: &mut Connection) -> Result<(), StateError> {
     let completed_at = now_rfc3339();
     let tx = conn.transaction()?;
     let revision = metadata_u64(&tx, "revision")?;

@@ -151,6 +151,28 @@ failure is a setup task, not a generic network error. Never display collector ra
 Empty Overview recovery says to sign in to a provider CLI or enable an agent in Settings. A failed
 current sync keeps last-known content visible and adds one inline warning.
 
+### Repair
+
+The service owns repair. QuotaBar only presents `get_state.repair`. There is no Settings **Repair**
+button and no `doctor --repair` action.
+
+`repair.severity` chooses the surface:
+
+- `durable` with status `repairing`, `stuck`, `failed`, or the short `completed` flash: a full Repair
+  page overlay. Header title is **Repairing**, **Repair stopped**, or **Repair failed**. There is no
+  back, Settings, Diagnostics, Account, Usage, or Agents. Opening the menu extra shows this page.
+  Content is the service `title`, `activity`, elapsed time from `started_at`, heartbeat age when
+  `now - heartbeat_at > 8s` (**Updated 12 seconds ago**), a determinate bar only when both progress
+  fields are present (otherwise a spinner), then `guidance`. Stuck and failed add a critical icon and
+  one **Retry** or reinstall copy.
+- `derived`: Overview and Usage stay. One inline notice uses `title` + `activity` + optional bar.
+  Navigation remains. Quit is not intercepted.
+- `checking` and `idle`: Overview. `checking` lasts at most two seconds and does not open Repair.
+
+`applicationShouldTerminate` returns `.terminateCancel` only while `repair.blocks_quit` (durable
+repairing). It opens the Repair page and announces **QuotaBar is repairing local data. Keep the app
+open.** Sparkle is suppressed only while `blocks_quit`. Closing the menu extra never cancels repair.
+
 ### Settings
 
 Settings section order is fixed:
@@ -326,6 +348,8 @@ Swift clears the field after Save; the service owns validation, owner-only persi
 | `ProviderBrandIcon` | Catalog brand resource with stable optical sizing |
 | `QuotaPageStateView` | Centered Loading, Empty, or Error when no page content is available |
 | `QuotaInlineNotice` | Compact refresh/error warning while cached content remains visible |
+| `RepairPageView` | Full durable-repair overlay; no navigation |
+| `RepairDerivedNotice` | Inline derived-repair title, activity, and optional progress |
 | `QuotaSectionStateView` | Left-aligned Loading, Empty, or Error scoped to one section |
 
 Prefer these components over page-local replicas. In-section actions never mix an accent capsule
@@ -362,8 +386,9 @@ share tokens and accessibility semantics but do not own tasks or form a generic 
 ## Visual QA matrix
 
 Required fixture states are loading, signed-in content, cached content with a sync warning,
-signed-out provider issues, and service unavailable. Required routes are Overview, Settings, Agents,
-provider setup variants (CLI, API key, and browser session), Devices, Usage, and Diagnostics. Inspect
+signed-out provider issues, service unavailable, and Repair (`repairing-durable`,
+`repairing-derived`, `stuck`, `failed`). Required routes are Overview, Settings, Agents, provider
+setup variants (CLI, API key, and browser session), Devices, Usage, Diagnostics, and Repair. Inspect
 light and dark appearances, standard and accessibility text sizes, keyboard traversal, VoiceOver
 labels, and Reduce Motion transitions.
 

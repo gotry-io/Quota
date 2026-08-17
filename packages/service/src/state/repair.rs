@@ -1,0 +1,927 @@
+//! Repair classification, session persistence, and the single `run_repair` entry.
+
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
+
+use rusqlite::Connection;
+use serde::{Deserialize, Serialize};
+
+use super::salvage;
+use super::{
+    StateError, StateStore, bump_revision, metadata_flag, metadata_value,
+    recover_interrupted_attempts, write_metadata_flag,
+};
+use crate::protocol::{
+    RepairPhase, RepairRecoveryAction, RepairSession, RepairSeverity, RepairStatus,
+};
+use crate::state::now_rfc3339;
+
+const REPAIR_SESSION_KEY: &str = "repair_session_json";
+const AUTOMATIC_SALVAGE_DAY_KEY: &str = "automatic_salvage_utc_day";
+const USAGE_ISOLATED_KEY: &str = "usage_isolated";
+const DERIVED_DROP_PENDING_KEY: &str = "derived_drop_pending";
+const MAX_SESSION_BYTES: usize = 4 * 1024;
+const REQUIRED_COPY_PROGRESS_TOTAL: i64 = 7;
+
+const DURABLE_TITLE: &str = "Repairing local data";
+const DURABLE_GUIDANCE: &str = "Keep QuotaBar open. You can close this menu.";
+#[allow(dead_code)]
+const DERIVED_TITLE: &str = "Rebuilding Usage history";
+#[allow(dead_code)]
+const DERIVED_GUIDANCE: &str = "Quota and Account stay available. Usage history is catching up.";
+const STUCK_GUIDANCE: &str = "Repair stopped responding. You can retry.";
+const FAILED_GUIDANCE: &str = "Reinstall QuotaBar to repair local data.";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RepairClass {
+    DurableImage,
+    ProcessResidue,
+    StaleHealthEvidence,
+    DerivedState,
+    ScheduledProgress,
+    UserAction,
+    TransientExternal,
+    UntrustedInput,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RepairSite {
+    Open,
+    RefreshStart,
+    RefreshWorker,
+    WriteFailure,
+    DiagnoseRead,
+    PostRefresh,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RepairDisposition {
+    Automatic,
+    RetrySchedule,
+    UserVerb,
+    Isolate,
+    NotRepair,
+    FailClosed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RepairAction {
+    ResumeInterruptedSalvage,
+    SalvageDurableImage,
+    RestoreLastGoodSnapshot,
+    RefreshLastGoodSnapshot,
+    CheckpointWal,
+    DiscardUnreadableDerivedIndex,
+    FinalizeInterruptedAttempts,
+    ClearRefreshingFlags,
+    InvalidateDiagnosticSnapshot,
+    MarkUsageReindexPending,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepairReport {
+    pub site: RepairSite,
+    pub executed: Vec<RepairAction>,
+    pub changed: bool,
+    pub fail_closed: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PersistenceClass {
+    Durable,
+    IoOrFull,
+    UsageIsolated,
+    Other,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub(super) struct PersistedRepair {
+    #[serde(default)]
+    seq: u64,
+    #[serde(default)]
+    session: Option<RepairSession>,
+}
+
+pub(super) struct RepairRuntime {
+    seq: AtomicU64,
+    last_seq: AtomicU64,
+    last_seq_at: Mutex<Option<Instant>>,
+    live: Mutex<RepairSession>,
+    last_error: Mutex<Option<PersistenceClass>>,
+    stuck_at: Mutex<Option<Instant>>,
+    completed_at: Mutex<Option<Instant>>,
+}
+
+impl RepairRuntime {
+    pub(super) fn from_persisted(persisted: PersistedRepair) -> Self {
+        let session = persisted
+            .session
+            .filter(|session| session.is_valid())
+            .unwrap_or_else(RepairSession::idle);
+        Self {
+            seq: AtomicU64::new(persisted.seq),
+            last_seq: AtomicU64::new(persisted.seq),
+            last_seq_at: Mutex::new(Some(Instant::now())),
+            live: Mutex::new(session),
+            last_error: Mutex::new(None),
+            stuck_at: Mutex::new(None),
+            completed_at: Mutex::new(None),
+        }
+    }
+}
+
+pub fn sqlite_durable_corruption(error: &rusqlite::Error) -> bool {
+    salvage::sqlite_durable_corruption(error)
+}
+
+pub fn sqlite_io_or_full(error: &rusqlite::Error) -> bool {
+    salvage::sqlite_io_or_full(error)
+}
+
+pub fn sqlite_durable_corruption_error(error: &StateError) -> bool {
+    salvage::sqlite_durable_corruption_error(error)
+}
+
+pub fn sqlite_io_or_full_error(error: &StateError) -> bool {
+    salvage::sqlite_io_or_full_error(error)
+}
+
+pub(super) fn read_persisted_repair(conn: &Connection) -> Result<PersistedRepair, StateError> {
+    let Some(raw) = metadata_value(conn, REPAIR_SESSION_KEY)? else {
+        return Ok(PersistedRepair::default());
+    };
+    if raw.len() > MAX_SESSION_BYTES {
+        return Ok(PersistedRepair::default());
+    }
+    Ok(serde_json::from_str(&raw).unwrap_or_default())
+}
+
+impl StateStore {
+    pub fn run_repair(&self, site: RepairSite) -> Result<RepairReport, StateError> {
+        match site {
+            RepairSite::Open => self.repair_open(),
+            RepairSite::RefreshStart => self.repair_refresh_start(),
+            RepairSite::RefreshWorker => self.repair_refresh_worker(),
+            RepairSite::WriteFailure => self.repair_write_failure(),
+            RepairSite::DiagnoseRead => self.repair_diagnose_read(),
+            RepairSite::PostRefresh => self.repair_post_refresh(),
+        }
+    }
+
+    pub fn repair_session(&self) -> RepairSession {
+        self.repair
+            .live
+            .lock()
+            .map(|session| session.clone())
+            .unwrap_or_else(|_| RepairSession::idle())
+    }
+
+    pub fn increment_repair_heartbeat_seq(&self) -> u64 {
+        let seq = self.repair.seq.fetch_add(1, Ordering::AcqRel) + 1;
+        if let Ok(mut session) = self.repair.live.lock()
+            && session.status == RepairStatus::Repairing
+        {
+            session.heartbeat_at = Some(now_rfc3339());
+        }
+        if let Ok(mut last_at) = self.repair.last_seq_at.lock() {
+            *last_at = Some(Instant::now());
+        }
+        self.repair.last_seq.store(seq, Ordering::Release);
+        seq
+    }
+
+    pub fn persist_repair_heartbeat_best_effort(&self) {
+        let Ok(conn) = self.db.try_lock() else {
+            return;
+        };
+        let session = self.repair_session();
+        let seq = self.repair.seq.load(Ordering::Acquire);
+        let _ = persist_session_on(&conn, seq, &session);
+        let _ = bump_revision(&conn);
+    }
+
+    pub fn mark_repair_stuck_if_silent(&self, now: Instant, timeout: Duration) -> bool {
+        let session = self.repair_session();
+        if session.status != RepairStatus::Repairing {
+            return false;
+        }
+        let last = self
+            .repair
+            .last_seq_at
+            .lock()
+            .ok()
+            .and_then(|guard| *guard)
+            .unwrap_or(now);
+        if now.duration_since(last) < timeout {
+            return false;
+        }
+        self.apply_live_session(stuck_session(&session));
+        if let Ok(mut stuck_at) = self.repair.stuck_at.lock() {
+            *stuck_at = Some(now);
+        }
+        let _ = self.persist_live_session();
+        true
+    }
+
+    pub fn mark_repair_failed_if_stuck_expired(&self, now: Instant, timeout: Duration) -> bool {
+        let session = self.repair_session();
+        if session.status != RepairStatus::Stuck {
+            return false;
+        }
+        let Some(stuck_at) = self.repair.stuck_at.lock().ok().and_then(|guard| *guard) else {
+            return false;
+        };
+        if now.duration_since(stuck_at) < timeout {
+            return false;
+        }
+        self.apply_live_session(failed_session(&session, RepairRecoveryAction::Reinstall));
+        let _ = self.persist_live_session();
+        true
+    }
+
+    pub fn mark_repair_idle_if_completed_expired(&self, now: Instant, timeout: Duration) -> bool {
+        let session = self.repair_session();
+        if session.status != RepairStatus::Completed {
+            return false;
+        }
+        let Some(completed_at) = self
+            .repair
+            .completed_at
+            .lock()
+            .ok()
+            .and_then(|guard| *guard)
+        else {
+            return false;
+        };
+        if now.duration_since(completed_at) < timeout {
+            return false;
+        }
+        self.apply_live_session(RepairSession::idle());
+        let _ = self.persist_live_session();
+        true
+    }
+
+    pub fn note_persistence_failure(&self, error: &StateError) {
+        let class = classify_persistence_error(error);
+        if let Ok(mut last) = self.repair.last_error.lock() {
+            *last = Some(class);
+        }
+        if matches!(
+            class,
+            PersistenceClass::Durable | PersistenceClass::IoOrFull
+        ) && let Ok(conn) = self.db.try_lock()
+        {
+            let _ = write_metadata_flag(&conn, "snapshot_untrusted", true);
+        }
+        if class == PersistenceClass::UsageIsolated
+            && let Ok(conn) = self.db.try_lock()
+        {
+            let _ = write_metadata_flag(&conn, USAGE_ISOLATED_KEY, true);
+        }
+    }
+
+    pub(crate) fn record_open_salvage_session(&self) -> Result<(), StateError> {
+        self.record_automatic_salvage_day()?;
+        let now = now_rfc3339();
+        self.apply_live_session(completed_durable_session(&now));
+        self.persist_live_session()
+    }
+
+    fn repair_open(&self) -> Result<RepairReport, StateError> {
+        let mut executed = Vec::new();
+        match self.persist_probe() {
+            Ok(()) => {}
+            Err(error) if sqlite_io_or_full_error(&error) => return Err(StateError::Unavailable),
+            Err(error) if sqlite_durable_corruption_error(&error) => {
+                match self.salvage_durable_if_allowed(true)? {
+                    SalvageOutcome::Ran => executed.push(RepairAction::SalvageDurableImage),
+                    SalvageOutcome::Capped => {
+                        return Ok(self.stuck_report(RepairSite::Open, executed));
+                    }
+                    SalvageOutcome::FailedClosed => {
+                        return Ok(RepairReport {
+                            site: RepairSite::Open,
+                            executed,
+                            changed: true,
+                            fail_closed: true,
+                        });
+                    }
+                }
+            }
+            Err(error) => return Err(error),
+        }
+        self.recover_process_residue()?;
+        executed.push(RepairAction::FinalizeInterruptedAttempts);
+        executed.push(RepairAction::ClearRefreshingFlags);
+        if executed.contains(&RepairAction::SalvageDurableImage) {
+            executed.push(RepairAction::InvalidateDiagnosticSnapshot);
+            executed.push(RepairAction::MarkUsageReindexPending);
+        }
+        Ok(RepairReport {
+            site: RepairSite::Open,
+            executed,
+            changed: true,
+            fail_closed: false,
+        })
+    }
+
+    fn repair_refresh_start(&self) -> Result<RepairReport, StateError> {
+        let mut executed = Vec::new();
+        let user_retry = matches!(
+            self.repair_session().status,
+            RepairStatus::Stuck | RepairStatus::Failed
+        ) && self.repair_session().recovery_action
+            == Some(RepairRecoveryAction::Retry);
+        match self.persist_probe() {
+            Ok(()) => {
+                if user_retry {
+                    self.apply_live_session(RepairSession::idle());
+                    let _ = self.persist_live_session();
+                }
+            }
+            Err(error) if sqlite_io_or_full_error(&error) => return Err(StateError::Unavailable),
+            Err(error) if sqlite_durable_corruption_error(&error) => {
+                match self.salvage_durable_if_allowed(!user_retry)? {
+                    SalvageOutcome::Ran => executed.push(RepairAction::SalvageDurableImage),
+                    SalvageOutcome::Capped => {
+                        return Ok(self.stuck_report(RepairSite::RefreshStart, executed));
+                    }
+                    SalvageOutcome::FailedClosed => {
+                        return Ok(RepairReport {
+                            site: RepairSite::RefreshStart,
+                            executed,
+                            changed: true,
+                            fail_closed: true,
+                        });
+                    }
+                }
+            }
+            Err(error) => return Err(error),
+        }
+        let isolated = self.usage_isolated_flag()?;
+        if isolated {
+            self.set_metadata_flag(DERIVED_DROP_PENDING_KEY, true)?;
+        }
+        Ok(RepairReport {
+            site: RepairSite::RefreshStart,
+            changed: !executed.is_empty() || isolated,
+            executed,
+            fail_closed: false,
+        })
+    }
+
+    fn repair_refresh_worker(&self) -> Result<RepairReport, StateError> {
+        let pending = self.derived_drop_pending().unwrap_or(false);
+        Ok(RepairReport {
+            site: RepairSite::RefreshWorker,
+            executed: Vec::new(),
+            changed: pending,
+            fail_closed: false,
+        })
+    }
+
+    fn repair_write_failure(&self) -> Result<RepairReport, StateError> {
+        let class = self
+            .repair
+            .last_error
+            .lock()
+            .ok()
+            .and_then(|guard| *guard)
+            .unwrap_or(PersistenceClass::Other);
+        match class {
+            PersistenceClass::Durable => {
+                let now = now_rfc3339();
+                if self.automatic_salvage_used_today().unwrap_or(false) {
+                    return Ok(self.stuck_report(RepairSite::WriteFailure, Vec::new()));
+                }
+                self.apply_live_session(durable_repairing_session(
+                    &now,
+                    RepairPhase::PreservingAccount,
+                    "Copying account",
+                    Some(0),
+                    Some(REQUIRED_COPY_PROGRESS_TOTAL),
+                ));
+                let _ = self.persist_live_session();
+                Ok(RepairReport {
+                    site: RepairSite::WriteFailure,
+                    executed: Vec::new(),
+                    changed: true,
+                    fail_closed: false,
+                })
+            }
+            PersistenceClass::UsageIsolated => {
+                let _ = self.set_metadata_flag(USAGE_ISOLATED_KEY, true);
+                Ok(RepairReport {
+                    site: RepairSite::WriteFailure,
+                    executed: Vec::new(),
+                    changed: true,
+                    fail_closed: false,
+                })
+            }
+            PersistenceClass::IoOrFull => Err(StateError::Unavailable),
+            PersistenceClass::Other => Ok(RepairReport {
+                site: RepairSite::WriteFailure,
+                executed: Vec::new(),
+                changed: false,
+                fail_closed: false,
+            }),
+        }
+    }
+
+    fn repair_diagnose_read(&self) -> Result<RepairReport, StateError> {
+        let fail_closed = matches!(
+            self.health_evidence_trust(),
+            super::HealthEvidenceTrust::FailClosed
+        );
+        Ok(RepairReport {
+            site: RepairSite::DiagnoseRead,
+            executed: Vec::new(),
+            changed: false,
+            fail_closed,
+        })
+    }
+
+    fn repair_post_refresh(&self) -> Result<RepairReport, StateError> {
+        if let Some(class) = self.repair.last_error.lock().ok().and_then(|guard| *guard) {
+            let error = match class {
+                PersistenceClass::Durable => StateError::InvalidState,
+                PersistenceClass::IoOrFull => StateError::Unavailable,
+                _ => StateError::Unavailable,
+            };
+            self.note_persistence_failure(&error);
+        }
+        Ok(RepairReport {
+            site: RepairSite::PostRefresh,
+            executed: Vec::new(),
+            changed: false,
+            fail_closed: false,
+        })
+    }
+
+    fn salvage_durable_if_allowed(&self, automatic: bool) -> Result<SalvageOutcome, StateError> {
+        if automatic && self.automatic_salvage_used_today()? {
+            return Ok(SalvageOutcome::Capped);
+        }
+        let now = now_rfc3339();
+        self.apply_live_session(durable_repairing_session(
+            &now,
+            RepairPhase::PreservingAccount,
+            "Copying account",
+            Some(0),
+            Some(REQUIRED_COPY_PROGRESS_TOTAL),
+        ));
+        let _ = self.persist_live_session();
+        match self.replace_connection_with_salvage() {
+            Ok(()) => {
+                self.record_automatic_salvage_day()?;
+                let completed_at = now_rfc3339();
+                self.apply_live_session(durable_repairing_session(
+                    self.repair_session()
+                        .started_at
+                        .as_deref()
+                        .unwrap_or(&completed_at),
+                    RepairPhase::RebuildingStorage,
+                    "Rebuilding storage",
+                    Some(REQUIRED_COPY_PROGRESS_TOTAL),
+                    Some(REQUIRED_COPY_PROGRESS_TOTAL),
+                ));
+                self.apply_live_session(completed_durable_session(
+                    self.repair_session()
+                        .started_at
+                        .as_deref()
+                        .unwrap_or(&completed_at),
+                ));
+                self.persist_live_session()?;
+                self.recover_process_residue()?;
+                Ok(SalvageOutcome::Ran)
+            }
+            Err(error) if sqlite_io_or_full_error(&error) => Err(StateError::Unavailable),
+            Err(_) => {
+                let started = self.repair_session().started_at.unwrap_or_else(now_rfc3339);
+                self.apply_live_session(failed_session(
+                    &durable_repairing_session(
+                        &started,
+                        RepairPhase::RebuildingStorage,
+                        "Rebuilding storage",
+                        None,
+                        None,
+                    ),
+                    RepairRecoveryAction::Reinstall,
+                ));
+                let _ = self.persist_live_session();
+                Ok(SalvageOutcome::FailedClosed)
+            }
+        }
+    }
+
+    fn replace_connection_with_salvage(&self) -> Result<(), StateError> {
+        let mut guard = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        drop(std::mem::replace(
+            &mut *guard,
+            Connection::open_in_memory()?,
+        ));
+        match salvage::salvage_existing(&self.root) {
+            Ok(connection) => {
+                *guard = connection;
+                Ok(())
+            }
+            Err(error) => {
+                if let Ok(connection) = salvage::reopen_live(&self.root) {
+                    *guard = connection;
+                }
+                Err(error)
+            }
+        }
+    }
+
+    fn recover_process_residue(&self) -> Result<(), StateError> {
+        let mut conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        recover_interrupted_attempts(&mut conn)
+    }
+
+    fn apply_live_session(&self, session: RepairSession) {
+        if let Ok(mut live) = self.repair.live.lock() {
+            *live = session.clone();
+        }
+        match session.status {
+            RepairStatus::Repairing => {
+                if let Ok(mut last_at) = self.repair.last_seq_at.lock() {
+                    *last_at = Some(Instant::now());
+                }
+                if let Ok(mut stuck_at) = self.repair.stuck_at.lock() {
+                    *stuck_at = None;
+                }
+                if let Ok(mut completed_at) = self.repair.completed_at.lock() {
+                    *completed_at = None;
+                }
+            }
+            RepairStatus::Completed => {
+                if let Ok(mut completed_at) = self.repair.completed_at.lock() {
+                    *completed_at = Some(Instant::now());
+                }
+            }
+            RepairStatus::Stuck => {
+                if let Ok(mut stuck_at) = self.repair.stuck_at.lock()
+                    && stuck_at.is_none()
+                {
+                    *stuck_at = Some(Instant::now());
+                }
+            }
+            RepairStatus::Idle => {
+                if let Ok(mut stuck_at) = self.repair.stuck_at.lock() {
+                    *stuck_at = None;
+                }
+                if let Ok(mut completed_at) = self.repair.completed_at.lock() {
+                    *completed_at = None;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn persist_live_session(&self) -> Result<(), StateError> {
+        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        persist_session_on(
+            &conn,
+            self.repair.seq.load(Ordering::Acquire),
+            &self.repair_session(),
+        )?;
+        bump_revision(&conn)?;
+        Ok(())
+    }
+
+    fn stuck_report(&self, site: RepairSite, executed: Vec<RepairAction>) -> RepairReport {
+        let now = now_rfc3339();
+        let current = self.repair_session();
+        let started = current.started_at.unwrap_or_else(|| now.clone());
+        self.apply_live_session(stuck_session(&durable_repairing_session(
+            &started,
+            current.phase.unwrap_or(RepairPhase::PreservingAccount),
+            current.activity.as_deref().unwrap_or("Copying account"),
+            current.progress_current,
+            current.progress_total,
+        )));
+        let _ = self.persist_live_session();
+        RepairReport {
+            site,
+            executed,
+            changed: true,
+            fail_closed: false,
+        }
+    }
+
+    fn automatic_salvage_used_today(&self) -> Result<bool, StateError> {
+        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        Ok(metadata_value(&conn, AUTOMATIC_SALVAGE_DAY_KEY)?
+            .is_some_and(|value| value == utc_day_from_rfc3339(&now_rfc3339())))
+    }
+
+    fn record_automatic_salvage_day(&self) -> Result<(), StateError> {
+        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        conn.execute(
+            "INSERT INTO metadata(key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            rusqlite::params![
+                AUTOMATIC_SALVAGE_DAY_KEY,
+                utc_day_from_rfc3339(&now_rfc3339())
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn usage_isolated_flag(&self) -> Result<bool, StateError> {
+        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        metadata_flag(&conn, USAGE_ISOLATED_KEY)
+    }
+
+    fn set_metadata_flag(&self, key: &str, value: bool) -> Result<(), StateError> {
+        let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+        write_metadata_flag(&conn, key, value)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_usage_isolated_for_test(&self, isolated: bool) -> Result<(), StateError> {
+        self.set_metadata_flag(USAGE_ISOLATED_KEY, isolated)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn repair_seq_for_test(&self) -> u64 {
+        self.repair.seq.load(Ordering::Acquire)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn start_durable_repairing_for_test(&self) -> Result<(), StateError> {
+        let now = now_rfc3339();
+        self.apply_live_session(durable_repairing_session(
+            &now,
+            RepairPhase::PreservingAccount,
+            "Copying account",
+            Some(0),
+            Some(REQUIRED_COPY_PROGRESS_TOTAL),
+        ));
+        self.persist_live_session()
+    }
+}
+
+enum SalvageOutcome {
+    Ran,
+    Capped,
+    FailedClosed,
+}
+
+fn persist_session_on(
+    conn: &Connection,
+    seq: u64,
+    session: &RepairSession,
+) -> Result<(), StateError> {
+    let persisted = PersistedRepair {
+        seq,
+        session: Some(session.clone()),
+    };
+    let raw = serde_json::to_string(&persisted)?;
+    if raw.len() > MAX_SESSION_BYTES {
+        return Err(StateError::InvalidState);
+    }
+    conn.execute(
+        "INSERT INTO metadata(key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        rusqlite::params![REPAIR_SESSION_KEY, raw],
+    )?;
+    Ok(())
+}
+
+fn classify_persistence_error(error: &StateError) -> PersistenceClass {
+    if sqlite_durable_corruption_error(error) {
+        PersistenceClass::Durable
+    } else if sqlite_io_or_full_error(error) {
+        PersistenceClass::IoOrFull
+    } else if usage_isolated_error(error) {
+        PersistenceClass::UsageIsolated
+    } else {
+        PersistenceClass::Other
+    }
+}
+
+fn usage_isolated_error(error: &StateError) -> bool {
+    let message = error.to_string().to_ascii_lowercase();
+    message.contains("usage_file_index")
+        || message.contains("usage_file_records")
+        || message.contains("usage_dirty_ranges")
+        || message.contains("usage_partial_sources")
+}
+
+fn durable_repairing_session(
+    started_at: &str,
+    phase: RepairPhase,
+    activity: &str,
+    progress_current: Option<i64>,
+    progress_total: Option<i64>,
+) -> RepairSession {
+    RepairSession {
+        status: RepairStatus::Repairing,
+        severity: RepairSeverity::Durable,
+        phase: Some(phase),
+        title: Some(DURABLE_TITLE.to_owned()),
+        guidance: Some(DURABLE_GUIDANCE.to_owned()),
+        activity: Some(activity.to_owned()),
+        started_at: Some(started_at.to_owned()),
+        heartbeat_at: Some(now_rfc3339()),
+        progress_current,
+        progress_total,
+        stuck: false,
+        blocks_quit: true,
+        recovery_action: None,
+    }
+}
+
+fn completed_durable_session(started_at: &str) -> RepairSession {
+    RepairSession {
+        status: RepairStatus::Completed,
+        severity: RepairSeverity::Durable,
+        phase: Some(RepairPhase::Verifying),
+        title: Some(DURABLE_TITLE.to_owned()),
+        guidance: Some(DURABLE_GUIDANCE.to_owned()),
+        activity: Some("Rebuilding storage".to_owned()),
+        started_at: Some(started_at.to_owned()),
+        heartbeat_at: Some(now_rfc3339()),
+        progress_current: Some(REQUIRED_COPY_PROGRESS_TOTAL),
+        progress_total: Some(REQUIRED_COPY_PROGRESS_TOTAL),
+        stuck: false,
+        blocks_quit: false,
+        recovery_action: None,
+    }
+}
+
+fn stuck_session(current: &RepairSession) -> RepairSession {
+    let mut session = current.clone();
+    session.status = RepairStatus::Stuck;
+    session.stuck = true;
+    session.blocks_quit = false;
+    session.recovery_action = Some(RepairRecoveryAction::Retry);
+    session.guidance = Some(STUCK_GUIDANCE.to_owned());
+    session.heartbeat_at = Some(now_rfc3339());
+    session
+}
+
+fn failed_session(current: &RepairSession, recovery: RepairRecoveryAction) -> RepairSession {
+    let mut session = current.clone();
+    session.status = RepairStatus::Failed;
+    session.stuck = true;
+    session.blocks_quit = false;
+    session.recovery_action = Some(recovery);
+    session.guidance = Some(FAILED_GUIDANCE.to_owned());
+    session.heartbeat_at = Some(now_rfc3339());
+    session
+}
+
+fn utc_day_from_rfc3339(value: &str) -> String {
+    value.get(..10).unwrap_or(value).to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::StateStore;
+    use std::fs;
+    use std::thread;
+    use uuid::Uuid;
+
+    fn temp_store() -> (std::path::PathBuf, StateStore) {
+        let root = std::env::temp_dir().join(format!("quota-repair-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let store = StateStore::open(&root).expect("state");
+        (root, store)
+    }
+
+    #[test]
+    fn diagnose_read_does_not_salvage() {
+        let (root, store) = temp_store();
+        store
+            .fail_persist_probe_with_corruption_for_test()
+            .expect("poison");
+        let report = store
+            .run_repair(RepairSite::DiagnoseRead)
+            .expect("diagnose");
+        assert!(!report.changed);
+        assert!(report.fail_closed);
+        assert!(store.state_salvaged_at().expect("marker").is_none());
+        assert!(!root.join("state.sqlite.broken").exists());
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn refresh_start_does_not_drop_usage_tables() {
+        let (root, store) = temp_store();
+        store.insert_usage_file_record_for_test().expect("usage");
+        store.set_usage_isolated_for_test(true).expect("flag");
+        let report = store
+            .run_repair(RepairSite::RefreshStart)
+            .expect("refresh start");
+        assert!(
+            !report
+                .executed
+                .contains(&RepairAction::DiscardUnreadableDerivedIndex)
+        );
+        assert_eq!(store.usage_event_count().expect("count"), 1);
+        assert!(store.derived_drop_pending().expect("pending"));
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn heartbeat_increments_seq_without_sqlite_lock() {
+        let (root, store) = temp_store();
+        store.start_durable_repairing_for_test().expect("session");
+        let blocked = store.db.lock().expect("lock");
+        let started = Instant::now();
+        let seq = store.increment_repair_heartbeat_seq();
+        let elapsed = started.elapsed();
+        drop(blocked);
+        assert_eq!(seq, 1);
+        assert_eq!(store.repair_seq_for_test(), 1);
+        assert!(elapsed < Duration::from_millis(50));
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn watchdog_marks_stuck_when_seq_stops() {
+        let (root, store) = temp_store();
+        store.start_durable_repairing_for_test().expect("session");
+        let started = Instant::now();
+        assert!(!store.mark_repair_stuck_if_silent(
+            started + Duration::from_secs(10),
+            Duration::from_secs(45)
+        ));
+        assert!(store.mark_repair_stuck_if_silent(
+            started + Duration::from_secs(46),
+            Duration::from_secs(45)
+        ));
+        let session = store.repair_session();
+        assert_eq!(session.status, RepairStatus::Stuck);
+        assert!(!session.blocks_quit);
+        assert_eq!(session.recovery_action, Some(RepairRecoveryAction::Retry));
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn automatic_salvage_creates_durable_session() {
+        let (root, store) = temp_store();
+        store
+            .fail_persist_probe_with_corruption_for_test()
+            .expect("poison");
+        let report = store.run_repair(RepairSite::RefreshStart).expect("salvage");
+        assert!(report.executed.contains(&RepairAction::SalvageDurableImage));
+        let session = store.repair_session();
+        assert_eq!(session.severity, RepairSeverity::Durable);
+        assert!(matches!(
+            session.status,
+            RepairStatus::Repairing | RepairStatus::Completed
+        ));
+        assert!(store.state_salvaged_at().expect("marker").is_some());
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn second_automatic_salvage_same_day_is_stuck() {
+        let (root, store) = temp_store();
+        store
+            .fail_persist_probe_with_corruption_for_test()
+            .expect("poison");
+        store
+            .run_repair(RepairSite::RefreshStart)
+            .expect("first salvage");
+        store
+            .fail_persist_probe_with_corruption_for_test()
+            .expect("poison again");
+        let report = store
+            .run_repair(RepairSite::RefreshStart)
+            .expect("second detect");
+        assert!(!report.executed.contains(&RepairAction::SalvageDurableImage));
+        assert_eq!(store.repair_session().status, RepairStatus::Stuck);
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn heartbeat_thread_can_tick_while_another_thread_holds_sqlite() {
+        let (root, store) = temp_store();
+        store.start_durable_repairing_for_test().expect("session");
+        thread::scope(|scope| {
+            let lock = store.db.lock().expect("lock");
+            let seq = scope
+                .spawn(|| store.increment_repair_heartbeat_seq())
+                .join()
+                .expect("join");
+            drop(lock);
+            assert_eq!(seq, 1);
+        });
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+}

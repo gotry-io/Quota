@@ -12,6 +12,10 @@
     case cachedRefreshError = "cached-refresh-error"
     case empty
     case unavailable
+    case repairingDurable = "repairing-durable"
+    case repairingDerived = "repairing-derived"
+    case stuck
+    case failed
 
     @MainActor
     fileprivate func makeModel(referenceDate: Date) -> MenuBarViewModel {
@@ -44,6 +48,83 @@
           errorMessage: "The bundled local service could not be started.",
           lastCheckedAt: nil
         )
+      case .repairingDurable, .repairingDerived, .stuck, .failed:
+        MenuBarViewModel(
+          visualTestState: contentVisualState(at: referenceDate).withRepair(repairSession(at: referenceDate)),
+          errorMessage: nil,
+          lastCheckedAt: referenceDate.addingTimeInterval(-30)
+        )
+      }
+    }
+
+    fileprivate func repairSession(at date: Date) -> LocalServiceRepairSession {
+      switch self {
+      case .repairingDurable:
+        LocalServiceRepairSession(
+          status: .repairing,
+          severity: .durable,
+          phase: .preservingAccount,
+          title: "Repairing local data",
+          guidance: "Keep QuotaBar open. You can close this menu.",
+          activity: "Copying account",
+          startedAt: date.addingTimeInterval(-14),
+          heartbeatAt: date.addingTimeInterval(-2),
+          progressCurrent: 3,
+          progressTotal: 7,
+          stuck: false,
+          blocksQuit: true,
+          recoveryAction: nil
+        )
+      case .repairingDerived:
+        LocalServiceRepairSession(
+          status: .repairing,
+          severity: .derived,
+          phase: .reindexingUsage,
+          title: "Rebuilding Usage history",
+          guidance: "Quota and Account stay available. Usage history is catching up.",
+          activity: "Scanning local logs",
+          startedAt: date.addingTimeInterval(-14),
+          heartbeatAt: date.addingTimeInterval(-2),
+          progressCurrent: 12,
+          progressTotal: 40,
+          stuck: false,
+          blocksQuit: false,
+          recoveryAction: nil
+        )
+      case .stuck:
+        LocalServiceRepairSession(
+          status: .stuck,
+          severity: .durable,
+          phase: .preservingAccount,
+          title: "Repairing local data",
+          guidance: "Repair stopped responding. You can retry.",
+          activity: "Copying account",
+          startedAt: date.addingTimeInterval(-60),
+          heartbeatAt: date.addingTimeInterval(-50),
+          progressCurrent: 3,
+          progressTotal: 7,
+          stuck: true,
+          blocksQuit: false,
+          recoveryAction: .retry
+        )
+      case .failed:
+        LocalServiceRepairSession(
+          status: .failed,
+          severity: .durable,
+          phase: .rebuildingStorage,
+          title: "Repairing local data",
+          guidance: "Reinstall QuotaBar to repair local data.",
+          activity: "Rebuilding storage",
+          startedAt: date.addingTimeInterval(-90),
+          heartbeatAt: date.addingTimeInterval(-80),
+          progressCurrent: nil,
+          progressTotal: nil,
+          stuck: true,
+          blocksQuit: false,
+          recoveryAction: .reinstall
+        )
+      default:
+        .idle
       }
     }
   }
@@ -59,10 +140,11 @@
     case usage
     case support
     case diagnostics
+    case repair
 
     fileprivate var path: [MenuBarRoute] {
       switch self {
-      case .overview: []
+      case .overview, .repair: []
       case .settings: [.settings]
       case .agents: [.settings, .agents]
       case .providerCodex: [.settings, .agents, .provider(.codex)]
@@ -182,6 +264,8 @@
         return DiagnosticsPageModel(report: signedOutDiagnosticVisualReport(at: referenceDate))
       case .unavailable:
         return DiagnosticsPageModel(errorMessage: "The bundled local service could not be started.")
+      case .repairingDurable, .repairingDerived, .stuck, .failed:
+        return DiagnosticsPageModel(report: diagnosticVisualReport(at: referenceDate))
       }
     }
 

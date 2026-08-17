@@ -94,7 +94,8 @@ func consumesServiceMergedOverviewWithoutReprocessingObservations() async throws
         selectedSourceDisplayName: source.displayName,
         isStale: false
       )
-    ]
+    ],
+    repair: .idle
   )
   let model = MenuBarViewModel(client: StubLocalService(state: state))
 
@@ -147,13 +148,61 @@ func emptyUsageCacheWhileRefreshingIsPreparingNotMissing() async throws {
     pricing: emptyComponent(),
     providers: [],
     providerBrowserSessions: [],
-    overview: []
+    overview: [],
+    repair: .idle
   )
   let model = MenuBarViewModel(client: StubLocalService(state: state))
   await model.refreshIfNeeded()
   #expect(model.usageDetail(source: .local, period: .today) == nil)
   #expect(model.isPreparingUsage(source: .local))
   #expect(!model.isPreparingUsage(source: .account))
+}
+
+@Test @MainActor
+func idleRepairStaysOnOverviewAndDurableRepairBlocksQuit() async throws {
+  let idle = MenuBarViewModel(client: StubLocalService(state: loggingInState()))
+  await idle.refreshIfNeeded()
+  #expect(idle.repairPresentation == .overview)
+  #expect(!idle.showsFullRepairPage)
+  #expect(!idle.repairBlocksQuit)
+
+  var repairing = loggingInState()
+  repairing = LocalServiceState(
+    ipcVersion: repairing.ipcVersion,
+    revision: repairing.revision,
+    usageUploadEnabled: repairing.usageUploadEnabled,
+    usagePeriods: repairing.usagePeriods,
+    quota: repairing.quota,
+    usage: repairing.usage,
+    account: repairing.account,
+    pricing: repairing.pricing,
+    providers: repairing.providers,
+    providerBrowserSessions: repairing.providerBrowserSessions,
+    overview: repairing.overview,
+    repair: LocalServiceRepairSession(
+      status: .repairing,
+      severity: .durable,
+      phase: .preservingAccount,
+      title: "Repairing local data",
+      guidance: "Keep QuotaBar open. You can close this menu.",
+      activity: "Copying account",
+      startedAt: Date(timeIntervalSince1970: 1_786_300_000),
+      heartbeatAt: Date(timeIntervalSince1970: 1_786_300_014),
+      progressCurrent: 1,
+      progressTotal: 7,
+      stuck: false,
+      blocksQuit: true,
+      recoveryAction: nil
+    )
+  )
+  let model = MenuBarViewModel(client: StubLocalService(state: repairing))
+  await model.refreshIfNeeded()
+  #expect(model.repairPresentation == .fullPage)
+  #expect(model.showsFullRepairPage)
+  #expect(model.repairBlocksQuit)
+  #expect(model.repairHeaderTitle == "Repairing")
+  model.presentRepairPageFromQuitAttempt()
+  #expect(model.showsFullRepairPage)
 }
 
 @Test @MainActor
@@ -216,7 +265,8 @@ private func loggingInState() -> LocalServiceState {
     pricing: emptyComponent(),
     providers: [],
     providerBrowserSessions: [],
-    overview: []
+    overview: [],
+    repair: .idle
   )
 }
 

@@ -102,6 +102,18 @@ enum AccountDisconnectReason: Equatable {
     let accountSummary: AccountSummary?
     let authStatus: LocalServiceAuthStatus
     let overview: [LocalServiceOverviewItem]
+    var repair: LocalServiceRepairSession = .idle
+
+    func withRepair(_ repair: LocalServiceRepairSession) -> MenuBarVisualState {
+      MenuBarVisualState(
+        report: report,
+        localUsage: localUsage,
+        accountSummary: accountSummary,
+        authStatus: authStatus,
+        overview: overview,
+        repair: repair
+      )
+    }
   }
 #endif
 
@@ -134,6 +146,10 @@ final class MenuBarViewModel {
   private var authStatus: LocalServiceAuthStatus?
   private var overview: [LocalServiceOverviewItem] = []
   private var revision = 0
+  private(set) var repair: LocalServiceRepairSession = .idle
+  private var localRepairOverride: LocalServiceRepairSession?
+  private var lastSuccessfulStateAt: Date?
+  private var lastRepairEventAt: Date?
 
   var accountState: AccountViewState {
     switch authStatus {
@@ -162,8 +178,35 @@ final class MenuBarViewModel {
   @ObservationIgnored
   private let initializationError: String?
 
+  var presentedRepair: LocalServiceRepairSession {
+    localRepairOverride ?? repair
+  }
+
+  var repairPresentation: RepairPresentationKind {
+    RepairPresentation.kind(for: presentedRepair)
+  }
+
+  var showsFullRepairPage: Bool {
+    repairPresentation == .fullPage
+  }
+
+  var showsDerivedRepairNotice: Bool {
+    repairPresentation == .derivedNotice
+  }
+
+  var repairHeaderTitle: String {
+    RepairPresentation.headerTitle(for: presentedRepair)
+  }
+
+  var repairBlocksQuit: Bool {
+    presentedRepair.blocksQuit
+  }
+
   @ObservationIgnored
   private var eventTask: Task<Void, Never>?
+
+  @ObservationIgnored
+  private var repairWatchTask: Task<Void, Never>?
 
   @ObservationIgnored
   private var loginTask: Task<Void, Never>?
@@ -248,11 +291,13 @@ final class MenuBarViewModel {
       }
       authStatus = visualTestState.authStatus
       overview = visualTestState.overview
+      repair = visualTestState.repair
     }
   #endif
 
   deinit {
     eventTask?.cancel()
+    repairWatchTask?.cancel()
     loginTask?.cancel()
     browserSessionTask?.cancel()
   }
@@ -266,10 +311,24 @@ final class MenuBarViewModel {
       await self?.reloadState()
       for await event in client.events {
         guard !Task.isCancelled else { return }
-        guard let self, event.revision > revision else { continue }
+        guard let self else { continue }
+        if event.changedComponents.contains(.repair) {
+          lastRepairEventAt = Date()
+        }
+        guard event.revision > revision else { continue }
         await reloadState()
       }
     }
+    repairWatchTask = Task { @MainActor [weak self] in
+      while !Task.isCancelled {
+        try? await Task.sleep(for: .seconds(20))
+        await self?.checkRepairLiveness()
+      }
+    }
+  }
+
+  func presentRepairPageFromQuitAttempt() {
+    localRepairOverride = presentedRepair
   }
 
   func refreshIfNeeded() async {
@@ -706,6 +765,10 @@ final class MenuBarViewModel {
 
   private func apply(_ state: LocalServiceState) {
     revision = state.revision
+    lastSuccessfulStateAt = Date()
+    localRepairOverride = nil
+    repair = state.repair
+    QuotaBarUpdater.setChecksSuppressed(state.repair.blocksQuit)
     usageUploadEnabled = state.usageUploadEnabled
     usagePeriods = state.usagePeriods
     report = state.quota.value
@@ -750,6 +813,43 @@ final class MenuBarViewModel {
     } else {
       accountErrorMessage = accountActionErrorMessage
     }
+  }
+
+  private func checkRepairLiveness() async {
+    guard let client else { return }
+    let now = Date()
+    let lastSignal = [lastRepairEventAt, lastSuccessfulStateAt].compactMap { $0 }.max()
+    if let lastSignal, now.timeIntervalSince(lastSignal) < 20 { return }
+    do {
+      apply(try await client.state())
+      lastSuccessfulStateAt = Date()
+      if let heartbeat = presentedRepair.heartbeatAt,
+        Date().timeIntervalSince(heartbeat) > 45
+      {
+        renderStuckFromLastSession()
+      }
+    } catch {
+      renderStuckFromLastSession()
+    }
+  }
+
+  private func renderStuckFromLastSession() {
+    guard presentedRepair.status == .repairing else { return }
+    localRepairOverride = LocalServiceRepairSession(
+      status: .stuck,
+      severity: presentedRepair.severity,
+      phase: presentedRepair.phase,
+      title: presentedRepair.title,
+      guidance: "Repair stopped responding. You can retry.",
+      activity: presentedRepair.activity,
+      startedAt: presentedRepair.startedAt,
+      heartbeatAt: presentedRepair.heartbeatAt,
+      progressCurrent: presentedRepair.progressCurrent,
+      progressTotal: presentedRepair.progressTotal,
+      stuck: true,
+      blocksQuit: false,
+      recoveryAction: .retry
+    )
   }
 
   private func providerStatus(for provider: ProviderID) -> ProviderStatusCopy? {

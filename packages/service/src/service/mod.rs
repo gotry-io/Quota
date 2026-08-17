@@ -5,11 +5,12 @@ pub mod backend;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::protocol::*;
 use crate::state::{
-    DiagnosticAttemptCompletion, DiagnosticAttemptHandle, StateError, StateStore, now_rfc3339,
+    DiagnosticAttemptCompletion, DiagnosticAttemptHandle, RepairSite, StateError, StateStore,
+    now_rfc3339, sqlite_durable_corruption_error, sqlite_io_or_full_error,
 };
 use serde_json::Value;
 
@@ -185,6 +186,7 @@ struct ServiceInner {
     login: Mutex<LoginState>,
     scheduler_wakeup: Condvar,
     scheduler_signal: Mutex<bool>,
+    repair_watchdog_started: AtomicBool,
     #[cfg(test)]
     fail_next_refresh_spawn: AtomicBool,
 }
@@ -214,6 +216,7 @@ impl LocalService {
                 login: Mutex::new(LoginState { active: None }),
                 scheduler_wakeup: Condvar::new(),
                 scheduler_signal: Mutex::new(false),
+                repair_watchdog_started: AtomicBool::new(false),
                 #[cfg(test)]
                 fail_next_refresh_spawn: AtomicBool::new(false),
             }),
@@ -221,6 +224,7 @@ impl LocalService {
     }
 
     pub fn start_scheduler(&self) {
+        self.start_repair_watchdog();
         let service = self.clone();
         service.request_refresh_with_trigger(DiagnosticAttemptTrigger::Startup);
         thread::Builder::new()
@@ -328,12 +332,27 @@ impl LocalService {
 
     fn diagnose(&self, request: &IpcRequest) -> Result<DiagnosticReport, IpcError> {
         request.decode_payload::<EmptyPayload>()?;
+        let _ = self.inner.state.run_repair(RepairSite::DiagnoseRead);
         let mut report = self.inner.backend.diagnose().map_err(|error| error.error)?;
         if let Ok(refresh) = self.inner.refresh.lock()
             && let Some(active) = &refresh.active
         {
             report.refresh.phase = DiagnosticRefreshPhase::Running;
             report.refresh.started_at = Some(active.started_at.clone());
+            report.refresh.next_due_at = None;
+        }
+        let repair = self.inner.state.repair_session();
+        if matches!(
+            repair.status,
+            crate::protocol::RepairStatus::Repairing
+                | crate::protocol::RepairStatus::Checking
+                | crate::protocol::RepairStatus::Stuck
+                | crate::protocol::RepairStatus::Failed
+        ) {
+            report.refresh.phase = DiagnosticRefreshPhase::Running;
+            if report.refresh.started_at.is_none() {
+                report.refresh.started_at = repair.started_at;
+            }
             report.refresh.next_due_at = None;
         }
         Ok(report)
@@ -439,6 +458,7 @@ impl LocalService {
 
     fn logout(&self, request: &IpcRequest) -> Result<LogoutResult, IpcError> {
         request.decode_payload::<EmptyPayload>()?;
+        self.reject_if_durable_repair()?;
         if self
             .inner
             .login
@@ -508,6 +528,7 @@ impl LocalService {
 
     fn set_provider_config(&self, request: &IpcRequest) -> Result<ProviderConfigView, IpcError> {
         let payload: SetProviderConfigPayload = request.decode_payload()?;
+        self.reject_if_durable_repair()?;
         validate_provider_config(&payload.provider, payload.base_url.as_deref())?;
         self.inner
             .state
@@ -546,6 +567,7 @@ impl LocalService {
 
     fn remove_provider_config(&self, request: &IpcRequest) -> Result<ProviderConfigView, IpcError> {
         let payload: ProviderPayload = request.decode_payload()?;
+        self.reject_if_durable_repair()?;
         provider_credential_config(&payload.provider)?;
         self.inner
             .state
@@ -576,6 +598,7 @@ impl LocalService {
         &self,
         request: &IpcRequest,
     ) -> Result<ProviderBrowserSessionView, IpcError> {
+        self.reject_if_durable_repair()?;
         let (provider, validated) = self.validated_provider_browser_session(request)?;
         self.inner
             .state
@@ -629,6 +652,7 @@ impl LocalService {
         &self,
         request: &IpcRequest,
     ) -> Result<ProviderBrowserSessionView, IpcError> {
+        self.reject_if_durable_repair()?;
         let payload: ProviderPayload = request.decode_payload()?;
         let provider = crate::catalog::ProviderId::parse(&payload.provider)
             .filter(|provider| provider.metadata().browser_session.is_some())
@@ -678,12 +702,36 @@ impl LocalService {
                 revision: self.inner.state.current_revision().unwrap_or(0),
             };
         }
-        if let Err(_error) = self.inner.state.repair_if_needed() {
-            return RefreshResult {
-                accepted: false,
-                pending: false,
-                revision: self.inner.state.current_revision().unwrap_or(0),
-            };
+        self.start_repair_watchdog();
+        match self.inner.state.run_repair(RepairSite::RefreshStart) {
+            Ok(report) if report.fail_closed => {
+                return RefreshResult {
+                    accepted: false,
+                    pending: false,
+                    revision: self.inner.state.current_revision().unwrap_or(0),
+                };
+            }
+            Err(error)
+                if sqlite_io_or_full_error(&error) || sqlite_durable_corruption_error(&error) =>
+            {
+                return RefreshResult {
+                    accepted: false,
+                    pending: false,
+                    revision: self.inner.state.current_revision().unwrap_or(0),
+                };
+            }
+            Err(_) => {
+                return RefreshResult {
+                    accepted: false,
+                    pending: false,
+                    revision: self.inner.state.current_revision().unwrap_or(0),
+                };
+            }
+            Ok(_) => {
+                if self.inner.state.repair_session().status != crate::protocol::RepairStatus::Idle {
+                    self.emit(vec![ComponentName::Repair]);
+                }
+            }
         }
         let cancel = Arc::new(AtomicBool::new(false));
         let attempt = self
@@ -819,6 +867,7 @@ impl LocalService {
     }
 
     fn run_refresh(&self, cancel: Arc<AtomicBool>, attempt: Option<DiagnosticAttemptHandle>) {
+        let _ = self.inner.state.run_repair(RepairSite::RefreshWorker);
         let outcome = if cancel.load(Ordering::Acquire) || self.is_shutdown() {
             let cancelled = || Err(BackendError::cancelled());
             RefreshOutcome {
@@ -1252,6 +1301,77 @@ impl LocalService {
         self.inner
             .sink
             .event(IpcEvent::state_changed(revision, components));
+    }
+
+    fn reject_if_durable_repair(&self) -> Result<(), IpcError> {
+        let repair = self.inner.state.repair_session();
+        if repair.severity == crate::protocol::RepairSeverity::Durable
+            && matches!(
+                repair.status,
+                crate::protocol::RepairStatus::Repairing | crate::protocol::RepairStatus::Checking
+            )
+        {
+            return Err(IpcError::new(ErrorCode::Busy, RecoveryAction::Retry));
+        }
+        Ok(())
+    }
+
+    fn start_repair_watchdog(&self) {
+        if self
+            .inner
+            .repair_watchdog_started
+            .swap(true, Ordering::AcqRel)
+        {
+            return;
+        }
+        let service = self.clone();
+        let _ = thread::Builder::new()
+            .name("quota-repair-watchdog".to_owned())
+            .spawn(move || {
+                let heartbeat = Duration::from_secs(2);
+                let stuck_after = Duration::from_secs(45);
+                let failed_after = Duration::from_secs(30);
+                let completed_flash = Duration::from_millis(1500);
+                let tick = Duration::from_millis(200);
+                let mut last_heartbeat = Instant::now();
+                loop {
+                    thread::sleep(tick);
+                    if service.is_shutdown() {
+                        break;
+                    }
+                    let now = Instant::now();
+                    let session = service.inner.state.repair_session();
+                    if session.status == crate::protocol::RepairStatus::Repairing
+                        && now.duration_since(last_heartbeat) >= heartbeat
+                    {
+                        service.inner.state.increment_repair_heartbeat_seq();
+                        service.inner.state.persist_repair_heartbeat_best_effort();
+                        service.emit(vec![ComponentName::Repair]);
+                        last_heartbeat = now;
+                    }
+                    if service
+                        .inner
+                        .state
+                        .mark_repair_stuck_if_silent(now, stuck_after)
+                    {
+                        service.emit(vec![ComponentName::Repair]);
+                    }
+                    if service
+                        .inner
+                        .state
+                        .mark_repair_failed_if_stuck_expired(now, failed_after)
+                    {
+                        service.emit(vec![ComponentName::Repair]);
+                    }
+                    if service
+                        .inner
+                        .state
+                        .mark_repair_idle_if_completed_expired(now, completed_flash)
+                    {
+                        service.emit(vec![ComponentName::Repair]);
+                    }
+                }
+            });
     }
 }
 
@@ -1736,8 +1856,41 @@ mod tests {
         let response = service.handle(request);
         assert!(response.error.is_none());
         assert!(service.inner.refresh.lock().expect("lock").active.is_none());
+        let repair = response
+            .result
+            .as_ref()
+            .and_then(|value| value.get("repair"))
+            .expect("repair object");
+        assert_eq!(repair["status"], "idle");
+        assert_eq!(repair["severity"], "none");
         service.shutdown();
         drop(service);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn automatic_salvage_emits_repair_changed() {
+        let root = std::env::temp_dir().join(format!("quota-repair-event-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        state
+            .fail_persist_probe_with_corruption_for_test()
+            .expect("poison");
+        let sink = Arc::new(RecordingSink::default());
+        let service = LocalService::new(state.clone(), sink.clone(), Arc::new(UnavailableBackend));
+        let result = service.request_refresh_with_trigger(DiagnosticAttemptTrigger::Startup);
+        assert!(result.accepted || !result.accepted);
+        let session = state.repair_session();
+        assert_eq!(session.severity, crate::protocol::RepairSeverity::Durable);
+        let events = sink.0.lock().expect("events");
+        assert!(
+            events
+                .iter()
+                .any(|event| event.changed_components == [ComponentName::Repair])
+        );
+        service.shutdown();
+        drop(service);
+        drop(state);
         fs::remove_dir_all(root).expect("cleanup");
     }
 

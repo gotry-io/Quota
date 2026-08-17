@@ -190,6 +190,7 @@ private func flowState() -> LocalServiceState {
     pricing: empty(),
     providers: [],
     providerBrowserSessions: [],
-    overview: []
+    overview: [],
+    repair: .idle
   )
 }
