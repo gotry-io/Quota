@@ -127,7 +127,6 @@ impl RepairRuntime {
             RepairStatus::Completed | RepairStatus::Repairing | RepairStatus::Checking
         );
         let session = reconcile_loaded_session(loaded);
-        let stuck_at = (session.status == RepairStatus::Stuck).then(Instant::now);
         Self {
             seq: AtomicU64::new(persisted.seq),
             last_seq: AtomicU64::new(persisted.seq),
@@ -135,7 +134,7 @@ impl RepairRuntime {
             last_revision: AtomicU64::new(0),
             live: Mutex::new(session),
             last_error: Mutex::new(None),
-            stuck_at: Mutex::new(stuck_at),
+            stuck_at: Mutex::new(None),
             completed_at: Mutex::new(None),
             remapped_on_load,
         }
@@ -1014,6 +1013,32 @@ mod tests {
         assert_eq!(session.status, RepairStatus::Stuck);
         assert!(!session.blocks_quit);
         assert_eq!(session.recovery_action, Some(RepairRecoveryAction::Retry));
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn restored_stuck_does_not_start_reinstall_timer() {
+        let (root, store) = temp_store();
+        store
+            .start_durable_repairing_for_test()
+            .expect("persist repairing");
+        drop(store);
+        let store = StateStore::open(&root).expect("reopen remapped");
+        let later = Instant::now() + Duration::from_secs(31);
+        assert!(!store.mark_repair_failed_if_stuck_expired(later, Duration::from_secs(30)));
+        let remapped = store.repair_session();
+        assert_eq!(remapped.status, RepairStatus::Stuck);
+        assert_eq!(remapped.recovery_action, Some(RepairRecoveryAction::Retry));
+        store
+            .persist_session_for_test(remapped.clone())
+            .expect("persist stuck");
+        drop(store);
+        let store = StateStore::open(&root).expect("reopen persisted stuck");
+        assert!(!store.mark_repair_failed_if_stuck_expired(later, Duration::from_secs(30)));
+        let restored = store.repair_session();
+        assert_eq!(restored.status, RepairStatus::Stuck);
+        assert_eq!(restored.recovery_action, Some(RepairRecoveryAction::Retry));
         drop(store);
         fs::remove_dir_all(root).expect("cleanup");
     }
