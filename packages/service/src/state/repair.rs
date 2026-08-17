@@ -543,7 +543,9 @@ impl StateStore {
             executed.push(RepairAction::RefreshLastGoodSnapshot);
         }
         let session = self.repair_session();
-        if session.severity == RepairSeverity::Derived && session.status == RepairStatus::Repairing
+        if session.severity == RepairSeverity::Derived
+            && session.status == RepairStatus::Repairing
+            && !self.usage_reindex_pending().unwrap_or(true)
         {
             let started = session.started_at.unwrap_or_else(now_rfc3339);
             self.apply_live_session(completed_derived_session(&started));
@@ -1125,6 +1127,38 @@ mod tests {
                 .is_empty()
         );
         assert_eq!(store.repair_session().severity, RepairSeverity::Derived);
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn post_refresh_keeps_derived_session_while_reindex_pending() {
+        let (root, store) = temp_store();
+        store.set_usage_isolated_for_test(true).expect("isolated");
+        store
+            .run_repair(RepairSite::RefreshStart)
+            .expect("refresh start");
+        store
+            .run_repair(RepairSite::RefreshWorker)
+            .expect("refresh worker");
+        assert!(store.usage_reindex_pending().expect("pending"));
+        assert_eq!(store.repair_session().status, RepairStatus::Repairing);
+        assert_eq!(store.repair_session().severity, RepairSeverity::Derived);
+
+        store
+            .run_repair(RepairSite::PostRefresh)
+            .expect("post refresh while pending");
+        let session = store.repair_session();
+        assert_eq!(session.status, RepairStatus::Repairing);
+        assert_eq!(session.phase, Some(RepairPhase::ReindexingUsage));
+
+        store
+            .set_usage_reindex_pending(false)
+            .expect("clear pending");
+        store
+            .run_repair(RepairSite::PostRefresh)
+            .expect("post refresh after scan");
+        assert_eq!(store.repair_session().status, RepairStatus::Completed);
         drop(store);
         fs::remove_dir_all(root).expect("cleanup");
     }

@@ -16,6 +16,7 @@ const BROKEN_NAME: &str = "state.sqlite.broken";
 const SALVAGE_NAME: &str = "state.sqlite.salvage";
 const GOOD_NAME: &str = "state.sqlite.good";
 const GOOD_TMP_NAME: &str = "state.sqlite.good.tmp";
+const GOOD_RESTORE_NAME: &str = "state.sqlite.good-restore";
 const SQLITE_HEADER: &[u8; 16] = b"SQLite format 3\0";
 const COPY_HEADROOM_BYTES: u64 = 64 * 1024 * 1024;
 
@@ -127,6 +128,9 @@ pub(super) fn open_or_salvage(root: &Path) -> Result<(Connection, bool), StateEr
         LiveKind::Missing | LiveKind::Empty | LiveKind::NotSqlite if broken_path.exists() => {
             resume_interrupted_salvage(root, &live_path, &broken_path)
         }
+        LiveKind::Missing | LiveKind::Empty if last_good_is_restorable(root)? => {
+            restore_or_fail(root, &live_path)
+        }
         LiveKind::Missing | LiveKind::Empty => first_install(&live_path),
         LiveKind::NotSqlite => fail_closed_or_restore_good(root, &live_path),
         LiveKind::Sqlite => open_existing_or_salvage(root, &live_path, &broken_path),
@@ -186,6 +190,10 @@ fn fail_closed_or_restore_good(
     root: &Path,
     live_path: &Path,
 ) -> Result<(Connection, bool), StateError> {
+    restore_or_fail(root, live_path)
+}
+
+fn restore_or_fail(root: &Path, live_path: &Path) -> Result<(Connection, bool), StateError> {
     match restore_last_good_snapshot(root, live_path) {
         Ok(connection) => Ok((connection, true)),
         Err(error) if sqlite_io_or_full_error(&error) => Err(StateError::Unavailable),
@@ -202,12 +210,25 @@ fn open_existing_or_salvage(
         Ok(connection) => connection,
         Err(error) if sqlite_io_or_full_error(&error) => return Err(StateError::Unavailable),
         Err(error) if sqlite_durable_corruption_error(&error) => {
-            return salvage_unreadable_live(root, live_path, broken_path);
+            // Present header-valid live: park this image, never resume from a stale .broken.
+            return Ok((salvage_once(root, live_path)?, true));
         }
         Err(StateError::ClientUpgradeRequired) => return Err(StateError::ClientUpgradeRequired),
         Err(error) => return Err(map_open_failure(error)),
     };
-    let live_identity = read_identity(&connection);
+    let live_identity = match read_identity(&connection) {
+        Ok(identity) => identity,
+        Err(error) if sqlite_io_or_full_error(&error) => return Err(StateError::Unavailable),
+        Err(error) if sqlite_durable_corruption_error(&error) => {
+            drop(connection);
+            if broken_path.exists() {
+                read_broken_identity(broken_path)?;
+                return fail_closed_or_restore_good(root, live_path);
+            }
+            return Ok((salvage_once(root, live_path)?, true));
+        }
+        Err(error) => return Err(map_open_failure(error)),
+    };
     let broken_identity = if broken_path.exists() {
         Some(read_broken_identity(broken_path)?)
     } else {
@@ -244,30 +265,17 @@ fn open_existing_or_salvage(
     }
 }
 
-fn salvage_unreadable_live(
-    root: &Path,
-    live_path: &Path,
-    broken_path: &Path,
-) -> Result<(Connection, bool), StateError> {
-    if broken_path.exists() {
-        resume_interrupted_salvage(root, live_path, broken_path)
-    } else {
-        Ok((salvage_once(root, live_path)?, true))
-    }
-}
-
 fn salvage_if_identity_ok(
     root: &Path,
     live_path: &Path,
     broken_path: &Path,
     live_identity: &ImageIdentity,
 ) -> Result<(Connection, bool), StateError> {
-    if live_identity.salvaged_at.is_some()
-        && broken_path.exists()
-        && let Ok(broken) = read_broken_identity(broken_path)
-        && is_incomplete_replacement(live_identity, &broken)
-    {
-        return fail_closed_incomplete_replacement(root, live_path);
+    if broken_path.exists() {
+        let broken = read_broken_identity(broken_path)?;
+        if is_incomplete_replacement(live_identity, &broken) {
+            return fail_closed_incomplete_replacement(root, live_path);
+        }
     }
     Ok((salvage_once(root, live_path)?, true))
 }
@@ -671,26 +679,30 @@ fn sqlite_readonly_uri(path: &Path) -> Result<String, StateError> {
 }
 
 fn read_broken_identity(path: &Path) -> Result<ImageIdentity, StateError> {
-    let connection = open_broken_readonly(path)?;
-    Ok(read_identity(&connection))
+    let connection = open_broken_readonly(path).map_err(map_broken_identity_error)?;
+    read_identity(&connection).map_err(map_broken_identity_error)
 }
 
-fn read_identity(conn: &Connection) -> ImageIdentity {
-    ImageIdentity {
+fn map_broken_identity_error(error: StateError) -> StateError {
+    if sqlite_io_or_full_error(&error) || sqlite_durable_corruption_error(&error) {
+        StateError::Unavailable
+    } else {
+        error
+    }
+}
+
+fn read_identity(conn: &Connection) -> Result<ImageIdentity, StateError> {
+    Ok(ImageIdentity {
         installation_id: optional_text(
             conn,
             "SELECT installation_id FROM installation WHERE id = 1",
-        )
-        .ok()
-        .flatten(),
-        has_session: row_exists(conn, "SELECT 1 FROM session WHERE id = 1").unwrap_or(false),
+        )?,
+        has_session: row_exists(conn, "SELECT 1 FROM session WHERE id = 1")?,
         salvaged_at: optional_text(
             conn,
             "SELECT value FROM metadata WHERE key = 'state_salvaged_at'",
-        )
-        .ok()
-        .flatten(),
-    }
+        )?,
+    })
 }
 
 fn classify_live_path(path: &Path) -> Result<LiveKind, StateError> {
@@ -721,25 +733,72 @@ fn classify_live_path(path: &Path) -> Result<LiveKind, StateError> {
     }
 }
 
+fn last_good_is_restorable(root: &Path) -> Result<bool, StateError> {
+    Ok(usable_last_good_image(&root.join(GOOD_RESTORE_NAME))?
+        || usable_last_good_image(&root.join(GOOD_NAME))?)
+}
+
+fn usable_last_good_image(path: &Path) -> Result<bool, StateError> {
+    if classify_live_path(path)? != LiveKind::Sqlite {
+        return Ok(false);
+    }
+    match read_broken_identity(path) {
+        Ok(identity) => Ok(identity.installation_id.is_some()),
+        Err(error)
+            if sqlite_io_or_full_error(&error) || sqlite_durable_corruption_error(&error) =>
+        {
+            Err(StateError::Unavailable)
+        }
+        Err(_) => Ok(false),
+    }
+}
+
 fn restore_last_good_snapshot(root: &Path, live_path: &Path) -> Result<Connection, StateError> {
-    let good_path = root.join(GOOD_NAME);
-    if classify_live_path(&good_path)? != LiveKind::Sqlite {
-        return Err(StateError::InvalidState);
+    let source = last_good_restore_source(root)?;
+    let tmp_path = root.join(GOOD_RESTORE_NAME);
+    if source != tmp_path {
+        copy_into_owner_only_file(&source, &tmp_path)?;
+    } else {
+        set_owner_file_mode(&tmp_path);
     }
-    let identity = read_broken_identity(&good_path)?;
-    if identity.installation_id.is_none() {
-        return Err(StateError::InvalidState);
-    }
-    let tmp_path = root.join("state.sqlite.good-restore");
-    remove_sqlite_image(&tmp_path);
-    fs::copy(&good_path, &tmp_path)?;
-    set_owner_file_mode(&tmp_path);
-    remove_sqlite_image(live_path);
+    let _ = fs::remove_file(sqlite_sidecar(live_path, "-wal"));
+    let _ = fs::remove_file(sqlite_sidecar(live_path, "-shm"));
     fs::rename(&tmp_path, live_path)?;
     set_owner_file_mode(live_path);
     let connection = open_live_and_probe(live_path)?;
     apply_salvage_markers(&connection)?;
     Ok(connection)
+}
+
+fn last_good_restore_source(root: &Path) -> Result<PathBuf, StateError> {
+    let leftover = root.join(GOOD_RESTORE_NAME);
+    if usable_last_good_image(&leftover)? {
+        return Ok(leftover);
+    }
+    let good = root.join(GOOD_NAME);
+    if usable_last_good_image(&good)? {
+        return Ok(good);
+    }
+    Err(StateError::InvalidState)
+}
+
+fn copy_into_owner_only_file(from: &Path, to: &Path) -> Result<(), StateError> {
+    create_owner_only_file(to)?;
+    let mut source = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(from)?;
+    let mut dest = OpenOptions::new()
+        .write(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(to)?;
+    if !source.metadata()?.is_file() || !dest.metadata()?.is_file() {
+        return Err(StateError::InvalidState);
+    }
+    std::io::copy(&mut source, &mut dest)?;
+    dest.set_permissions(Permissions::from_mode(0o600))?;
+    dest.sync_all()?;
+    Ok(())
 }
 
 fn quick_check_small_image(conn: &Connection) -> Result<(), StateError> {
@@ -1422,6 +1481,129 @@ mod tests {
         test_hooks::clear_available_bytes();
         assert!(matches!(opened, Err(StateError::Unavailable)));
         assert!(!root.join(BROKEN_NAME).exists());
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    fn trash_after_header(path: &Path) {
+        let mut bytes = fs::read(path).expect("read");
+        assert!(bytes.len() >= 16);
+        for byte in &mut bytes[16..] {
+            *byte = 0xFF;
+        }
+        fs::write(path, bytes).expect("trash");
+        let _ = fs::remove_file(sqlite_sidecar(path, "-wal"));
+        let _ = fs::remove_file(sqlite_sidecar(path, "-shm"));
+    }
+
+    #[test]
+    fn present_live_does_not_resume_stale_broken_on_writable_open_failure() {
+        let root = temp_root();
+        let store = StateStore::open(&root).expect("state");
+        store
+            .write_session_json(&json!({"status":"old"}))
+            .expect("old session");
+        drop(store);
+        copy_sqlite_image(&root.join(LIVE_NAME), &root.join(BROKEN_NAME));
+
+        let store = StateStore::open(&root).expect("reopen");
+        store
+            .write_session_json(&json!({"status":"new"}))
+            .expect("new session");
+        drop(store);
+        trash_after_header(&root.join(LIVE_NAME));
+
+        let opened = StateStore::open(&root);
+        match opened {
+            Ok(store) => {
+                assert_ne!(session_status(&store).as_deref(), Some("old"));
+                drop(store);
+            }
+            Err(error) => {
+                assert!(matches!(
+                    error,
+                    StateError::InvalidState | StateError::Unavailable
+                ));
+            }
+        }
+        if let Some(status) = session_status_in(&root.join(LIVE_NAME)) {
+            assert_ne!(status, "old");
+        }
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn missing_live_restores_from_good_instead_of_first_install() {
+        let root = temp_root();
+        let store = StateStore::open(&root).expect("state");
+        let installation = store.installation_id().expect("installation");
+        write_session(&store);
+        store
+            .run_repair(crate::state::RepairSite::PostRefresh)
+            .expect("write good");
+        drop(store);
+        remove_sqlite_image(&root.join(LIVE_NAME));
+        assert!(!root.join(BROKEN_NAME).exists());
+
+        let store = StateStore::open(&root).expect("restored");
+        assert_eq!(store.installation_id().expect("id"), installation);
+        assert_eq!(session_status(&store), Some("active".into()));
+        assert!(store.usage_reindex_pending().expect("reindex"));
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn leftover_good_restore_is_used_when_live_is_missing() {
+        let root = temp_root();
+        let store = StateStore::open(&root).expect("state");
+        let installation = store.installation_id().expect("installation");
+        write_session(&store);
+        store
+            .run_repair(crate::state::RepairSite::PostRefresh)
+            .expect("write good");
+        drop(store);
+        let leftover = root.join(GOOD_RESTORE_NAME);
+        copy_into_owner_only_file(&root.join(GOOD_NAME), &leftover).expect("leftover");
+        remove_sqlite_image(&root.join(LIVE_NAME));
+        remove_sqlite_image(&root.join(GOOD_NAME));
+
+        let store = StateStore::open(&root).expect("restored leftover");
+        assert_eq!(store.installation_id().expect("id"), installation);
+        assert_eq!(session_status(&store), Some("active".into()));
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn unreadable_broken_identity_does_not_park_or_mint() {
+        let root = temp_root();
+        let store = StateStore::open(&root).expect("state");
+        let installation = store.installation_id().expect("installation");
+        write_session(&store);
+        drop(store);
+        let live = root.join(LIVE_NAME);
+        let broken = root.join(BROKEN_NAME);
+        fs::write(
+            &broken,
+            SQLITE_HEADER
+                .iter()
+                .copied()
+                .chain([0xFF; 64])
+                .collect::<Vec<_>>(),
+        )
+        .expect("junk broken");
+        set_owner_file_mode(&broken);
+
+        assert!(matches!(
+            StateStore::open(&root),
+            Err(StateError::Unavailable)
+        ));
+        assert_eq!(
+            installation_in(&live).as_deref(),
+            Some(installation.as_str())
+        );
+        assert!(broken.exists());
+        assert_eq!(session_status_in(&live).as_deref(), Some("active"));
         fs::remove_dir_all(root).expect("cleanup");
     }
 }
