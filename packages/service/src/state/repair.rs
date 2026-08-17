@@ -26,9 +26,7 @@ const REQUIRED_COPY_PROGRESS_TOTAL: i64 = 7;
 
 const DURABLE_TITLE: &str = "Repairing local data";
 const DURABLE_GUIDANCE: &str = "Keep QuotaBar open. You can close this menu.";
-#[allow(dead_code)]
 const DERIVED_TITLE: &str = "Rebuilding Usage history";
-#[allow(dead_code)]
 const DERIVED_GUIDANCE: &str = "Quota and Account stay available. Usage history is catching up.";
 const STUCK_GUIDANCE: &str = "Repair stopped responding. You can retry.";
 const FAILED_GUIDANCE: &str = "Reinstall QuotaBar to repair local data.";
@@ -416,10 +414,23 @@ impl StateStore {
 
     fn repair_refresh_worker(&self) -> Result<RepairReport, StateError> {
         let pending = self.derived_drop_pending().unwrap_or(false);
+        let isolated = self.usage_isolated_flag().unwrap_or(false);
+        if !pending && !isolated {
+            return Ok(RepairReport {
+                site: RepairSite::RefreshWorker,
+                executed: Vec::new(),
+                changed: false,
+                fail_closed: false,
+            });
+        }
+        self.discard_unreadable_derived_index()?;
         Ok(RepairReport {
             site: RepairSite::RefreshWorker,
-            executed: Vec::new(),
-            changed: pending,
+            executed: vec![
+                RepairAction::DiscardUnreadableDerivedIndex,
+                RepairAction::MarkUsageReindexPending,
+            ],
+            changed: true,
             fail_closed: false,
         })
     }
@@ -453,15 +464,42 @@ impl StateStore {
                     fail_closed: false,
                 })
             }
-            PersistenceClass::UsageIsolated => {
-                let _ = self.set_metadata_flag(USAGE_ISOLATED_KEY, true);
-                Ok(RepairReport {
-                    site: RepairSite::WriteFailure,
-                    executed: Vec::new(),
-                    changed: true,
-                    fail_closed: false,
-                })
-            }
+            PersistenceClass::UsageIsolated => match self.persist_probe() {
+                Ok(()) => {
+                    self.discard_unreadable_derived_index()?;
+                    Ok(RepairReport {
+                        site: RepairSite::WriteFailure,
+                        executed: vec![
+                            RepairAction::DiscardUnreadableDerivedIndex,
+                            RepairAction::MarkUsageReindexPending,
+                        ],
+                        changed: true,
+                        fail_closed: false,
+                    })
+                }
+                Err(error) if sqlite_io_or_full_error(&error) => Err(StateError::Unavailable),
+                Err(error) if sqlite_durable_corruption_error(&error) => {
+                    let now = now_rfc3339();
+                    if self.automatic_salvage_used_today().unwrap_or(false) {
+                        return Ok(self.stuck_report(RepairSite::WriteFailure, Vec::new()));
+                    }
+                    self.apply_live_session(durable_repairing_session(
+                        &now,
+                        RepairPhase::PreservingAccount,
+                        "Copying account",
+                        Some(0),
+                        Some(REQUIRED_COPY_PROGRESS_TOTAL),
+                    ));
+                    let _ = self.persist_live_session();
+                    Ok(RepairReport {
+                        site: RepairSite::WriteFailure,
+                        executed: Vec::new(),
+                        changed: true,
+                        fail_closed: false,
+                    })
+                }
+                Err(error) => Err(error),
+            },
             PersistenceClass::IoOrFull => Err(StateError::Unavailable),
             PersistenceClass::Other => Ok(RepairReport {
                 site: RepairSite::WriteFailure,
@@ -494,10 +532,27 @@ impl StateStore {
             };
             self.note_persistence_failure(&error);
         }
+        let mut executed = Vec::new();
+        {
+            let conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+            if salvage::checkpoint_wal(&conn).is_ok() {
+                executed.push(RepairAction::CheckpointWal);
+            }
+        }
+        if salvage::write_last_good_if_space(&self.root).unwrap_or(false) {
+            executed.push(RepairAction::RefreshLastGoodSnapshot);
+        }
+        let session = self.repair_session();
+        if session.severity == RepairSeverity::Derived && session.status == RepairStatus::Repairing
+        {
+            let started = session.started_at.unwrap_or_else(now_rfc3339);
+            self.apply_live_session(completed_derived_session(&started));
+            let _ = self.persist_live_session();
+        }
         Ok(RepairReport {
             site: RepairSite::PostRefresh,
-            executed: Vec::new(),
-            changed: false,
+            executed,
+            changed: true,
             fail_closed: false,
         })
     }
@@ -596,6 +651,46 @@ impl StateStore {
     fn recover_process_residue(&self) -> Result<(), StateError> {
         let mut conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
         recover_interrupted_attempts(&mut conn)
+    }
+
+    fn discard_unreadable_derived_index(&self) -> Result<(), StateError> {
+        self.begin_derived_reindex_session();
+        self.increment_repair_heartbeat_seq();
+        let _ = self.persist_live_session();
+        {
+            let mut conn = self.db.lock().map_err(|_| StateError::Unavailable)?;
+            let tx = conn.transaction()?;
+            crate::migration::recreate_usage_index_tables(&tx)?;
+            write_metadata_flag(&tx, "usage_reindex_pending", true)?;
+            write_metadata_flag(&tx, "snapshot_untrusted", true)?;
+            write_metadata_flag(&tx, DERIVED_DROP_PENDING_KEY, false)?;
+            write_metadata_flag(&tx, USAGE_ISOLATED_KEY, false)?;
+            tx.commit()?;
+        }
+        self.apply_live_session(derived_repairing_session(
+            self.repair_session()
+                .started_at
+                .as_deref()
+                .unwrap_or(&now_rfc3339()),
+            "Scanning local logs",
+        ));
+        self.increment_repair_heartbeat_seq();
+        let _ = self.persist_live_session();
+        Ok(())
+    }
+
+    fn begin_derived_reindex_session(&self) {
+        let current = self.repair_session();
+        if current.severity == RepairSeverity::Durable
+            && matches!(
+                current.status,
+                RepairStatus::Repairing | RepairStatus::Stuck | RepairStatus::Failed
+            )
+        {
+            return;
+        }
+        let started = current.started_at.unwrap_or_else(now_rfc3339);
+        self.apply_live_session(derived_repairing_session(&started, "Rebuilding storage"));
     }
 
     fn apply_live_session(&self, session: RepairSession) {
@@ -816,6 +911,42 @@ fn durable_repairing_session(
     }
 }
 
+fn derived_repairing_session(started_at: &str, activity: &str) -> RepairSession {
+    RepairSession {
+        status: RepairStatus::Repairing,
+        severity: RepairSeverity::Derived,
+        phase: Some(RepairPhase::ReindexingUsage),
+        title: Some(DERIVED_TITLE.to_owned()),
+        guidance: Some(DERIVED_GUIDANCE.to_owned()),
+        activity: Some(activity.to_owned()),
+        started_at: Some(started_at.to_owned()),
+        heartbeat_at: Some(now_rfc3339()),
+        progress_current: None,
+        progress_total: None,
+        stuck: false,
+        blocks_quit: false,
+        recovery_action: None,
+    }
+}
+
+fn completed_derived_session(started_at: &str) -> RepairSession {
+    RepairSession {
+        status: RepairStatus::Completed,
+        severity: RepairSeverity::Derived,
+        phase: Some(RepairPhase::ReindexingUsage),
+        title: Some(DERIVED_TITLE.to_owned()),
+        guidance: Some(DERIVED_GUIDANCE.to_owned()),
+        activity: Some("Scanning local logs".to_owned()),
+        started_at: Some(started_at.to_owned()),
+        heartbeat_at: Some(now_rfc3339()),
+        progress_current: None,
+        progress_total: None,
+        stuck: false,
+        blocks_quit: false,
+        recovery_action: None,
+    }
+}
+
 fn completed_durable_session(started_at: &str) -> RepairSession {
     RepairSession {
         status: RepairStatus::Completed,
@@ -907,6 +1038,93 @@ mod tests {
         );
         assert_eq!(store.usage_event_count().expect("count"), 1);
         assert!(store.derived_drop_pending().expect("pending"));
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn refresh_worker_drops_usage_index_in_one_transaction() {
+        let (root, store) = temp_store();
+        store.insert_usage_file_record_for_test().expect("usage");
+        store
+            .write_usage_scan_diagnostics(crate::usage::UsageAgent::Codex, &serde_json::json!({}))
+            .expect("scan diagnostics");
+        store
+            .write_sync_diagnostic(&serde_json::json!({}))
+            .expect("sync diagnostics");
+        store
+            .write_session_json(&serde_json::json!({"status":"active"}))
+            .expect("session");
+        store.set_usage_isolated_for_test(true).expect("isolated");
+        store
+            .run_repair(RepairSite::RefreshStart)
+            .expect("flag pending");
+        assert_eq!(store.usage_event_count().expect("before"), 1);
+
+        let report = store
+            .run_repair(RepairSite::RefreshWorker)
+            .expect("refresh worker");
+        assert!(
+            report
+                .executed
+                .contains(&RepairAction::DiscardUnreadableDerivedIndex)
+        );
+        assert!(
+            report
+                .executed
+                .contains(&RepairAction::MarkUsageReindexPending)
+        );
+        assert_eq!(store.usage_event_count().expect("after"), 0);
+        assert!(store.usage_reindex_pending().expect("reindex"));
+        assert!(store.snapshot_untrusted().expect("untrusted"));
+        assert!(!store.derived_drop_pending().expect("pending cleared"));
+        assert!(store.session_json().expect("session").is_some());
+        assert!(
+            store
+                .usage_scan_diagnostics()
+                .expect("scan diagnostics")
+                .is_empty()
+        );
+        assert!(store.sync_diagnostic().expect("sync diagnostics").is_none());
+        let session = store.repair_session();
+        assert_eq!(session.severity, RepairSeverity::Derived);
+        assert_eq!(session.phase, Some(RepairPhase::ReindexingUsage));
+        assert!(!session.blocks_quit);
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn write_failure_drops_usage_index_when_persist_probe_passes() {
+        let (root, store) = temp_store();
+        store.insert_usage_file_record_for_test().expect("usage");
+        store
+            .write_usage_scan_diagnostics(crate::usage::UsageAgent::Codex, &serde_json::json!({}))
+            .expect("scan diagnostics");
+        let isolated = StateError::Sql(rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error {
+                code: rusqlite::ErrorCode::ConstraintViolation,
+                extended_code: 19,
+            },
+            Some("usage_file_records unique constraint".into()),
+        ));
+        store.note_persistence_failure(&isolated);
+        let report = store
+            .run_repair(RepairSite::WriteFailure)
+            .expect("write failure");
+        assert!(
+            report
+                .executed
+                .contains(&RepairAction::DiscardUnreadableDerivedIndex)
+        );
+        assert_eq!(store.usage_event_count().expect("after"), 0);
+        assert!(
+            store
+                .usage_scan_diagnostics()
+                .expect("scan diagnostics")
+                .is_empty()
+        );
+        assert_eq!(store.repair_session().severity, RepairSeverity::Derived);
         drop(store);
         fs::remove_dir_all(root).expect("cleanup");
     }

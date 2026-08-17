@@ -801,6 +801,7 @@ impl LocalService {
                         }
                     }
                     if let Ok(report) = service.inner.backend.complete_diagnostics() {
+                        let _ = service.inner.state.run_repair(RepairSite::PostRefresh);
                         let _ = service.inner.backend.publish_device_health(&report);
                     }
                     let rerun = service
@@ -1858,6 +1859,32 @@ mod tests {
         assert_eq!(repair["severity"], "none");
         service.shutdown();
         drop(service);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn request_refresh_does_not_drop_usage_tables() {
+        let root = std::env::temp_dir().join(format!("quota-refresh-no-drop-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        state.insert_usage_file_record_for_test().expect("usage");
+        state.set_usage_isolated_for_test(true).expect("isolated");
+        let service = LocalService::new(
+            state.clone(),
+            Arc::new(RecordingSink::default()),
+            Arc::new(UnavailableBackend),
+        );
+        service
+            .inner
+            .fail_next_refresh_spawn
+            .store(true, Ordering::Release);
+        let result = service.request_refresh_with_trigger(DiagnosticAttemptTrigger::Startup);
+        assert!(!result.accepted);
+        assert_eq!(state.usage_event_count().expect("count"), 1);
+        assert!(state.derived_drop_pending().expect("pending"));
+        service.shutdown();
+        drop(service);
+        drop(state);
         fs::remove_dir_all(root).expect("cleanup");
     }
 

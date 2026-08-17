@@ -36,7 +36,6 @@ pub use repair::{
     sqlite_io_or_full_error,
 };
 
-const STATE_DB_NAME: &str = "state.sqlite";
 const PROVIDER_CONFIG_NAME: &str = "providers.json";
 const MAX_USAGE_OUTBOX_ENTRIES: i64 = 64;
 const MAX_DIAGNOSTIC_ATTEMPTS: i64 = 50_000;
@@ -318,19 +317,6 @@ impl StateStore {
         // state-root boundary; the database filename itself remains protected by NOFOLLOW.
         let root = fs::canonicalize(root)?;
         let owner_lock = OwnerLock::acquire(&root)?;
-        let database_path = root.join(STATE_DB_NAME);
-        let database_file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(&database_path)?;
-        if !database_file.metadata()?.is_file() {
-            return Err(StateError::InvalidState);
-        }
-        database_file.set_permissions(Permissions::from_mode(0o600))?;
-        drop(database_file);
         let (mut connection, salvaged) = salvage::open_or_salvage(&root)?;
         recover_interrupted_attempts(&mut connection)?;
         let persisted = repair::read_persisted_repair(&connection).unwrap_or_default();
