@@ -56,7 +56,10 @@ data requirements. Architecture and product behavior are defined in
   explicit; a newer schema fails closed and requires an app upgrade. The first Rust launch imports
   the released installation/session/cache/outbox/pricing JSON transactionally and removes source
   files only after the imported state is readable. The bounded migration lifecycle is defined in
-  [ADR 0007](decisions/0007-rust-native-local-service.md). The shared
+  [ADR 0007](decisions/0007-rust-native-local-service.md). Salvage retains at most one owner-only
+  `state.sqlite.broken` and one `state.sqlite.good`; the service never writes a recovered SQL dump,
+  never uploads those files, and never includes their paths in diagnostics
+  ([ADR 0016](decisions/0016-local-service-self-repair.md)). The shared
   `providers.json`/`ProviderConfigLock` path and OAuth `client_id=quotacli` remain current collection
   interfaces. The registered `quota-ios` public client is a separate read-only Account interface.
 - SQLite migration v8 stores only the typed diagnostic attempt fields and bounded metrics defined by

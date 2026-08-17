@@ -118,7 +118,9 @@ over the child process's stdin, never argv or preferences. Environment variables
 inputs. Operational state has one owner: `state.sqlite` stores installation/account state, component
 last-good values, file index, normalized Usage facts, fixed-period presentation cache, pricing state,
 sequences, the durable outbox and Usage upload setting, and the single last-completed diagnostic
-snapshot plus bounded structured attempt journal. SQLite migrations are explicit and append-only.
+snapshot plus bounded structured attempt journal. Unreadable or unwritable image handling and repair
+presentation are [ADR 0016](decisions/0016-local-service-self-repair.md). SQLite migrations are
+explicit and append-only.
 
 Catalog browser-session capability contains an HTTPS login URL, exact Cookie hosts/names, and a
 browser-priority prefix. QuotaBar pins login and discovery to one selected supported browser;
