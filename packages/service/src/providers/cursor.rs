@@ -1,16 +1,14 @@
 use crate::catalog::ProviderId;
 use serde_json::Value;
-use std::time::Duration;
 
 use super::common::{
     CollectionContext, ErrorCategory, HttpClient, ProviderError, ProviderSession, QuotaAccount,
-    QuotaSnapshot, QuotaWindow, ValidatedBrowserSession, account_identity, clamp_percent,
-    mask_email, number, obj_get, parse_date, unix_seconds_to_iso,
+    QuotaSnapshot, QuotaWindow, VALIDATION_TIMEOUT, ValidatedBrowserSession, account_identity,
+    clamp_percent, mask_email, number, obj_get, parse_date, unix_seconds_to_iso,
 };
 
 pub const SOURCE: &str = "cursor_dashboard_api";
 const ORIGIN: &str = "https://cursor.com";
-const VALIDATION_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub fn discover(context: &CollectionContext) -> Vec<ProviderSession> {
     context
@@ -46,7 +44,8 @@ fn validate_at(
         ("Cookie", cookie_header),
         ("User-Agent", user_agent.as_str()),
     ];
-    let (_, identity) = client.get_json(&format!("{origin}/api/auth/me"), &headers, SOURCE)?;
+    let (_, identity) =
+        client.get_json_session(&format!("{origin}/api/auth/me"), &headers, SOURCE)?;
     identity_from_response(&identity, cookie_header)
 }
 
@@ -112,7 +111,8 @@ pub fn collect(
         ("Cookie", cookie_header),
         ("User-Agent", user_agent.as_str()),
     ];
-    let (_, summary) = client.get_json(&format!("{ORIGIN}/api/usage-summary"), &headers, SOURCE)?;
+    let (_, summary) =
+        client.get_json_session(&format!("{ORIGIN}/api/usage-summary"), &headers, SOURCE)?;
     let windows = quota_windows(&summary)?;
     Ok(QuotaSnapshot {
         provider: ProviderId::Cursor,
@@ -246,7 +246,13 @@ mod tests {
         assert!(ProviderId::ALL.contains(&ProviderId::Cursor));
         assert!(ProviderId::Cursor.metadata().account_sync);
         assert_eq!(ProviderId::Cursor.metadata().account_sync_protocol, Some(3));
-        assert!(ProviderId::Cursor.metadata().browser_session.is_some());
+        assert_eq!(
+            ProviderId::Cursor
+                .metadata()
+                .browser_session
+                .map(|session| session.exclusive),
+            Some(true)
+        );
     }
 
     #[test]

@@ -37,6 +37,7 @@ pub struct BrowserSessionConfig {
     pub cookie_hosts: &'static [&'static str],
     pub cookie_names: &'static [&'static str],
     pub browser_priority: &'static [&'static str],
+    pub exclusive: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -68,7 +69,24 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
         account_sync_protocol: Some(2),
         environment_keys: &["CODEX_HOME"],
         credential_config: None,
-        browser_session: None,
+        browser_session: Some(BrowserSessionConfig {
+            login_url: "https://chatgpt.com/",
+            cookie_hosts: &["chatgpt.com", "www.chatgpt.com"],
+            cookie_names: &[
+                "__Secure-next-auth.session-token",
+                "__Secure-next-auth.session-token.0",
+                "__Secure-next-auth.session-token.1",
+                "__Secure-next-auth.session-token.2",
+                "__Host-next-auth.session-token",
+                "__Secure-authjs.session-token",
+                "authjs.session-token",
+                "_account",
+            ],
+            browser_priority: &[
+                "safari", "chrome", "edge", "brave", "arc", "dia", "chromium", "firefox",
+            ],
+            exclusive: false,
+        }),
         default_base_url: None,
         base_url_environment_key: None,
     },
@@ -83,7 +101,15 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
         account_sync_protocol: Some(2),
         environment_keys: &["CLAUDE_CONFIG_DIR"],
         credential_config: None,
-        browser_session: None,
+        browser_session: Some(BrowserSessionConfig {
+            login_url: "https://claude.ai/",
+            cookie_hosts: &["claude.ai", "www.claude.ai"],
+            cookie_names: &["sessionKey", "lastActiveOrg"],
+            browser_priority: &[
+                "safari", "chrome", "edge", "brave", "arc", "dia", "chromium", "firefox",
+            ],
+            exclusive: false,
+        }),
         default_base_url: None,
         base_url_environment_key: None,
     },
@@ -98,7 +124,15 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
         account_sync_protocol: Some(2),
         environment_keys: &["GROK_HOME"],
         credential_config: None,
-        browser_session: None,
+        browser_session: Some(BrowserSessionConfig {
+            login_url: "https://grok.com/",
+            cookie_hosts: &["grok.com", "www.grok.com"],
+            cookie_names: &["sso", "sso-rw"],
+            browser_priority: &[
+                "safari", "chrome", "edge", "brave", "arc", "dia", "chromium", "firefox",
+            ],
+            exclusive: false,
+        }),
         default_base_url: None,
         base_url_environment_key: None,
     },
@@ -158,7 +192,15 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
             allow_private_http: false,
             mask_label: "Kimi",
         }),
-        browser_session: None,
+        browser_session: Some(BrowserSessionConfig {
+            login_url: "https://www.kimi.com/code/console",
+            cookie_hosts: &["www.kimi.com", "kimi.com"],
+            cookie_names: &["kimi-auth"],
+            browser_priority: &[
+                "safari", "chrome", "edge", "brave", "arc", "dia", "chromium", "firefox",
+            ],
+            exclusive: false,
+        }),
         default_base_url: Some("https://api.kimi.com"),
         base_url_environment_key: None,
     },
@@ -213,6 +255,7 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
             browser_priority: &[
                 "safari", "chrome", "edge", "brave", "arc", "dia", "chromium", "firefox",
             ],
+            exclusive: true,
         }),
         default_base_url: None,
         base_url_environment_key: None,

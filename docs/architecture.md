@@ -122,8 +122,9 @@ snapshot plus bounded structured attempt journal. Unreadable or unwritable image
 presentation are [ADR 0016](decisions/0016-local-service-self-repair.md). SQLite migrations are
 explicit and append-only.
 
-Catalog browser-session capability contains an HTTPS login URL, exact Cookie hosts/names, and a
-browser-priority prefix. QuotaBar pins login and discovery to one selected supported browser;
+Catalog browser-session capability contains an HTTPS login URL, exact Cookie hosts/names, a
+browser-priority prefix, and `exclusive` when that session is the only local auth path. QuotaBar
+pins login and discovery to one selected supported browser;
 SweetCookieKit only acquires allowlisted Cookie candidates in Swift memory. Rust owns syntax and
 account validation, durable state, provider networking, and routine refresh. Linux QuotaCLI does
 not implement browser acquisition.
