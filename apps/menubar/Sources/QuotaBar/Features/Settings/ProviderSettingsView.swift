@@ -64,7 +64,7 @@ struct ProviderSettingsView: View {
           SettingsSection(title: "This Mac Configuration") {
             providerConfiguration
           }
-        } else if provider.browserSession == nil {
+        } else if showsOfficialSignInCommand {
           SettingsSection(title: "This Mac Sign-in") {
             QuotaCommandRow(command: provider.setupAction, copyLabel: "Copy sign-in command")
           }
@@ -199,6 +199,10 @@ struct ProviderSettingsView: View {
     }
     .padding(QuotaDesign.Layout.groupContentInset)
     .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  private var showsOfficialSignInCommand: Bool {
+    provider.browserSession?.exclusive != true
   }
 
   private var visibilityBinding: Binding<Bool> {

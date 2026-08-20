@@ -56,6 +56,10 @@ pub fn validate_browser_session(
 ) -> Result<ValidatedBrowserSession, ProviderError> {
     let cookie_header = common::normalize_browser_cookie_header(provider, cookie_header)?;
     match provider {
+        ProviderId::Codex => codex::validate_browser_session(&cookie_header, context),
+        ProviderId::Claude => claude::validate_browser_session(&cookie_header, context),
+        ProviderId::Grok => grok::validate_browser_session(&cookie_header, context),
+        ProviderId::Kimi => kimi::validate_browser_session(&cookie_header, context),
         ProviderId::Cursor => cursor::validate_browser_session(&cookie_header, context),
         _ => Err(ProviderError::new(
             common::ErrorCategory::Unsupported,

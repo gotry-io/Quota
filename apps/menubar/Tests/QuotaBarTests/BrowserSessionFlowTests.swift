@@ -27,6 +27,37 @@ func unsupportedDefaultBrowserRequestsAChoiceBeforeOpening() async throws {
 }
 
 @Test @MainActor
+func multipleCookieHeadersRequireAccountSelection() async throws {
+  let first = BrowserSessionCookieCandidate(
+    cookieHeader: "sso=one",
+    headerFingerprint: "header-a",
+    browserName: "Chrome",
+    profileName: "Personal"
+  )
+  let second = BrowserSessionCookieCandidate(
+    cookieHeader: "sso=two",
+    headerFingerprint: "header-b",
+    browserName: "Chrome",
+    profileName: "Work"
+  )
+  let safari = URL(filePath: "/Applications/Safari.app")
+  let service = FlowService(state: flowState())
+  let model = MenuBarViewModel(
+    client: service,
+    browserSessionImporter: FlowImporter(candidates: [first, second]),
+    browserApplicationRouter: FlowRouter(defaultApplication: safari)
+  )
+  model.startProviderBrowserSessionLogin(.grok)
+  try await waitUntil {
+    if case .account(_, let choices) = model.browserSessionPopup {
+      return choices.count == 2
+    }
+    return false
+  }
+  #expect(await service.commits == 0)
+}
+
+@Test @MainActor
 func addCommitsOneUnambiguousAccount() async throws {
   let candidate = BrowserSessionCookieCandidate(
     cookieHeader: "wos-session=new",

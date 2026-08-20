@@ -14,7 +14,8 @@ subscription quota and privacy-preserving Usage together across a user's devices
 - **Quota Web** — public site, GitHub login, device authorization, and account dashboard.
 
 Quota collection supports Codex, Claude Code, Grok, OpenRouter, DeepSeek, Kimi Code, LiteLLM, and
-Cursor browser sessions on macOS.
+Cursor. On macOS, QuotaBar can acquire catalog-declared browser sessions for Cursor, Codex, Claude,
+Grok, and Kimi.
 Local Usage analytics supports Codex, Claude Code, Grok, OpenCode, Pi, and Cursor logs. Provider credentials,
 prompts, completions, raw events, local paths, and conversation identifiers never upload.
 

@@ -102,7 +102,7 @@ const rustMetadata = entries
       : "None";
     const envs = entry.environment_keys.map(rustString).join(", ");
     const browserSession = entry.browser_session
-      ? `Some(BrowserSessionConfig { login_url: ${rustString(entry.browser_session.login_url)}, cookie_hosts: &[${entry.browser_session.cookie_hosts.map(rustString).join(", ")}], cookie_names: &[${entry.browser_session.cookie_names.map(rustString).join(", ")}], browser_priority: &[${entry.browser_session.browser_priority.map(rustString).join(", ")}] })`
+      ? `Some(BrowserSessionConfig { login_url: ${rustString(entry.browser_session.login_url)}, cookie_hosts: &[${entry.browser_session.cookie_hosts.map(rustString).join(", ")}], cookie_names: &[${entry.browser_session.cookie_names.map(rustString).join(", ")}], browser_priority: &[${entry.browser_session.browser_priority.map(rustString).join(", ")}], exclusive: ${entry.browser_session.exclusive} })`
       : "None";
     const defaultBase =
       entry.default_base_url === null ? "None" : `Some(${rustString(entry.default_base_url)})`;
@@ -151,6 +151,7 @@ pub struct BrowserSessionConfig {
   pub cookie_hosts: &'static [&'static str],
   pub cookie_names: &'static [&'static str],
   pub browser_priority: &'static [&'static str],
+  pub exclusive: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -267,7 +268,8 @@ const browserSession = entries
       loginURL: "${escapeSwift(spec.login_url)}",
       cookieHosts: [${hosts}],
       cookieNames: [${names}],
-      browserPriority: [${browsers}])`;
+      browserPriority: [${browsers}],
+      exclusive: ${spec.exclusive})`;
   })
   .join("\n");
 const accountSyncProtocol = entries
@@ -287,6 +289,7 @@ struct BrowserSessionSpec: Equatable, Sendable {
   let cookieHosts: [String]
   let cookieNames: [String]
   let browserPriority: [String]
+  let exclusive: Bool
 }
 
 enum ProviderID: String, Codable, CaseIterable, Identifiable, Sendable {

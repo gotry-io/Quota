@@ -15,11 +15,16 @@ enum that cannot accept new local providers without a new protocol version.
 
 Declare browser-session acquisition and managed-account synchronization independently in the
 [provider catalog](../../packages/provider/catalog.json). QuotaBar uses the declared allowlist to
-read only matching cookie records into bounded Swift memory and sends one minimal candidate at a
-time over private child stdin; Rust revalidates the catalog rules, verifies the provider account,
-performs provider networking, and stores the session in the owner-only local SQLite state. Cursor is
-the first adapter. It synchronizes from managed-data v3 while released v2 routes retain their closed
-provider enum, as defined by [ADR 0012](0012-managed-data-v3.md).
+read only matching cookie records into bounded Swift memory and sends one candidate at a time over
+private child stdin. Complementary same-host cookies (Grok `sso`/`sso-rw`, numbered ChatGPT session
+chunks, plus optional `_account` or `lastActiveOrg`) share one header; unrelated allowlisted names
+such as Cursor's `wos-session` and `WorkosCursorSessionToken` stay separate candidates. Hosts and
+browser profiles are never combined. Rust revalidates the catalog rules, verifies the provider
+account, performs provider networking, and stores the session in the owner-only local SQLite state. Catalog `browser_session.exclusive` marks
+the session as the only local auth path; Settings then omits the official CLI command. Cursor is
+exclusive. Codex, Claude, Grok, and Kimi use the same acquisition path when OAuth or the Code API is
+missing or rejected. Cursor synchronizes from managed-data v3 while released v2 routes retain their
+closed provider enum, as defined by [ADR 0012](0012-managed-data-v3.md).
 
 The credential and redaction boundary is specified in [security](../security.md), and provider API
 behavior remains in [provider collection](../provider-collection.md).

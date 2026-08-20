@@ -57,19 +57,17 @@ struct BrowserSessionImporter: BrowserSessionImporting, Sendable {
         guard
           let records = try? client.records(matching: query, in: store, logger: nil)
         else { continue }
-        for record in records {
-          guard !Task.isCancelled, Date() < deadline,
-            candidates.count < Self.maximumCandidates,
-            let candidate = Self.candidate(
-              record: record,
-              browserName: browser.displayName,
-              profileName: store.profile.name,
-              allowedHosts: allowedHosts,
-              allowedNames: allowedNames,
-              now: now
-            ),
-            seen.insert(candidate.headerFingerprint).inserted
-          else { continue }
+        let grouped = Self.groupedCandidates(
+          records: records,
+          browserName: browser.displayName,
+          profileName: store.profile.name,
+          allowedHosts: allowedHosts,
+          allowedNames: allowedNames,
+          now: now
+        )
+        for candidate in grouped {
+          guard candidates.count < Self.maximumCandidates else { break }
+          guard seen.insert(candidate.headerFingerprint).inserted else { continue }
           candidates.append(candidate)
         }
         if candidates.count == Self.maximumCandidates { break }
@@ -97,13 +95,30 @@ struct BrowserSessionImporter: BrowserSessionImporting, Sendable {
     allowedNames: Set<String>,
     now: Date
   ) -> BrowserSessionCookieCandidate? {
-    let host = record.domain.hasPrefix(".") ? String(record.domain.dropFirst()) : record.domain
     guard
-      allowedHosts.contains(host.lowercased()),
-      allowedNames.contains(record.name),
-      record.expires.map({ $0 > now }) != false
+      let pair = allowlistedPair(
+        record: record,
+        allowedHosts: allowedHosts,
+        allowedNames: allowedNames,
+        now: now
+      )
     else { return nil }
-    let header = "\(record.name)=\(record.value)"
+    return candidate(
+      pairs: [(pair.name, pair.value)],
+      browserName: browserName,
+      profileName: profileName
+    )
+  }
+
+  static func candidate(
+    pairs: [(name: String, value: String)],
+    browserName: String,
+    profileName: String
+  ) -> BrowserSessionCookieCandidate? {
+    let header = pairs
+      .sorted { $0.name < $1.name }
+      .map { "\($0.name)=\($0.value)" }
+      .joined(separator: "; ")
     guard !header.isEmpty, header.utf8.count <= maximumCookieHeaderBytes else { return nil }
     let fingerprint = SHA256.hash(data: Data(header.utf8))
       .map { String(format: "%02x", $0) }
@@ -114,6 +129,101 @@ struct BrowserSessionImporter: BrowserSessionImporting, Sendable {
       browserName: browserName,
       profileName: sanitizedProfileName(profileName)
     )
+  }
+
+  static func allowlistedPair(
+    record: BrowserCookieRecord,
+    allowedHosts: Set<String>,
+    allowedNames: Set<String>,
+    now: Date
+  ) -> (name: String, value: String, host: String)? {
+    let host = record.domain.hasPrefix(".") ? String(record.domain.dropFirst()) : record.domain
+    guard
+      allowedHosts.contains(host.lowercased()),
+      allowedNames.contains(record.name),
+      record.expires.map({ $0 > now }) != false,
+      !record.value.isEmpty
+    else { return nil }
+    return (record.name, record.value, host.lowercased())
+  }
+
+  static func groupedCandidates(
+    records: [BrowserCookieRecord],
+    browserName: String,
+    profileName: String,
+    allowedHosts: Set<String>,
+    allowedNames: Set<String>,
+    now: Date
+  ) -> [BrowserSessionCookieCandidate] {
+    var byHost: [String: [(name: String, value: String)]] = [:]
+    var seenByHost: [String: Set<String>] = [:]
+    for record in records {
+      guard
+        let pair = allowlistedPair(
+          record: record,
+          allowedHosts: allowedHosts,
+          allowedNames: allowedNames,
+          now: now
+        )
+      else { continue }
+      var seenNames = seenByHost[pair.host] ?? []
+      guard seenNames.insert(pair.name).inserted else { continue }
+      seenByHost[pair.host] = seenNames
+      byHost[pair.host, default: []].append((pair.name, pair.value))
+    }
+    var candidates: [BrowserSessionCookieCandidate] = []
+    for host in byHost.keys.sorted() {
+      let hostPairs = byHost[host] ?? []
+      let context = hostPairs.filter { isOptionalContextCookie($0.name) }
+      let sessionPairs = hostPairs.filter { !isOptionalContextCookie($0.name) }
+      var families: [String: [(name: String, value: String)]] = [:]
+      var standalones: [(name: String, value: String)] = []
+      for pair in sessionPairs {
+        if let family = complementaryFamily(for: pair.name) {
+          families[family, default: []].append(pair)
+        } else {
+          standalones.append(pair)
+        }
+      }
+      for family in families.keys.sorted() {
+        guard
+          let candidate = candidate(
+            pairs: (families[family] ?? []) + context,
+            browserName: browserName,
+            profileName: profileName
+          )
+        else { continue }
+        candidates.append(candidate)
+      }
+      for pair in standalones {
+        guard
+          let candidate = candidate(
+            pairs: [pair] + context,
+            browserName: browserName,
+            profileName: profileName
+          )
+        else { continue }
+        candidates.append(candidate)
+      }
+    }
+    return candidates
+  }
+
+  static func complementaryFamily(for name: String) -> String? {
+    if name == "sso" || name == "sso-rw" {
+      return "sso"
+    }
+    guard
+      let separator = name.lastIndex(of: "."),
+      separator < name.index(before: name.endIndex)
+    else { return nil }
+    let suffix = name[name.index(after: separator)...]
+    guard !suffix.isEmpty, suffix.allSatisfy(\.isNumber) else { return nil }
+    return String(name[..<separator])
+  }
+
+  static func isOptionalContextCookie(_ name: String) -> Bool {
+    name == "_account" || name == "lastActiveOrg"
   }
 
   static func sanitizedProfileName(_ value: String) -> String {

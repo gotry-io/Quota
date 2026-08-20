@@ -10,10 +10,13 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::common::{
     CollectionContext, ErrorCategory, HttpClient, LOCAL_FILE_LIMIT, ProviderError, ProviderSession,
-    QuotaAccount, QuotaSnapshot, QuotaWindow, account_identity, clamp_percent, duration_seconds,
+    QuotaAccount, QuotaSnapshot, QuotaWindow, ValidatedBrowserSession, account_identity,
+    clamp_percent, collect_official_or_browser, discover_official_or_browser, duration_seconds,
     is_executable_file, mask_display_name, mask_email, number, obj_get, obj_get_any, parse_date,
     read_bounded_file, string,
 };
+
+mod web;
 
 pub const SOURCE: &str = "grok_billing_api";
 pub const BILLING_URL: &str = "https://cli-chat-proxy.grok.com/v1/billing?format=credits";
@@ -35,23 +38,38 @@ struct Credentials {
 }
 
 pub fn discover(context: &CollectionContext) -> Vec<ProviderSession> {
-    load_credentials(context)
-        .map(|credentials| {
-            vec![ProviderSession {
-                provider: ProviderId::Grok,
-                credential_source: credentials.source,
-            }]
-        })
-        .unwrap_or_default()
+    discover_official_or_browser(
+        ProviderId::Grok,
+        load_credentials(context).map(|credentials| ProviderSession {
+            provider: ProviderId::Grok,
+            credential_source: credentials.source,
+        }),
+        context,
+    )
+}
+
+pub fn validate_browser_session(
+    cookie_header: &str,
+    context: &CollectionContext,
+) -> Result<ValidatedBrowserSession, ProviderError> {
+    web::validate_browser_session(cookie_header, context)
 }
 
 pub fn collect(
-    _session: &ProviderSession,
+    session: &ProviderSession,
     context: &CollectionContext,
 ) -> Result<QuotaSnapshot, ProviderError> {
-    if context.cancelled() {
-        return Err(ProviderError::new(ErrorCategory::Unavailable, SOURCE));
-    }
+    collect_official_or_browser(
+        session,
+        context,
+        ProviderId::Grok,
+        SOURCE,
+        || collect_local(context),
+        || web::collect(context),
+    )
+}
+
+fn collect_local(context: &CollectionContext) -> Result<QuotaSnapshot, ProviderError> {
     let mut credentials = load_credentials(context)
         .ok_or_else(|| ProviderError::new(ErrorCategory::AuthRequired, SOURCE))?;
     let mut refresh_succeeded = false;
@@ -538,6 +556,27 @@ fn now_seconds(context: &CollectionContext) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn discovers_browser_session_when_oauth_is_absent() {
+        let mut context = CollectionContext {
+            home_directory: PathBuf::from("/tmp/quota-grok-missing-home"),
+            environment: std::collections::HashMap::new(),
+            config_path: None,
+            browser_sessions: std::collections::HashMap::new(),
+            client_name: "QuotaTest".to_owned(),
+            client_version: "test".to_owned(),
+            now: Some("2026-08-10T00:00:00Z".to_owned()),
+            cancel: None,
+        };
+        assert!(discover(&context).is_empty());
+        context
+            .browser_sessions
+            .insert(ProviderId::Grok, "sso=session-value".to_owned());
+        let sessions = discover(&context);
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].credential_source, "browser_session");
+    }
 
     #[test]
     fn maps_weekly_billing_cycle() {

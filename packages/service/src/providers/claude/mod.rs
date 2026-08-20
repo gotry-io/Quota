@@ -11,10 +11,13 @@ use uuid::Uuid;
 
 use super::common::{
     CollectionContext, ErrorCategory, HttpClient, LOCAL_FILE_LIMIT, ProviderError, ProviderSession,
-    QuotaAccount, QuotaSnapshot, QuotaWindow, account_identity, clamp_percent, is_executable_file,
+    QuotaAccount, QuotaSnapshot, QuotaWindow, ValidatedBrowserSession, account_identity,
+    clamp_percent, collect_official_or_browser, discover_official_or_browser, is_executable_file,
     mask_email, number, obj_get, obj_get_any, parse_date, read_bounded_file, run_bounded_command,
     string,
 };
+
+mod web;
 
 pub const SOURCE: &str = "anthropic_oauth_usage_api";
 pub const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
@@ -33,23 +36,38 @@ struct Credentials {
 }
 
 pub fn discover(context: &CollectionContext) -> Vec<ProviderSession> {
-    load_credentials(context)
-        .map(|credentials| {
-            vec![ProviderSession {
-                provider: ProviderId::Claude,
-                credential_source: credentials.source,
-            }]
-        })
-        .unwrap_or_default()
+    discover_official_or_browser(
+        ProviderId::Claude,
+        load_credentials(context).map(|credentials| ProviderSession {
+            provider: ProviderId::Claude,
+            credential_source: credentials.source,
+        }),
+        context,
+    )
+}
+
+pub fn validate_browser_session(
+    cookie_header: &str,
+    context: &CollectionContext,
+) -> Result<ValidatedBrowserSession, ProviderError> {
+    web::validate_browser_session(cookie_header, context)
 }
 
 pub fn collect(
-    _session: &ProviderSession,
+    session: &ProviderSession,
     context: &CollectionContext,
 ) -> Result<QuotaSnapshot, ProviderError> {
-    if context.cancelled() {
-        return Err(ProviderError::new(ErrorCategory::Unavailable, SOURCE));
-    }
+    collect_official_or_browser(
+        session,
+        context,
+        ProviderId::Claude,
+        SOURCE,
+        || collect_oauth(context),
+        || web::collect(context),
+    )
+}
+
+fn collect_oauth(context: &CollectionContext) -> Result<QuotaSnapshot, ProviderError> {
     let mut credentials = load_credentials(context)
         .ok_or_else(|| ProviderError::new(ErrorCategory::AuthRequired, SOURCE))?;
     if !credentials
@@ -435,7 +453,7 @@ fn collect_with_credentials(
     })
 }
 
-fn map_usage(value: &Value) -> Vec<QuotaWindow> {
+pub(super) fn map_usage(value: &Value) -> Vec<QuotaWindow> {
     let mut windows = Vec::new();
     for (value, id, title, duration) in [
         (
@@ -553,12 +571,15 @@ fn usage_window(
     duration: u64,
 ) -> Option<QuotaWindow> {
     let value = value?;
-    let utilization = number(obj_get(value, "utilization"))?;
+    let utilization = number(obj_get_any(
+        value,
+        &["utilization", "utilization_pct", "percent"],
+    ))?;
     Some(QuotaWindow {
         id: id.to_owned(),
         title: title.to_owned(),
         used_percent: clamp_percent(utilization),
-        resets_at: obj_get_any(value, &["resets_at", "resetsAt"])
+        resets_at: obj_get_any(value, &["resets_at", "resetsAt", "reset_at", "resetAt"])
             .and_then(|v| parse_date(Some(v)))
             .map(super::common::unix_seconds_to_iso),
         duration_seconds: Some(duration),
@@ -631,6 +652,31 @@ fn now_seconds(context: &CollectionContext) -> i64 {
 mod tests {
     use super::*;
 
+    fn isolated_context() -> CollectionContext {
+        CollectionContext {
+            home_directory: PathBuf::from("/tmp/quota-claude-missing-home"),
+            environment: std::collections::HashMap::new(),
+            config_path: None,
+            browser_sessions: std::collections::HashMap::new(),
+            client_name: "QuotaTest".to_owned(),
+            client_version: "test".to_owned(),
+            now: Some("2026-08-10T00:00:00Z".to_owned()),
+            cancel: None,
+        }
+    }
+
+    #[test]
+    fn discovers_browser_session_when_oauth_is_absent() {
+        let mut context = isolated_context();
+        assert!(discover(&context).is_empty());
+        context
+            .browser_sessions
+            .insert(ProviderId::Claude, "sessionKey=sk-ant-ok".to_owned());
+        let sessions = discover(&context);
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].credential_source, "browser_session");
+    }
+
     #[test]
     fn maps_optional_usage_windows_and_extra_usage() {
         let windows = map_usage(&serde_json::json!({
@@ -640,6 +686,11 @@ mod tests {
         }));
         assert!(windows.iter().any(|window| window.id == "seven_day"));
         assert!(windows.iter().any(|window| window.id == "extra_usage"));
+        let aliased = map_usage(&serde_json::json!({
+            "five_hour": {"utilization_pct": 10, "reset_at": "2026-08-09T12:00:00Z"}
+        }));
+        assert_eq!(aliased[0].id, "five_hour");
+        assert_eq!(aliased[0].used_percent, 10.0);
     }
 
     #[test]

@@ -114,7 +114,7 @@
     "browser_session": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["login_url", "cookie_hosts", "cookie_names", "browser_priority"],
+      "required": ["login_url", "cookie_hosts", "cookie_names", "browser_priority", "exclusive"],
       "properties": {
         "login_url": { "type": "string", "pattern": "^https://", "maxLength": 2048 },
         "cookie_hosts": {
@@ -149,6 +149,10 @@
             "maxLength": 64,
             "pattern": "^[A-Za-z][A-Za-z0-9]*$"
           }
+        },
+        "exclusive": {
+          "type": "boolean",
+          "description": "When true, the browser session is the only local auth path and Settings omits the official CLI command."
         }
       }
     }

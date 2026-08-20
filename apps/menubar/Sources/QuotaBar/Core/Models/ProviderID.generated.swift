@@ -8,6 +8,7 @@ struct BrowserSessionSpec: Equatable, Sendable {
   let cookieHosts: [String]
   let cookieNames: [String]
   let browserPriority: [String]
+  let exclusive: Bool
 }
 
 enum ProviderID: String, Codable, CaseIterable, Identifiable, Sendable {
@@ -140,18 +141,39 @@ enum ProviderID: String, Codable, CaseIterable, Identifiable, Sendable {
 
   var browserSession: BrowserSessionSpec? {
     switch self {
-    case .`codex`: nil
-    case .`claude`: nil
-    case .`grok`: nil
+    case .`codex`: BrowserSessionSpec(
+      loginURL: "https://chatgpt.com/",
+      cookieHosts: ["chatgpt.com", "www.chatgpt.com"],
+      cookieNames: ["__Secure-next-auth.session-token", "__Secure-next-auth.session-token.0", "__Secure-next-auth.session-token.1", "__Secure-next-auth.session-token.2", "__Host-next-auth.session-token", "__Secure-authjs.session-token", "authjs.session-token", "_account"],
+      browserPriority: ["safari", "chrome", "edge", "brave", "arc", "dia", "chromium", "firefox"],
+      exclusive: false)
+    case .`claude`: BrowserSessionSpec(
+      loginURL: "https://claude.ai/",
+      cookieHosts: ["claude.ai", "www.claude.ai"],
+      cookieNames: ["sessionKey", "lastActiveOrg"],
+      browserPriority: ["safari", "chrome", "edge", "brave", "arc", "dia", "chromium", "firefox"],
+      exclusive: false)
+    case .`grok`: BrowserSessionSpec(
+      loginURL: "https://grok.com/",
+      cookieHosts: ["grok.com", "www.grok.com"],
+      cookieNames: ["sso", "sso-rw"],
+      browserPriority: ["safari", "chrome", "edge", "brave", "arc", "dia", "chromium", "firefox"],
+      exclusive: false)
     case .`openrouter`: nil
     case .`deepseek`: nil
-    case .`kimi`: nil
+    case .`kimi`: BrowserSessionSpec(
+      loginURL: "https://www.kimi.com/code/console",
+      cookieHosts: ["www.kimi.com", "kimi.com"],
+      cookieNames: ["kimi-auth"],
+      browserPriority: ["safari", "chrome", "edge", "brave", "arc", "dia", "chromium", "firefox"],
+      exclusive: false)
     case .`litellm`: nil
     case .`cursor`: BrowserSessionSpec(
       loginURL: "https://authenticator.cursor.sh/",
       cookieHosts: ["cursor.com", "www.cursor.com", "cursor.sh", "authenticator.cursor.sh"],
       cookieNames: ["WorkosCursorSessionToken", "__Secure-next-auth.session-token", "next-auth.session-token", "wos-session", "__Secure-wos-session", "authjs.session-token", "__Secure-authjs.session-token"],
-      browserPriority: ["safari", "chrome", "edge", "brave", "arc", "dia", "chromium", "firefox"])
+      browserPriority: ["safari", "chrome", "edge", "brave", "arc", "dia", "chromium", "firefox"],
+      exclusive: true)
     }
   }
 

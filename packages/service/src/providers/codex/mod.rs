@@ -12,50 +12,68 @@ use std::time::{Duration, Instant};
 
 use super::common::{
     CollectionContext, ErrorCategory, HttpClient, LOCAL_FILE_LIMIT, ProviderError, ProviderSession,
-    QuotaAccount, QuotaSnapshot, QuotaWindow, account_identity, clamp_percent, is_executable_file,
+    QuotaAccount, QuotaSnapshot, QuotaWindow, ValidatedBrowserSession, account_identity,
+    clamp_percent, collect_official_or_browser, discover_official_or_browser, is_executable_file,
     mask_email, number, obj_get, obj_get_any, parse_date, read_bounded_file, string,
 };
+
+mod web;
 
 pub const SOURCE_API: &str = "chatgpt_usage_api";
 pub const SOURCE_RPC: &str = "codex_app_server";
 pub const USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
 
 #[derive(Clone, Debug)]
-struct Credentials {
+pub(super) struct Credentials {
     access_token: String,
     id_token: Option<String>,
     account_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]
-struct Identity {
+pub(super) struct Identity {
     email: Option<String>,
     plan: Option<String>,
     account_id: Option<String>,
 }
 
 pub fn discover(context: &CollectionContext) -> Vec<ProviderSession> {
-    load_credentials(context)
-        .map(|(_, source)| {
-            vec![ProviderSession {
-                provider: ProviderId::Codex,
-                credential_source: source,
-            }]
-        })
-        .unwrap_or_default()
+    discover_official_or_browser(
+        ProviderId::Codex,
+        load_credentials(context).map(|(_, source)| ProviderSession {
+            provider: ProviderId::Codex,
+            credential_source: source,
+        }),
+        context,
+    )
+}
+
+pub fn validate_browser_session(
+    cookie_header: &str,
+    context: &CollectionContext,
+) -> Result<ValidatedBrowserSession, ProviderError> {
+    web::validate_browser_session(cookie_header, context)
 }
 
 pub fn collect(
-    _session: &ProviderSession,
+    session: &ProviderSession,
     context: &CollectionContext,
 ) -> Result<QuotaSnapshot, ProviderError> {
-    if context.cancelled() {
-        return Err(ProviderError::new(ErrorCategory::Unavailable, SOURCE_API));
-    }
+    collect_official_or_browser(
+        session,
+        context,
+        ProviderId::Codex,
+        SOURCE_API,
+        || collect_local(context),
+        || web::collect(context),
+    )
+}
+
+fn collect_local(context: &CollectionContext) -> Result<QuotaSnapshot, ProviderError> {
     let (credentials, _) = load_credentials(context)
         .ok_or_else(|| ProviderError::new(ErrorCategory::AuthRequired, SOURCE_API))?;
     let identity = extract_identity(&credentials);
-    let direct = collect_api(&credentials, &identity, context);
+    let direct = collect_api(&credentials, &identity, context, SOURCE_API);
     match direct {
         Ok(Some(snapshot)) => return Ok(snapshot),
         Err(error) if error.category == ErrorCategory::Error => return Err(error),
@@ -185,10 +203,11 @@ fn decode_jwt_payload(token: &str) -> Option<Value> {
     serde_json::from_slice(&bytes).ok()
 }
 
-fn collect_api(
+pub(super) fn collect_api(
     credentials: &Credentials,
     identity: &Identity,
     context: &CollectionContext,
+    source: &'static str,
 ) -> Result<Option<QuotaSnapshot>, ProviderError> {
     let client = HttpClient::new()?;
     let bearer = format!("Bearer {}", credentials.access_token);
@@ -203,10 +222,10 @@ fn collect_api(
     {
         headers.push(("ChatGPT-Account-Id", account_id));
     }
-    let (_, value) = client.get_json(USAGE_URL, &headers, SOURCE_API)?;
+    let (_, value) = client.get_json(USAGE_URL, &headers, source)?;
     let mapped = map_usage(&value);
     if mapped.malformed_success {
-        return Err(ProviderError::new(ErrorCategory::Error, SOURCE_API));
+        return Err(ProviderError::new(ErrorCategory::Error, source));
     }
     if !mapped.windows.is_empty() {
         let plan = mapped.plan.or_else(|| identity.plan.clone());
@@ -216,7 +235,7 @@ fn collect_api(
             .or_else(|| identity.account_id.clone())
             .or_else(|| credentials.account_id.clone());
         return Ok(Some(snapshot(
-            SOURCE_API,
+            source,
             &mapped.windows,
             plan.as_deref(),
             email.as_deref(),
@@ -228,7 +247,7 @@ fn collect_api(
 }
 
 #[derive(Default)]
-struct MappedUsage {
+pub(super) struct MappedUsage {
     plan: Option<String>,
     email: Option<String>,
     account_id: Option<String>,
@@ -236,7 +255,7 @@ struct MappedUsage {
     malformed_success: bool,
 }
 
-fn map_usage(value: &Value) -> MappedUsage {
+pub(super) fn map_usage(value: &Value) -> MappedUsage {
     let Some(_root) = value.as_object() else {
         return MappedUsage {
             malformed_success: true,
@@ -599,7 +618,7 @@ fn resolve_executable(context: &CollectionContext) -> Option<String> {
         .or_else(|| Some("codex".to_owned()))
 }
 
-fn snapshot(
+pub(super) fn snapshot(
     source: &'static str,
     windows: &[QuotaWindow],
     plan: Option<&str>,
@@ -793,6 +812,28 @@ impl Drop for RpcClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn discovers_browser_session_when_oauth_is_absent() {
+        let mut context = CollectionContext {
+            home_directory: PathBuf::from("/tmp/quota-codex-missing-home"),
+            environment: std::collections::HashMap::new(),
+            config_path: None,
+            browser_sessions: std::collections::HashMap::new(),
+            client_name: "QuotaTest".to_owned(),
+            client_version: "test".to_owned(),
+            now: Some("2026-08-10T00:00:00Z".to_owned()),
+            cancel: None,
+        };
+        assert!(discover(&context).is_empty());
+        context.browser_sessions.insert(
+            ProviderId::Codex,
+            "__Secure-next-auth.session-token=abc".to_owned(),
+        );
+        let sessions = discover(&context);
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].credential_source, "browser_session");
+    }
 
     #[test]
     fn maps_primary_and_secondary_windows() {

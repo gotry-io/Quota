@@ -70,9 +70,10 @@ struct BrowserSessionAccountChoice: Identifiable, Equatable, Sendable {
   let accountLabel: String?
   let browserName: String
   let profileName: String
+  let headerFingerprint: String
   let cookieHeader: String
 
-  var id: String { accountFingerprint }
+  var id: String { headerFingerprint }
   var title: String { PlanDisplay.accountLabel(accountLabel) ?? "Account" }
   var subtitle: String { "\(browserName) · \(profileName)" }
 }
@@ -615,12 +616,13 @@ final class MenuBarViewModel {
               provider, cookieHeader: candidate.cookieHeader)
             guard !Task.isCancelled, Date() < deadline else { return }
             guard validated.accountFingerprint != currentFingerprint else { continue }
-            accounts[validated.accountFingerprint] = BrowserSessionAccountChoice(
+            accounts[candidate.headerFingerprint] = BrowserSessionAccountChoice(
               provider: provider,
               accountFingerprint: validated.accountFingerprint,
               accountLabel: validated.accountLabel,
               browserName: candidate.browserName,
               profileName: candidate.profileName,
+              headerFingerprint: candidate.headerFingerprint,
               cookieHeader: candidate.cookieHeader
             )
           } catch is CancellationError {

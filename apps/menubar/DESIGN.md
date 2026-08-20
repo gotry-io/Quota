@@ -313,7 +313,8 @@ Provider detail contains:
 - **Overview**: provider-wide visibility switch;
 - **Reporting From**: This Mac or account device display names, source kind, optional stale state,
   and compact observation age;
-- **This Mac Sign-in**: the catalog-provided copyable official-provider command; or
+- **This Mac Sign-in**: the catalog-provided copyable official-provider command, shown with Browser
+  Session unless that session is catalog `exclusive` (Cursor); or
 - **This Mac Configuration**: native secure API-key entry, optional base URL when catalog-enabled,
   masked saved state, Save, and Remove; and
 - **Browser Session** when catalog-enabled: disconnected **Sign In**, bounded **Waiting / Cancel**,
