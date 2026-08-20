@@ -69,13 +69,13 @@ dashboard scraping and reset-credit redemption are not used.
 6. Map the five-hour, seven-day, model-scoped, and extra-usage windows that are present.
 7. Enrich identity best-effort through `/api/oauth/profile`; usage remains valid if enrichment fails.
 8. If OAuth credentials are missing or usage returns 401/403, and a stored Claude browser session
-   exists, use the catalog `sessionKey` cookie against `https://claude.ai/api/organizations` then
-   `/organizations/{id}/usage`. Prefer the chat-capable org matching optional `lastActiveOrg`, then
-   the org on `/api/account` when that call succeeds; otherwise the first chat-capable org. Validate
-   by mapping usage, not by the org list alone. Usage accepts OAuth `utilization` / `resets_at` and
-   the web aliases `utilization_pct` / `reset_at`. The `sessionKey` value must start with `sk-ant-`.
-   QuotaBar acquires `sessionKey` and optional `lastActiveOrg` from `claude.ai` through the same
-   allowlisted browser-session flow as Cursor.
+   exists, send the stored allowlisted Cookie header (`sessionKey` plus optional `lastActiveOrg`)
+   to `https://claude.ai/api/organizations` then `/organizations/{id}/usage`. Prefer the listed org
+   matching `lastActiveOrg`, then the org on `/api/account`, unless that org is `api_disabled`;
+   otherwise the first chat-capable org. Validate by mapping usage, not by the org list alone. Usage
+   accepts OAuth `utilization` / `resets_at` and the web aliases `utilization_pct` / `reset_at`. The
+   `sessionKey` value must start with `sk-ant-`. QuotaBar acquires `sessionKey` and optional
+   `lastActiveOrg` from `claude.ai` through the same allowlisted browser-session flow as Cursor.
 
 An absent, stale, or unreadable session is `auth_required`. A Claude Code installation configured
 only for a third-party API gateway does not provide Anthropic subscription OAuth quota unless a

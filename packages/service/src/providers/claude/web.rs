@@ -51,10 +51,8 @@ fn collect_at(
         .ok_or_else(|| ProviderError::new(ErrorCategory::Error, WEB_SOURCE))?;
     let client = HttpClient::new()?;
     let user_agent = context.user_agent();
-    let session_key = session_key_from_header(cookie_header)
-        .ok_or_else(|| ProviderError::new(ErrorCategory::Error, WEB_SOURCE))?;
-    let cookie = format!("sessionKey={session_key}");
-    let headers = web_headers(&cookie, &user_agent);
+    let cookie = request_cookie_header(cookie_header)?;
+    let headers = web_headers(cookie, &user_agent);
     let (_, usage) = client.get_json_session(
         &format!("{origin}/api/organizations/{organization}/usage"),
         &headers,
@@ -95,12 +93,10 @@ fn web_account(
     if context.cancelled() {
         return Err(ProviderError::new(ErrorCategory::Unavailable, WEB_SOURCE));
     }
-    let session_key = session_key_from_header(cookie_header)
-        .ok_or_else(|| ProviderError::new(ErrorCategory::Error, WEB_SOURCE))?;
+    let cookie = request_cookie_header(cookie_header)?;
     let client = HttpClient::new()?;
     let user_agent = context.user_agent();
-    let cookie = format!("sessionKey={session_key}");
-    let headers = web_headers(&cookie, &user_agent);
+    let headers = web_headers(cookie, &user_agent);
     let (_, organizations) =
         client.get_json_session(&format!("{origin}/api/organizations"), &headers, WEB_SOURCE)?;
     let account = client
@@ -130,12 +126,10 @@ fn fetch_organization_id(
         return Err(ProviderError::new(ErrorCategory::Unavailable, WEB_SOURCE));
     }
     let started = std::time::Instant::now();
-    let session_key = session_key_from_header(cookie_header)
-        .ok_or_else(|| ProviderError::new(ErrorCategory::Error, WEB_SOURCE))?;
+    let cookie = request_cookie_header(cookie_header)?;
     let client = HttpClient::with_timeout(timeout)?;
     let user_agent = context.user_agent();
-    let cookie = format!("sessionKey={session_key}");
-    let headers = web_headers(&cookie, &user_agent);
+    let headers = web_headers(cookie, &user_agent);
     let (_, organizations) =
         client.get_json_session(&format!("{origin}/api/organizations"), &headers, WEB_SOURCE)?;
     let preferred = preferred
@@ -171,6 +165,12 @@ fn web_headers<'a>(cookie: &'a str, user_agent: &'a str) -> [(&'a str, &'a str);
     ]
 }
 
+fn request_cookie_header(header: &str) -> Result<&str, ProviderError> {
+    session_key_from_header(header)
+        .ok_or_else(|| ProviderError::new(ErrorCategory::Error, WEB_SOURCE))?;
+    Ok(header)
+}
+
 fn session_key_from_header(header: &str) -> Option<String> {
     let value = cookie_named_value(header, "sessionKey")?.trim();
     (value.starts_with("sk-ant-") && value.len() <= 512 && !value.chars().any(char::is_control))
@@ -181,6 +181,16 @@ fn select_organization_id(value: &Value, preferred: Option<&str>) -> Option<Stri
     let entries = value
         .as_array()
         .or_else(|| obj_get(value, "organizations").and_then(Value::as_array))?;
+    if let Some(preferred) = preferred {
+        for entry in entries {
+            let Some(id) = organization_id(entry) else {
+                continue;
+            };
+            if id == preferred && !organization_is_api_disabled(entry) {
+                return Some(id);
+            }
+        }
+    }
     let mut first = None;
     for entry in entries {
         if !organization_allows_chat(entry) {
@@ -189,9 +199,6 @@ fn select_organization_id(value: &Value, preferred: Option<&str>) -> Option<Stri
         let Some(id) = organization_id(entry) else {
             continue;
         };
-        if preferred == Some(id.as_str()) {
-            return Some(id);
-        }
         if first.is_none() {
             first = Some(id);
         }
@@ -224,10 +231,13 @@ fn web_account_organization(value: &Value) -> Option<String> {
         .filter(|id| !id.is_empty() && id.len() <= 128 && !id.chars().any(char::is_control))
 }
 
-fn organization_allows_chat(value: &Value) -> bool {
-    if value.get("api_disabled") == Some(&Value::Bool(true))
+fn organization_is_api_disabled(value: &Value) -> bool {
+    value.get("api_disabled") == Some(&Value::Bool(true))
         || value.get("apiDisabled") == Some(&Value::Bool(true))
-    {
+}
+
+fn organization_allows_chat(value: &Value) -> bool {
+    if organization_is_api_disabled(value) {
         return false;
     }
     obj_get_any(value, &["capabilities", "capability"])
@@ -302,6 +312,22 @@ mod tests {
         assert_eq!(
             select_organization_id(&value, Some("api-only")).as_deref(),
             Some("chat-org")
+        );
+        assert_eq!(
+            select_organization_id(
+                &serde_json::json!([
+                    {"uuid": "api-only", "api_disabled": true},
+                    {"uuid": "preferred-plain"},
+                    {"uuid": "chat-org", "capabilities": ["chat"]}
+                ]),
+                Some("preferred-plain")
+            )
+            .as_deref(),
+            Some("preferred-plain")
+        );
+        assert_eq!(
+            request_cookie_header("lastActiveOrg=org-2; sessionKey=sk-ant-ok").ok(),
+            Some("lastActiveOrg=org-2; sessionKey=sk-ant-ok")
         );
         assert!(
             select_organization_id(
