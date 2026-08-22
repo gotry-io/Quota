@@ -117,6 +117,8 @@ Do not commit generated state such as `node_modules/`, `dist/`, `target/`, `.bui
 
 ## Verification
 
+- The `.githooks` pre-commit and pre-push hooks are the floor, not the plan. They catch formatting,
+  a stale generated catalog, and the tiers a push touches; the entries below still apply.
 - TypeScript-only change: run the affected workspace's type check and tests, plus root formatting.
 - Provider change: run shared Rust service and entry-point tests, including relevant failure and
   redaction cases.

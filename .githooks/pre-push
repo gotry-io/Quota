@@ -1,0 +1,71 @@
+#!/bin/bash
+# Run the test tiers the pushed commits actually touch, so CI reports on integration
+# problems rather than on breakage that was visible locally.
+# Set QUOTA_HOOKS_SKIP=1 (or pass --no-verify) to bypass.
+
+set -euo pipefail
+
+if [ "${QUOTA_HOOKS_SKIP:-}" = "1" ]; then
+  echo "pre-push: skipped by QUOTA_HOOKS_SKIP=1"
+  exit 0
+fi
+
+cd "$(git rev-parse --show-toplevel)"
+
+# git feeds pre-push one "<local ref> <local sha> <remote ref> <remote sha>" line per ref.
+CHANGED="$(
+  while read -r _local_ref local_sha _remote_ref remote_sha; do
+    if [ "$local_sha" = "0000000000000000000000000000000000000000" ]; then
+      continue # branch deletion carries no content to verify
+    fi
+    # A new branch sends the all-zero sha, and a remote sha can name an object this clone
+    # never fetched. Both fail this test and fall back to the fork point from main.
+    if git cat-file -e "${remote_sha}^{commit}" 2>/dev/null; then
+      base="$remote_sha"
+    else
+      base="$(git merge-base origin/main "$local_sha" 2>/dev/null || true)"
+    fi
+    if [ -z "$base" ]; then
+      git ls-files # no comparable base: verify the whole tree
+      break
+    fi
+    git diff --name-only "$base" "$local_sha"
+  done
+)"
+
+if [ -z "$CHANGED" ]; then
+  echo "pre-push: nothing to verify"
+  exit 0
+fi
+
+touches() { printf '%s' "$CHANGED" | grep -Eq "$1"; }
+
+if touches '^(apps/(web|relay)|packages/(protocol|quota-model|relay-core))/|\.(ts|svelte|mjs)$|^(package\.json|pnpm-lock\.yaml|biome\.json|tsconfig\.base\.json)$'; then
+  if [ ! -d node_modules ]; then
+    echo "pre-push: node_modules is missing; run pnpm install" >&2
+    exit 1
+  fi
+  echo "pre-push: TypeScript workspace"
+  pnpm -r --if-present check
+  pnpm -r --if-present test
+fi
+
+# Cargo manifests are matched unanchored: three of the four live inside a crate directory.
+if touches '\.rs$|(^|/)Cargo\.(toml|lock)$'; then
+  echo "pre-push: Rust service"
+  pnpm test:service
+  if [ "$(uname -s)" = Linux ]; then
+    pnpm test:linux-cli
+  fi
+fi
+
+# apps/menubar/helper is a Rust crate and apps/ios ships no Package.swift, so a bare
+# `.swift` match would run these three packages for changes they cannot cover.
+if touches '^(apps/menubar/(Sources|Tests|Package\.swift)|packages/apple-(shared|client)/)'; then
+  if ! command -v swift >/dev/null 2>&1; then
+    echo "pre-push: swift is unavailable on this host; CI covers the Swift packages" >&2
+  else
+    echo "pre-push: Swift packages"
+    ./scripts/test-swift.sh
+  fi
+fi
