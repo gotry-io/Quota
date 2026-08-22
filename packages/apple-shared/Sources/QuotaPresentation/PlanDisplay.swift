@@ -34,8 +34,6 @@ public enum PlanDisplay: Sendable {
     "plus": "Plus",
     "pro": "Pro",
     "prolite": "Pro Lite",
-    "pro_lite": "Pro Lite",
-    "pro-lite": "Pro Lite",
     "max": "Max",
     "team": "Team",
     "business": "Business",
@@ -43,16 +41,18 @@ public enum PlanDisplay: Sendable {
     "edu": "Edu",
     "education": "Education",
     "supergrok": "SuperGrok",
-    "super_grok": "SuperGrok",
-    "super-grok": "SuperGrok",
+    "supergrokheavy": "SuperGrok Heavy",
     "super": "Super",
   ]
 
+  /// Plan slugs reach us with any separator (`supergrok heavy`, `super_grok`,
+  /// `pro-lite`), so the lookup key drops them all rather than the table
+  /// carrying one entry per spelling.
   private static func normalize(_ value: String) -> String {
     value
       .trimmingCharacters(in: .whitespacesAndNewlines)
       .lowercased()
-      .replacingOccurrences(of: " ", with: "")
+      .filter { $0.isLetter || $0.isNumber }
   }
 
   private static func nonempty(_ value: String?) -> String? {

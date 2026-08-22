@@ -152,7 +152,7 @@
         },
         "exclusive": {
           "type": "boolean",
-          "description": "When true, the browser session is the only local auth path and Settings omits the official CLI command."
+          "description": "When true, Settings omits the official CLI sign-in command because the provider has no CLI or API-key login."
         }
       }
     }

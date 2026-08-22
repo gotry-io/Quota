@@ -1,26 +1,40 @@
 use crate::catalog::ProviderId;
 use serde_json::Value;
+use std::path::{Path, PathBuf};
 
 use super::common::{
-    ApiKeyCredentials, CollectionContext, ErrorCategory, HTTP_TIMEOUT, HttpClient, ProviderError,
-    ProviderSession, QuotaAccount, QuotaSnapshot, QuotaWindow, VALIDATION_TIMEOUT,
-    ValidatedBrowserSession, account_identity, api_key_identity, clamp_percent,
+    ApiKeyCredentials, CollectionContext, ErrorCategory, HTTP_TIMEOUT, HttpClient,
+    LOCAL_FILE_LIMIT, ProviderError, ProviderSession, QuotaAccount, QuotaSnapshot, QuotaWindow,
+    VALIDATION_TIMEOUT, ValidatedBrowserSession, account_identity, api_key_identity, clamp_percent,
     collect_official_or_browser, cookie_named_value, discover_official_or_browser, number, obj_get,
-    obj_get_any, parse_date, resolve_api_key, string,
+    obj_get_any, parse_date, read_bounded_file, resolve_api_key, string,
 };
 
 pub const SOURCE: &str = "kimi_code_usages_api";
+pub const CLI_SOURCE: &str = "kimi_code_cli_credential";
 pub const WEB_SOURCE: &str = "kimi_web_billing_api";
 const WEB_USAGES_URL: &str =
     "https://www.kimi.com/apiv2/kimi.gateway.billing.v1.BillingService/GetUsages";
+const DEFAULT_CODE_BASE_URL: &str = "https://api.kimi.com";
+const CLI_TOKEN_SKEW_SECONDS: i64 = 60;
+
+#[derive(Clone, Debug)]
+struct CliCredentials {
+    access_token: String,
+    source: String,
+}
 
 pub fn discover(context: &CollectionContext) -> Vec<ProviderSession> {
     discover_official_or_browser(
         ProviderId::Kimi,
-        resolve(context).ok().map(|credentials| ProviderSession {
-            provider: ProviderId::Kimi,
-            credential_source: credentials.source,
-        }),
+        resolve(context)
+            .ok()
+            .map(|credentials| credentials.source)
+            .or_else(|| load_cli_credentials(context).map(|credentials| credentials.source))
+            .map(|credential_source| ProviderSession {
+                provider: ProviderId::Kimi,
+                credential_source,
+            }),
         context,
     )
 }
@@ -52,40 +66,114 @@ pub fn collect(
         context,
         ProviderId::Kimi,
         SOURCE,
-        || collect_api(context),
+        || collect_local(context),
         || collect_web(context),
     )
 }
 
-fn collect_api(context: &CollectionContext) -> Result<QuotaSnapshot, ProviderError> {
-    let credentials = resolve(context)?;
+fn collect_local(context: &CollectionContext) -> Result<QuotaSnapshot, ProviderError> {
+    match resolve(context) {
+        Ok(credentials) => match collect_with_bearer(&BearerAuth::ApiKey(&credentials), context) {
+            Ok(snapshot) => return Ok(snapshot),
+            Err(error) if error.category == ErrorCategory::AuthRequired => {}
+            Err(error) => return Err(error),
+        },
+        Err(error) if error.category == ErrorCategory::AuthRequired => {}
+        Err(error) => return Err(error),
+    }
+    let cli = load_cli_credentials(context)
+        .ok_or_else(|| ProviderError::new(ErrorCategory::AuthRequired, CLI_SOURCE))?;
+    collect_with_bearer(&BearerAuth::Cli(&cli), context)
+}
+
+/// A bearer token accepted by the Kimi Code usages endpoint.
+enum BearerAuth<'a> {
+    ApiKey(&'a ApiKeyCredentials),
+    Cli(&'a CliCredentials),
+}
+
+impl BearerAuth<'_> {
+    fn token(&self) -> &str {
+        match self {
+            Self::ApiKey(credentials) => &credentials.api_key,
+            Self::Cli(credentials) => &credentials.access_token,
+        }
+    }
+
+    fn base_url(&self) -> &str {
+        match self {
+            Self::ApiKey(credentials) => &credentials.base_url,
+            Self::Cli(_) => DEFAULT_CODE_BASE_URL,
+        }
+    }
+
+    fn source(&self) -> &'static str {
+        match self {
+            Self::ApiKey(_) => SOURCE,
+            Self::Cli(_) => CLI_SOURCE,
+        }
+    }
+
+    fn label(&self) -> String {
+        match self {
+            Self::ApiKey(credentials) => credentials.label.clone(),
+            Self::Cli(_) => "Kimi Code".to_owned(),
+        }
+    }
+
+    /// The CLI token is only honored when the request identifies as the CLI.
+    fn platform_header(&self) -> Option<&'static str> {
+        match self {
+            Self::ApiKey(_) => None,
+            Self::Cli(_) => Some("kimi_code_cli"),
+        }
+    }
+
+    /// API keys are stable, so their hash identifies the account. CLI access
+    /// tokens rotate on refresh, so they stay source-scoped like the web path.
+    fn identity(&self) -> (String, &'static str) {
+        match self {
+            Self::ApiKey(credentials) => api_key_identity("kimi", &credentials.api_key),
+            Self::Cli(_) => account_identity("kimi", "cli_credential", None),
+        }
+    }
+}
+
+fn collect_with_bearer(
+    auth: &BearerAuth<'_>,
+    context: &CollectionContext,
+) -> Result<QuotaSnapshot, ProviderError> {
+    let source = auth.source();
     let client = HttpClient::new()?;
-    let url = format!("{}/coding/v1/usages", credentials.base_url);
-    let auth = format!("Bearer {}", credentials.api_key);
+    let url = format!("{}/coding/v1/usages", auth.base_url().trim_end_matches('/'));
+    let bearer = format!("Bearer {}", auth.token());
     let user_agent = context.user_agent();
-    let headers = [
-        ("Authorization", auth.as_str()),
+    let mut headers = vec![
+        ("Authorization", bearer.as_str()),
         ("Accept", "application/json"),
         ("User-Agent", user_agent.as_str()),
     ];
-    let (_, value) = client.get_json(&url, &headers, SOURCE)?;
+    if let Some(platform) = auth.platform_header() {
+        headers.push(("X-Msh-Platform", platform));
+    }
+    let (_, value) = client.get_json(&url, &headers, source)?;
     let data =
-        map_usages(&value).ok_or_else(|| ProviderError::new(ErrorCategory::Error, SOURCE))?;
+        map_usages(&value).ok_or_else(|| ProviderError::new(ErrorCategory::Error, source))?;
     let windows = map_windows(&data);
     if windows.is_empty() {
-        return Err(ProviderError::new(ErrorCategory::Error, SOURCE));
+        return Err(ProviderError::new(ErrorCategory::Error, source));
     }
-    let (fingerprint, scope) = api_key_identity("kimi", &credentials.api_key);
+    let (fingerprint, scope) = auth.identity();
     Ok(QuotaSnapshot {
         provider: ProviderId::Kimi,
         account: QuotaAccount {
             fingerprint,
             fingerprint_scope: scope,
-            label: Some(credentials.label),
+            label: Some(auth.label()),
             plan: None,
         },
         windows,
-        source: SOURCE,
+        source,
         status: "available",
         observed_at: context.observed_at(),
     })
@@ -93,6 +181,42 @@ fn collect_api(context: &CollectionContext) -> Result<QuotaSnapshot, ProviderErr
 
 fn resolve(context: &CollectionContext) -> Result<ApiKeyCredentials, ProviderError> {
     resolve_api_key(context, ProviderId::Kimi)
+}
+
+fn load_cli_credentials(context: &CollectionContext) -> Option<CliCredentials> {
+    let home = context
+        .env("KIMI_CODE_HOME")
+        .filter(|value| !value.trim().is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| context.home_directory.join(".kimi-code"));
+    let path = home.join("credentials/kimi-code.json");
+    read_cli_credentials(&path, context)
+}
+
+fn read_cli_credentials(path: &Path, context: &CollectionContext) -> Option<CliCredentials> {
+    let metadata = std::fs::symlink_metadata(path).ok()?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return None;
+    }
+    let value: Value = serde_json::from_slice(&read_bounded_file(path, LOCAL_FILE_LIMIT)?).ok()?;
+    parse_cli_credentials(&value, &path.to_string_lossy(), context.observed_unix())
+}
+
+fn parse_cli_credentials(value: &Value, source: &str, now: i64) -> Option<CliCredentials> {
+    let access_token = obj_get_any(value, &["access_token", "accessToken"])
+        .and_then(|value| string(Some(value)))?;
+    let expires_at = obj_get_any(value, &["expires_at", "expiresAt"]).and_then(|value| {
+        number(Some(value))
+            .map(|seconds| seconds as i64)
+            .or_else(|| parse_date(Some(value)))
+    })?;
+    if expires_at <= now + CLI_TOKEN_SKEW_SECONDS {
+        return None;
+    }
+    Some(CliCredentials {
+        access_token,
+        source: source.to_owned(),
+    })
 }
 
 fn collect_web(context: &CollectionContext) -> Result<QuotaSnapshot, ProviderError> {
@@ -311,6 +435,42 @@ mod tests {
         let sessions = discover(&context);
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].credential_source, "browser_session");
+    }
+
+    #[test]
+    fn accepts_fresh_cli_credential_and_rejects_stale_or_missing_expiry() {
+        let fresh = parse_cli_credentials(
+            &serde_json::json!({
+                "access_token": "cli-token",
+                "refresh_token": "refresh",
+                "expires_at": 1_786_406_400_i64
+            }),
+            "fixture",
+            1_786_320_000,
+        )
+        .unwrap();
+        assert_eq!(fresh.access_token, "cli-token");
+        assert!(
+            parse_cli_credentials(
+                &serde_json::json!({
+                    "access_token": "cli-token",
+                    "expires_at": 1_786_320_030_i64
+                }),
+                "fixture",
+                1_786_320_000,
+            )
+            .is_none()
+        );
+        assert!(
+            parse_cli_credentials(
+                &serde_json::json!({
+                    "access_token": "cli-token"
+                }),
+                "fixture",
+                1_786_320_000,
+            )
+            .is_none()
+        );
     }
 
     #[test]

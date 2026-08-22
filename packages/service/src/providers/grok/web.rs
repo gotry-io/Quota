@@ -6,7 +6,6 @@ use super::super::common::{
     QuotaSnapshot, QuotaWindow, VALIDATION_TIMEOUT, ValidatedBrowserSession, account_identity,
     clamp_percent, cookie_named_value,
 };
-use super::now_seconds;
 
 pub const WEB_SOURCE: &str = "grok_web_billing_api";
 const WEB_BILLING_URL: &str = "https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig";
@@ -17,7 +16,7 @@ pub fn validate_browser_session(
     context: &CollectionContext,
 ) -> Result<ValidatedBrowserSession, ProviderError> {
     sso_token(cookie_header).ok_or_else(|| ProviderError::new(ErrorCategory::Error, WEB_SOURCE))?;
-    let _ = fetch_web_billing(cookie_header, context, VALIDATION_TIMEOUT)?;
+    let _ = fetch_web_billing(WebAuth::Cookie(cookie_header), context, VALIDATION_TIMEOUT)?;
     let (account_fingerprint, _) = account_identity("grok", "user_id", None);
     Ok(ValidatedBrowserSession {
         cookie_header: cookie_header.to_owned(),
@@ -31,7 +30,7 @@ pub fn collect(context: &CollectionContext) -> Result<QuotaSnapshot, ProviderErr
         .browser_session(ProviderId::Grok)
         .ok_or_else(|| ProviderError::new(ErrorCategory::AuthRequired, WEB_SOURCE))?;
     sso_token(cookie_header).ok_or_else(|| ProviderError::new(ErrorCategory::Error, WEB_SOURCE))?;
-    let billing = fetch_web_billing(cookie_header, context, HTTP_TIMEOUT)?;
+    let billing = fetch_web_billing(WebAuth::Cookie(cookie_header), context, HTTP_TIMEOUT)?;
     let (fingerprint, scope) = account_identity("grok", "user_id", None);
     Ok(QuotaSnapshot {
         provider: ProviderId::Grok,
@@ -41,15 +40,31 @@ pub fn collect(context: &CollectionContext) -> Result<QuotaSnapshot, ProviderErr
             label: Some("Grok".to_owned()),
             plan: None,
         },
-        windows: vec![billing_window(&billing, now_seconds(context))],
+        windows: vec![billing_window(&billing, context.observed_unix())],
         source: WEB_SOURCE,
         status: "available",
         observed_at: context.observed_at(),
     })
 }
 
+/// The billing-cycle window from grok.com's gRPC-web billing RPC using the local
+/// OAuth access token instead of browser cookies. CodexBar's last Automatic step.
+pub(super) fn bearer_billing_window(
+    access_token: &str,
+    context: &CollectionContext,
+) -> Result<QuotaWindow, ProviderError> {
+    let bearer = format!("Bearer {access_token}");
+    let billing = fetch_web_billing(WebAuth::Bearer(&bearer), context, HTTP_TIMEOUT)?;
+    Ok(billing_window(&billing, context.observed_unix()))
+}
+
+enum WebAuth<'a> {
+    Cookie(&'a str),
+    Bearer(&'a str),
+}
+
 fn fetch_web_billing(
-    cookie_header: &str,
+    auth: WebAuth<'_>,
     context: &CollectionContext,
     timeout: Duration,
 ) -> Result<WebBilling, ProviderError> {
@@ -58,8 +73,12 @@ fn fetch_web_billing(
     }
     let client = HttpClient::with_timeout(timeout)?;
     let user_agent = context.user_agent();
+    let auth_header = match auth {
+        WebAuth::Cookie(header) => ("Cookie", header),
+        WebAuth::Bearer(header) => ("Authorization", header),
+    };
     let headers = [
-        ("Cookie", cookie_header),
+        auth_header,
         ("Origin", "https://grok.com"),
         ("Referer", "https://grok.com/?_s=usage"),
         ("Accept", "*/*"),
@@ -69,7 +88,7 @@ fn fetch_web_billing(
         ("User-Agent", user_agent.as_str()),
     ];
     let (_, body) = client.post_bytes(WEB_BILLING_URL, &headers, GRPC_EMPTY_FRAME, WEB_SOURCE)?;
-    parse_grpc_web_billing(&body, now_seconds(context))
+    parse_grpc_web_billing(&body, context.observed_unix())
 }
 
 fn sso_token(header: &str) -> Option<&str> {
@@ -87,12 +106,15 @@ struct WebBilling {
     resets_at: Option<i64>,
 }
 
+/// The RPC exposes only the reset instant, not the cadence. A reset 20–45 days out
+/// reads as monthly; anything nearer is the weekly credit pool, even late in the
+/// week (CodexBar's untyped-window rule), and no reset at all stays generic.
 fn billing_window(billing: &WebBilling, now: i64) -> QuotaWindow {
     let delta = billing.resets_at.and_then(|end| end.checked_sub(now));
     let title = match delta {
-        Some(seconds) if (6 * 86_400..9 * 86_400).contains(&seconds) => "Weekly",
-        Some(seconds) if (25 * 86_400..40 * 86_400).contains(&seconds) => "Monthly",
-        _ => "Billing cycle",
+        Some(seconds) if (20 * 86_400..=45 * 86_400).contains(&seconds) => "Monthly",
+        Some(_) => "Weekly",
+        None => "Billing cycle",
     };
     QuotaWindow {
         id: "billing_cycle".to_owned(),

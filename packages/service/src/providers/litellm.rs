@@ -5,7 +5,7 @@ use std::thread;
 use super::common::{
     ApiKeyCredentials, CollectionContext, ErrorCategory, HttpClient, ProviderError,
     ProviderSession, QuotaAccount, QuotaSnapshot, QuotaWindow, api_key_identity, clamp_percent,
-    number, obj_get, obj_get_any, parse_date, resolve_api_key, string,
+    number, obj_get, obj_get_any, parse_date, resolve_api_key, string, url_encode,
 };
 
 pub const SOURCE: &str = "litellm_budget_api";
@@ -276,17 +276,6 @@ fn map_windows(personal: Option<&Budget>, team: Option<&Budget>) -> Vec<QuotaWin
         })
     })
     .collect()
-}
-
-fn url_encode(value: &str) -> String {
-    value.bytes().fold(String::new(), |mut result, byte| {
-        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
-            result.push(byte as char);
-        } else {
-            result.push_str(&format!("%{byte:02X}"));
-        }
-        result
-    })
 }
 
 #[cfg(test)]

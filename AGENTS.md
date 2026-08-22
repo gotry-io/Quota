@@ -14,6 +14,7 @@ Read the relevant source before changing that area:
 | Credentials, trust, redaction, transport, storage safety | `docs/security.md` |
 | Provider registration catalog (ids, defaults, config) | `packages/provider/catalog.json` |
 | Codex, Claude Code, Grok, and OpenRouter collection strategies | `docs/provider-collection.md` |
+| CodexBar external platform capability baseline (quota/usage/fallback) | `docs/codexbar-platform-capabilities.md` |
 | Persistent Relay storage decision and rationale | `docs/decisions/0001-persistent-relay-storage.md` |
 | Managed account, device, authentication, deletion, and Usage boundary | `docs/decisions/0006-managed-account-device-usage.md` |
 | Managed-data v3 and Cursor account-sync protocol | `docs/decisions/0012-managed-data-v3.md` |

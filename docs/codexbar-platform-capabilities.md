@@ -1,0 +1,303 @@
+# CodexBar 平台能力梳理
+
+本文梳理 [CodexBar](https://github.com/steipete/CodexBar) 的**平台额度**、**使用量/成本**、**鉴权与降级规则**及平台特有能力，作为 Quota 对齐基线。Quota 自身策略仍以 [`provider-collection.md`](provider-collection.md) 为准。
+
+## 核对说明
+
+| 项 | 值 |
+| --- | --- |
+| 上游仓库 | `steipete/CodexBar` |
+| 核对提交 | `f74117a`（2026-08-20） |
+| 核对方式 | 读取 `ProviderManifest.swift`（69 个 descriptor）+ 各 `*ProviderDescriptor.swift` 的 `fetchPlan` / `resolveStrategies`、`ProviderTokenCostConfig.supportsTokenCost`，并以单平台文档补窗口语义 |
+| 优先级 | **Descriptor / strategy 源码 > 单平台 `docs/<provider>.md` > `docs/providers.md` 总览表** |
+| 增量核对 | `27c7f33`（2026-08-22）：仅重读 Quota 已支持 provider 的 descriptor / probe / fetcher（Codex、Claude、Cursor、Grok、Kimi、DeepSeek、OpenRouter、LiteLLM），用于 §7 对照 |
+
+已发现并按源码修正的偏差（相对上游 `providers.md` 或初版整理）：
+
+1. **Usage & Spend 入选集**：代码以 `tokenCost.supportsTokenCost == true` 为准，共 **11** 个，不是总览里点名的 6 个。
+2. **Codex Auto**：源码为 `PAT → OAuth → CLI`（选中 managed workspace 时去掉 CLI）；**不是**「App: oauth→cli / CLI: web→cli」。`.web`（openai-web）仅显式 source。
+3. **Cursor**：pipeline 只有一条 `CursorStatusFetchStrategy`；App→Cookie 降级在 `CursorStatusProbe` 内部；`sourceMode == .web` 时 `allowAppAuthFallback = false`。浏览器导入顺序 **Safari 优先**。
+4. **Kimi Auto**：`API → CLI credential → Web`（中间多一步 CLI 凭证）。
+5. **DeepSeek**：不只 API；无 key 时走 Platform Web；有 key 时 API 为主，可选 Chrome 会话补 detailed usage。
+6. **OpenCode Go Auto**：unscoped=`local → api → web`；scoped=`web → local → api`（文档常漏掉 API）。
+7. **Grok Auto**：`CLI → OAuth(proxy) → Web → OAuth(grpc)`；本地 sessions 不在额度 pipeline 内。
+8. **Groq Auto**：Console Web → Prometheus metrics API。
+
+---
+
+## 1. 术语与产品切分
+
+| 概念 | 含义 | 代码落点 |
+| --- | --- | --- |
+| **Quota / UsageSnapshot** | 菜单栏/卡片剩余额度窗口 | `ProviderFetchStrategy.fetch` → `UsageSnapshot` |
+| **Token cost / Usage & Spend** | 花费、token、按日图表 | `ProviderTokenCostConfig.supportsTokenCost`；Settings 过滤见 `SettingsStore+MenuPreferences` / `UsageStore+SpendDashboardTokenCost` |
+| **Fetch strategy** | 一条取数路径 | `ProviderFetchKind`：cli / web / oauth / apiToken / local 等 |
+| **Source mode** | 过滤 pipeline | `.auto` / `.web` / `.oauth` / `.api` / `.cli` |
+
+通用规则（`docs/provider.md` + pipeline 实现）：
+
+1. `resolveStrategies` 返回**有序**策略列表；`auto` 按序尝试。
+2. `isAvailable == false` 跳过；失败是否继续看 `shouldFallback`。
+3. Cookie 类常见 Automatic / Manual；成功会话可进 Keychain cache。
+4. API key / 手动 Cookie / token accounts 等在 `~/.codexbar/config.json`（或 `~/.config/codexbar/config.json`）。
+5. Identity 按 provider 隔离。
+
+---
+
+## 2. 使用量与成本（跨平台）
+
+### 2.1 谁进入 Usage & Spend
+
+源码条件：`descriptor.tokenCost.supportsTokenCost` 且 provider 已启用（另有 cost 总开关）。
+
+`supportsTokenCost: true`（`f74117a`）：
+
+| ID | 显示名 | `supportsTokenSnapshot` | Cost 形态（摘要） |
+| --- | --- | --- | --- |
+| `codex` | Codex | true | 本机 sessions / archived_sessions JSONL + pi/OMP |
+| `claude` | Claude | true | 本机 projects JSONL + pi/OMP；Admin API spend |
+| `openai` | OpenAI | false/default | Admin / balance API 历史 |
+| `cursor` | Cursor | macOS true / 非 macOS false | 远端 dashboard events（opt-in） |
+| `vertexai` | Vertex AI | true | Claude 本地日志过滤 Vertex 标记 |
+| `bedrock` | AWS Bedrock | true | Cost Explorer（+ 可选 CloudWatch） |
+| `mistral` | Mistral | false/default | Cookie 会话账单 + 客户端算价 |
+| `openrouter` | OpenRouter | false/default | `/credits` + `/key` spend 字段 |
+| `opencodego` | OpenCode Go | false/default | 本地 DB / API / web 路径上的用量 |
+| `grok` | Grok | false/default | 本地 session token 桶进目录；credits 不当美元 |
+| `xai` | xAI | false/default | Management API prepaid + 30d spend |
+
+其余 58 个 descriptor 为 `supportsTokenCost: false`，Settings → Usage & Spend **不会**当 cost 订阅列出。
+
+### 2.2 Cost 实现形态
+
+| 形态 | 平台 | 做法 |
+| --- | --- | --- |
+| 本机 session 扫描 | Codex、Claude | JSONL；本地定价 / models.dev 缓存；1–365 天窗口 |
+| Claude 日志过滤 | Vertex AI | 同 scanner，按 Vertex 标记过滤 |
+| Admin / org API | OpenAI、Claude Admin | 组织 spend / messages |
+| 远端 Dashboard 事件 | Cursor | `POST /api/dashboard/get-filtered-usage-events`；账户级跨设备 |
+| Billing / usage API | OpenRouter、xAI、Bedrock、Mistral… | 厂商计费接口 |
+| 本地信号（非美元） | Grok | `~/.grok/sessions/**/signals.json` |
+
+---
+
+## 3. 全量平台矩阵（Automatic，源码顺序）
+
+「使用量」列：`supportsTokenCost` 或明确的 detailed/spend 能力。策略名来自 descriptor。
+
+| ID | Automatic 额度策略顺序 | 使用量 / Cost | 备注 |
+| --- | --- | --- | --- |
+| `codex` | **PAT → OAuth**（无 workspace 时再加 **CLI**） | 本机 JSONL | 显式 `.web` = openai-web；不写回 `auth.json` |
+| `openai` | API（Swift balance；插件开启时 JS 优先） | Admin/API spend | 与 Codex 凭证隔离 |
+| `azureopenai` | API deployment probe | — | 无 spend 历史 |
+| `claude` | 见 §4.2（App: oauth→cli→web；CLI: web→cli；Admin/选中账号可钉死） | 本机 JSONL + Admin | claude-swap；Keychain 策略 |
+| `cursor` | 单策略 `CursorStatusFetchStrategy`；内部 App→cache→import→legacy | 远端 dashboard（macOS） | `.web` 禁用 App fallback；Safari 优先 |
+| `clinepass` | API（bundled TS plugin） | — | |
+| `opencode` | Web | — | |
+| `opencodego` | unscoped: **local→api→web**；scoped: **web→local→api** | token-cost true | scoped = 选中账号 / 手动 cookie / workspace |
+| `alibaba` | cookie off → **API only**；否则 **web→API** | — | |
+| `alibabatokenplan` | Web | — | |
+| `qwencloud` | Web | — | OneConsole 共享层 |
+| `factory` | **API→Web**（`.cli` 等同 auto） | — | |
+| `fireworks` | API | billing summary（非 token-cost 入选） | |
+| `gemini` | API（Gemini CLI OAuth credentials） | — | |
+| `antigravity` | app→cli→ide→oauth（有 oauth 凭证时） | — | |
+| `copilot` | API | — | |
+| `devin` | Web | — | |
+| `zai` | API（plugin） | usageDetails | |
+| `minimax` | 见 §5：Coding Plan web 与 API token 分支 | 可选 30d web history | |
+| `manus` | Web | — | |
+| `kimi` | **API → CLI credential → Web** | — | |
+| `kilo` | **API → CLI** | — | |
+| `kiro` | CLI `/usage` | — | |
+| `vertexai` | OAuth（ADC） | Claude 本地过滤 | |
+| `augment` | **CLI → Web** | — | |
+| `jetbrains` | Local XML | — | |
+| `moonshot` | API | — | |
+| `amp` | **CLI → API → Web** | — | |
+| `t3chat` | Web | — | |
+| `ollama` | cookie off→API；有 token→**web→API**；否则 web | — | |
+| `synthetic` | API | — | |
+| `openrouter` | API（plugin） | token-cost true | |
+| `elevenlabs` | API | — | |
+| `warp` | API | — | |
+| `windsurf` | **Web → Local** | — | |
+| `zed` | Local Keychain session → cloud API | — | kind 标 api，实现为 local session |
+| `perplexity` | Web | — | |
+| `mimo` | Web | — | |
+| `doubao` | CLI/API 探活（descriptor modes `.auto,.cli,.api`） | — | |
+| `sakana` | Web（手动 Cookie） | — | |
+| `abacus` | Web | — | |
+| `mistral` | Web | token-cost true | Chrome→Firefox→Safari |
+| `deepseek` | 有 key→**API**（可叠加 Chrome detailed）；无 key→**Platform Web** | detailed via Chrome | **非**纯 API |
+| `deepinfra` | API | — | |
+| `codebuff` | API | — | |
+| `crof` | API（plugin） | — | |
+| `venice` | API | — | |
+| `commandcode` | Web | — | |
+| `qoder` | Web | — | |
+| `stepfun` | Web | — | |
+| `bedrock` | API | token-cost true | |
+| `grok` | **CLI → OAuth(proxy) → Web → OAuth(grpc)** | token-cost true（本地 tokens） | ≠ `xai` |
+| `groq` | **Console Web → Prometheus API** | — | |
+| `llmproxy` | API | — | |
+| `litellm` | API | — | 需 base URL |
+| `deepgram` | API（plugin） | — | |
+| `poe` | API | — | |
+| `chutes` | API | — | |
+| `neuralwatt` | API | — | |
+| `clawrouter` | API（plugin） | — | |
+| `longcat` | Web（token-pack → legacy tokenUsage） | — | |
+| `sub2api` | API | — | |
+| `wayfinder` | 本地 gateway | — | |
+| `zenmux` | API | — | |
+| `aiand` | API（30d logs spend） | — | |
+| `zoommate` | Web（cookie→bearer） | credits chart | |
+| `xai` | API（plugin） | token-cost true | Management key + team |
+| `notion` | Web | — | |
+| `ibmbob` | API | — | |
+
+稳定 ID 顺序与 `ProviderManifest.allDescriptors` / `docs/provider-ids.md` 一致（69 个）。
+
+---
+
+## 4. 核心平台（源码细节）
+
+### 4.1 Codex
+
+**文件**：`Sources/CodexBarCore/Providers/Codex/CodexProviderDescriptor.swift`
+
+```text
+auto (无 codexWorkspaceID):  [PAT, OAuth, CLI]
+auto (有 workspace):         [PAT, OAuth]
+.oauth: [OAuth, OAuthNativeRefreshCLI]
+.web:   [WebDashboard]          // sourceLabel openai-web
+.cli:   [CLI]
+.api:   [PAT]
+```
+
+- PAT：读 Codex auth 文件中的 PAT；managed `CODEX_HOME` 不隐藏 ambient PAT。
+- OAuth：`wham/usage`；不写回 `auth.json`；过期委托 CLI。
+- CLI：`codex app-server` RPC；PTY `/status` 仅诊断。
+- openai-web：显式 web / extras，**不在 auto pipeline**。
+- Cost：本机 `sessions` + `archived_sessions`；Usage & Spend 账户行排除 pi/OMP。
+
+### 4.2 Claude
+
+**文件**：`ClaudeProviderDescriptor.swift` + `ClaudeSourcePlanner.swift`
+
+选中 token account 时钉死策略（Admin / OAuth token / Web cookie），**禁止**回落到 ambient。
+
+未选中账号时：
+
+| 条件 | 顺序 |
+| --- | --- |
+| `sourceMode == .api` 或检测到 Admin key | `[AdminAPI]` |
+| App + auto | oauth → cli → web |
+| CLI runtime + auto | web → cli |
+| App + 显式 oauth | oauth → cli（owner CLI fallback） |
+
+Cost：本机 projects JSONL；Admin 另出 org spend。
+
+### 4.3 Cursor
+
+**文件**：`CursorProviderDescriptor.swift` + `CursorStatusProbe(+SessionResolution).swift`
+
+- Pipeline：**仅** `CursorStatusFetchStrategy`（kind `.web`）。
+- `fetch`：`allowAppAuthFallback: context.sourceMode != .web`。
+- Probe 内 Automatic：Cursor.app `cursorAuth/accessToken` → Keychain cookie → browser import → legacy `cursor-session.json`。
+- Cookie 导入顺序：descriptor 强制 **Safari 优先**，再跟 defaultImportOrder 其余项。
+- Linux：无 App/自动浏览器；手动 Cookie 可通过 `browserSupportExemption`。
+- Cost：`supportsTokenCost true`；snapshot 仅 macOS；Cookie source Off 时清 cost。
+
+### 4.4 Grok
+
+```text
+.auto: [CLI, OAuth(proxy), Web, OAuth(grpc)]
+.cli / .oauth / .web: 各自单策略
+.api: []
+```
+
+本地 `signals.json` 不在额度 strategy 列表内，供目录/诊断。与 `xai` Management API 分离。
+
+### 4.5 OpenCode Go
+
+```text
+.api:  [API]
+.web:  [Web]
+.auto + scoped (账号/手动cookie/workspace): [Web, Local, API]
+.auto + unscoped:                          [Local, API, Web]
+```
+
+### 4.6 Kimi / DeepSeek / OpenRouter / LiteLLM
+
+| 平台 | Automatic | 说明 |
+| --- | --- | --- |
+| Kimi | API → **CLI credential** → Web | 源码多一步 CLI 凭证 |
+| DeepSeek | 有 key→API（可选 Chrome detailed）；无 key→Platform Web | `shouldFallback` 在 API/Web 策略上多为 false（互不自动串） |
+| OpenRouter | API plugin | token-cost true |
+| LiteLLM | API | key/info → user/team info；**非** token-cost 入选 |
+
+---
+
+## 5. 其他自动分支（源码）
+
+**Alibaba Coding Plan**：`cookieSource == .off` → 仅 API；否则 web→API。
+
+**MiniMax Auto**：
+
+- 使用 API token 且 standard key → 仅 Coding Plan fetch；
+- 使用 API token 且非 standard → API→Coding Plan；
+- 否则仅 Coding Plan web。
+
+**Ollama Auto**：cookie off→仅 API；有 ollama token→web→API；否则仅 web。
+
+**Amp**：CLI→API→Web。
+
+**Factory**：API→Web（`.cli` 走同一列表）。
+
+**Windsurf**：Web→Local（固定两条）。
+
+**Antigravity Auto**：有 oauth 时 app→cli→ide→oauth，否则 app→cli→ide。
+
+---
+
+## 6. 平台特有功能（代码/文档交叉）
+
+| 能力 | 相关 | 说明 |
+| --- | --- | --- |
+| 多账号 / token accounts | Codex、Claude、Cursor、Copilot、OpenRouter、sub2api… | 切换器或堆叠卡 |
+| claude-swap | Claude | 外部 `cswap`；不读其密钥库 |
+| openai-web extras | Codex | 显式 web；隐藏 WKWebView |
+| Add/Switch Account | Cursor | `authenticator.cursor.sh`；钉浏览器 |
+| Bundled TS/JS plugins | ClinePass、OpenRouter、z.ai、xAI、Crof、Poe… | `ScriptFetchStrategy` |
+| OneConsole 共享 | Alibaba / Qwen Cloud | Cookie/SEC/JSON 工具 |
+| Statuspage | 多平台 | 部分只链不轮询 |
+| Widgets | `widgetSelectable` | AppEnum 静态表 |
+| Linux 限制 | Cookie/App 导入 | 多数自动浏览器导入仅 macOS |
+
+---
+
+## 7. 与 Quota 对照
+
+| 主题 | CodexBar（源码） | Quota 现状（[`provider-collection.md`](provider-collection.md)） |
+| --- | --- | --- |
+| Cursor 额度 | Probe 内 App→Cookie；`usage-summary` + `get-sand-usage-status`（Grok Bot 周额度）+ `/api/usage?user=`（legacy 按次套餐） | 已对齐：Cursor.app `state.vscdb` → stored browser session；三个端点及 legacy 套餐替换规则一致 |
+| Cursor cost | Dashboard events + token-cost | 本机 bubble/JSONL，不等价 |
+| Codex Auto | PAT→OAuth→CLI | 已对齐：PAT→OAuth(WHAM)→app-server RPC→browser；窗口按时长分类 |
+| Claude Auto | Planner oauth→cli→web | 已对齐：OAuth→CLI `/usage` PTY 探针（仅在本地凭据存在时）→browser |
+| Grok Auto | CLI→OAuth(proxy)→Web→OAuth(grpc)；套餐名来自 `/v1/settings` `subscription_tier_display` | 已对齐 OAuth(proxy)→OAuth(grpc)→browser 与 settings 套餐名。**有意差异**：不走 CLI 取额度——grok 1.0.5 `agent stdio` 对 `x.ai/billing` 返回 `-32601 Method not found`（CodexBar 源码 `isBillingMethodUnavailable` 也专门处理该错误），CLI 仅用于 token 刷新；OAuth(grpc) 排在 browser 之前，因为它不需要额外凭据 |
+| Kimi | API→CLI cred→Web | 已对齐：API key→`~/.kimi-code` CLI 凭据→browser |
+| DeepSeek | 有 key→API（可叠加 Chrome localStorage `userToken` 取月度明细）；无 key→Platform Web（同一 token） | **有意差异**：仅 API balance。Platform 路径的 token 来源是浏览器 localStorage（安全基线排除）或 `DEEPSEEK_PLATFORM_TOKEN` 手工粘贴；其增量是月度花费明细（cost，不是 quota），余额与 API key 路径相同 |
+| OpenRouter | `/credits` + `/key` 额度；`/activity` 花费历史 | 额度已对齐；`/activity` 属 cost，不在 quota 范围 |
+| LiteLLM | `key/info` → `user/info` / `team/info`，含 `budget_reset_at` | 已对齐 |
+| Usage & Spend 集合 | 11 个 supportsTokenCost | Quota Usage 为本机 agent 扫描集 |
+
+---
+
+## 8. 维护
+
+1. 变更后先读 `ProviderManifest` 与对应 `*ProviderDescriptor.resolveStrategies`。
+2. 窗口语义仍可读 `docs/<provider>.md`，但 **pipeline 顺序以源码为准**。
+3. 刷新本文件时更新「核对提交」哈希。
+4. 不替代 [`provider-collection.md`](provider-collection.md)；分叉需在 collection 文档标明有意差异或待对齐。

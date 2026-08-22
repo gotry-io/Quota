@@ -27,8 +27,9 @@ For catalog browser-session providers, QuotaBar pins login and Cookie discovery 
 browser application. SweetCookieKit 0.5.2 enumerates that browser's profiles with logging disabled
 and returns only exact-host/name allowlist candidates in memory. Swift sends one minimal Cookie
 header at a time to Rust for validation/commit; it never calls provider APIs or persists the header.
-Cursor is browser-session-only; Codex, Claude, Grok, and Kimi reuse the same allowlisted
-acquisition as a fallback. QuotaBar 0.0.13 uploads its quota and Usage through managed-data v3;
+Cursor prefers a signed-in Cursor.app session and uses the same allowlisted browser acquisition as
+a fallback; Codex, Claude, Grok, and Kimi reuse that browser path when their official credentials
+are missing or rejected. QuotaBar 0.0.13 uploads its quota and Usage through managed-data v3;
 released v2 clients remain isolated from Cursor. Browser cookies stay local.
 
 Each background refresh precomputes Today, 7 Days, 30 Days, and All for This Mac and, when enabled,

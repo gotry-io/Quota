@@ -14,8 +14,9 @@ subscription quota and privacy-preserving Usage together across a user's devices
 - **Quota Web** — public site, GitHub login, device authorization, and account dashboard.
 
 Quota collection supports Codex, Claude Code, Grok, OpenRouter, DeepSeek, Kimi Code, LiteLLM, and
-Cursor. On macOS, QuotaBar can acquire catalog-declared browser sessions for Cursor, Codex, Claude,
-Grok, and Kimi.
+Cursor. Cursor prefers a signed-in Cursor.app session from local desktop state, then a stored
+browser session. On macOS, QuotaBar can acquire catalog-declared browser sessions for Cursor, Codex,
+Claude, Grok, and Kimi.
 Local Usage analytics supports Codex, Claude Code, Grok, OpenCode, Pi, and Cursor logs. Provider credentials,
 prompts, completions, raw events, local paths, and conversation identifiers never upload.
 
@@ -48,7 +49,8 @@ Usage semantics, credentials, OAuth, Relay traffic, persistence, the durable Usa
 outbox sequencing, merging local and account observations, and scheduling. QuotaRelay and Quota Web
 remain TypeScript. See the canonical
 [architecture](docs/architecture.md), [security baseline](docs/security.md),
-[provider strategies](docs/provider-collection.md), [native service decision](docs/decisions/0007-rust-native-local-service.md),
+[provider strategies](docs/provider-collection.md),
+[CodexBar platform capability baseline](docs/codexbar-platform-capabilities.md), [native service decision](docs/decisions/0007-rust-native-local-service.md),
 [managed account decision](docs/decisions/0006-managed-account-device-usage.md),
 [managed-data v3](docs/decisions/0012-managed-data-v3.md),
 [read-only iOS account client](docs/decisions/0013-readonly-ios-account-client.md),

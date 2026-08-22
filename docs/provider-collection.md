@@ -2,7 +2,9 @@
 
 This document is the source of truth for current provider discovery and collection strategy order.
 All implementations must also satisfy the credential, network, process, redaction, and fixture rules
-in [`security.md`](security.md).
+in [`security.md`](security.md). For an external baseline of CodexBar's quota, usage, and fallback
+behavior across its full provider set, see
+[`codexbar-platform-capabilities.md`](codexbar-platform-capabilities.md).
 
 The shared Rust service owns provider access and emits normalized protocol models for QuotaBar and
 Linux `quotacli`. QuotaRelay never handles the provider-specific inputs described here.
@@ -35,18 +37,26 @@ snapshot helpers in `packages/service/src/providers/common/`.
 ## Codex
 
 1. Discover `$CODEX_HOME/auth.json` or `~/.codex/auth.json`.
-2. Prefer `GET https://chatgpt.com/backend-api/wham/usage` using the local OAuth access token and,
+2. Prefer a top-level `personal_access_token` / `personalAccessToken` when present:
+   `GET https://auth.openai.com/api/accounts/v1/user-auth-credential/whoami` with
+   `Authorization: Bearer <PAT>`, then the same WHAM usage URL with
+   `ChatGPT-Account-Id` from whoami (`chatgpt_account_id`). PAT identity comes from whoami, not a
+   stale managed-workspace account id. Only HTTP 401/403 falls through to OAuth; a successful but
+   malformed WHAM body is reported as an error.
+3. Else prefer `GET https://chatgpt.com/backend-api/wham/usage` using the local OAuth access token and,
    when present, `ChatGPT-Account-Id`.
-3. Map primary, secondary, additional, and dedicated `code_review_rate_limit` windows without
-   changing their used/remaining meaning. A null code-review object is absent, not malformed.
-4. Fall back to `codex -s read-only -a untrusted app-server` and call
+4. Map primary, secondary, additional, and dedicated `code_review_rate_limit` windows without
+   changing their used/remaining meaning. Classify primary and secondary by reported duration
+   (5-hour, weekly, or 30-day monthly) rather than by payload slot, so a Free-tier monthly
+   window is not labeled as 5-hour. A null code-review object is absent, not malformed.
+5. Fall back to `codex -s read-only -a untrusted app-server` and call
    `account/rateLimits/read` when the direct OAuth result is unavailable or rejects the cached
    access token. Codex owns any access-token renewal performed while its app-server starts.
-5. If OAuth credentials are missing or WHAM/RPC return 401/403, and a stored ChatGPT browser session
+6. If OAuth credentials are missing or WHAM/RPC return 401/403, and a stored ChatGPT browser session
    exists, read `GET https://chatgpt.com/api/auth/session` (then `/backend-api/me`) with the catalog
    session cookies. Use a session `accessToken` as Bearer for the same WHAM URL when present;
    otherwise send the Cookie header. QuotaBar acquires those cookies from `chatgpt.com`.
-6. Do not fall back after a successful but malformed response; report the parser failure instead.
+7. Do not fall back after a successful but malformed response; report the parser failure instead.
 
 The local service never submits the Codex refresh token or writes `auth.json`. `CODEX_CLI_PATH` can identify
 the executable when it is outside `PATH`; the service also checks common user-local and Homebrew paths
@@ -56,19 +66,37 @@ dashboard scraping and reset-credit redemption are not used.
 ## Claude Code
 
 1. Discover `$CLAUDE_CONFIG_DIR/.credentials.json`, `~/.claude/.credentials.json`, or the macOS
-   Keychain generic password service `Claude Code-credentials`.
+   Keychain generic password service `Claude Code-credentials` when collection home is the
+   process `HOME`. Isolated or remapped homes do not read the live Keychain.
 2. Parse only `claudeAiOauth` and require `accessToken` with a usable `user:profile` scope.
 3. On macOS, when the token is expired or within one minute of expiry, run the official Claude CLI's
    interactive `/status` path in a bounded probe-only PTY. The probe disables tools, auto-update, and
    deep-link registration; it does not run a model prompt or an authentication command. Reload the
-   file or Keychain entry after Claude rotates its own credentials.
+   file or Keychain entry after Claude rotates its own credentials. The probe runs with
+   `--allowed-tools "" --strict-mcp-config` and is driven by the CLI's output, matched without
+   regard to spacing: it answers Claude's interactive prompts from a fixed table (the first-run
+   folder-trust dialog for the stable, empty, owner-only probe directory under the user temp root;
+   "ready to code" / "press Enter" notices; the command's own palette row), submits the slash command
+   with a carriage return once output settles, treats `/usage` as rendered when the session row
+   carries a percentage (nudging a panel that is still loading, leaving one that reports a load
+   failure), closes the panel with Escape, then submits `/exit`. A TUI that does not leave within
+   the grace period is stopped, and the whole probe is capped at 45 seconds.
 4. Call `GET https://api.anthropic.com/api/oauth/usage` with
    `anthropic-beta: oauth-2025-04-20`.
 5. On HTTP 401, perform the same Claude-owned refresh once, reload credentials, and retry exactly
    once. Do not refresh for missing scopes, rate limits, malformed responses, or other failures.
 6. Map the five-hour, seven-day, model-scoped, and extra-usage windows that are present.
 7. Enrich identity best-effort through `/api/oauth/profile`; usage remains valid if enrichment fails.
-8. If OAuth credentials are missing or usage returns 401/403, and a stored Claude browser session
+8. If local OAuth credentials exist but the usage API fails (except a successful but malformed
+   body), and the official Claude CLI is available on macOS, run the same bounded PTY probe with
+   `/usage` and map the Settings/Usage panel. Each window is a title followed by a bar and
+   `<n>% used`; take that value verbatim (a `left` / `remaining` / `available` phrasing is converted
+   to used percent), matching without regard to spacing because the TUI places words with cursor
+   moves. `Current session` is the five-hour window, `Current week (all models)` is
+   `seven_day`, `Current week (Sonnet only)` / `(Opus)` keep their OAuth ids, and any other
+   `Current week (<Model>)` row is the same `claude-weekly-scoped-<model>` window the OAuth usage
+   body reports. Missing credentials skip the probe so an unsigned-in machine never spawns the CLI.
+9. If OAuth and CLI usage are unavailable or return 401/403, and a stored Claude browser session
    exists, send the stored allowlisted Cookie header (`sessionKey` plus optional `lastActiveOrg`)
    to `https://claude.ai/api/organizations` then `/organizations/{id}/usage`. Prefer the listed org
    matching `lastActiveOrg`, then the org on `/api/account`, unless that org is `api_disabled`;
@@ -233,17 +261,26 @@ upload partitions are summarized by the unified `quotacli doctor`/QuotaBar diagn
 5. Prefer `config.creditUsagePercent` and `config.currentPeriod`. For non-unified accounts, retain the
    deprecated `config.used.val / config.monthlyLimit.val * 100` fields documented by Grok Build. A
    new period that omits those usage fields is 0% used, not malformed.
-6. Billing does not expose a subscription plan field. Infer a CodexBar-compatible plan hint from local
-   credentials only: OIDC scopes under `https://auth.x.ai::` (and `auth_mode: oidc`) map to
-   `supergrok`; other `auth_mode` values may be kept as a weak plan slug when they look like a plan
-   name. Do not invent a plan when neither signal is present.
-7. If the provider-owned refresh is unavailable or the retried request is unauthorized, report
+6. When the proxy is unreachable (not rejected, not malformed), `POST
+   https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig` as gRPC-web with the same
+   OAuth token as `Authorization: Bearer`. This is CodexBar's last Automatic step; Quota runs it
+   before the stored browser session because it needs no extra credential. If it also fails, report
+   the proxy outcome.
+7. Billing does not name the tier. Best-effort and bounded to two seconds, read
+   `GET https://cli-chat-proxy.grok.com/v1/settings` with the same headers and map
+   `subscription_tier_display` (for example `SuperGrok Heavy`) to the plan slug `supergrok_heavy`.
+   When that is absent, infer a weak hint from local credentials only: OIDC scopes under
+   `https://auth.x.ai::` (and `auth_mode: oidc`) map to `supergrok`; other `auth_mode` values may be
+   kept as a plan slug when they look like a plan name. Do not invent a plan when no signal is present.
+8. If the provider-owned refresh is unavailable or the retried request is unauthorized, report
    `auth_required` and require `grok login`.
-8. If OAuth credentials are missing or billing returns 401/403, and a stored Grok browser session
-   exists, `POST https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig` as gRPC-web
-   with the catalog `sso` / `sso-rw` cookies. Map used percent and reset from the protobuf payload.
-   QuotaBar acquires those cookies from `grok.com`. grok.com may reject cookie-only requests that
-   lack the browser Web Key Exchange proof; that is `auth_required`, not a parser failure.
+9. If OAuth credentials are missing or billing returns 401/403, and a stored Grok browser session
+   exists, call the same gRPC-web billing RPC with the catalog `sso` / `sso-rw` cookies. Map used
+   percent and reset from the protobuf payload. The RPC exposes only the reset instant: 20–45 days
+   out is **Monthly**, anything nearer is the **Weekly** credit pool, and no reset stays
+   **Billing cycle**. QuotaBar acquires those cookies from `grok.com`. grok.com may reject
+   cookie-only requests that lack the browser Web Key Exchange proof; that is `auth_required`, not a
+   parser failure.
 
 The local service never submits the refresh token itself and never starts Grok's interactive browser login.
 The provider-owned CLI is solely responsible for refresh-token rotation and credential-file writes;
@@ -291,8 +328,10 @@ scope. Dashboard cookies and browser scrapes are not strategies.
 
 ## DeepSeek
 
-Aligned with CodexBar's DeepSeek API-key balance path (platform session / usage detail is out of
-scope).
+Aligned with CodexBar's DeepSeek **API-key balance** path. CodexBar's Automatic also has a Platform
+Web path that reads Chrome `localStorage` `userToken` on `platform.deepseek.com`; Quota does **not**
+import browser localStorage (see [`security.md`](security.md)). Platform detailed usage therefore
+stays out of scope unless a future allowlisted, user-supplied token channel is added.
 
 1. Resolve the API key in order:
    1. Owner-only config at `$XDG_CONFIG_HOME/quotacli/providers.json` or
@@ -314,8 +353,7 @@ scope).
 
 ## Kimi Code
 
-Aligned with CodexBar's Kimi Code API-key path, plus the official web cookie fallback. Distinct
-from Moonshot Open Platform balance.
+Aligned with CodexBar's Kimi Code Automatic order: API key → CLI credential → web cookie.
 
 1. Resolve the API key in order:
    1. Owner-only config `providers.kimi.api_key`.
@@ -327,11 +365,16 @@ from Moonshot Open Platform balance.
    - **Weekly** from top-level `usage` (request counts; `value_unit: "count"`).
    - **5 hour** only from `limits[]` where window duration is exactly 300 minutes (also when it is
      the only entry).
-4. If no API key is configured, or the Code API returns 401/403, and a stored Kimi browser session
+4. If no API key is configured, or the Code API returns 401/403, read
+   `$KIMI_CODE_HOME/credentials/kimi-code.json` or `~/.kimi-code/credentials/kimi-code.json`
+   read-only. Use a fresh `access_token` (`expires_at` more than 60 seconds away) against the same
+   `/coding/v1/usages` URL. Do not redeem `refresh_token` or write `device_id` / credential files.
+5. If API and CLI credentials are unavailable or unauthorized, and a stored Kimi browser session
    exists, `POST https://www.kimi.com/apiv2/kimi.gateway.billing.v1.BillingService/GetUsages` with
    `Authorization: Bearer` from the `kimi-auth` cookie. Map the `FEATURE_CODING` usage object with
    the same weekly / 5-hour rules. QuotaBar acquires `kimi-auth` from `www.kimi.com` / `kimi.com`.
-5. Absent key and no browser session → `auth_required`. HTTP 401/403 → `auth_required`.
+6. Absent key/CLI credential and no browser session → `auth_required`. HTTP 401/403 →
+   `auth_required`.
 
 ## LiteLLM
 
@@ -354,35 +397,58 @@ OpenRouter, DeepSeek, and Kimi always use their fixed official origins; custom b
 
 ## Cursor
 
-Cursor is the browser-session-only adapter. Codex, Claude, Grok, and Kimi declare the same catalog
-capability alongside their existing OAuth/API-key sources. Quota snapshots follow the product default
-and sync to the managed Account.
+Cursor prefers a signed-in Cursor.app session, then a stored browser session. Codex, Claude, Grok,
+and Kimi declare the same catalog browser-session capability alongside their existing OAuth/API-key
+sources. Quota snapshots follow the product default and sync to the managed Account.
 
-1. QuotaBar opens `https://authenticator.cursor.sh/` in one explicit supported browser and polls
+1. Discover a usable Cursor.app session from the desktop `state.vscdb` `ItemTable` key
+   `cursorAuth/accessToken`. On macOS that file is
+   `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb`. On Linux it is
+   `$XDG_CONFIG_HOME/Cursor/User/globalStorage/state.vscdb`, defaulting `XDG_CONFIG_HOME` to
+   `~/.config`. Open the database read-only. When WAL sidecars are present, read them; when they are
+   absent and WAL mode remains in the header, use SQLite immutable mode so the service does not
+   recreate files in Cursor's directory. The JWT must include `sub` and `exp` more than 60 seconds
+   away. The local service never refreshes it. Derive
+   `WorkosCursorSessionToken={userID}%3A%3A{token}` from the last `|` component of `sub`. Isolated
+   or remapped collection homes only read that remapped desktop path.
+2. QuotaBar opens `https://authenticator.cursor.sh/` in one explicit supported browser and polls
    only that browser's profiles. If the default HTTPS handler is unsupported, the user chooses a
    supported browser before any URL opens. Linux QuotaCLI does not acquire browser sessions.
-2. SweetCookieKit queries the catalog's four exact hosts (`cursor.com`, `www.cursor.com`,
+3. SweetCookieKit queries the catalog's four exact hosts (`cursor.com`, `www.cursor.com`,
    `cursor.sh`, `authenticator.cursor.sh`) and seven exact session Cookie names. Expired/unrelated
    records are discarded and logging is disabled. Complementary same-host cookies share one header
    (Grok `sso`/`sso-rw`, numbered ChatGPT session-token chunks, plus optional `_account` or
    `lastActiveOrg`). Unrelated allowlisted names stay one candidate each, so Cursor
    `wos-session` and `WorkosCursorSessionToken` are never combined. Hosts and browser profiles are
    never combined.
-3. Rust validates header syntax and the catalog allowlist, then calls fixed
+4. Rust validates header syntax and the catalog allowlist, then calls fixed
    `GET https://cursor.com/api/auth/me` with no redirects and a ten-second timeout. Stable `sub` is
    the preferred namespaced fingerprint input; normalized email is the fallback. Only the hash and
    masked email return to Swift. Validate does not persist; commit repeats validation before an
    atomic SQLite replacement, so failures keep the old session.
-4. Routine refresh reads only the Rust-owned stored session and calls
-   `GET https://cursor.com/api/usage-summary`. The official Cursor Models and Other Models windows
-   map from `individualUsage.plan.autoPercentUsed` and `apiPercentUsed`. Other Models also carries
-   the included API dollar remaining from `plan.used` / `limit` / `remaining` (cents). Cursor Models
-   is percent-only. `totalPercentUsed` is not a third quota. Individual, on-demand, team pool, and
-   team on-demand cents-based limits map to remaining USD windows. HTTP 401/403 is `auth_required`;
-   malformed/partial payloads do not expose provider response data.
-5. Catalog `account_sync` is true and `account_sync_protocol` is 3, so Cursor snapshots enter v3
-   envelopes and Account summaries. Browser cookies still never leave the local service. Released
-   v2 routes keep the original provider enum and filter Cursor observations.
+5. Routine refresh prefers the live Cursor.app session when it is usable, otherwise the Rust-owned
+   stored browser session, and calls `GET https://cursor.com/api/usage-summary`. HTTP 401/403 on the
+   app session falls back to the stored browser session when one exists. The official Cursor Models
+   and Other Models windows map from `individualUsage.plan.autoPercentUsed` and `apiPercentUsed`.
+   Other Models also carries the included API dollar remaining from `plan.used` / `limit` /
+   `remaining` (cents). Cursor Models is percent-only. `totalPercentUsed` is not a third quota.
+   Individual, on-demand, team pool, and team on-demand cents-based limits map to remaining USD
+   windows. HTTP 401/403 is `auth_required`; malformed/partial payloads do not expose provider
+   response data.
+6. Two dashboard calls are best-effort with a five-second cap; neither failure fails the refresh:
+   - `POST https://cursor.com/api/dashboard/get-sand-usage-status` (empty JSON body, `Origin`
+     header) is the weekly **Grok Bot** allowance. Emit it after the included windows only when
+     `hasNonZeroIncludedLimit` is true, from `usagePercent`, `nextResetTimestampUtc`, and
+     `currentPeriodStart`.
+   - `GET https://cursor.com/api/usage?user=<sub>` with the `/api/auth/me` subject is the legacy
+     request-based plan. When `gpt-4.maxRequestUsage` is positive, a single **Requests** window
+     (`numRequestsTotal`, else `numRequests`; `value_unit: "count"`) replaces Cursor Models, Other
+     Models, and Grok Bot, which only describe usage-based pricing. On-demand and team windows
+     remain.
+7. Catalog `account_sync` is true and `account_sync_protocol` is 3, so Cursor snapshots enter v3
+   envelopes and Account summaries. Browser cookies and the Cursor.app access token still never
+   leave the local service. Released v2 routes keep the original provider enum and filter Cursor
+   observations.
 
 ## Identity and normalization
 

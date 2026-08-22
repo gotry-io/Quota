@@ -1,3 +1,4 @@
+use base64::Engine as _;
 use serde_json::Value;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -46,6 +47,50 @@ pub fn unix_seconds_to_iso(seconds: i64) -> String {
         (remainder % 3600) / 60,
         remainder % 60
     )
+}
+
+/// Percent-encodes `value` for a URL query or path segment, keeping only the
+/// RFC 3986 unreserved set.
+pub fn url_encode(value: &str) -> String {
+    value.bytes().fold(String::new(), |mut result, byte| {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+            result.push(byte as char);
+        } else {
+            result.push_str(&format!("%{byte:02X}"));
+        }
+        result
+    })
+}
+
+/// A lowercase ASCII-alphanumeric identifier: every other run of characters
+/// collapses to one `separator`, and leading and trailing separators are dropped.
+pub fn slug(value: &str, separator: char) -> String {
+    let mut output = String::new();
+    for character in value.chars() {
+        if character.is_ascii_alphanumeric() {
+            output.push(character.to_ascii_lowercase());
+        } else if !output.is_empty() && !output.ends_with(separator) {
+            output.push(separator);
+        }
+    }
+    while output.ends_with(separator) {
+        output.pop();
+    }
+    output
+}
+
+/// The claim set of a JWT, without verifying its signature. Callers use it only
+/// for locally issued provider tokens whose bearer already proves possession.
+pub fn decode_jwt_payload(token: &str) -> Option<Value> {
+    let payload = token.split('.').nth(1)?;
+    let mut normalized = payload.replace('-', "+").replace('_', "/");
+    while !normalized.len().is_multiple_of(4) {
+        normalized.push('=');
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(normalized)
+        .ok()?;
+    serde_json::from_slice(&bytes).ok()
 }
 
 pub fn parse_date(value: Option<&Value>) -> Option<i64> {
