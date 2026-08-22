@@ -83,15 +83,6 @@ extension LocalServiceServing {
   }
 }
 
-/// Writing to a helper that has already exited raises SIGPIPE, whose default disposition
-/// terminates the process before `write` can report `EPIPE`. `send` is written to surface that as
-/// `connectionClosed`, so the signal has to be ignored for its `catch` to be reachable at all.
-/// AppKit installs this for the running app; doing it here holds for every host, including the
-/// bare `swift test` runner.
-private let sigpipeIgnored: Void = {
-  signal(SIGPIPE, SIG_IGN)
-}()
-
 actor LocalServiceClient: LocalServiceServing {
   nonisolated let events: AsyncStream<LocalServiceEvent>
 
@@ -115,7 +106,6 @@ actor LocalServiceClient: LocalServiceServing {
     bundle: Bundle = .main,
     requestTimeoutNanoseconds: UInt64 = LocalServiceClient.defaultRequestTimeoutNanoseconds
   ) throws {
-    _ = sigpipeIgnored
     let stream = AsyncStream<LocalServiceEvent>.makeStream()
     events = stream.stream
     eventContinuation = stream.continuation
@@ -341,7 +331,12 @@ actor LocalServiceClient: LocalServiceServing {
     connectionGeneration += 1
     let generation = connectionGeneration
     self.process = process
-    standardInput = input.fileHandleForWriting
+    let inputHandle = input.fileHandleForWriting
+    // Once the helper exits this pipe has no reader, and a write to it raises SIGPIPE, which
+    // terminates the process before `write` can report `EPIPE`. `request` maps that `EPIPE` to
+    // `connectionClosed`, so the descriptor has to opt out of the signal for its `catch` to run.
+    _ = fcntl(inputHandle.fileDescriptor, F_SETNOSIGPIPE, 1)
+    standardInput = inputHandle
     let outputHandle = output.fileHandleForReading
     standardOutput = outputHandle
     receiveBuffer.removeAll(keepingCapacity: true)
