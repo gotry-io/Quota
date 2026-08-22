@@ -115,18 +115,20 @@ pnpm test:linux-cli
 
 The root `pnpm check`, `pnpm test`, and `pnpm build` commands cover the macOS service and QuotaBar
 only; they intentionally do not compile the Linux-only CLI or the iOS app. Run the Linux commands on
-Ubuntu (or another supported Linux host). Run the iOS commands on macOS.
+Ubuntu (or another supported Linux host). Run the iOS commands on macOS. `pnpm test` runs every
+Swift package, not only QuotaBar.
+
+`pnpm install` arms the checked-in hooks in `.githooks` through `core.hooksPath`. Pre-commit
+rejects unformatted sources and a stale generated provider catalog; pre-push runs the tests for the
+areas the pushed commits touch. Bypass either with `QUOTA_HOOKS_SKIP=1` or `--no-verify`.
 
 Useful entry points:
 
 ```bash
 pnpm dev:web
 pnpm dev:relay
-cargo test --locked --package quota-service --package quota-menubar-helper
-cargo test --locked --package quotacli
-swift test --package-path apps/menubar
-swift test --package-path packages/apple-shared
-swift test --package-path packages/apple-client
+pnpm test:service
+pnpm test:swift
 pnpm generate:ios
 pnpm test:ios
 pnpm build:ios

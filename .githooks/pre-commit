@@ -1,0 +1,21 @@
+#!/bin/bash
+# Refuse a commit over the failures that cost a full CI round trip to learn about:
+# unformatted sources and a stale generated provider catalog.
+# Set QUOTA_HOOKS_SKIP=1 (or pass --no-verify) to bypass.
+
+set -euo pipefail
+
+if [ "${QUOTA_HOOKS_SKIP:-}" = "1" ]; then
+  echo "pre-commit: skipped by QUOTA_HOOKS_SKIP=1"
+  exit 0
+fi
+
+cd "$(git rev-parse --show-toplevel)"
+
+if [ ! -d node_modules ]; then
+  echo "pre-commit: node_modules is missing; run pnpm install" >&2
+  exit 1
+fi
+
+pnpm format:check
+pnpm check:provider-catalog

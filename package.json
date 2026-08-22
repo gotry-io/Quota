@@ -15,6 +15,7 @@
     "pnpm": ">=10.0.0"
   },
   "scripts": {
+    "prepare": "./scripts/install-git-hooks.sh",
     "build": "pnpm --filter @gotry-io/quota-relay build && cargo build --locked --package quota-service --package quota-menubar-helper && swift build --package-path apps/menubar",
     "check": "pnpm check:provider-catalog && pnpm -r --if-present check && cargo check --locked --package quota-service --package quota-menubar-helper --all-targets",
     "check:provider-catalog": "node --experimental-strip-types scripts/generate-provider-catalog.mjs --check",
@@ -22,8 +23,12 @@
     "version:bump:cli": "node scripts/bump-version.mjs cli",
     "version:bump:menubar": "node scripts/bump-version.mjs menubar",
     "format": "biome format --write . && cargo fmt --all",
-    "format:check": "biome format . && cargo fmt --all -- --check",
-    "test": "pnpm -r --if-present test && cargo test --locked --package quota-service --package quota-menubar-helper && swift test --package-path apps/menubar",
+    "format:check": "pnpm format:check:js && pnpm format:check:rust",
+    "format:check:js": "biome format .",
+    "format:check:rust": "cargo fmt --all -- --check",
+    "test": "pnpm -r --if-present test && pnpm test:service && pnpm test:swift",
+    "test:service": "cargo test --locked --package quota-service --package quota-menubar-helper",
+    "test:swift": "./scripts/test-swift.sh",
     "test:menubar:helper": "./scripts/test-menubar-helper.sh",
     "build:linux-cli": "cargo build --locked --release --package quotacli",
     "check:linux-cli": "cargo check --locked --package quotacli --all-targets",
