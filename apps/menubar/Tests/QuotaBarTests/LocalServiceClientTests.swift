@@ -273,20 +273,16 @@ struct LocalServiceClientTests {
   }
 
   @Test
-  func writingToAClosedPipeReportsEPIPEInsteadOfKillingTheProcess() throws {
-    // Constructing a client is what installs the disposition the write path depends on.
-    _ = try LocalServiceClient(executableURL: URL(fileURLWithPath: "/usr/bin/true"))
-
-    var descriptors: [Int32] = [-1, -1]
-    #expect(pipe(&descriptors) == 0)
-    close(descriptors[0])
+  func noSigpipeDescriptorsReportEPIPEOnceTheReaderIsGone() throws {
+    // `startIfNeeded` sets this on the helper's stdin so that `request` can catch a broken pipe.
+    var descriptors: [Int32] = [0, 0]
+    try #require(pipe(&descriptors) == 0)
     defer { close(descriptors[1]) }
+    try #require(fcntl(descriptors[1], F_SETNOSIGPIPE, 1) == 0)
+    close(descriptors[0])
 
-    // At SIGPIPE's default disposition this call terminates the test runner rather than
-    // returning, which is how a helper that exits early used to take the whole suite down.
-    var byte: UInt8 = 0
-    let written = write(descriptors[1], &byte, 1)
-    #expect(written == -1)
+    // Without the option this write terminates the runner instead of returning.
+    #expect(write(descriptors[1], "x", 1) == -1)
     #expect(errno == EPIPE)
   }
 
