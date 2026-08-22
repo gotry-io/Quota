@@ -33,3 +33,6 @@ tmp/
 # IDEs
 .idea/
 .vscode/
+
+# pnpm content-addressable store (cloud agent sandboxes drop it in the repo root)
+.pnpm-store/
