@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, atomic::AtomicBool};
 
-use super::json::{unix_now, unix_seconds_to_iso};
+use super::json::{parse_date, unix_now, unix_seconds_to_iso};
 
 pub const BROWSER_COOKIE_HEADER_LIMIT: usize = 8_192;
 pub const BROWSER_SESSION_SOURCE: &str = "browser_session";
@@ -185,6 +185,15 @@ impl CollectionContext {
             .unwrap_or_else(|| unix_seconds_to_iso(unix_now()))
     }
 
+    /// [`Self::observed_at`] as unix seconds, for the providers that compare
+    /// against credential expiry or reset instants.
+    pub fn observed_unix(&self) -> i64 {
+        self.now
+            .as_deref()
+            .and_then(|value| parse_date(Some(&serde_json::Value::String(value.to_owned()))))
+            .unwrap_or_else(unix_now)
+    }
+
     pub fn cancelled(&self) -> bool {
         self.cancel
             .as_ref()
@@ -215,6 +224,14 @@ pub fn discover_official_or_browser(
         .collect()
 }
 
+/// Collects from a provider's local credentials, falling back to a stored
+/// browser session.
+///
+/// **`collect_official` must report [`ErrorCategory::AuthRequired`] when no
+/// usable local credential exists.** That category is the only one that reaches
+/// `collect_web`; any other ends the refresh, so a provider whose official
+/// closure chains several credential sources internally has to surface the
+/// chain's verdict rather than the last step's incidental error.
 pub fn collect_official_or_browser(
     session: &ProviderSession,
     context: &CollectionContext,
@@ -298,6 +315,54 @@ fn is_cookie_octet(byte: u8) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_auth_required_reaches_the_browser_session() {
+        let mut context = CollectionContext::default();
+        context
+            .browser_sessions
+            .insert(ProviderId::Claude, "sessionKey=sk-ant-x".to_owned());
+        let session = ProviderSession {
+            provider: ProviderId::Claude,
+            credential_source: "local".to_owned(),
+        };
+        let web = || {
+            Err::<QuotaSnapshot, _>(ProviderError::new(ErrorCategory::Unsupported, "web_source"))
+        };
+        // A missing local credential hands off to the stored session...
+        let handed_off = collect_official_or_browser(
+            &session,
+            &context,
+            ProviderId::Claude,
+            "official_source",
+            || {
+                Err(ProviderError::new(
+                    ErrorCategory::AuthRequired,
+                    "official_source",
+                ))
+            },
+            web,
+        );
+        assert_eq!(handed_off.unwrap_err().source_id, "web_source");
+        // ...while every other failure is the refresh's final answer.
+        for category in [
+            ErrorCategory::Error,
+            ErrorCategory::Unavailable,
+            ErrorCategory::Unsupported,
+        ] {
+            let error = collect_official_or_browser(
+                &session,
+                &context,
+                ProviderId::Claude,
+                "official_source",
+                || Err(ProviderError::new(category, "official_source")),
+                web,
+            )
+            .expect_err("official failure");
+            assert_eq!(error.category, category);
+            assert_eq!(error.source_id, "official_source");
+        }
+    }
 
     #[test]
     fn host_keychain_requires_live_home() {

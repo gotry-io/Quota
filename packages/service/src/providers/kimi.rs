@@ -29,15 +29,11 @@ pub fn discover(context: &CollectionContext) -> Vec<ProviderSession> {
         ProviderId::Kimi,
         resolve(context)
             .ok()
-            .map(|credentials| ProviderSession {
+            .map(|credentials| credentials.source)
+            .or_else(|| load_cli_credentials(context).map(|credentials| credentials.source))
+            .map(|credential_source| ProviderSession {
                 provider: ProviderId::Kimi,
-                credential_source: credentials.source,
-            })
-            .or_else(|| {
-                load_cli_credentials(context).map(|credentials| ProviderSession {
-                    provider: ProviderId::Kimi,
-                    credential_source: credentials.source,
-                })
+                credential_source,
             }),
         context,
     )
@@ -203,20 +199,7 @@ fn read_cli_credentials(path: &Path, context: &CollectionContext) -> Option<CliC
         return None;
     }
     let value: Value = serde_json::from_slice(&read_bounded_file(path, LOCAL_FILE_LIMIT)?).ok()?;
-    parse_cli_credentials(&value, &path.to_string_lossy(), context_now(context))
-}
-
-fn context_now(context: &CollectionContext) -> i64 {
-    context
-        .now
-        .as_deref()
-        .and_then(|value| parse_date(Some(&Value::String(value.to_owned()))))
-        .unwrap_or_else(|| {
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|duration| duration.as_secs() as i64)
-                .unwrap_or(0)
-        })
+    parse_cli_credentials(&value, &path.to_string_lossy(), context.observed_unix())
 }
 
 fn parse_cli_credentials(value: &Value, source: &str, now: i64) -> Option<CliCredentials> {

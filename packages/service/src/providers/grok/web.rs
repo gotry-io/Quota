@@ -6,7 +6,6 @@ use super::super::common::{
     QuotaSnapshot, QuotaWindow, VALIDATION_TIMEOUT, ValidatedBrowserSession, account_identity,
     clamp_percent, cookie_named_value,
 };
-use super::now_seconds;
 
 pub const WEB_SOURCE: &str = "grok_web_billing_api";
 const WEB_BILLING_URL: &str = "https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig";
@@ -41,7 +40,7 @@ pub fn collect(context: &CollectionContext) -> Result<QuotaSnapshot, ProviderErr
             label: Some("Grok".to_owned()),
             plan: None,
         },
-        windows: vec![billing_window(&billing, now_seconds(context))],
+        windows: vec![billing_window(&billing, context.observed_unix())],
         source: WEB_SOURCE,
         status: "available",
         observed_at: context.observed_at(),
@@ -56,7 +55,7 @@ pub(super) fn bearer_billing_window(
 ) -> Result<QuotaWindow, ProviderError> {
     let bearer = format!("Bearer {access_token}");
     let billing = fetch_web_billing(WebAuth::Bearer(&bearer), context, HTTP_TIMEOUT)?;
-    Ok(billing_window(&billing, now_seconds(context)))
+    Ok(billing_window(&billing, context.observed_unix()))
 }
 
 enum WebAuth<'a> {
@@ -89,7 +88,7 @@ fn fetch_web_billing(
         ("User-Agent", user_agent.as_str()),
     ];
     let (_, body) = client.post_bytes(WEB_BILLING_URL, &headers, GRPC_EMPTY_FRAME, WEB_SOURCE)?;
-    parse_grpc_web_billing(&body, now_seconds(context))
+    parse_grpc_web_billing(&body, context.observed_unix())
 }
 
 fn sso_token(header: &str) -> Option<&str> {

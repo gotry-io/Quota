@@ -1,6 +1,9 @@
-use super::super::common::{BROWSER_COOKIE_HEADER_LIMIT, CollectionContext, parse_date, unix_now};
+use crate::catalog::ProviderId;
+
+use super::super::common::{
+    CollectionContext, decode_jwt_payload, normalize_browser_cookie_header, parse_date,
+};
 use rusqlite::{Connection, OpenFlags, types::ValueRef};
-use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -9,19 +12,11 @@ const ACCESS_TOKEN_KEY: &str = "cursorAuth/accessToken";
 const AUTH_SKEW_SECONDS: i64 = 60;
 const TOKEN_LIMIT: usize = 8_192;
 
-struct AppSession {
-    cookie_header: String,
-}
-
 pub(super) fn usable_session(context: &CollectionContext) -> bool {
-    load_session(context).is_some()
+    cookie_header(context).is_some()
 }
 
 pub(super) fn cookie_header(context: &CollectionContext) -> Option<String> {
-    load_session(context).map(|session| session.cookie_header)
-}
-
-fn load_session(context: &CollectionContext) -> Option<AppSession> {
     if context.cancelled() {
         return None;
     }
@@ -30,7 +25,7 @@ fn load_session(context: &CollectionContext) -> Option<AppSession> {
         return None;
     }
     let token = read_access_token(&path)?;
-    session_from_access_token(&token, observed_unix(context))
+    session_from_access_token(&token, context.observed_unix())
 }
 
 fn desktop_state_path(context: &CollectionContext) -> PathBuf {
@@ -145,26 +140,20 @@ fn decode_blob(bytes: &[u8]) -> Option<String> {
     String::from_utf16(&units).ok()
 }
 
-fn session_from_access_token(token: &str, now: i64) -> Option<AppSession> {
+fn session_from_access_token(token: &str, now: i64) -> Option<String> {
     let payload = decode_jwt_payload(token)?;
     let user_id = user_id_from_subject(payload.get("sub")?.as_str()?)?;
-    let expires_at = payload.get("exp").and_then(Value::as_i64).or_else(|| {
-        payload
-            .get("exp")
-            .and_then(Value::as_f64)
-            .filter(|value| value.is_finite() && *value > 0.0)
-            .map(|value| value.floor() as i64)
-    })?;
+    let expires_at = parse_date(payload.get("exp"))?;
     if expires_at - now <= AUTH_SKEW_SECONDS {
         return None;
     }
-    let cookie_header = format!("WorkosCursorSessionToken={user_id}%3A%3A{token}");
-    if cookie_header.len() > BROWSER_COOKIE_HEADER_LIMIT
-        || cookie_header.chars().any(char::is_control)
-    {
-        return None;
-    }
-    Some(AppSession { cookie_header })
+    // The dashboard cookie the app session yields goes through the same catalog
+    // allowlist, octet, and bound checks as a browser-supplied header.
+    normalize_browser_cookie_header(
+        ProviderId::Cursor,
+        &format!("WorkosCursorSessionToken={user_id}%3A%3A{token}"),
+    )
+    .ok()
 }
 
 fn user_id_from_subject(subject: &str) -> Option<String> {
@@ -176,25 +165,6 @@ fn user_id_from_subject(subject: &str) -> Option<String> {
         .bytes()
         .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
         .then(|| user_id.to_owned())
-}
-
-fn decode_jwt_payload(token: &str) -> Option<Value> {
-    let payload = token.split('.').nth(1)?;
-    let mut normalized = payload.replace('-', "+").replace('_', "/");
-    while normalized.len() % 4 != 0 {
-        normalized.push('=');
-    }
-    let bytes =
-        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, normalized).ok()?;
-    serde_json::from_slice(&bytes).ok()
-}
-
-fn observed_unix(context: &CollectionContext) -> i64 {
-    context
-        .now
-        .as_deref()
-        .and_then(|value| parse_date(Some(&Value::String(value.to_owned()))))
-        .unwrap_or_else(unix_now)
 }
 
 #[cfg(test)]

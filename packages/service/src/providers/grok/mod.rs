@@ -6,14 +6,14 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use super::common::{
     CollectionContext, ErrorCategory, HttpClient, LOCAL_FILE_LIMIT, ProviderError, ProviderSession,
     QuotaAccount, QuotaSnapshot, QuotaWindow, ValidatedBrowserSession, account_identity,
     clamp_percent, collect_official_or_browser, discover_official_or_browser, duration_seconds,
     is_executable_file, mask_display_name, mask_email, number, obj_get, obj_get_any, parse_date,
-    read_bounded_file, string,
+    read_bounded_file, slug, string,
 };
 
 mod web;
@@ -78,7 +78,7 @@ fn collect_local(context: &CollectionContext) -> Result<QuotaSnapshot, ProviderE
     let mut refresh_succeeded = false;
     if credentials
         .expires_at
-        .map(|expiry| expiry <= now_seconds(context) + 60)
+        .map(|expiry| expiry <= context.observed_unix() + 60)
         .unwrap_or(false)
         && let Some(refreshed) = refresh_and_reload(&credentials, context)
     {
@@ -426,7 +426,12 @@ fn collect_with_credentials(
     credentials: &Credentials,
     context: &CollectionContext,
 ) -> Result<QuotaSnapshot, ProviderError> {
-    let (window, source) = match fetch_proxy_billing(credentials, context) {
+    let bearer = format!("Bearer {}", credentials.access_token);
+    let user_agent = context.user_agent();
+    let headers = proxy_headers(credentials, &bearer, &user_agent);
+    let proxy = fetch_proxy_billing(&headers);
+    let proxy_reachable = proxy.is_ok();
+    let (window, source) = match proxy {
         Ok(window) => (window, SOURCE),
         // Rejected or malformed proxy answers are final. When the proxy is merely
         // unreachable, grok.com's own billing RPC accepts the same OAuth token.
@@ -437,7 +442,12 @@ fn collect_with_credentials(
             web::WEB_SOURCE,
         ),
     };
-    let plan = fetch_settings_plan(credentials, context).or_else(|| grok_plan(credentials));
+    // The tier lives behind the same host as billing, so an unreachable proxy
+    // would only spend the refresh's remaining budget re-learning that.
+    let plan = proxy_reachable
+        .then(|| fetch_settings_plan(&headers, context))
+        .flatten()
+        .or_else(|| grok_plan(credentials));
     let namespace = if credentials.team_id.is_some() {
         "team_id"
     } else {
@@ -489,47 +499,28 @@ fn proxy_headers<'a>(
     headers
 }
 
-fn fetch_proxy_billing(
-    credentials: &Credentials,
-    context: &CollectionContext,
-) -> Result<QuotaWindow, ProviderError> {
+fn fetch_proxy_billing(headers: &[(&str, &str)]) -> Result<QuotaWindow, ProviderError> {
     let client = HttpClient::new()?;
-    let bearer = format!("Bearer {}", credentials.access_token);
-    let user_agent = context.user_agent();
-    let headers = proxy_headers(credentials, &bearer, &user_agent);
-    let (_, value) = client.get_json(BILLING_URL, &headers, SOURCE)?;
+    let (_, value) = client.get_json(BILLING_URL, headers, SOURCE)?;
     map_billing(&value)
 }
 
 /// Billing does not name the tier; the CLI settings envelope does
 /// (`subscription_tier_display`, e.g. "SuperGrok Heavy"). Best-effort and bounded:
 /// a missing or slow answer leaves the credential-derived plan hint in place.
-fn fetch_settings_plan(credentials: &Credentials, context: &CollectionContext) -> Option<String> {
+fn fetch_settings_plan(headers: &[(&str, &str)], context: &CollectionContext) -> Option<String> {
     if context.cancelled() {
         return None;
     }
     let client = HttpClient::with_timeout(SETTINGS_TIMEOUT).ok()?;
-    let bearer = format!("Bearer {}", credentials.access_token);
-    let user_agent = context.user_agent();
-    let headers = proxy_headers(credentials, &bearer, &user_agent);
-    let (_, value) = client.get_json(SETTINGS_URL, &headers, SOURCE).ok()?;
+    let (_, value) = client.get_json(SETTINGS_URL, headers, SOURCE).ok()?;
     plan_slug(string(obj_get(&value, "subscription_tier_display")).as_deref())
 }
 
 /// Normalizes a display tier into the catalog's plan slug shape
 /// ("SuperGrok Heavy" → "supergrok_heavy").
 fn plan_slug(display: Option<&str>) -> Option<String> {
-    let mut slug = String::new();
-    for character in display?.trim().chars() {
-        if character.is_ascii_alphanumeric() {
-            slug.push(character.to_ascii_lowercase());
-        } else if !slug.is_empty() && !slug.ends_with('_') {
-            slug.push('_');
-        }
-    }
-    while slug.ends_with('_') {
-        slug.pop();
-    }
+    let slug = slug(display?, '_');
     (!slug.is_empty() && slug.len() <= PLAN_SLUG_LIMIT).then_some(slug)
 }
 
@@ -600,19 +591,6 @@ fn grok_plan(credentials: &Credentials) -> Option<String> {
     } else {
         Some(mode)
     }
-}
-
-fn now_seconds(context: &CollectionContext) -> i64 {
-    context
-        .now
-        .as_deref()
-        .and_then(|value| super::common::parse_date(Some(&Value::String(value.to_owned()))))
-        .unwrap_or_else(|| {
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|duration| duration.as_secs() as i64)
-                .unwrap_or(0)
-        })
 }
 
 #[cfg(test)]

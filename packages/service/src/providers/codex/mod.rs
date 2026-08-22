@@ -1,5 +1,4 @@
 use crate::catalog::ProviderId;
-use base64::Engine;
 use serde_json::{Value, json};
 use std::fs;
 use std::io::{Read, Write};
@@ -13,8 +12,9 @@ use std::time::{Duration, Instant};
 use super::common::{
     CollectionContext, ErrorCategory, HttpClient, LOCAL_FILE_LIMIT, ProviderError, ProviderSession,
     QuotaAccount, QuotaSnapshot, QuotaWindow, ValidatedBrowserSession, account_identity,
-    clamp_percent, collect_official_or_browser, discover_official_or_browser, is_executable_file,
-    mask_email, number, obj_get, obj_get_any, parse_date, read_bounded_file, string,
+    clamp_percent, collect_official_or_browser, decode_jwt_payload, discover_official_or_browser,
+    is_executable_file, mask_email, number, obj_get, obj_get_any, parse_date, read_bounded_file,
+    slug, string,
 };
 
 mod web;
@@ -286,18 +286,6 @@ fn extract_identity(credentials: &Credentials) -> Identity {
     }
 }
 
-fn decode_jwt_payload(token: &str) -> Option<Value> {
-    let payload = token.split('.').nth(1)?;
-    let mut normalized = payload.replace('-', "+").replace('_', "/");
-    while normalized.len() % 4 != 0 {
-        normalized.push('=');
-    }
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(normalized)
-        .ok()?;
-    serde_json::from_slice(&bytes).ok()
-}
-
 pub(super) fn collect_api(
     credentials: &Credentials,
     identity: &Identity,
@@ -423,7 +411,8 @@ const FIVE_HOUR_SECONDS: u64 = 18_000;
 const WEEKLY_SECONDS: u64 = 604_800;
 const MONTHLY_SECONDS: u64 = 2_592_000;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+/// Ordered as the windows are displayed: shortest cadence first.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum WindowKind {
     FiveHour,
     Weekly,
@@ -431,40 +420,22 @@ enum WindowKind {
 }
 
 impl WindowKind {
-    fn from_duration(seconds: u64) -> Option<Self> {
-        match seconds {
-            FIVE_HOUR_SECONDS => Some(Self::FiveHour),
-            WEEKLY_SECONDS => Some(Self::Weekly),
-            MONTHLY_SECONDS => Some(Self::Monthly),
-            _ => None,
-        }
-    }
-
+    /// A window whose reported duration names no known cadence keeps the
+    /// cadence of the payload slot it arrived in.
     fn classify(duration: Option<u64>, fallback: Self) -> Self {
-        duration.and_then(Self::from_duration).unwrap_or(fallback)
-    }
-
-    fn id(self) -> &'static str {
-        match self {
-            Self::FiveHour => "five_hour",
-            Self::Weekly => "weekly",
-            Self::Monthly => "monthly",
+        match duration {
+            Some(FIVE_HOUR_SECONDS) => Self::FiveHour,
+            Some(WEEKLY_SECONDS) => Self::Weekly,
+            Some(MONTHLY_SECONDS) => Self::Monthly,
+            _ => fallback,
         }
     }
 
-    fn title(self) -> &'static str {
+    fn labels(self) -> (&'static str, &'static str) {
         match self {
-            Self::FiveHour => "5 hour",
-            Self::Weekly => "Weekly",
-            Self::Monthly => "Monthly",
-        }
-    }
-
-    fn order(self) -> u8 {
-        match self {
-            Self::FiveHour => 0,
-            Self::Weekly => 1,
-            Self::Monthly => 2,
+            Self::FiveHour => ("five_hour", "5 hour"),
+            Self::Weekly => ("weekly", "Weekly"),
+            Self::Monthly => ("monthly", "Monthly"),
         }
     }
 }
@@ -522,14 +493,15 @@ fn normalize_primary_secondary(
             windows.push(labeled);
         }
     }
-    windows.sort_by_key(|(kind, _)| kind.order());
+    windows.sort_by_key(|(kind, _)| *kind);
     windows.into_iter().map(|(_, window)| window).collect()
 }
 
 fn label_window(mut window: QuotaWindow, fallback: WindowKind) -> (WindowKind, QuotaWindow) {
     let kind = WindowKind::classify(window.duration_seconds, fallback);
-    window.id = kind.id().to_owned();
-    window.title = kind.title().to_owned();
+    let (id, title) = kind.labels();
+    window.id = id.to_owned();
+    window.title = title.to_owned();
     (kind, window)
 }
 
@@ -566,7 +538,7 @@ fn map_additional(value: Option<&Value>) -> Vec<QuotaWindow> {
         let Some(source) = metered.as_deref().or(limit_name.as_deref()) else {
             continue;
         };
-        let id = format!("codex-{}", slug(source));
+        let id = format!("codex-{}", slug(source, '-'));
         if used.contains(&id) {
             continue;
         }
@@ -632,18 +604,6 @@ fn map_named_windows(
         }
     }
     windows
-}
-
-fn slug(value: &str) -> String {
-    let mut result = String::new();
-    for character in value.to_ascii_lowercase().chars() {
-        if character.is_ascii_alphanumeric() {
-            result.push(character);
-        } else if !result.ends_with('-') {
-            result.push('-');
-        }
-    }
-    result.trim_matches('-').to_owned()
 }
 
 fn collect_rpc(
@@ -921,6 +881,7 @@ impl Drop for RpcClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::Engine as _;
 
     #[test]
     fn discovers_browser_session_when_oauth_is_absent() {

@@ -6,7 +6,7 @@ use super::common::{
     CollectionContext, ErrorCategory, HttpClient, ProviderError, ProviderSession, QuotaAccount,
     QuotaSnapshot, QuotaWindow, VALIDATION_TIMEOUT, ValidatedBrowserSession, account_identity,
     clamp_percent, collect_official_or_browser, discover_official_or_browser, mask_email, number,
-    obj_get, parse_date, unix_seconds_to_iso,
+    obj_get, parse_date, unix_seconds_to_iso, url_encode,
 };
 
 mod app;
@@ -147,7 +147,12 @@ fn collect_with_cookie(
     ];
     let (_, summary) =
         client.get_json_session(&format!("{ORIGIN}/api/usage-summary"), &headers, SOURCE)?;
-    let extras = optional_usage(cookie_header, identity.subject.as_deref(), context);
+    let extras = optional_usage(
+        &summary,
+        cookie_header,
+        identity.subject.as_deref(),
+        context,
+    );
     let windows = quota_windows(&summary, &extras)?;
     Ok(QuotaSnapshot {
         provider: ProviderId::Cursor,
@@ -164,26 +169,33 @@ fn collect_with_cookie(
     })
 }
 
-/// Best-effort dashboard payloads alongside `/api/usage-summary`. Either may be
-/// absent; neither failure fails the refresh.
+/// A best-effort dashboard payload alongside `/api/usage-summary`. Absent when
+/// the account cannot use it or the call fails; neither fails the refresh.
 #[derive(Default)]
-struct OptionalUsage {
+enum OptionalUsage {
     /// `GET /api/usage?user=<sub>`: request counters for legacy request-based plans.
-    requests: Option<Value>,
+    Requests(Value),
     /// `POST /api/dashboard/get-sand-usage-status`: the weekly Grok Bot allowance.
-    grok_bot: Option<Value>,
+    GrokBot(Value),
+    #[default]
+    None,
 }
 
+/// Fetches whichever optional payload this account can actually show. The two are
+/// mutually exclusive in [`quota_windows`] — a legacy request quota replaces the
+/// token-based windows that Grok Bot accompanies — so only one call is made, and
+/// the summary already says which plan shape this is.
 fn optional_usage(
+    summary: &Value,
     cookie_header: &str,
     subject: Option<&str>,
     context: &CollectionContext,
 ) -> OptionalUsage {
     if context.cancelled() {
-        return OptionalUsage::default();
+        return OptionalUsage::None;
     }
     let Ok(client) = HttpClient::with_timeout(OPTIONAL_TIMEOUT) else {
-        return OptionalUsage::default();
+        return OptionalUsage::None;
     };
     let user_agent = context.user_agent();
     let headers = [
@@ -192,36 +204,39 @@ fn optional_usage(
         ("Origin", ORIGIN),
         ("User-Agent", user_agent.as_str()),
     ];
-    let requests = subject.and_then(|subject| {
-        let url = format!("{ORIGIN}/api/usage?user={}", urlencode(subject));
-        client
-            .get_json_session(&url, &headers, SOURCE)
+    if has_token_based_plan(summary) {
+        return client
+            .post_json_session(
+                &format!("{ORIGIN}/api/dashboard/get-sand-usage-status"),
+                &headers,
+                &Value::Object(Default::default()),
+                SOURCE,
+            )
             .ok()
-            .map(|(_, value)| value)
-    });
-    let grok_bot = client
-        .post_json_session(
-            &format!("{ORIGIN}/api/dashboard/get-sand-usage-status"),
-            &headers,
-            &Value::Object(Default::default()),
-            SOURCE,
-        )
-        .ok()
-        .map(|(_, value)| value);
-    OptionalUsage { requests, grok_bot }
+            .map(|(_, value)| OptionalUsage::GrokBot(value))
+            .unwrap_or_default();
+    }
+    subject
+        .and_then(|subject| {
+            let url = format!("{ORIGIN}/api/usage?user={}", url_encode(subject));
+            client
+                .get_json_session(&url, &headers, SOURCE)
+                .ok()
+                .map(|(_, value)| OptionalUsage::Requests(value))
+        })
+        .unwrap_or_default()
 }
 
-fn urlencode(value: &str) -> String {
-    let mut encoded = String::with_capacity(value.len());
-    for byte in value.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                encoded.push(byte as char);
-            }
-            _ => encoded.push_str(&format!("%{byte:02X}")),
-        }
-    }
-    encoded
+/// Usage-based pricing reports the Cursor / Other Models percentages; an account
+/// that does not cannot be on one, and may still carry a legacy request quota.
+fn has_token_based_plan(summary: &Value) -> bool {
+    obj_get(summary, "individualUsage")
+        .and_then(|value| obj_get(value, "plan"))
+        .filter(|plan| plan.get("enabled").and_then(Value::as_bool) != Some(false))
+        .is_some_and(|plan| {
+            number(plan.get("autoPercentUsed")).is_some()
+                || number(plan.get("apiPercentUsed")).is_some()
+        })
 }
 
 fn quota_windows(
@@ -234,17 +249,19 @@ fn quota_windows(
     let mut windows = Vec::new();
     // A legacy request quota replaces the token-based Cursor/Other Models split and
     // the weekly Grok Bot bar, which only make sense next to usage-based pricing.
-    let legacy_requests = extras
-        .requests
-        .as_ref()
-        .and_then(|value| request_window(value, reset.clone()));
-    if let Some(window) = legacy_requests {
+    let legacy = match extras {
+        OptionalUsage::Requests(value) => request_window(value, reset.clone()),
+        _ => None,
+    };
+    if let Some(window) = legacy {
         windows.push(window);
     } else {
         if let Some(plan) = individual.and_then(|value| obj_get(value, "plan")) {
             windows.extend(included_windows(plan, reset.clone()));
         }
-        if let Some(window) = extras.grok_bot.as_ref().and_then(grok_bot_window) {
+        if let OptionalUsage::GrokBot(value) = extras
+            && let Some(window) = grok_bot_window(value)
+        {
             windows.push(window);
         }
     }
@@ -478,16 +495,13 @@ mod tests {
 
     #[test]
     fn grok_bot_weekly_allowance_follows_the_included_windows() {
-        let extras = OptionalUsage {
-            requests: None,
-            grok_bot: Some(serde_json::json!({
-                "currentPeriodStart": "2026-08-18T00:00:00.000Z",
-                "nextResetTimestampUtc": "2026-08-25T00:00:00.000Z",
-                "usagePercent": 42.5,
-                "hasAvailableUsage": true,
-                "hasNonZeroIncludedLimit": true
-            })),
-        };
+        let extras = OptionalUsage::GrokBot(serde_json::json!({
+            "currentPeriodStart": "2026-08-18T00:00:00.000Z",
+            "nextResetTimestampUtc": "2026-08-25T00:00:00.000Z",
+            "usagePercent": 42.5,
+            "hasAvailableUsage": true,
+            "hasNonZeroIncludedLimit": true
+        }));
         let windows = quota_windows(&token_summary(), &extras).expect("windows");
         assert_eq!(
             windows
@@ -502,12 +516,9 @@ mod tests {
         assert_eq!(bot.resets_at.as_deref(), Some("2026-08-25T00:00:00Z"));
         assert_eq!(bot.duration_seconds, Some(604_800));
 
-        let no_allowance = OptionalUsage {
-            requests: None,
-            grok_bot: Some(
-                serde_json::json!({"usagePercent": 10, "hasNonZeroIncludedLimit": false}),
-            ),
-        };
+        let no_allowance = OptionalUsage::GrokBot(
+            serde_json::json!({"usagePercent": 10, "hasNonZeroIncludedLimit": false}),
+        );
         assert!(
             quota_windows(&token_summary(), &no_allowance)
                 .expect("windows")
@@ -518,15 +529,10 @@ mod tests {
 
     #[test]
     fn legacy_request_plan_replaces_token_windows_and_grok_bot() {
-        let extras = OptionalUsage {
-            requests: Some(serde_json::json!({
-                "gpt-4": {"numRequests": 120, "numRequestsTotal": 130, "maxRequestUsage": 500},
-                "startOfMonth": "2026-08-01T00:00:00Z"
-            })),
-            grok_bot: Some(
-                serde_json::json!({"usagePercent": 10, "hasNonZeroIncludedLimit": true}),
-            ),
-        };
+        let extras = OptionalUsage::Requests(serde_json::json!({
+            "gpt-4": {"numRequests": 120, "numRequestsTotal": 130, "maxRequestUsage": 500},
+            "startOfMonth": "2026-08-01T00:00:00Z"
+        }));
         let windows = quota_windows(&token_summary(), &extras).expect("windows");
         assert_eq!(
             windows
@@ -544,12 +550,9 @@ mod tests {
         assert_eq!(requests.resets_at.as_deref(), Some("2026-09-01T00:00:00Z"));
 
         // Usage-based accounts answer the endpoint without a request cap.
-        let unlimited = OptionalUsage {
-            requests: Some(
-                serde_json::json!({"gpt-4": {"numRequests": 3, "maxRequestUsage": null}}),
-            ),
-            grok_bot: None,
-        };
+        let unlimited = OptionalUsage::Requests(
+            serde_json::json!({"gpt-4": {"numRequests": 3, "maxRequestUsage": null}}),
+        );
         assert_eq!(
             quota_windows(&token_summary(), &unlimited).expect("windows")[0].id,
             "cursor_models"
@@ -557,9 +560,17 @@ mod tests {
     }
 
     #[test]
-    fn request_usage_subject_is_url_encoded() {
-        assert_eq!(urlencode("auth0|user_123"), "auth0%7Cuser_123");
-        assert_eq!(urlencode("plain-id.x~y"), "plain-id.x~y");
+    fn plan_shape_picks_the_single_optional_call() {
+        // Usage-based pricing reports the model percentages, so only Grok Bot can apply.
+        assert!(has_token_based_plan(&token_summary()));
+        // A legacy request plan reports neither, and a disabled plan is not usage-based.
+        assert!(!has_token_based_plan(&serde_json::json!({
+            "individualUsage": {"onDemand": {"enabled": true, "used": 1, "limit": 2}}
+        })));
+        assert!(!has_token_based_plan(&serde_json::json!({
+            "individualUsage": {"plan": {"enabled": false, "autoPercentUsed": 5.0}}
+        })));
+        assert!(!has_token_based_plan(&serde_json::json!({})));
     }
 
     #[test]

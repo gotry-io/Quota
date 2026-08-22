@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 use uuid::Uuid;
 
 use super::common::{
@@ -14,7 +14,7 @@ use super::common::{
     QuotaAccount, QuotaSnapshot, QuotaWindow, ValidatedBrowserSession, account_identity,
     clamp_percent, collect_official_or_browser, discover_official_or_browser, is_executable_file,
     mask_email, number, obj_get, obj_get_any, parse_date, read_bounded_file, run_bounded_command,
-    string,
+    slug, string,
 };
 
 mod web;
@@ -95,7 +95,7 @@ fn collect_oauth(
     }
     let refresh_attempted = credentials
         .expires_at
-        .map(|expiry| expiry <= now_seconds(context) + AUTH_REFRESH_SKEW)
+        .map(|expiry| expiry <= context.observed_unix() + AUTH_REFRESH_SKEW)
         .unwrap_or(false);
     if refresh_attempted {
         credentials = refresh_and_reload(&credentials, context).unwrap_or(credentials);
@@ -127,7 +127,7 @@ fn load_credentials(context: &CollectionContext) -> Option<Credentials> {
     let file_credentials = read_credentials_file(&file);
     if file_credentials
         .as_ref()
-        .map(|credentials| !is_expiring(credentials, now_seconds(context)))
+        .map(|credentials| !is_expiring(credentials, context.observed_unix()))
         .unwrap_or(false)
     {
         return file_credentials;
@@ -466,19 +466,18 @@ fn run_cli_slash_command(context: &CollectionContext, command: &str) -> Option<V
     });
 
     let is_usage = command == "/usage";
-    let palette: &[PromptReply] = if is_usage {
+    let palette = if is_usage {
         USAGE_PALETTE_REPLIES
-    } else if command == "/status" {
-        STATUS_PALETTE_REPLIES
     } else {
-        &[]
+        STATUS_PALETTE_REPLIES
     };
     let started = std::time::Instant::now();
     let mut last_output = started;
     let mut stage = ProbeStage::Starting;
     let mut stage_since = started;
     let mut last_nudge = started;
-    let mut answered = vec![false; PROMPT_REPLIES.len() + palette.len()];
+    let mut answered = [false; PROMPT_REPLIES.len() + 1];
+    let mut screen = CompactText::default();
     let mut output = Vec::new();
     let mut send = |bytes: &[u8]| stdin.write_all(bytes).and_then(|_| stdin.flush()).is_ok();
     loop {
@@ -486,15 +485,21 @@ fn run_cli_slash_command(context: &CollectionContext, command: &str) -> Option<V
             stop_child(&mut child);
             return None;
         }
+        let mut grew = false;
         match receiver.recv_timeout(Duration::from_millis(100)) {
-            Ok(chunk) => {
-                if chunk
-                    .windows(CURSOR_POSITION_QUERY.len())
-                    .any(|window| window == CURSOR_POSITION_QUERY)
-                {
-                    let _ = send(CURSOR_POSITION_REPLY);
+            // Drain what else has already arrived so a burst of small writes
+            // costs one rescan rather than one per write.
+            Ok(first) => {
+                for chunk in std::iter::once(first).chain(receiver.try_iter()) {
+                    if chunk
+                        .windows(CURSOR_POSITION_QUERY.len())
+                        .any(|window| window == CURSOR_POSITION_QUERY)
+                    {
+                        let _ = send(CURSOR_POSITION_REPLY);
+                    }
+                    output.extend_from_slice(&chunk);
                 }
-                output.extend_from_slice(&chunk);
+                grew = true;
                 last_output = std::time::Instant::now();
                 if output.len() > PROBE_OUTPUT_LIMIT {
                     stop_child(&mut child);
@@ -514,8 +519,11 @@ fn run_cli_slash_command(context: &CollectionContext, command: &str) -> Option<V
             }
             return (stage >= ProbeStage::Dismissed).then_some(output);
         }
-        let tail = output.len().saturating_sub(PROBE_TAIL);
-        let screen = compact_terminal_text(&String::from_utf8_lossy(&output[tail..]));
+        // Nothing new means the screen is provably unchanged since the last scan.
+        if grew || screen.lower.is_empty() {
+            let tail = output.len().saturating_sub(PROBE_TAIL);
+            screen = compact_terminal_text(&String::from_utf8_lossy(&output[tail..]));
+        }
         if stage < ProbeStage::Dismissed {
             // Palette rows only exist once the command has been typed.
             let visible = if stage == ProbeStage::Submitted {
@@ -557,30 +565,31 @@ fn run_cli_slash_command(context: &CollectionContext, command: &str) -> Option<V
             }
             ProbeStage::Submitted => {
                 let panel = &screen.lower;
-                let rendered = if is_usage {
-                    let failed = panel.contains("failedtoloadusagedata");
-                    let has_data = panel.contains("currentsession") && has_percent(panel);
-                    let loading = panel.contains("loadingusagedata") && !has_data;
-                    if loading && last_nudge.elapsed() >= PROBE_NUDGE {
-                        // Claude's panel can wait for a keystroke before it draws the rows.
-                        let _ = send(b"\r");
-                        last_nudge = std::time::Instant::now();
-                    }
-                    failed
-                        || (has_data && quiet >= PROBE_SETTLE)
-                        || (!loading && quiet >= PROBE_PANEL_QUIET)
-                        || stage_since.elapsed() >= PROBE_PANEL_LIMIT
-                } else {
-                    quiet >= PROBE_PANEL_QUIET || stage_since.elapsed() >= PROBE_PANEL_LIMIT
-                };
+                // A panel that stopped drawing, or one that has drawn too long,
+                // is as done as it is going to get.
+                let settled = quiet >= PROBE_PANEL_QUIET;
+                let expired = stage_since.elapsed() >= PROBE_PANEL_LIMIT;
+                let rendered = expired
+                    || if is_usage {
+                        let failed = panel.contains("failedtoloadusagedata");
+                        let has_data = panel.contains("currentsession") && has_percent(panel);
+                        let loading = panel.contains("loadingusagedata") && !has_data;
+                        if loading && last_nudge.elapsed() >= PROBE_NUDGE {
+                            // Claude's panel can wait for a keystroke before it draws the rows.
+                            let _ = send(b"\r");
+                            last_nudge = std::time::Instant::now();
+                        }
+                        failed || (has_data && quiet >= PROBE_SETTLE) || (!loading && settled)
+                    } else {
+                        settled
+                    };
                 if rendered {
                     if !send(b"\x1b") {
                         stop_child(&mut child);
                         return None;
                     }
                     stage = ProbeStage::Dismissed;
-                    stage_since = std::time::Instant::now();
-                    last_output = stage_since;
+                    last_output = std::time::Instant::now();
                 }
             }
             ProbeStage::Dismissed => {
@@ -616,6 +625,7 @@ fn has_percent(lower: &str) -> bool {
 /// Terminal text with escape sequences and whitespace removed. The TUI positions
 /// words with cursor moves rather than spaces, so matching must ignore spacing.
 /// `lower` is ASCII-lowercased and byte-aligned with `text`.
+#[derive(Default)]
 struct CompactText {
     text: String,
     lower: String,
@@ -630,10 +640,72 @@ fn compact_terminal_text(raw: &str) -> CompactText {
     CompactText { text, lower }
 }
 
+/// One of Claude's fixed usage windows. Both the OAuth body and the CLI panel
+/// describe the same quota, so they share this table rather than each carrying
+/// its own ids and titles — that is what keeps either source updating the same row.
+struct ClaudeWindow {
+    /// Key in the OAuth usage body.
+    field: &'static str,
+    /// Whitespace-free lowercase scopes the Settings panel renders inside
+    /// `Current week (…)`. Empty when the panel has no row for this window.
+    labels: &'static [&'static str],
+    id: &'static str,
+    title: &'static str,
+    duration_seconds: u64,
+}
+
+const FIVE_HOUR_FIELD: &str = "five_hour";
+const CLAUDE_WINDOWS: &[ClaudeWindow] = &[
+    ClaudeWindow {
+        field: FIVE_HOUR_FIELD,
+        // The panel calls this one "Current session" rather than a weekly scope.
+        labels: &[],
+        id: "five_hour",
+        title: "5 hour",
+        duration_seconds: 18_000,
+    },
+    ClaudeWindow {
+        field: "seven_day",
+        labels: &["allmodels"],
+        id: "seven_day",
+        title: "Weekly",
+        duration_seconds: 604_800,
+    },
+    ClaudeWindow {
+        field: "seven_day_sonnet",
+        labels: &["sonnet", "sonnetonly"],
+        id: "seven_day_sonnet",
+        title: "Sonnet weekly",
+        duration_seconds: 604_800,
+    },
+    ClaudeWindow {
+        field: "seven_day_opus",
+        labels: &["opus", "opusonly"],
+        id: "seven_day_opus",
+        title: "Opus weekly",
+        duration_seconds: 604_800,
+    },
+    ClaudeWindow {
+        field: "seven_day_oauth_apps",
+        labels: &[],
+        id: "seven_day_oauth_apps",
+        title: "OAuth apps weekly",
+        duration_seconds: 604_800,
+    },
+];
+
+/// The weekly window a model-scoped row belongs to, whether it comes from the
+/// OAuth `limits[]` array or the panel's `Current week (<Model>)` heading.
+fn scoped_weekly_window(name: &str) -> (String, String) {
+    (
+        format!("claude-weekly-scoped-{}", slug(name, '-')),
+        format!("{name} only"),
+    )
+}
+
 /// Maps the text of Claude's Settings → Usage panel. Each window is a title such
 /// as `Current session` or `Current week (Fable)` followed by a bar and
-/// `<n>% used`; Claude reports percent *used*, taken verbatim. Window ids match
-/// the OAuth usage mapping so either source updates the same rows.
+/// `<n>% used`; Claude reports percent *used*, taken verbatim.
 fn map_cli_usage_text(text: &str) -> Vec<QuotaWindow> {
     let compact = compact_terminal_text(text);
     let mut windows: Vec<QuotaWindow> = Vec::new();
@@ -652,8 +724,18 @@ fn map_cli_usage_text(text: &str) -> Vec<QuotaWindow> {
             value_unit: None,
         });
     };
-    if let Some(used) = percent_used_after(&compact.lower, "currentsession", 0) {
-        push("five_hour".to_owned(), "5 hour".to_owned(), used, 18_000);
+    let five_hour = CLAUDE_WINDOWS
+        .iter()
+        .find(|window| window.field == FIVE_HOUR_FIELD);
+    if let Some(window) = five_hour
+        && let Some(used) = percent_used_after(&compact.lower, "currentsession", 0)
+    {
+        push(
+            window.id.to_owned(),
+            window.title.to_owned(),
+            used,
+            window.duration_seconds,
+        );
     }
     let mut cursor = 0;
     while let Some(offset) = compact.lower[cursor..].find("currentweek(") {
@@ -665,19 +747,18 @@ fn map_cli_usage_text(text: &str) -> Vec<QuotaWindow> {
         let Some(used) = percent_used_after(&compact.lower, ")", close) else {
             continue;
         };
-        let (id, title) = match &compact.lower[open..close] {
-            "allmodels" => ("seven_day".to_owned(), "Weekly".to_owned()),
-            "sonnet" | "sonnetonly" => ("seven_day_sonnet".to_owned(), "Sonnet weekly".to_owned()),
-            "opus" | "opusonly" => ("seven_day_opus".to_owned(), "Opus weekly".to_owned()),
-            _ => {
+        let scope = &compact.lower[open..close];
+        let (id, title) = match CLAUDE_WINDOWS
+            .iter()
+            .find(|window| window.labels.contains(&scope))
+        {
+            Some(window) => (window.id.to_owned(), window.title.to_owned()),
+            None => {
                 let name = compact.text[open..close].trim_end_matches("only");
                 if name.is_empty() {
                     continue;
                 }
-                (
-                    format!("claude-weekly-scoped-{}", slug(name)),
-                    format!("{name} only"),
-                )
+                scoped_weekly_window(name)
             }
         };
         push(id, title, used, 604_800);
@@ -714,7 +795,7 @@ fn percent_used_after(lower: &str, label: &str, from: usize) -> Option<f64> {
         if digits == 0 {
             continue;
         }
-        let Some(value) = window[index - digits..index].parse::<f64>().ok() else {
+        let Ok(value) = window[index - digits..index].parse::<f64>() else {
             continue;
         };
         if !(0.0..=100.0).contains(&value) {
@@ -836,39 +917,13 @@ fn collect_with_credentials(
 
 pub(super) fn map_usage(value: &Value) -> Vec<QuotaWindow> {
     let mut windows = Vec::new();
-    for (value, id, title, duration) in [
-        (
-            obj_get(value, "five_hour"),
-            "five_hour",
-            "5 hour",
-            18_000_u64,
-        ),
-        (
-            obj_get(value, "seven_day"),
-            "seven_day",
-            "Weekly",
-            604_800_u64,
-        ),
-        (
-            obj_get(value, "seven_day_sonnet"),
-            "seven_day_sonnet",
-            "Sonnet weekly",
-            604_800,
-        ),
-        (
-            obj_get(value, "seven_day_opus"),
-            "seven_day_opus",
-            "Opus weekly",
-            604_800,
-        ),
-        (
-            obj_get(value, "seven_day_oauth_apps"),
-            "seven_day_oauth_apps",
-            "OAuth apps weekly",
-            604_800,
-        ),
-    ] {
-        if let Some(window) = usage_window(value, id, title, duration) {
+    for entry in CLAUDE_WINDOWS {
+        if let Some(window) = usage_window(
+            obj_get(value, entry.field),
+            entry.id,
+            entry.title,
+            entry.duration_seconds,
+        ) {
             windows.push(window);
         }
     }
@@ -897,7 +952,7 @@ pub(super) fn map_usage(value: &Value) -> Vec<QuotaWindow> {
                 continue;
             }
             let identity = model_id.as_deref().unwrap_or(&model_name);
-            let id = format!("claude-weekly-scoped-{}", slug(identity));
+            let (id, _) = scoped_weekly_window(identity);
             if !seen.insert(id.clone()) {
                 continue;
             }
@@ -993,40 +1048,15 @@ fn map_profile(value: &Value) -> (Option<String>, Option<String>) {
 }
 
 fn is_all_models(model_id: Option<&str>, model_name: &str) -> bool {
-    if slug(model_name) == "all-models" {
+    if slug(model_name, '-') == "all-models" {
         return true;
     }
     model_id
         .map(|id| {
-            let id = slug(id);
+            let id = slug(id, '-');
             id == "all-models" || id.ends_with("-all-models")
         })
         .unwrap_or(false)
-}
-
-fn slug(value: &str) -> String {
-    let mut output = String::new();
-    for character in value.to_ascii_lowercase().chars() {
-        if character.is_ascii_alphanumeric() {
-            output.push(character);
-        } else if !output.ends_with('-') {
-            output.push('-');
-        }
-    }
-    output.trim_matches('-').to_owned()
-}
-
-fn now_seconds(context: &CollectionContext) -> i64 {
-    context
-        .now
-        .as_deref()
-        .and_then(|value| super::common::parse_date(Some(&Value::String(value.to_owned()))))
-        .unwrap_or_else(|| {
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|duration| duration.as_secs() as i64)
-                .unwrap_or(0)
-        })
 }
 
 #[cfg(test)]
