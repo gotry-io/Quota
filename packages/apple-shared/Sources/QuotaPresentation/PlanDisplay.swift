@@ -45,6 +45,9 @@ public enum PlanDisplay: Sendable {
     "supergrok": "SuperGrok",
     "super_grok": "SuperGrok",
     "super-grok": "SuperGrok",
+    "supergrok_heavy": "SuperGrok Heavy",
+    "supergrok-heavy": "SuperGrok Heavy",
+    "supergrokheavy": "SuperGrok Heavy",
     "super": "Super",
   ]
 

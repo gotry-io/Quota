@@ -21,10 +21,12 @@ chunks, plus optional `_account` or `lastActiveOrg`) share one header; unrelated
 such as Cursor's `wos-session` and `WorkosCursorSessionToken` stay separate candidates. Hosts and
 browser profiles are never combined. Rust revalidates the catalog rules, verifies the provider
 account, performs provider networking, and stores the session in the owner-only local SQLite state. Catalog `browser_session.exclusive` marks
-the session as the only local auth path; Settings then omits the official CLI command. Cursor is
-exclusive. Codex, Claude, Grok, and Kimi use the same acquisition path when OAuth or the Code API is
-missing or rejected. Cursor synchronizes from managed-data v3 while released v2 routes retain their
-closed provider enum, as defined by [ADR 0012](0012-managed-data-v3.md).
+the session as lacking an official CLI or API-key sign-in command; Settings then omits that command
+row. Cursor is exclusive. It still discovers a signed-in Cursor.app session from local desktop
+state, as defined by [provider collection](../provider-collection.md). Codex, Claude, Grok, and
+Kimi use the same browser acquisition path when OAuth or the Code API is missing or rejected.
+Cursor synchronizes from managed-data v3 while released v2 routes retain their closed provider
+enum, as defined by [ADR 0012](0012-managed-data-v3.md).
 
 The credential and redaction boundary is specified in [security](../security.md), and provider API
 behavior remains in [provider collection](../provider-collection.md).

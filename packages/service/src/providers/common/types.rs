@@ -1,7 +1,7 @@
 use crate::catalog::ProviderId;
 use serde::Serialize;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, atomic::AtomicBool};
 
 use super::json::{unix_now, unix_seconds_to_iso};
@@ -160,6 +160,14 @@ impl CollectionContext {
         self.environment.get(key).map(String::as_str)
     }
 
+    /// The macOS Keychain is process-global. Isolated collection (tests, remapped
+    /// homes) must not read the live user store.
+    pub fn allows_host_keychain(&self) -> bool {
+        self.env("HOME")
+            .filter(|value| !value.trim().is_empty())
+            .is_some_and(|home| self.home_directory == Path::new(home))
+    }
+
     pub fn config_path(&self) -> PathBuf {
         self.config_path.clone().unwrap_or_else(|| {
             self.environment
@@ -290,6 +298,21 @@ fn is_cookie_octet(byte: u8) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn host_keychain_requires_live_home() {
+        let mut context = CollectionContext {
+            home_directory: PathBuf::from("/Users/ada"),
+            environment: HashMap::from([("HOME".into(), "/Users/ada".into())]),
+            ..CollectionContext::default()
+        };
+        assert!(context.allows_host_keychain());
+        context.home_directory = PathBuf::from("/tmp/quota-isolated-home");
+        assert!(!context.allows_host_keychain());
+        context.home_directory = PathBuf::from("/Users/ada");
+        context.environment.clear();
+        assert!(!context.allows_host_keychain());
+    }
 
     #[test]
     fn browser_cookie_header_is_allowlisted_canonical_and_bounded() {

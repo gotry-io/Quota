@@ -20,14 +20,23 @@ use super::common::{
 mod web;
 
 pub const SOURCE_API: &str = "chatgpt_usage_api";
+pub const SOURCE_PAT: &str = "codex_pat_usage_api";
 pub const SOURCE_RPC: &str = "codex_app_server";
 pub const USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
+pub const WHOAMI_URL: &str = "https://auth.openai.com/api/accounts/v1/user-auth-credential/whoami";
 
 #[derive(Clone, Debug)]
 pub(super) struct Credentials {
     access_token: String,
     id_token: Option<String>,
     account_id: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+struct AuthMaterial {
+    pat: Option<String>,
+    oauth: Option<Credentials>,
+    source: String,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -40,9 +49,9 @@ pub(super) struct Identity {
 pub fn discover(context: &CollectionContext) -> Vec<ProviderSession> {
     discover_official_or_browser(
         ProviderId::Codex,
-        load_credentials(context).map(|(_, source)| ProviderSession {
+        load_auth(context).map(|auth| ProviderSession {
             provider: ProviderId::Codex,
-            credential_source: source,
+            credential_source: auth.source,
         }),
         context,
     )
@@ -70,7 +79,17 @@ pub fn collect(
 }
 
 fn collect_local(context: &CollectionContext) -> Result<QuotaSnapshot, ProviderError> {
-    let (credentials, _) = load_credentials(context)
+    let auth = load_auth(context)
+        .ok_or_else(|| ProviderError::new(ErrorCategory::AuthRequired, SOURCE_API))?;
+    if let Some(pat) = auth.pat.as_deref() {
+        match collect_pat(pat, context) {
+            Ok(snapshot) => return Ok(snapshot),
+            Err(error) if error.category == ErrorCategory::AuthRequired => {}
+            Err(error) => return Err(error),
+        }
+    }
+    let credentials = auth
+        .oauth
         .ok_or_else(|| ProviderError::new(ErrorCategory::AuthRequired, SOURCE_API))?;
     let identity = extract_identity(&credentials);
     let direct = collect_api(&credentials, &identity, context, SOURCE_API);
@@ -106,7 +125,7 @@ fn collect_local(context: &CollectionContext) -> Result<QuotaSnapshot, ProviderE
     collect_rpc(&identity, context)
 }
 
-fn load_credentials(context: &CollectionContext) -> Option<(Credentials, String)> {
+fn load_auth(context: &CollectionContext) -> Option<AuthMaterial> {
     let mut paths = Vec::new();
     if let Some(home) = context
         .env("CODEX_HOME")
@@ -116,23 +135,37 @@ fn load_credentials(context: &CollectionContext) -> Option<(Credentials, String)
     }
     paths.push(context.home_directory.join(".codex/auth.json"));
     for path in paths {
-        if let Some(credentials) = read_credentials(&path) {
-            return Some((credentials, path.to_string_lossy().into_owned()));
+        if let Some(auth) = read_auth(&path) {
+            return Some(auth);
         }
     }
     None
 }
 
-fn read_credentials(path: &Path) -> Option<Credentials> {
+fn read_auth(path: &Path) -> Option<AuthMaterial> {
     let metadata = fs::symlink_metadata(path).ok()?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         return None;
     }
     let value: Value = serde_json::from_slice(&read_bounded_file(path, LOCAL_FILE_LIMIT)?).ok()?;
-    parse_credentials(&value)
+    parse_auth(&value, &path.to_string_lossy())
 }
 
-fn parse_credentials(value: &Value) -> Option<Credentials> {
+fn parse_auth(value: &Value, source: &str) -> Option<AuthMaterial> {
+    let pat = obj_get_any(value, &["personal_access_token", "personalAccessToken"])
+        .and_then(|v| string(Some(v)));
+    let oauth = parse_oauth_credentials(value);
+    if pat.is_none() && oauth.is_none() {
+        return None;
+    }
+    Some(AuthMaterial {
+        pat,
+        oauth,
+        source: source.to_owned(),
+    })
+}
+
+fn parse_oauth_credentials(value: &Value) -> Option<Credentials> {
     let tokens = value.get("tokens")?.as_object()?;
     let access_token = obj_get_any(
         &Value::Object(tokens.clone()),
@@ -148,6 +181,68 @@ fn parse_credentials(value: &Value) -> Option<Credentials> {
         id_token,
         account_id,
     })
+}
+
+fn collect_pat(token: &str, context: &CollectionContext) -> Result<QuotaSnapshot, ProviderError> {
+    let client = HttpClient::new()?;
+    let bearer = format!("Bearer {token}");
+    let user_agent = pat_user_agent();
+    let headers = [
+        ("Authorization", bearer.as_str()),
+        ("Accept", "application/json"),
+        ("User-Agent", user_agent.as_str()),
+        ("originator", "codex_cli_rs"),
+    ];
+    let (_, whoami) = client.get_json(WHOAMI_URL, &headers, SOURCE_PAT)?;
+    let account_id = obj_get_any(&whoami, &["chatgpt_account_id", "chatgptAccountId"])
+        .and_then(|v| string(Some(v)));
+    let email = obj_get(&whoami, "email").and_then(|v| string(Some(v)));
+    let plan = obj_get_any(&whoami, &["chatgpt_plan_type", "chatgptPlanType"])
+        .and_then(|v| string(Some(v)));
+    let mut usage_headers = vec![
+        ("Authorization", bearer.as_str()),
+        ("Accept", "application/json"),
+        ("User-Agent", user_agent.as_str()),
+        ("originator", "codex_cli_rs"),
+    ];
+    if let Some(account_id) = account_id.as_deref() {
+        usage_headers.push(("ChatGPT-Account-Id", account_id));
+    }
+    let (_, value) = client.get_json(USAGE_URL, &usage_headers, SOURCE_PAT)?;
+    let mapped = map_usage(&value);
+    if mapped.malformed_success {
+        return Err(ProviderError::new(ErrorCategory::Error, SOURCE_PAT));
+    }
+    if mapped.windows.is_empty() {
+        return Err(ProviderError::new(ErrorCategory::Unavailable, SOURCE_PAT));
+    }
+    Ok(snapshot(
+        SOURCE_PAT,
+        &mapped.windows,
+        mapped.plan.as_deref().or(plan.as_deref()),
+        mapped.email.as_deref().or(email.as_deref()),
+        mapped.account_id.as_deref().or(account_id.as_deref()),
+        &context.observed_at(),
+    ))
+}
+
+/// Codex only honors personal access tokens from requests that identify as its CLI.
+fn pat_user_agent() -> String {
+    let platform = if cfg!(target_os = "macos") {
+        "Mac OS"
+    } else if cfg!(target_os = "linux") {
+        "Linux"
+    } else {
+        "Darwin"
+    };
+    let arch = if cfg!(target_arch = "aarch64") {
+        "arm64"
+    } else if cfg!(target_arch = "x86_64") {
+        "x86_64"
+    } else {
+        "unknown"
+    };
+    format!("codex_cli_rs ({platform}; {arch})")
 }
 
 fn extract_identity(credentials: &Credentials) -> Identity {
@@ -268,10 +363,10 @@ pub(super) fn map_usage(value: &Value) -> MappedUsage {
     let rate_limit = obj_get_any(value, &["rate_limit", "rateLimit"]);
     let primary = rate_limit
         .and_then(|v| obj_get_any(v, &["primary_window", "primaryWindow"]))
-        .and_then(|v| map_window(v, "five_hour", "5 hour", false));
+        .and_then(|v| map_window(v, "five_hour", "5 hour"));
     let secondary = rate_limit
         .and_then(|v| obj_get_any(v, &["secondary_window", "secondaryWindow"]))
-        .and_then(|v| map_window(v, "weekly", "Weekly", false));
+        .and_then(|v| map_window(v, "weekly", "Weekly"));
     let mut windows = normalize_primary_secondary(primary, secondary);
     windows.extend(map_additional(obj_get_any(
         value,
@@ -292,12 +387,12 @@ pub(super) fn map_usage(value: &Value) -> MappedUsage {
     let malformed_primary = primary_present
         && !rate_limit
             .and_then(|v| obj_get_any(v, &["primary_window", "primaryWindow"]))
-            .and_then(|v| map_window(v, "five_hour", "5 hour", false))
+            .and_then(|v| map_window(v, "five_hour", "5 hour"))
             .is_some();
     let malformed_secondary = secondary_present
         && !rate_limit
             .and_then(|v| obj_get_any(v, &["secondary_window", "secondaryWindow"]))
-            .and_then(|v| map_window(v, "weekly", "Weekly", false))
+            .and_then(|v| map_window(v, "weekly", "Weekly"))
             .is_some();
     MappedUsage {
         plan,
@@ -314,8 +409,8 @@ fn map_rpc(value: &Value) -> MappedUsage {
         .or_else(|| value.get("rate_limits"))
         .unwrap_or(value);
     let plan = obj_get_any(root, &["planType", "plan_type"]).and_then(|v| string(Some(v)));
-    let primary = obj_get(root, "primary").and_then(|v| map_rpc_window(v, "five_hour", "5 hour"));
-    let secondary = obj_get(root, "secondary").and_then(|v| map_rpc_window(v, "weekly", "Weekly"));
+    let primary = obj_get(root, "primary").and_then(|v| map_window(v, "five_hour", "5 hour"));
+    let secondary = obj_get(root, "secondary").and_then(|v| map_window(v, "weekly", "Weekly"));
     let windows = normalize_primary_secondary(primary, secondary);
     MappedUsage {
         plan,
@@ -324,88 +419,118 @@ fn map_rpc(value: &Value) -> MappedUsage {
     }
 }
 
-fn map_window(value: &Value, id: &str, title: &str, _rpc: bool) -> Option<QuotaWindow> {
+const FIVE_HOUR_SECONDS: u64 = 18_000;
+const WEEKLY_SECONDS: u64 = 604_800;
+const MONTHLY_SECONDS: u64 = 2_592_000;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WindowKind {
+    FiveHour,
+    Weekly,
+    Monthly,
+}
+
+impl WindowKind {
+    fn from_duration(seconds: u64) -> Option<Self> {
+        match seconds {
+            FIVE_HOUR_SECONDS => Some(Self::FiveHour),
+            WEEKLY_SECONDS => Some(Self::Weekly),
+            MONTHLY_SECONDS => Some(Self::Monthly),
+            _ => None,
+        }
+    }
+
+    fn classify(duration: Option<u64>, fallback: Self) -> Self {
+        duration.and_then(Self::from_duration).unwrap_or(fallback)
+    }
+
+    fn id(self) -> &'static str {
+        match self {
+            Self::FiveHour => "five_hour",
+            Self::Weekly => "weekly",
+            Self::Monthly => "monthly",
+        }
+    }
+
+    fn title(self) -> &'static str {
+        match self {
+            Self::FiveHour => "5 hour",
+            Self::Weekly => "Weekly",
+            Self::Monthly => "Monthly",
+        }
+    }
+
+    fn order(self) -> u8 {
+        match self {
+            Self::FiveHour => 0,
+            Self::Weekly => 1,
+            Self::Monthly => 2,
+        }
+    }
+}
+
+fn map_window(value: &Value, id: &str, title: &str) -> Option<QuotaWindow> {
     let used =
         obj_get_any(value, &["used_percent", "usedPercent"]).and_then(|v| number(Some(v)))?;
-    let reset = obj_get_any(value, &["reset_at", "resetAt"])
+    let reset = obj_get_any(value, &["reset_at", "resetAt", "resetsAt", "resets_at"])
         .and_then(|v| parse_date(Some(v)))
         .map(super::common::unix_seconds_to_iso);
-    let duration = obj_get_any(value, &["limit_window_seconds", "limitWindowSeconds"])
-        .and_then(|v| number(Some(v)))
-        .filter(|v| *v >= 0.0)
-        .map(|v| v.floor() as u64);
     Some(QuotaWindow {
         id: id.to_owned(),
         title: title.to_owned(),
         used_percent: clamp_percent(used),
         resets_at: reset,
-        duration_seconds: duration,
+        duration_seconds: window_duration_seconds(value),
         remaining_value: None,
         limit_value: None,
         value_unit: None,
     })
 }
 
-fn map_rpc_window(value: &Value, id: &str, title: &str) -> Option<QuotaWindow> {
-    let used =
-        obj_get_any(value, &["usedPercent", "used_percent"]).and_then(|v| number(Some(v)))?;
-    let reset = obj_get_any(value, &["resetsAt", "resets_at"])
-        .and_then(|v| parse_date(Some(v)))
-        .map(super::common::unix_seconds_to_iso);
-    let duration = obj_get_any(value, &["windowDurationMins", "window_duration_mins"])
+fn window_duration_seconds(value: &Value) -> Option<u64> {
+    if let Some(seconds) = obj_get_any(value, &["limit_window_seconds", "limitWindowSeconds"])
         .and_then(|v| number(Some(v)))
-        .filter(|v| *v >= 0.0)
-        .map(|v| (v * 60.0).floor() as u64);
-    Some(QuotaWindow {
-        id: id.to_owned(),
-        title: title.to_owned(),
-        used_percent: clamp_percent(used),
-        resets_at: reset,
-        duration_seconds: duration,
-        remaining_value: None,
-        limit_value: None,
-        value_unit: None,
-    })
+        .filter(|value| *value >= 0.0)
+    {
+        return Some(seconds.floor() as u64);
+    }
+    obj_get_any(
+        value,
+        &[
+            "windowDurationMins",
+            "window_duration_mins",
+            "windowMinutes",
+            "window_minutes",
+        ],
+    )
+    .and_then(|v| number(Some(v)))
+    .filter(|value| *value >= 0.0)
+    .map(|minutes| (minutes * 60.0).floor() as u64)
 }
 
 fn normalize_primary_secondary(
     primary: Option<QuotaWindow>,
     secondary: Option<QuotaWindow>,
 ) -> Vec<QuotaWindow> {
-    fn role(window: &QuotaWindow) -> u8 {
-        match window.duration_seconds {
-            Some(18_000) => 1,
-            Some(604_800) => 2,
-            _ => 0,
+    let mut windows = Vec::new();
+    if let Some(window) = primary {
+        windows.push(label_window(window, WindowKind::FiveHour));
+    }
+    if let Some(window) = secondary {
+        let labeled = label_window(window, WindowKind::Weekly);
+        if !windows.iter().any(|(kind, _)| *kind == labeled.0) {
+            windows.push(labeled);
         }
     }
-    match (primary, secondary) {
-        (Some(primary), Some(secondary))
-            if role(&primary) == 2 && (role(&secondary) == 1 || role(&secondary) == 0) =>
-        {
-            vec![
-                rename(secondary, "five_hour", "5 hour"),
-                rename(primary, "weekly", "Weekly"),
-            ]
-        }
-        (Some(primary), Some(secondary)) => vec![
-            rename(primary, "five_hour", "5 hour"),
-            rename(secondary, "weekly", "Weekly"),
-        ],
-        (Some(primary), None) if role(&primary) == 2 => vec![rename(primary, "weekly", "Weekly")],
-        (Some(primary), None) => vec![rename(primary, "five_hour", "5 hour")],
-        (None, Some(secondary)) if role(&secondary) == 1 || role(&secondary) == 0 => {
-            vec![rename(secondary, "five_hour", "5 hour")]
-        }
-        (None, Some(secondary)) => vec![rename(secondary, "weekly", "Weekly")],
-        _ => Vec::new(),
-    }
+    windows.sort_by_key(|(kind, _)| kind.order());
+    windows.into_iter().map(|(_, window)| window).collect()
 }
 
-fn rename(mut window: QuotaWindow, id: &str, title: &str) -> QuotaWindow {
-    window.id = id.to_owned();
-    window.title = title.to_owned();
-    window
+fn label_window(mut window: QuotaWindow, fallback: WindowKind) -> (WindowKind, QuotaWindow) {
+    let kind = WindowKind::classify(window.duration_seconds, fallback);
+    window.id = kind.id().to_owned();
+    window.title = kind.title().to_owned();
+    (kind, window)
 }
 
 fn map_additional(value: Option<&Value>) -> Vec<QuotaWindow> {
@@ -453,7 +578,6 @@ fn map_additional(value: Option<&Value>) -> Vec<QuotaWindow> {
                     .as_deref()
                     .or(metered.as_deref())
                     .unwrap_or("Codex extra limit"),
-                false,
             )
         }) {
             used.insert(id.clone());
@@ -489,40 +613,25 @@ fn map_named_windows(
     used: &mut std::collections::HashSet<String>,
 ) -> Vec<QuotaWindow> {
     let mut windows = Vec::new();
-    for (candidate, fallback) in [(primary, "five"), (secondary, "weekly")] {
-        let kind = window_kind(candidate, fallback);
-        let (id, title) = if kind == "five" {
-            (five_id, five_title)
-        } else {
-            (weekly_id, weekly_title)
+    for (candidate, fallback) in [
+        (primary, WindowKind::FiveHour),
+        (secondary, WindowKind::Weekly),
+    ] {
+        let Some(value) = candidate else {
+            continue;
         };
-        if let Some(window) = candidate.and_then(|v| map_window(v, id, title, false))
+        let kind = WindowKind::classify(window_duration_seconds(value), fallback);
+        let (id, title) = match kind {
+            WindowKind::FiveHour => (five_id, five_title),
+            WindowKind::Weekly | WindowKind::Monthly => (weekly_id, weekly_title),
+        };
+        if let Some(window) = map_window(value, id, title)
             && used.insert(id.to_owned())
         {
             windows.push(window);
         }
     }
     windows
-}
-
-fn window_kind(value: Option<&Value>, fallback: &str) -> &'static str {
-    let seconds = value
-        .and_then(|v| obj_get_any(v, &["limit_window_seconds", "limitWindowSeconds"]))
-        .and_then(|v| number(Some(v)))
-        .unwrap_or(0.0);
-    if seconds > 0.0 {
-        if seconds / 60.0 <= 360.0 {
-            return "five";
-        }
-        if seconds / 60.0 >= 8_640.0 {
-            return "weekly";
-        }
-    }
-    if fallback == "weekly" {
-        "weekly"
-    } else {
-        "five"
-    }
 }
 
 fn slug(value: &str) -> String {
@@ -852,6 +961,122 @@ mod tests {
     }
 
     #[test]
+    fn maps_swapped_weekly_primary_and_five_hour_secondary() {
+        let usage = map_usage(&serde_json::json!({
+            "rate_limit": {
+                "primary_window": {"used_percent": 33, "limit_window_seconds": 604800},
+                "secondary_window": {"used_percent": 12, "limit_window_seconds": 18000}
+            }
+        }));
+        assert_eq!(
+            usage
+                .windows
+                .iter()
+                .map(|window| (
+                    window.id.as_str(),
+                    window.title.as_str(),
+                    window.used_percent
+                ))
+                .collect::<Vec<_>>(),
+            [("five_hour", "5 hour", 12.0), ("weekly", "Weekly", 33.0)]
+        );
+    }
+
+    #[test]
+    fn maps_free_monthly_and_weekly_windows_by_duration() {
+        let usage = map_usage(&serde_json::json!({
+            "plan_type": "free",
+            "rate_limit": {
+                "primary_window": {"used_percent": 41, "limit_window_seconds": 2592000},
+                "secondary_window": {"used_percent": 12, "limit_window_seconds": 604800}
+            }
+        }));
+        assert_eq!(
+            usage
+                .windows
+                .iter()
+                .map(|window| (
+                    window.id.as_str(),
+                    window.title.as_str(),
+                    window.used_percent
+                ))
+                .collect::<Vec<_>>(),
+            [("weekly", "Weekly", 12.0), ("monthly", "Monthly", 41.0),]
+        );
+        assert!(!usage.malformed_success);
+    }
+
+    #[test]
+    fn maps_free_monthly_primary_without_calling_it_five_hour() {
+        let usage = map_usage(&serde_json::json!({
+            "plan_type": "free",
+            "rate_limit": {
+                "primary_window": {
+                    "used_percent": 67,
+                    "limit_window_seconds": 2592000,
+                    "reset_at": 1787842532
+                },
+                "secondary_window": null
+            }
+        }));
+        assert_eq!(
+            usage
+                .windows
+                .iter()
+                .map(|window| (window.id.as_str(), window.title.as_str()))
+                .collect::<Vec<_>>(),
+            [("monthly", "Monthly")]
+        );
+        assert!(!usage.malformed_success);
+    }
+
+    #[test]
+    fn maps_rpc_window_minutes_to_monthly() {
+        let usage = map_rpc(&serde_json::json!({
+            "rate_limits": {
+                "plan_type": "free",
+                "primary": {"used_percent": 22, "window_minutes": 43200, "resets_at": 1787842532},
+                "secondary": {"usedPercent": 8, "windowDurationMins": 10080}
+            }
+        }));
+        assert_eq!(
+            usage
+                .windows
+                .iter()
+                .map(|window| (
+                    window.id.as_str(),
+                    window.title.as_str(),
+                    window.duration_seconds
+                ))
+                .collect::<Vec<_>>(),
+            [
+                ("weekly", "Weekly", Some(604_800)),
+                ("monthly", "Monthly", Some(2_592_000)),
+            ]
+        );
+    }
+
+    #[test]
+    fn maps_weekly_only_primary_window() {
+        let usage = map_usage(&serde_json::json!({
+            "rate_limit": {
+                "primary_window": {"used_percent": 100, "limit_window_seconds": 604800},
+                "secondary_window": null
+            }
+        }));
+        assert_eq!(
+            usage
+                .windows
+                .iter()
+                .map(|window| window.id.as_str())
+                .collect::<Vec<_>>(),
+            ["weekly"]
+        );
+        assert_eq!(usage.windows[0].title, "Weekly");
+        assert!(!usage.malformed_success);
+    }
+
+    #[test]
     fn maps_code_review_rate_limit_when_present() {
         let usage = map_usage(&serde_json::json!({
             "rate_limit": {
@@ -926,22 +1151,47 @@ mod tests {
 
     #[test]
     fn accepts_snake_and_camel_case_credentials_but_requires_access_token() {
-        let snake = parse_credentials(&serde_json::json!({
+        let snake = parse_oauth_credentials(&serde_json::json!({
             "tokens": {"access_token": "access-snake", "id_token": "id-snake", "account_id": "acct-snake"}
         }))
         .unwrap();
         assert_eq!(snake.access_token, "access-snake");
         assert_eq!(snake.account_id.as_deref(), Some("acct-snake"));
 
-        let camel = parse_credentials(&serde_json::json!({
+        let camel = parse_oauth_credentials(&serde_json::json!({
             "tokens": {"accessToken": "access-camel", "idToken": "id-camel", "accountId": "acct-camel"}
         }))
         .unwrap();
         assert_eq!(camel.access_token, "access-camel");
         assert_eq!(camel.account_id.as_deref(), Some("acct-camel"));
 
-        assert!(parse_credentials(&serde_json::json!({"tokens": {}})).is_none());
-        assert!(parse_credentials(&serde_json::json!({})).is_none());
+        assert!(parse_oauth_credentials(&serde_json::json!({"tokens": {}})).is_none());
+        assert!(parse_oauth_credentials(&serde_json::json!({})).is_none());
+    }
+
+    #[test]
+    fn discovers_pat_only_auth_without_oauth_tokens() {
+        let auth = parse_auth(
+            &serde_json::json!({
+                "personal_access_token": "pat-token"
+            }),
+            "fixture",
+        )
+        .unwrap();
+        assert_eq!(auth.pat.as_deref(), Some("pat-token"));
+        assert!(auth.oauth.is_none());
+
+        let camel = parse_auth(
+            &serde_json::json!({
+                "personalAccessToken": "pat-camel",
+                "tokens": {"access_token": "oauth"}
+            }),
+            "fixture",
+        )
+        .unwrap();
+        assert_eq!(camel.pat.as_deref(), Some("pat-camel"));
+        assert_eq!(camel.oauth.unwrap().access_token, "oauth");
+        assert!(parse_auth(&serde_json::json!({}), "fixture").is_none());
     }
 
     #[test]

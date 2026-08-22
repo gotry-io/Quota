@@ -1,0 +1,620 @@
+use crate::catalog::ProviderId;
+use serde_json::Value;
+use std::time::Duration;
+
+use super::common::{
+    CollectionContext, ErrorCategory, HttpClient, ProviderError, ProviderSession, QuotaAccount,
+    QuotaSnapshot, QuotaWindow, VALIDATION_TIMEOUT, ValidatedBrowserSession, account_identity,
+    clamp_percent, collect_official_or_browser, discover_official_or_browser, mask_email, number,
+    obj_get, parse_date, unix_seconds_to_iso,
+};
+
+mod app;
+
+pub const SOURCE: &str = "cursor_dashboard_api";
+const ORIGIN: &str = "https://cursor.com";
+/// Optional dashboard calls must not stretch a refresh that already has its
+/// required usage summary.
+const OPTIONAL_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// The validated session plus the stable subject that the legacy request-usage
+/// endpoint keys on.
+#[derive(Debug)]
+struct Identity {
+    session: ValidatedBrowserSession,
+    subject: Option<String>,
+}
+
+pub fn discover(context: &CollectionContext) -> Vec<ProviderSession> {
+    discover_official_or_browser(
+        ProviderId::Cursor,
+        app::usable_session(context).then(|| ProviderSession {
+            provider: ProviderId::Cursor,
+            credential_source: app::SOURCE.to_owned(),
+        }),
+        context,
+    )
+}
+
+pub fn validate_browser_session(
+    cookie_header: &str,
+    context: &CollectionContext,
+) -> Result<ValidatedBrowserSession, ProviderError> {
+    validate_at(cookie_header, context, ORIGIN).map(|identity| identity.session)
+}
+
+fn validate_at(
+    cookie_header: &str,
+    context: &CollectionContext,
+    origin: &str,
+) -> Result<Identity, ProviderError> {
+    if context.cancelled() {
+        return Err(ProviderError::new(ErrorCategory::Unavailable, SOURCE));
+    }
+    let client = HttpClient::with_timeout(VALIDATION_TIMEOUT)?;
+    let user_agent = context.user_agent();
+    let headers = [
+        ("Accept", "application/json"),
+        ("Cookie", cookie_header),
+        ("User-Agent", user_agent.as_str()),
+    ];
+    let (_, identity) =
+        client.get_json_session(&format!("{origin}/api/auth/me"), &headers, SOURCE)?;
+    identity_from_response(&identity, cookie_header)
+}
+
+fn identity_from_response(value: &Value, cookie_header: &str) -> Result<Identity, ProviderError> {
+    let sub = bounded_identity(value.get("sub"), 256);
+    let email = bounded_identity(value.get("email"), 254).filter(|value| valid_email(value));
+    let normalized_email = email.as_ref().map(|value| value.to_ascii_lowercase());
+    let (namespace, owner) = sub
+        .as_deref()
+        .map(|value| ("sub", value))
+        .or_else(|| normalized_email.as_deref().map(|value| ("email", value)))
+        .ok_or_else(|| ProviderError::new(ErrorCategory::Error, SOURCE))?;
+    let (account_fingerprint, _) = account_identity("cursor", namespace, Some(owner));
+    let display_email = email.as_deref().and_then(|value| {
+        let (local, domain) = value.split_once('@')?;
+        Some(format!("{local}@{}", domain.to_ascii_lowercase()))
+    });
+    let account_label = mask_email(display_email.as_deref())
+        .filter(|label| label.len() <= 128 && !label.chars().any(char::is_control));
+    Ok(Identity {
+        session: ValidatedBrowserSession {
+            cookie_header: cookie_header.to_owned(),
+            account_fingerprint,
+            account_label,
+        },
+        subject: sub,
+    })
+}
+
+fn bounded_identity(value: Option<&Value>, limit: usize) -> Option<String> {
+    let value = value?.as_str()?.trim();
+    (!value.is_empty() && value.len() <= limit && !value.chars().any(char::is_control))
+        .then(|| value.to_owned())
+}
+
+fn valid_email(value: &str) -> bool {
+    if !value.is_ascii() || value.bytes().any(|byte| byte.is_ascii_whitespace()) {
+        return false;
+    }
+    let Some((local, domain)) = value.split_once('@') else {
+        return false;
+    };
+    !local.is_empty()
+        && !domain.is_empty()
+        && !domain.starts_with('.')
+        && !domain.ends_with('.')
+        && domain.contains('.')
+        && !domain.contains('@')
+}
+
+pub fn collect(
+    session: &ProviderSession,
+    context: &CollectionContext,
+) -> Result<QuotaSnapshot, ProviderError> {
+    collect_official_or_browser(
+        session,
+        context,
+        ProviderId::Cursor,
+        SOURCE,
+        || {
+            let cookie_header = app::cookie_header(context)
+                .ok_or_else(|| ProviderError::new(ErrorCategory::AuthRequired, SOURCE))?;
+            collect_with_cookie(&cookie_header, context)
+        },
+        || {
+            let cookie_header = context
+                .browser_session(ProviderId::Cursor)
+                .ok_or_else(|| ProviderError::new(ErrorCategory::AuthRequired, SOURCE))?;
+            collect_with_cookie(cookie_header, context)
+        },
+    )
+}
+
+fn collect_with_cookie(
+    cookie_header: &str,
+    context: &CollectionContext,
+) -> Result<QuotaSnapshot, ProviderError> {
+    let identity = validate_at(cookie_header, context, ORIGIN)?;
+    let client = HttpClient::new()?;
+    let user_agent = context.user_agent();
+    let headers = [
+        ("Accept", "application/json"),
+        ("Cookie", cookie_header),
+        ("User-Agent", user_agent.as_str()),
+    ];
+    let (_, summary) =
+        client.get_json_session(&format!("{ORIGIN}/api/usage-summary"), &headers, SOURCE)?;
+    let extras = optional_usage(cookie_header, identity.subject.as_deref(), context);
+    let windows = quota_windows(&summary, &extras)?;
+    Ok(QuotaSnapshot {
+        provider: ProviderId::Cursor,
+        account: QuotaAccount {
+            fingerprint: identity.session.account_fingerprint,
+            fingerprint_scope: "global",
+            label: identity.session.account_label,
+            plan: bounded_identity(summary.get("membershipType"), 64),
+        },
+        windows,
+        source: SOURCE,
+        status: "available",
+        observed_at: context.observed_at(),
+    })
+}
+
+/// Best-effort dashboard payloads alongside `/api/usage-summary`. Either may be
+/// absent; neither failure fails the refresh.
+#[derive(Default)]
+struct OptionalUsage {
+    /// `GET /api/usage?user=<sub>`: request counters for legacy request-based plans.
+    requests: Option<Value>,
+    /// `POST /api/dashboard/get-sand-usage-status`: the weekly Grok Bot allowance.
+    grok_bot: Option<Value>,
+}
+
+fn optional_usage(
+    cookie_header: &str,
+    subject: Option<&str>,
+    context: &CollectionContext,
+) -> OptionalUsage {
+    if context.cancelled() {
+        return OptionalUsage::default();
+    }
+    let Ok(client) = HttpClient::with_timeout(OPTIONAL_TIMEOUT) else {
+        return OptionalUsage::default();
+    };
+    let user_agent = context.user_agent();
+    let headers = [
+        ("Accept", "application/json"),
+        ("Cookie", cookie_header),
+        ("Origin", ORIGIN),
+        ("User-Agent", user_agent.as_str()),
+    ];
+    let requests = subject.and_then(|subject| {
+        let url = format!("{ORIGIN}/api/usage?user={}", urlencode(subject));
+        client
+            .get_json_session(&url, &headers, SOURCE)
+            .ok()
+            .map(|(_, value)| value)
+    });
+    let grok_bot = client
+        .post_json_session(
+            &format!("{ORIGIN}/api/dashboard/get-sand-usage-status"),
+            &headers,
+            &Value::Object(Default::default()),
+            SOURCE,
+        )
+        .ok()
+        .map(|(_, value)| value);
+    OptionalUsage { requests, grok_bot }
+}
+
+fn urlencode(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                encoded.push(byte as char);
+            }
+            _ => encoded.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    encoded
+}
+
+fn quota_windows(
+    summary: &Value,
+    extras: &OptionalUsage,
+) -> Result<Vec<QuotaWindow>, ProviderError> {
+    let reset = parse_date(summary.get("billingCycleEnd")).map(unix_seconds_to_iso);
+    let individual = obj_get(summary, "individualUsage");
+    let team = obj_get(summary, "teamUsage");
+    let mut windows = Vec::new();
+    // A legacy request quota replaces the token-based Cursor/Other Models split and
+    // the weekly Grok Bot bar, which only make sense next to usage-based pricing.
+    let legacy_requests = extras
+        .requests
+        .as_ref()
+        .and_then(|value| request_window(value, reset.clone()));
+    if let Some(window) = legacy_requests {
+        windows.push(window);
+    } else {
+        if let Some(plan) = individual.and_then(|value| obj_get(value, "plan")) {
+            windows.extend(included_windows(plan, reset.clone()));
+        }
+        if let Some(window) = extras.grok_bot.as_ref().and_then(grok_bot_window) {
+            windows.push(window);
+        }
+    }
+    if let Some(overall) = individual.and_then(|value| obj_get(value, "overall")) {
+        if windows.is_empty()
+            && let Some(window) = money_window("individual", "Individual", overall, reset.clone())
+        {
+            windows.push(window);
+        }
+    }
+    if let Some(on_demand) = individual.and_then(|value| obj_get(value, "onDemand"))
+        && let Some(window) = money_window("on_demand", "On-demand", on_demand, reset.clone())
+    {
+        windows.push(window);
+    }
+    if let Some(pooled) = team.and_then(|value| obj_get(value, "pooled"))
+        && let Some(window) = money_window("team_pool", "Team pool", pooled, reset.clone())
+    {
+        windows.push(window);
+    }
+    if let Some(on_demand) = team.and_then(|value| obj_get(value, "onDemand"))
+        && let Some(window) =
+            money_window("team_on_demand", "Team on-demand", on_demand, reset.clone())
+    {
+        windows.push(window);
+    }
+    if windows.is_empty() {
+        return Err(ProviderError::new(ErrorCategory::Error, SOURCE));
+    }
+    Ok(windows)
+}
+
+fn included_windows(value: &Value, resets_at: Option<String>) -> Vec<QuotaWindow> {
+    if value.get("enabled").and_then(Value::as_bool) == Some(false) {
+        return Vec::new();
+    }
+    let api_money = included_api_remaining(value);
+    [
+        ("cursor_models", "Cursor Models", "autoPercentUsed"),
+        ("other_models", "Other Models", "apiPercentUsed"),
+    ]
+    .into_iter()
+    .filter_map(|(id, title, field)| {
+        let api = id == "other_models";
+        Some(QuotaWindow {
+            id: id.to_owned(),
+            title: title.to_owned(),
+            used_percent: clamp_percent(number(value.get(field))?),
+            resets_at: resets_at.clone(),
+            duration_seconds: None,
+            remaining_value: api
+                .then_some(api_money)
+                .flatten()
+                .map(|(remaining, _)| remaining),
+            limit_value: api.then_some(api_money).flatten().map(|(_, limit)| limit),
+            value_unit: (api && api_money.is_some()).then_some("usd"),
+        })
+    })
+    .collect()
+}
+
+fn included_api_remaining(value: &Value) -> Option<(f64, f64)> {
+    let used = number(value.get("used"))?;
+    let limit = number(value.get("limit"))?;
+    if used < 0.0 || limit <= 0.0 {
+        return None;
+    }
+    let remaining = number(value.get("remaining"))
+        .filter(|value| *value >= 0.0)
+        .unwrap_or_else(|| (limit - used).max(0.0));
+    Some((remaining / 100.0, limit / 100.0))
+}
+
+/// `/api/usage` `gpt-4`: `maxRequestUsage` present and positive marks a legacy
+/// request-based plan; `numRequestsTotal` is preferred over `numRequests`.
+fn request_window(value: &Value, resets_at: Option<String>) -> Option<QuotaWindow> {
+    let model = obj_get(value, "gpt-4")?;
+    let limit = number(model.get("maxRequestUsage")).filter(|limit| *limit > 0.0)?;
+    let used = number(model.get("numRequestsTotal"))
+        .or_else(|| number(model.get("numRequests")))
+        .filter(|used| *used >= 0.0)?;
+    Some(QuotaWindow {
+        id: "requests".to_owned(),
+        title: "Requests".to_owned(),
+        used_percent: clamp_percent(used / limit * 100.0),
+        resets_at,
+        duration_seconds: None,
+        remaining_value: Some((limit - used).max(0.0)),
+        limit_value: Some(limit),
+        value_unit: Some("count"),
+    })
+}
+
+/// `get-sand-usage-status`: the weekly Grok Bot allowance, only for accounts with
+/// a non-zero included limit.
+fn grok_bot_window(value: &Value) -> Option<QuotaWindow> {
+    if value
+        .get("hasNonZeroIncludedLimit")
+        .and_then(Value::as_bool)
+        != Some(true)
+    {
+        return None;
+    }
+    let used = number(value.get("usagePercent"))?;
+    let start = parse_date(value.get("currentPeriodStart"));
+    let end = parse_date(value.get("nextResetTimestampUtc"));
+    Some(QuotaWindow {
+        id: "grok_bot".to_owned(),
+        title: "Grok Bot".to_owned(),
+        used_percent: clamp_percent(used),
+        resets_at: end.map(unix_seconds_to_iso),
+        duration_seconds: super::common::duration_seconds(start, end),
+        remaining_value: None,
+        limit_value: None,
+        value_unit: None,
+    })
+}
+
+fn money_window(
+    id: &str,
+    title: &str,
+    value: &Value,
+    resets_at: Option<String>,
+) -> Option<QuotaWindow> {
+    if value.get("enabled").and_then(Value::as_bool) == Some(false) {
+        return None;
+    }
+    let used = number(value.get("used"))?;
+    let limit = number(value.get("limit"))?;
+    if used < 0.0 || limit <= 0.0 {
+        return None;
+    }
+    let remaining = number(value.get("remaining"))
+        .filter(|value| *value >= 0.0)
+        .unwrap_or_else(|| (limit - used).max(0.0));
+    let percent = number(value.get("totalPercentUsed")).unwrap_or_else(|| used / limit * 100.0);
+    Some(QuotaWindow {
+        id: id.to_owned(),
+        title: title.to_owned(),
+        used_percent: clamp_percent(percent),
+        resets_at,
+        duration_seconds: None,
+        remaining_value: Some(remaining / 100.0),
+        limit_value: Some(limit / 100.0),
+        value_unit: Some("usd"),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cursor_is_an_account_sync_catalog_provider() {
+        assert!(ProviderId::ALL.contains(&ProviderId::Cursor));
+        assert!(ProviderId::Cursor.metadata().account_sync);
+        assert_eq!(ProviderId::Cursor.metadata().account_sync_protocol, Some(3));
+        assert_eq!(
+            ProviderId::Cursor
+                .metadata()
+                .browser_session
+                .map(|session| session.exclusive),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn identity_is_stable_and_redacted() {
+        let value = serde_json::json!({"sub":"user-secret", "email":"Ada@Example.com"});
+        let identity = identity_from_response(&value, "wos-session=secret").expect("identity");
+        assert_eq!(identity.subject.as_deref(), Some("user-secret"));
+        let session = identity.session;
+        assert_eq!(session.account_label.as_deref(), Some("Ad***@example.com"));
+        assert!(!session.account_fingerprint.contains("user-secret"));
+        let wire = serde_json::to_string(&session.account_fingerprint).expect("wire");
+        assert!(!wire.contains("Ada"));
+    }
+
+    #[test]
+    fn usage_summary_maps_official_model_groups_and_on_demand_money() {
+        let windows = quota_windows(
+            &serde_json::json!({
+                "billingCycleEnd": "2026-09-01T00:00:00Z",
+                "individualUsage": {
+                    "plan": {
+                        "enabled": true,
+                        "used": 15684,
+                        "limit": 40000,
+                        "totalPercentUsed": 6.2736,
+                        "autoPercentUsed": 0.541,
+                        "apiPercentUsed": 29.204
+                    },
+                    "onDemand": {"enabled":true,"used":125,"limit":500,"remaining":375}
+                }
+            }),
+            &OptionalUsage::default(),
+        )
+        .expect("windows");
+        assert_eq!(windows.len(), 3);
+        assert_eq!(windows[0].title, "Cursor Models");
+        assert_eq!(windows[0].used_percent, 0.541);
+        assert_eq!(windows[0].remaining_value, None);
+        assert_eq!(windows[1].title, "Other Models");
+        assert_eq!(windows[1].used_percent, 29.204);
+        assert_eq!(windows[1].remaining_value, Some(243.16));
+        assert_eq!(windows[1].limit_value, Some(400.0));
+        assert_eq!(windows[1].value_unit, Some("usd"));
+        assert_eq!(windows[2].remaining_value, Some(3.75));
+    }
+
+    #[test]
+    fn partial_or_unbounded_usage_is_rejected() {
+        assert!(
+            quota_windows(
+                &serde_json::json!({"individualUsage":{"plan":{"used":1}}}),
+                &OptionalUsage::default()
+            )
+            .is_err()
+        );
+    }
+
+    fn token_summary() -> Value {
+        serde_json::json!({
+            "billingCycleEnd": "2026-09-01T00:00:00Z",
+            "individualUsage": {
+                "plan": {"enabled": true, "autoPercentUsed": 12.5, "apiPercentUsed": 3.0},
+                "onDemand": {"enabled": true, "used": 100, "limit": 1000}
+            }
+        })
+    }
+
+    #[test]
+    fn grok_bot_weekly_allowance_follows_the_included_windows() {
+        let extras = OptionalUsage {
+            requests: None,
+            grok_bot: Some(serde_json::json!({
+                "currentPeriodStart": "2026-08-18T00:00:00.000Z",
+                "nextResetTimestampUtc": "2026-08-25T00:00:00.000Z",
+                "usagePercent": 42.5,
+                "hasAvailableUsage": true,
+                "hasNonZeroIncludedLimit": true
+            })),
+        };
+        let windows = quota_windows(&token_summary(), &extras).expect("windows");
+        assert_eq!(
+            windows
+                .iter()
+                .map(|window| window.id.as_str())
+                .collect::<Vec<_>>(),
+            ["cursor_models", "other_models", "grok_bot", "on_demand"]
+        );
+        let bot = &windows[2];
+        assert_eq!(bot.title, "Grok Bot");
+        assert_eq!(bot.used_percent, 42.5);
+        assert_eq!(bot.resets_at.as_deref(), Some("2026-08-25T00:00:00Z"));
+        assert_eq!(bot.duration_seconds, Some(604_800));
+
+        let no_allowance = OptionalUsage {
+            requests: None,
+            grok_bot: Some(
+                serde_json::json!({"usagePercent": 10, "hasNonZeroIncludedLimit": false}),
+            ),
+        };
+        assert!(
+            quota_windows(&token_summary(), &no_allowance)
+                .expect("windows")
+                .iter()
+                .all(|window| window.id != "grok_bot")
+        );
+    }
+
+    #[test]
+    fn legacy_request_plan_replaces_token_windows_and_grok_bot() {
+        let extras = OptionalUsage {
+            requests: Some(serde_json::json!({
+                "gpt-4": {"numRequests": 120, "numRequestsTotal": 130, "maxRequestUsage": 500},
+                "startOfMonth": "2026-08-01T00:00:00Z"
+            })),
+            grok_bot: Some(
+                serde_json::json!({"usagePercent": 10, "hasNonZeroIncludedLimit": true}),
+            ),
+        };
+        let windows = quota_windows(&token_summary(), &extras).expect("windows");
+        assert_eq!(
+            windows
+                .iter()
+                .map(|window| window.id.as_str())
+                .collect::<Vec<_>>(),
+            ["requests", "on_demand"]
+        );
+        let requests = &windows[0];
+        assert_eq!(requests.title, "Requests");
+        assert_eq!(requests.used_percent, 26.0);
+        assert_eq!(requests.remaining_value, Some(370.0));
+        assert_eq!(requests.limit_value, Some(500.0));
+        assert_eq!(requests.value_unit, Some("count"));
+        assert_eq!(requests.resets_at.as_deref(), Some("2026-09-01T00:00:00Z"));
+
+        // Usage-based accounts answer the endpoint without a request cap.
+        let unlimited = OptionalUsage {
+            requests: Some(
+                serde_json::json!({"gpt-4": {"numRequests": 3, "maxRequestUsage": null}}),
+            ),
+            grok_bot: None,
+        };
+        assert_eq!(
+            quota_windows(&token_summary(), &unlimited).expect("windows")[0].id,
+            "cursor_models"
+        );
+    }
+
+    #[test]
+    fn request_usage_subject_is_url_encoded() {
+        assert_eq!(urlencode("auth0|user_123"), "auth0%7Cuser_123");
+        assert_eq!(urlencode("plain-id.x~y"), "plain-id.x~y");
+    }
+
+    #[test]
+    fn provider_text_is_bounded_before_wire_output() {
+        assert_eq!(
+            bounded_identity(Some(&serde_json::json!(" Pro ")), 64).as_deref(),
+            Some("Pro")
+        );
+        assert!(bounded_identity(Some(&serde_json::json!("x".repeat(65))), 64).is_none());
+        assert!(bounded_identity(Some(&serde_json::json!("bad\nplan")), 64).is_none());
+    }
+
+    #[test]
+    fn identity_rejects_oversized_control_and_malformed_values() {
+        for value in [
+            serde_json::json!({"sub":"x".repeat(257)}),
+            serde_json::json!({"sub":"bad\nsub"}),
+            serde_json::json!({"email":"not-an-email"}),
+            serde_json::json!({"email":"a@localhost"}),
+        ] {
+            assert!(identity_from_response(&value, "wos-session=secret").is_err());
+        }
+    }
+
+    #[test]
+    fn validation_maps_provider_auth_status_without_leaking_body() {
+        use std::io::{Read as _, Write as _};
+        use std::net::TcpListener;
+
+        for status in ["401 Unauthorized", "403 Forbidden"] {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+            let address = listener.local_addr().expect("address");
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().expect("accept");
+                let mut request = [0_u8; 2048];
+                let _ = stream.read(&mut request);
+                let body = b"provider-secret-response";
+                write!(
+                    stream,
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .expect("response headers");
+                stream.write_all(body).expect("response body");
+            });
+            let error = validate_at(
+                "wos-session=cookie-secret",
+                &CollectionContext::default(),
+                &format!("http://{address}"),
+            )
+            .expect_err("auth failure");
+            assert_eq!(error.category, ErrorCategory::AuthRequired);
+            assert!(!error.to_string().contains("provider-secret-response"));
+            assert!(!error.to_string().contains("cookie-secret"));
+            server.join().expect("server");
+        }
+    }
+}

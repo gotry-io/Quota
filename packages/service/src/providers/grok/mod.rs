@@ -20,6 +20,9 @@ mod web;
 
 pub const SOURCE: &str = "grok_billing_api";
 pub const BILLING_URL: &str = "https://cli-chat-proxy.grok.com/v1/billing?format=credits";
+pub const SETTINGS_URL: &str = "https://cli-chat-proxy.grok.com/v1/settings";
+const SETTINGS_TIMEOUT: Duration = Duration::from_secs(2);
+const PLAN_SLUG_LIMIT: usize = 64;
 const OIDC_PREFIX: &str = "https://auth.x.ai::";
 const LEGACY_SCOPE: &str = "https://accounts.x.ai/sign-in";
 
@@ -423,20 +426,18 @@ fn collect_with_credentials(
     credentials: &Credentials,
     context: &CollectionContext,
 ) -> Result<QuotaSnapshot, ProviderError> {
-    let client = HttpClient::new()?;
-    let bearer = format!("Bearer {}", credentials.access_token);
-    let user_agent = context.user_agent();
-    let mut headers = vec![
-        ("Authorization", bearer.as_str()),
-        ("Accept", "application/json"),
-        ("X-XAI-Token-Auth", "xai-grok-cli"),
-        ("User-Agent", user_agent.as_str()),
-    ];
-    if let Some(user_id) = credentials.user_id.as_deref() {
-        headers.push(("x-userid", user_id));
-    }
-    let (_, value) = client.get_json(BILLING_URL, &headers, SOURCE)?;
-    let window = map_billing(&value)?;
+    let (window, source) = match fetch_proxy_billing(credentials, context) {
+        Ok(window) => (window, SOURCE),
+        // Rejected or malformed proxy answers are final. When the proxy is merely
+        // unreachable, grok.com's own billing RPC accepts the same OAuth token.
+        Err(error) if error.category != ErrorCategory::Unavailable => return Err(error),
+        Err(proxy_error) => (
+            web::bearer_billing_window(&credentials.access_token, context)
+                .map_err(|_| proxy_error)?,
+            web::WEB_SOURCE,
+        ),
+    };
+    let plan = fetch_settings_plan(credentials, context).or_else(|| grok_plan(credentials));
     let namespace = if credentials.team_id.is_some() {
         "team_id"
     } else {
@@ -462,13 +463,74 @@ fn collect_with_credentials(
             fingerprint_scope: scope,
             label: mask_email(credentials.email.as_deref())
                 .or_else(|| mask_display_name(Some(&display_name))),
-            plan: grok_plan(credentials),
+            plan,
         },
         windows: vec![window],
-        source: SOURCE,
+        source,
         status: "available",
         observed_at: context.observed_at(),
     })
+}
+
+fn proxy_headers<'a>(
+    credentials: &'a Credentials,
+    bearer: &'a str,
+    user_agent: &'a str,
+) -> Vec<(&'a str, &'a str)> {
+    let mut headers = vec![
+        ("Authorization", bearer),
+        ("Accept", "application/json"),
+        ("X-XAI-Token-Auth", "xai-grok-cli"),
+        ("User-Agent", user_agent),
+    ];
+    if let Some(user_id) = credentials.user_id.as_deref() {
+        headers.push(("x-userid", user_id));
+    }
+    headers
+}
+
+fn fetch_proxy_billing(
+    credentials: &Credentials,
+    context: &CollectionContext,
+) -> Result<QuotaWindow, ProviderError> {
+    let client = HttpClient::new()?;
+    let bearer = format!("Bearer {}", credentials.access_token);
+    let user_agent = context.user_agent();
+    let headers = proxy_headers(credentials, &bearer, &user_agent);
+    let (_, value) = client.get_json(BILLING_URL, &headers, SOURCE)?;
+    map_billing(&value)
+}
+
+/// Billing does not name the tier; the CLI settings envelope does
+/// (`subscription_tier_display`, e.g. "SuperGrok Heavy"). Best-effort and bounded:
+/// a missing or slow answer leaves the credential-derived plan hint in place.
+fn fetch_settings_plan(credentials: &Credentials, context: &CollectionContext) -> Option<String> {
+    if context.cancelled() {
+        return None;
+    }
+    let client = HttpClient::with_timeout(SETTINGS_TIMEOUT).ok()?;
+    let bearer = format!("Bearer {}", credentials.access_token);
+    let user_agent = context.user_agent();
+    let headers = proxy_headers(credentials, &bearer, &user_agent);
+    let (_, value) = client.get_json(SETTINGS_URL, &headers, SOURCE).ok()?;
+    plan_slug(string(obj_get(&value, "subscription_tier_display")).as_deref())
+}
+
+/// Normalizes a display tier into the catalog's plan slug shape
+/// ("SuperGrok Heavy" → "supergrok_heavy").
+fn plan_slug(display: Option<&str>) -> Option<String> {
+    let mut slug = String::new();
+    for character in display?.trim().chars() {
+        if character.is_ascii_alphanumeric() {
+            slug.push(character.to_ascii_lowercase());
+        } else if !slug.is_empty() && !slug.ends_with('_') {
+            slug.push('_');
+        }
+    }
+    while slug.ends_with('_') {
+        slug.pop();
+    }
+    (!slug.is_empty() && slug.len() <= PLAN_SLUG_LIMIT).then_some(slug)
 }
 
 fn map_billing(value: &Value) -> Result<QuotaWindow, ProviderError> {
@@ -646,6 +708,23 @@ mod tests {
         assert_eq!(window.used_percent, 25.0);
         assert_eq!(window.title, "Monthly");
         assert!(map_billing(&serde_json::json!({"config": {}})).is_err());
+    }
+
+    #[test]
+    fn settings_tier_display_becomes_a_plan_slug() {
+        assert_eq!(
+            plan_slug(Some("SuperGrok Heavy")).as_deref(),
+            Some("supergrok_heavy")
+        );
+        assert_eq!(plan_slug(Some("SuperGrok")).as_deref(), Some("supergrok"));
+        assert_eq!(
+            plan_slug(Some("  Pro - Lite  ")).as_deref(),
+            Some("pro_lite")
+        );
+        assert!(plan_slug(Some("   ")).is_none());
+        assert!(plan_slug(Some("---")).is_none());
+        assert!(plan_slug(None).is_none());
+        assert!(plan_slug(Some(&"x".repeat(65))).is_none());
     }
 
     #[test]

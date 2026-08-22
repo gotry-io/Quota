@@ -123,7 +123,9 @@ presentation are [ADR 0016](decisions/0016-local-service-self-repair.md). SQLite
 explicit and append-only.
 
 Catalog browser-session capability contains an HTTPS login URL, exact Cookie hosts/names, a
-browser-priority prefix, and `exclusive` when that session is the only local auth path. QuotaBar
+browser-priority prefix, and `exclusive` when Settings should omit an official CLI sign-in command.
+Cursor still prefers a signed-in Cursor.app session from local desktop state before that stored
+browser session. QuotaBar
 pins login and discovery to one selected supported browser;
 SweetCookieKit only acquires allowlisted Cookie candidates in Swift memory. Rust owns syntax and
 account validation, durable state, provider networking, and routine refresh. Linux QuotaCLI does

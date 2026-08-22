@@ -20,6 +20,7 @@ use super::common::{
 mod web;
 
 pub const SOURCE: &str = "anthropic_oauth_usage_api";
+pub const CLI_SOURCE: &str = "claude_cli_usage";
 pub const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 pub const PROFILE_URL: &str = "https://api.anthropic.com/api/oauth/profile";
 pub const KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
@@ -62,14 +63,29 @@ pub fn collect(
         context,
         ProviderId::Claude,
         SOURCE,
-        || collect_oauth(context),
+        || collect_official(context),
         || web::collect(context),
     )
 }
 
-fn collect_oauth(context: &CollectionContext) -> Result<QuotaSnapshot, ProviderError> {
-    let mut credentials = load_credentials(context)
+fn collect_official(context: &CollectionContext) -> Result<QuotaSnapshot, ProviderError> {
+    let credentials = load_credentials(context)
         .ok_or_else(|| ProviderError::new(ErrorCategory::AuthRequired, SOURCE))?;
+    let plan = credentials.subscription_type.clone();
+    match collect_oauth(credentials, context) {
+        Ok(snapshot) => Ok(snapshot),
+        Err(error) if error.category == ErrorCategory::Error => Err(error),
+        // The official CLI renders the same account's usage panel. It only runs
+        // when local credentials exist, so a missing sign-in never spawns a probe
+        // and the OAuth verdict still drives the browser-session fallback.
+        Err(oauth_error) => collect_cli_usage(plan, context).map_err(|_| oauth_error),
+    }
+}
+
+fn collect_oauth(
+    mut credentials: Credentials,
+    context: &CollectionContext,
+) -> Result<QuotaSnapshot, ProviderError> {
     if !credentials
         .scopes
         .iter()
@@ -117,6 +133,7 @@ fn load_credentials(context: &CollectionContext) -> Option<Credentials> {
         return file_credentials;
     }
     if cfg!(target_os = "macos")
+        && context.allows_host_keychain()
         && let Some(credentials) = read_keychain(context)
     {
         return Some(credentials);
@@ -192,134 +209,9 @@ fn refresh_and_reload(
     credentials: &Credentials,
     context: &CollectionContext,
 ) -> Option<Credentials> {
-    if !cfg!(target_os = "macos") {
-        return None;
-    }
-    let executable = resolve_executable(context)?;
-    let script = Path::new("/usr/bin/script");
-    if !fs::metadata(script)
-        .map(|metadata| metadata.is_file())
-        .unwrap_or(false)
-    {
-        return None;
-    }
-    let probe_dir = std::env::temp_dir().join(format!(
-        "quota-claude-probe-{}-{}",
-        std::process::id(),
-        Uuid::new_v4()
-    ));
-    fs::create_dir_all(probe_dir.join(".claude")).ok()?;
-    let settings = probe_dir.join(".claude/settings.local.json");
-    fs::write(
-        &settings,
-        b"{\"disableDeepLinkRegistration\":\"disable\"}\n",
-    )
-    .ok()?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&probe_dir, fs::Permissions::from_mode(0o700)).ok()?;
-        fs::set_permissions(&settings, fs::Permissions::from_mode(0o600)).ok()?;
-    }
-    let session_id = Uuid::new_v4().to_string();
-    let _cleanup = ProbeCleanup::new(context, &probe_dir, &session_id);
-    // macOS `script` allocates the PTY that Claude's interactive slash
-    // commands require, while still letting us invoke the executable without
-    // a shell. The probe is read-only and exits immediately after /status.
-    let mut command = Command::new(script);
-    command
-        .args([
-            "-q",
-            "/dev/null",
-            &executable,
-            "--allowed-tools",
-            "",
-            "--session-id",
-            &session_id,
-        ])
-        .current_dir(&probe_dir)
-        .env("HOME", &context.home_directory)
-        .env("DISABLE_AUTOUPDATER", "1")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    for (key, value) in &context.environment {
-        if key != "HOME" && !key.starts_with("ANTHROPIC_") {
-            command.env(key, value);
-        }
-    }
-    command.env("HOME", &context.home_directory);
-    let mut child = command.spawn().ok()?;
-    let Some(mut stdin) = child.stdin.take() else {
-        stop_child(&mut child);
-        let _ = fs::remove_dir_all(&probe_dir);
-        return None;
-    };
-    let Some(stdout) = child.stdout.take() else {
-        stop_child(&mut child);
-        let _ = fs::remove_dir_all(&probe_dir);
-        return None;
-    };
-    let (sender, receiver) = mpsc::sync_channel(1);
-    thread::spawn(move || {
-        let mut output = Vec::new();
-        let result = stdout
-            .take(1_048_577)
-            .read_to_end(&mut output)
-            .map(|_| output);
-        let _ = sender.send(result.ok());
-    });
-    if stdin.write_all(b"/status\n/exit\n").is_err() {
-        stop_child(&mut child);
-        let _ = fs::remove_dir_all(&probe_dir);
-        return None;
-    }
-    drop(stdin);
-    let started = std::time::Instant::now();
-    let mut output = None;
-    let status = loop {
-        if context.cancelled() {
-            stop_child(&mut child);
-            let _ = fs::remove_dir_all(&probe_dir);
-            return None;
-        }
-        if output.is_none() {
-            match receiver.try_recv() {
-                Ok(Some(bytes)) => {
-                    if bytes.len() > 1_048_576 {
-                        stop_child(&mut child);
-                        let _ = fs::remove_dir_all(&probe_dir);
-                        return None;
-                    }
-                    output = Some(bytes);
-                }
-                Ok(None) | Err(mpsc::TryRecvError::Disconnected) => {
-                    stop_child(&mut child);
-                    let _ = fs::remove_dir_all(&probe_dir);
-                    return None;
-                }
-                Err(mpsc::TryRecvError::Empty) => {}
-            }
-        }
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if started.elapsed() < Duration::from_secs(60) => {
-                thread::sleep(Duration::from_millis(25));
-            }
-            Ok(None) | Err(_) => {
-                stop_child(&mut child);
-                let _ = fs::remove_dir_all(&probe_dir);
-                return None;
-            }
-        }
-    };
-    if !status.success() {
-        let _ = receiver.recv_timeout(Duration::from_secs(1));
-        let _ = fs::remove_dir_all(&probe_dir);
-        return None;
-    }
-    let _ = output.or_else(|| receiver.recv_timeout(Duration::from_secs(1)).ok().flatten())?;
-    let _ = fs::remove_dir_all(&probe_dir);
+    // Claude owns token renewal: its interactive `/status` refreshes an
+    // expiring OAuth token on disk, and the probe exits immediately after.
+    run_cli_slash_command(context, "/status")?;
     let reloaded = load_credentials(context)?;
     ((reloaded.access_token != credentials.access_token)
         || (reloaded.expires_at != credentials.expires_at))
@@ -393,6 +285,495 @@ fn resolve_executable(context: &CollectionContext) -> Option<String> {
         .find(|path| is_executable_file(path))
         .map(|path| path.to_string_lossy().into_owned())
         .or_else(|| Some("claude".to_owned()))
+}
+
+fn collect_cli_usage(
+    plan: Option<String>,
+    context: &CollectionContext,
+) -> Result<QuotaSnapshot, ProviderError> {
+    let output = run_cli_slash_command(context, "/usage")
+        .ok_or_else(|| ProviderError::new(ErrorCategory::Unavailable, CLI_SOURCE))?;
+    let text = String::from_utf8_lossy(&output);
+    let windows = map_cli_usage_text(&text);
+    if windows.is_empty() {
+        return Err(ProviderError::new(ErrorCategory::Unavailable, CLI_SOURCE));
+    }
+    let (fingerprint, scope) = account_identity("claude", "organization_id", None);
+    Ok(QuotaSnapshot {
+        provider: ProviderId::Claude,
+        account: QuotaAccount {
+            fingerprint,
+            fingerprint_scope: scope,
+            label: None,
+            plan,
+        },
+        windows,
+        source: CLI_SOURCE,
+        status: "available",
+        observed_at: context.observed_at(),
+    })
+}
+
+const PROBE_TIMEOUT: Duration = Duration::from_secs(45);
+const PROBE_EXIT_GRACE: Duration = Duration::from_secs(10);
+const PROBE_STARTUP_FLOOR: Duration = Duration::from_secs(2);
+const PROBE_QUIET: Duration = Duration::from_millis(1_500);
+const PROBE_PANEL_QUIET: Duration = Duration::from_millis(2_500);
+const PROBE_PANEL_LIMIT: Duration = Duration::from_secs(20);
+const PROBE_SETTLE: Duration = Duration::from_millis(1_000);
+const PROBE_NUDGE: Duration = Duration::from_millis(800);
+const PROBE_OUTPUT_LIMIT: usize = 1_048_576;
+const PROBE_TAIL: usize = 16_384;
+/// Terminal cursor-position query the TUI may issue at startup; answered so it
+/// does not wait on a reply.
+const CURSOR_POSITION_QUERY: &[u8] = b"\x1b[6n";
+const CURSOR_POSITION_REPLY: &[u8] = b"\x1b[1;1R";
+
+/// Interactive prompts the CLI can show before or after a slash command, matched
+/// on whitespace-free lowercase output. Each group is one dialog (its needles
+/// are alternative wordings) and is answered at most once. The trust dialog
+/// covers the empty, owner-only probe directory in which no tool is allowed;
+/// the palette groups confirm the command's own autocomplete row so a
+/// neighbouring action is never selected.
+struct PromptReply {
+    needles: &'static [&'static str],
+    reply: &'static [u8],
+}
+
+const PROMPT_REPLIES: &[PromptReply] = &[
+    PromptReply {
+        needles: &["yes,itrustthisfolder", "quicksafetycheck"],
+        reply: b"\r",
+    },
+    PromptReply {
+        needles: &["doyoutrustthefilesinthisfolder"],
+        reply: b"y\r",
+    },
+    PromptReply {
+        needles: &["readytocodehere"],
+        reply: b"\r",
+    },
+    PromptReply {
+        needles: &["pressentertocontinue"],
+        reply: b"\r",
+    },
+];
+const USAGE_PALETTE_REPLIES: &[PromptReply] = &[PromptReply {
+    needles: &["showplanusagelimits", "showplan"],
+    reply: b"\r",
+}];
+const STATUS_PALETTE_REPLIES: &[PromptReply] = &[PromptReply {
+    needles: &["showclaudecodestatus", "showclaudecode"],
+    reply: b"\r",
+}];
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum ProbeStage {
+    /// Waiting for the CLI to settle: answer its prompts, then submit the slash
+    /// command once output goes quiet.
+    Starting,
+    /// Command submitted; wait for the panel it opens to carry its data (or,
+    /// for commands without a recognizable payload, to go quiet).
+    Submitted,
+    /// Panel dismissed with Escape; `/exit` goes next.
+    Dismissed,
+    /// `/exit` submitted; wait for the process to leave.
+    Exiting,
+}
+
+/// Runs the official Claude CLI in a bounded, tool-less, probe-only session,
+/// submits one slash command, and returns the captured terminal output.
+///
+/// macOS `script` allocates the PTY that Claude's interactive slash commands
+/// require, while still invoking the executable without a shell. The TUI reads
+/// raw keystrokes, so commands are submitted with a carriage return, its
+/// Settings panels are closed with Escape, and its interactive prompts are
+/// answered from [`PROMPT_REPLIES`]. The probe directory is stable per user so
+/// the first-run trust dialog is answered once. `/usage` is considered rendered
+/// as soon as the session row carries a percentage; a panel that is still
+/// loading is nudged with Enter, and one that reports a load failure is left
+/// immediately.
+fn run_cli_slash_command(context: &CollectionContext, command: &str) -> Option<Vec<u8>> {
+    if !cfg!(target_os = "macos") {
+        return None;
+    }
+    let executable = resolve_executable(context)?;
+    let script = Path::new("/usr/bin/script");
+    if !fs::metadata(script)
+        .map(|metadata| metadata.is_file())
+        .unwrap_or(false)
+    {
+        return None;
+    }
+    let probe_dir = std::env::temp_dir().join("quota-claude-probe");
+    fs::create_dir_all(probe_dir.join(".claude")).ok()?;
+    let settings = probe_dir.join(".claude/settings.local.json");
+    fs::write(
+        &settings,
+        b"{\"disableDeepLinkRegistration\":\"disable\"}\n",
+    )
+    .ok()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&probe_dir, fs::Permissions::from_mode(0o700)).ok()?;
+        fs::set_permissions(&settings, fs::Permissions::from_mode(0o600)).ok()?;
+    }
+    let session_id = Uuid::new_v4().to_string();
+    let _cleanup = ProbeCleanup::new(context, &probe_dir, &session_id);
+    let mut child = Command::new(script)
+        .args([
+            "-q",
+            "/dev/null",
+            &executable,
+            "--allowed-tools",
+            "",
+            "--strict-mcp-config",
+            "--session-id",
+            &session_id,
+        ])
+        .current_dir(&probe_dir)
+        .envs(
+            context
+                .environment
+                .iter()
+                .filter(|(key, _)| *key != "HOME" && !key.starts_with("ANTHROPIC_")),
+        )
+        .env("HOME", &context.home_directory)
+        .env("DISABLE_AUTOUPDATER", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let (Some(mut stdin), Some(mut stdout)) = (child.stdin.take(), child.stdout.take()) else {
+        stop_child(&mut child);
+        return None;
+    };
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let mut chunk = [0u8; 8_192];
+        loop {
+            match stdout.read(&mut chunk) {
+                Ok(0) | Err(_) => break,
+                Ok(count) => {
+                    if sender.send(chunk[..count].to_vec()).is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+
+    let is_usage = command == "/usage";
+    let palette: &[PromptReply] = if is_usage {
+        USAGE_PALETTE_REPLIES
+    } else if command == "/status" {
+        STATUS_PALETTE_REPLIES
+    } else {
+        &[]
+    };
+    let started = std::time::Instant::now();
+    let mut last_output = started;
+    let mut stage = ProbeStage::Starting;
+    let mut stage_since = started;
+    let mut last_nudge = started;
+    let mut answered = vec![false; PROMPT_REPLIES.len() + palette.len()];
+    let mut output = Vec::new();
+    let mut send = |bytes: &[u8]| stdin.write_all(bytes).and_then(|_| stdin.flush()).is_ok();
+    loop {
+        if context.cancelled() || started.elapsed() > PROBE_TIMEOUT {
+            stop_child(&mut child);
+            return None;
+        }
+        match receiver.recv_timeout(Duration::from_millis(100)) {
+            Ok(chunk) => {
+                if chunk
+                    .windows(CURSOR_POSITION_QUERY.len())
+                    .any(|window| window == CURSOR_POSITION_QUERY)
+                {
+                    let _ = send(CURSOR_POSITION_REPLY);
+                }
+                output.extend_from_slice(&chunk);
+                last_output = std::time::Instant::now();
+                if output.len() > PROBE_OUTPUT_LIMIT {
+                    stop_child(&mut child);
+                    return None;
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                let _ = child.wait();
+                return (stage >= ProbeStage::Dismissed).then_some(output);
+            }
+        }
+        if let Ok(Some(_)) = child.try_wait() {
+            // Drain what the reader still holds, then hand back the transcript.
+            while let Ok(chunk) = receiver.try_recv() {
+                output.extend_from_slice(&chunk);
+            }
+            return (stage >= ProbeStage::Dismissed).then_some(output);
+        }
+        let tail = output.len().saturating_sub(PROBE_TAIL);
+        let screen = compact_terminal_text(&String::from_utf8_lossy(&output[tail..]));
+        if stage < ProbeStage::Dismissed {
+            // Palette rows only exist once the command has been typed.
+            let visible = if stage == ProbeStage::Submitted {
+                answered.len()
+            } else {
+                PROMPT_REPLIES.len()
+            };
+            let prompts = PROMPT_REPLIES.iter().chain(palette.iter()).take(visible);
+            for (index, prompt) in prompts.enumerate() {
+                if answered[index]
+                    || !prompt
+                        .needles
+                        .iter()
+                        .any(|needle| screen.lower.contains(needle))
+                {
+                    continue;
+                }
+                answered[index] = true;
+                if !send(prompt.reply) {
+                    stop_child(&mut child);
+                    return None;
+                }
+                last_output = std::time::Instant::now();
+            }
+        }
+        let quiet = last_output.elapsed();
+        match stage {
+            ProbeStage::Starting => {
+                if quiet >= PROBE_QUIET && started.elapsed() >= PROBE_STARTUP_FLOOR {
+                    if !send(format!("{command}\r").as_bytes()) {
+                        stop_child(&mut child);
+                        return None;
+                    }
+                    stage = ProbeStage::Submitted;
+                    stage_since = std::time::Instant::now();
+                    last_output = stage_since;
+                    last_nudge = stage_since;
+                }
+            }
+            ProbeStage::Submitted => {
+                let panel = &screen.lower;
+                let rendered = if is_usage {
+                    let failed = panel.contains("failedtoloadusagedata");
+                    let has_data = panel.contains("currentsession") && has_percent(panel);
+                    let loading = panel.contains("loadingusagedata") && !has_data;
+                    if loading && last_nudge.elapsed() >= PROBE_NUDGE {
+                        // Claude's panel can wait for a keystroke before it draws the rows.
+                        let _ = send(b"\r");
+                        last_nudge = std::time::Instant::now();
+                    }
+                    failed
+                        || (has_data && quiet >= PROBE_SETTLE)
+                        || (!loading && quiet >= PROBE_PANEL_QUIET)
+                        || stage_since.elapsed() >= PROBE_PANEL_LIMIT
+                } else {
+                    quiet >= PROBE_PANEL_QUIET || stage_since.elapsed() >= PROBE_PANEL_LIMIT
+                };
+                if rendered {
+                    if !send(b"\x1b") {
+                        stop_child(&mut child);
+                        return None;
+                    }
+                    stage = ProbeStage::Dismissed;
+                    stage_since = std::time::Instant::now();
+                    last_output = stage_since;
+                }
+            }
+            ProbeStage::Dismissed => {
+                if quiet >= PROBE_QUIET {
+                    if !send(b"/exit\r") {
+                        stop_child(&mut child);
+                        return Some(output);
+                    }
+                    stage = ProbeStage::Exiting;
+                    stage_since = std::time::Instant::now();
+                }
+            }
+            ProbeStage::Exiting => {
+                if stage_since.elapsed() > PROBE_EXIT_GRACE {
+                    // The panel text is already captured; do not let a stuck TUI
+                    // outlive the refresh.
+                    stop_child(&mut child);
+                    return Some(output);
+                }
+            }
+        }
+    }
+}
+
+fn has_percent(lower: &str) -> bool {
+    let bytes = lower.as_bytes();
+    bytes
+        .iter()
+        .enumerate()
+        .any(|(index, byte)| *byte == b'%' && index > 0 && bytes[index - 1].is_ascii_digit())
+}
+
+/// Terminal text with escape sequences and whitespace removed. The TUI positions
+/// words with cursor moves rather than spaces, so matching must ignore spacing.
+/// `lower` is ASCII-lowercased and byte-aligned with `text`.
+struct CompactText {
+    text: String,
+    lower: String,
+}
+
+fn compact_terminal_text(raw: &str) -> CompactText {
+    let text: String = strip_ansi(raw)
+        .chars()
+        .filter(|character| !character.is_whitespace() && !character.is_control())
+        .collect();
+    let lower = text.to_ascii_lowercase();
+    CompactText { text, lower }
+}
+
+/// Maps the text of Claude's Settings → Usage panel. Each window is a title such
+/// as `Current session` or `Current week (Fable)` followed by a bar and
+/// `<n>% used`; Claude reports percent *used*, taken verbatim. Window ids match
+/// the OAuth usage mapping so either source updates the same rows.
+fn map_cli_usage_text(text: &str) -> Vec<QuotaWindow> {
+    let compact = compact_terminal_text(text);
+    let mut windows: Vec<QuotaWindow> = Vec::new();
+    let mut push = |id: String, title: String, used: f64, duration: u64| {
+        if windows.iter().any(|window| window.id == id) {
+            return;
+        }
+        windows.push(QuotaWindow {
+            id,
+            title,
+            used_percent: clamp_percent(used),
+            resets_at: None,
+            duration_seconds: Some(duration),
+            remaining_value: None,
+            limit_value: None,
+            value_unit: None,
+        });
+    };
+    if let Some(used) = percent_used_after(&compact.lower, "currentsession", 0) {
+        push("five_hour".to_owned(), "5 hour".to_owned(), used, 18_000);
+    }
+    let mut cursor = 0;
+    while let Some(offset) = compact.lower[cursor..].find("currentweek(") {
+        let open = cursor + offset + "currentweek(".len();
+        let Some(close) = compact.lower[open..].find(')').map(|index| open + index) else {
+            break;
+        };
+        cursor = close + 1;
+        let Some(used) = percent_used_after(&compact.lower, ")", close) else {
+            continue;
+        };
+        let (id, title) = match &compact.lower[open..close] {
+            "allmodels" => ("seven_day".to_owned(), "Weekly".to_owned()),
+            "sonnet" | "sonnetonly" => ("seven_day_sonnet".to_owned(), "Sonnet weekly".to_owned()),
+            "opus" | "opusonly" => ("seven_day_opus".to_owned(), "Opus weekly".to_owned()),
+            _ => {
+                let name = compact.text[open..close].trim_end_matches("only");
+                if name.is_empty() {
+                    continue;
+                }
+                (
+                    format!("claude-weekly-scoped-{}", slug(name)),
+                    format!("{name} only"),
+                )
+            }
+        };
+        push(id, title, used, 604_800);
+    }
+    windows
+}
+
+/// Wording that marks a percentage as consumed versus remaining. Claude's panel
+/// currently prints `<n>% used`; a remaining-style phrasing is converted so a copy
+/// change cannot invert every reading.
+const USED_WORDS: &[&str] = &["used", "spent", "consumed"];
+const REMAINING_WORDS: &[&str] = &["left", "remaining", "available"];
+
+/// The first labelled percentage after `label` (searched from `from`), as a
+/// used percent, without crossing into the next window's title.
+fn percent_used_after(lower: &str, label: &str, from: usize) -> Option<f64> {
+    let start = from + lower[from..].find(label)? + label.len();
+    let end = lower[start..]
+        .find("current")
+        .map(|index| start + index)
+        .unwrap_or(lower.len())
+        .min(start + 600);
+    let window = &lower[start..end];
+    let bytes = window.as_bytes();
+    for (index, byte) in bytes.iter().enumerate() {
+        if *byte != b'%' {
+            continue;
+        }
+        let digits = bytes[..index]
+            .iter()
+            .rev()
+            .take_while(|byte| byte.is_ascii_digit())
+            .count();
+        if digits == 0 {
+            continue;
+        }
+        let Some(value) = window[index - digits..index].parse::<f64>().ok() else {
+            continue;
+        };
+        if !(0.0..=100.0).contains(&value) {
+            continue;
+        }
+        let after = &window[index + 1..];
+        if USED_WORDS.iter().any(|word| after.starts_with(word)) {
+            return Some(value);
+        }
+        if REMAINING_WORDS.iter().any(|word| after.starts_with(word)) {
+            return Some(100.0 - value);
+        }
+    }
+    None
+}
+
+/// Drops ANSI escape sequences: CSI (`ESC [ … final`), OSC (`ESC ] … BEL` or
+/// `ESC \`), and two-byte `ESC x` forms.
+fn strip_ansi(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut output = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != 0x1b {
+            output.push(bytes[index]);
+            index += 1;
+            continue;
+        }
+        index += 1;
+        match bytes.get(index) {
+            Some(b'[') => {
+                index += 1;
+                while index < bytes.len() {
+                    let byte = bytes[index];
+                    index += 1;
+                    if (0x40..=0x7e).contains(&byte) {
+                        break;
+                    }
+                }
+            }
+            Some(b']') => {
+                index += 1;
+                while index < bytes.len() {
+                    let byte = bytes[index];
+                    index += 1;
+                    if byte == 0x07 {
+                        break;
+                    }
+                    if byte == 0x1b && bytes.get(index) == Some(&b'\\') {
+                        index += 1;
+                        break;
+                    }
+                }
+            }
+            Some(_) => index += 1,
+            None => {}
+        }
+    }
+    String::from_utf8_lossy(&output).into_owned()
 }
 
 fn collect_with_credentials(
@@ -668,6 +1049,7 @@ mod tests {
     #[test]
     fn discovers_browser_session_when_oauth_is_absent() {
         let mut context = isolated_context();
+        assert!(!context.allows_host_keychain());
         assert!(discover(&context).is_empty());
         context
             .browser_sessions
@@ -691,6 +1073,75 @@ mod tests {
         }));
         assert_eq!(aliased[0].id, "five_hour");
         assert_eq!(aliased[0].used_percent, 10.0);
+    }
+
+    #[test]
+    fn maps_cli_usage_panel_used_percent_verbatim() {
+        let panel = concat!(
+            "\u{1b}[1mSettings\u{1b}[0m  Usage\n",
+            "Current session\n",
+            "\u{1b}[32m████\u{1b}[0m░░░░░░░░░░░░░░░░ 20% used\n",
+            "Resets 4pm (Asia/Shanghai)\n",
+            "\n",
+            "Current week (all models)\n",
+            "█████████░░░░░░░░░░░ 45% used\n",
+            "Resets Aug 25 at 9am (Asia/Shanghai)\n",
+            "\n",
+            "Current week (Sonnet only)\n",
+            "██░░░░░░░░░░░░░░░░░░ 10% used\n",
+        );
+        let windows = map_cli_usage_text(panel);
+        assert_eq!(
+            windows
+                .iter()
+                .map(|window| (window.id.as_str(), window.used_percent))
+                .collect::<Vec<_>>(),
+            [
+                ("five_hour", 20.0),
+                ("seven_day", 45.0),
+                ("seven_day_sonnet", 10.0),
+            ]
+        );
+        assert!(map_cli_usage_text("Not logged in\n").is_empty());
+        // A remaining-style phrasing is converted; a bare percentage is ignored.
+        let remaining =
+            map_cli_usage_text("Current session\n████ 80% left\nCurrent week (all models)\n45%\n");
+        assert_eq!(
+            remaining
+                .iter()
+                .map(|window| (window.id.as_str(), window.used_percent))
+                .collect::<Vec<_>>(),
+            [("five_hour", 20.0)]
+        );
+    }
+
+    #[test]
+    fn maps_cursor_positioned_panel_and_model_scoped_week() {
+        // The TUI places words with cursor moves, so spacing is unreliable, and a
+        // session's stats block precedes the windows.
+        let panel = concat!(
+            "\u{1b}]0;claude\u{7}Session Total cost: $0.0000\u{1b}[3;5H",
+            "Current\u{1b}[1Csession████████████████▌\u{1b}[12C33%usedResets 10:30pm (Asia/Singapore)",
+            "\u{1b}[5;1HCurrent week (all models)   ██▌   5% used  Resets Aug 23 at 12pm",
+            "\u{1b}[7;1H+50% weekly limits promo through Aug 31",
+            "\u{1b}[9;1HCurrent week (Fable)██▌\u{1b}[40C5% used",
+        );
+        let windows = map_cli_usage_text(panel);
+        assert_eq!(
+            windows
+                .iter()
+                .map(|window| (
+                    window.id.as_str(),
+                    window.title.as_str(),
+                    window.used_percent
+                ))
+                .collect::<Vec<_>>(),
+            [
+                ("five_hour", "5 hour", 33.0),
+                ("seven_day", "Weekly", 5.0),
+                ("claude-weekly-scoped-fable", "Fable only", 5.0),
+            ]
+        );
     }
 
     #[test]

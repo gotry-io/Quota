@@ -44,7 +44,9 @@ data requirements. Architecture and product behavior are defined in
 
 - Do not modify provider-owned credential files or Keychain entries. Provider refresh and rotation
   remain owned by the official provider CLI or application through the bounded strategies in
-  [`provider-collection.md`](provider-collection.md).
+  [`provider-collection.md`](provider-collection.md). Cursor.app `state.vscdb` is opened read-only
+  for the `cursorAuth/accessToken` item; the service never writes Cursor files, never refreshes
+  that JWT, and never persists the derived cookie unless the user later commits a browser session.
 - Optional API-key providers store secrets only in
   `$XDG_CONFIG_HOME/quotacli/providers.json` or `~/.config/quotacli/providers.json`: directory mode
   `0700`, file mode `0600`, no symlinks, shared owner-only lock, and same-directory atomic replace.
