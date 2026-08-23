@@ -1,10 +1,10 @@
 use super::{
     BillingChannel, ChannelSource, ContextBucket, CoverageReasonCode, CoverageStatus,
-    InferenceProvider, MAX_JSONL_LINE_BYTES, MAX_USAGE_MODELS, MAX_USAGE_ROWS,
-    NormalizedUsageEvent, UsageAgent, UsageFileIndex, UsageHourlyFact, UsageScanOptions,
-    aggregate_usage_events, build_local_usage_summary, fold_usage_facts, scan_claude_usage,
-    scan_codex_usage, scan_cursor_usage, scan_grok_usage, scan_local_usage, scan_opencode_usage,
-    scan_pi_usage,
+    DEFAULT_PARSER_REVISION, InferenceProvider, MAX_JSONL_LINE_BYTES, MAX_USAGE_MODELS,
+    MAX_USAGE_ROWS, NormalizedUsageEvent, UsageAgent, UsageFileIndex, UsageHourlyFact,
+    UsageScanOptions, aggregate_usage_events, build_local_usage_summary, fold_usage_facts,
+    scan_claude_usage, scan_codex_usage, scan_cursor_usage, scan_grok_usage, scan_local_usage,
+    scan_opencode_usage, scan_pi_usage,
 };
 use crate::pricing::{
     CalculatedUsageRowCost, PricingCatalog, PricingCatalogEntry, PricingRates, UsageCostAssumption,
@@ -709,6 +709,51 @@ fn opencode_resolves_registered_moonshot_and_deepseek_provider_ids() {
                 BillingChannel::Unknown,
                 ChannelSource::Unknown
             ),
+        ]
+    );
+
+    // A source already indexed under the revision that produced the unknown channel must be
+    // re-derived, not skipped, so history reclassifies instead of only new rows.
+    let indexed = |revision: &str| -> HashMap<String, UsageFileIndex> {
+        result
+            .sources
+            .iter()
+            .map(|source| {
+                (
+                    source.source.source_file_id.clone(),
+                    UsageFileIndex {
+                        parser_revision: revision.to_owned(),
+                        ..source.index.clone()
+                    },
+                )
+            })
+            .collect()
+    };
+    let current = scan_opencode_usage(&UsageScanOptions {
+        file_index: indexed(DEFAULT_PARSER_REVISION),
+        ..options(&path)
+    })
+    .expect("scan at the current revision");
+    assert_eq!(current.skipped_source_count, 1);
+    assert!(current.records.is_empty());
+
+    let stale = scan_opencode_usage(&UsageScanOptions {
+        file_index: indexed("usage-rust-v5"),
+        ..options(&path)
+    })
+    .expect("scan at a stale revision");
+    assert_eq!(stale.skipped_source_count, 0);
+    assert_eq!(
+        stale
+            .records
+            .iter()
+            .map(|record| record.event.billing_channel)
+            .collect::<Vec<_>>(),
+        vec![
+            BillingChannel::MoonshotDirect,
+            BillingChannel::MoonshotDirect,
+            BillingChannel::DeepseekDirect,
+            BillingChannel::Unknown,
         ]
     );
     let _ = fs::remove_dir_all(path);

@@ -21,7 +21,7 @@ pub use cursor::scan_cursor_usage;
 pub use grok::scan_grok_usage;
 pub use opencode::scan_opencode_usage;
 pub use pi::scan_pi_usage;
-pub use scan::{UsageScanOptions, discover_usage_files, scan_local_usage};
+pub use scan::{DEFAULT_PARSER_REVISION, UsageScanOptions, discover_usage_files, scan_local_usage};
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use chrono_tz::Tz;

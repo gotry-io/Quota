@@ -15,7 +15,16 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-pub const DEFAULT_PARSER_REVISION: &str = "usage-rust-v5";
+/// Identity of the parsing rules behind an indexed file's stored records.
+///
+/// The file index skips a source whose identity, size, and modification time are unchanged, so a
+/// collector whose output changes for the same bytes is only picked up when this value changes.
+/// Bump it when a parser starts emitting different facts for input it already indexed; a rescan
+/// then re-derives every source and marks only the hours whose facts actually differ.
+///
+/// v6 resolves the Moonshot and DeepSeek billing channels from registered provider ids, which
+/// previously produced the unknown channel.
+pub const DEFAULT_PARSER_REVISION: &str = "usage-rust-v6";
 
 #[derive(Clone, Debug)]
 pub struct UsageScanOptions {

@@ -37,7 +37,6 @@ use crate::usage::{
 };
 
 const PARSER_REVISION: &str = "quota-usage-rust-4";
-const FILE_INDEX_PARSER_REVISION: &str = "usage-rust-v5";
 const MAX_USAGE_OUTBOX_ENTRIES: usize = 64;
 const MAX_USAGE_MULTIPART_PARTS: usize = 64;
 const DEFAULT_TIMEZONE: &str = "UTC";
@@ -1567,7 +1566,7 @@ impl NativeBackend {
                 start_at: "1970-01-01T00:00:00Z".to_owned(),
                 end_at: end_at.clone(),
                 cancelled: Some(cancel.clone()),
-                parser_revision: FILE_INDEX_PARSER_REVISION.to_owned(),
+                parser_revision: usage::DEFAULT_PARSER_REVISION.to_owned(),
                 file_index,
                 ..UsageScanOptions::default()
             };
