@@ -12,8 +12,9 @@ export type AccountUsageDayResult =
 export function accountUsageDayPath(date: string): string {
   const params = new URLSearchParams({
     usage_agents: "all",
-    cost_mode: "calculate",
+    cost_mode: "auto",
     model_catalog: "1",
+    usage_channels: "1",
     from: date,
     to: date,
   });

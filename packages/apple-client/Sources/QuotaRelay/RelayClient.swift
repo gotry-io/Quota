@@ -118,11 +118,12 @@ public struct RelayClient: Sendable {
       query: [
         ("from", from),
         ("to", to),
-        ("cost_mode", "calculate"),
+        ("cost_mode", "auto"),
         ("usage_agents", "all"),
         ("usage_clients", "1"),
         ("model_catalog", "1"),
         ("device_health", "1"),
+        ("usage_channels", "1"),
       ],
       body: nil,
       bearer: accessToken,

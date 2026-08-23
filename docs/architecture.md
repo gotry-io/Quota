@@ -195,6 +195,13 @@ The field remains omitted without the opt-in. It never appears on released v2 su
 client explicitly requests it, and v2 still excludes Cursor. Clients never reconstruct ownership
 from independent breakdowns or model text.
 
+Billing channels added after menubar-v0.0.19 use the same shape, because that release already
+speaks v3 and cannot be separated by a protocol version. Summary and hourly responses narrow a
+newer channel to `unknown` unless the client sends `usage_channels=1`.
+[ADR 0012](decisions/0012-managed-data-v3.md) owns that rule; see
+[provider strategies](provider-collection.md) for the registered provider ids that resolve each
+channel.
+
 The native-cutover import and its version-specific Relay behavior ended in 0.0.8 as defined by
 [ADR 0007](decisions/0007-rust-native-local-service.md). Applied SQLite migrations remain ordered
 history; the current shared `providers.json`/`ProviderConfigLock` path and OAuth
@@ -269,8 +276,12 @@ evidence and does not fail collection or synchronization. See
 
 Pricing is versioned and effective-dated with ETag caching. Rust calculates local cost; Relay keeps
 the equivalent server-side TypeScript calculation for account summaries. Exact
-channel/model/date/dimension matching is required. Missing prices stay unpriced/partial; cost is not
-an invoice or subscription spend. Model normalization is intentionally independent: raw facts are
+channel/model/date/dimension matching is required. Every first-party client requests the `auto`
+cost mode, so a row the catalog cannot price falls back to a complete source-reported cost and This
+Mac, Account, iOS, and Web report the same basis for the same fact; `calculate` remains the route
+default for callers that do not ask. Costing memoizes catalog validation by identity, so a
+long-lived catalog is scanned once rather than per request. Missing prices stay unpriced/partial;
+cost is not an invoice or subscription spend. Model normalization is intentionally independent: raw facts are
 priced before report grouping, and normalization never creates pricing aliases or changes a cost or
 unpriced outcome.
 

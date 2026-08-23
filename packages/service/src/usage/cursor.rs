@@ -784,6 +784,10 @@ fn billing_channel(provider: Option<&str>) -> (BillingChannel, ChannelSource) {
         }
         Some("openrouter") => (BillingChannel::Openrouter, ChannelSource::Explicit),
         Some("xai") => (BillingChannel::XaiDirect, ChannelSource::Explicit),
+        Some("moonshotai") | Some("kimi-for-coding") => {
+            (BillingChannel::MoonshotDirect, ChannelSource::Explicit)
+        }
+        Some("deepseek") => (BillingChannel::DeepseekDirect, ChannelSource::Explicit),
         _ => (BillingChannel::Unknown, ChannelSource::Unknown),
     }
 }

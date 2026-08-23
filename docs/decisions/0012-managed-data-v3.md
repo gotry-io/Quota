@@ -55,14 +55,27 @@ Because a packaged native client can update before Relay, ADR 0015 also defines 
 Relay fallback for `400 invalid_request`. The fallback retries the unchanged default v3 response and
 locally represents its absent health as unknown; it does not weaken the opted-in wire schema.
 
+The protocol-version key expresses a closed-enum addition only while some supported client is still
+on the older version. `BillingChannel` is the case where it cannot: menubar-v0.0.19 already speaks
+v3 and decodes the channel and its inference provider with exhaustive Swift enums, so an unknown
+member fails to decode rather than degrading, and no v2/v3 split separates it. Such an addition
+therefore reuses the query opt-in instead: the enum widens once, and a response narrows any member
+outside the released set to `unknown` unless the caller sends `usage_channels=1`. Narrowing moves
+`channel_source` with the channel and happens before grouping, so a narrowed row folds into the
+existing unknown provider. Released v2 routes reject the opt-in and always narrow. The released
+member list is derived from the widened enum in `packages/protocol`, never restated, and is removed
+once no supported client predates the addition.
+
 ## Consequences
 
 - Released v2 clients continue to decode every response they can receive.
 - Current clients synchronize and display Cursor quota and Usage end to end.
 - Upgrading a released v2 local state preserves pending Usage uploads without letting a stale
   derived Account presentation make local quota unavailable.
-- A future closed-enum addition must declare a new first-supported protocol version instead of
-  mutating a shipped enum.
+- A future closed-enum addition declares a new first-supported protocol version instead of
+  mutating a shipped enum. When every supported client already speaks the newest version, that key
+  cannot express the boundary, and the addition uses a query opt-in with server-side narrowing
+  instead; `usage_channels=1` is the current example.
 - Optional response expansion must remain explicit when a released strict client would reject an
   unknown field; Device Health's query opt-in is the current example.
 - V2 remains only for concrete shipped compatibility; new feature work targets v3.

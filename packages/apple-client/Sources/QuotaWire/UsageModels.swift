@@ -17,6 +17,8 @@ public enum BillingChannel: String, Codable, Sendable {
   case googleVertex = "google_vertex"
   case openrouter
   case xaiDirect = "xai_direct"
+  case moonshotDirect = "moonshot_direct"
+  case deepseekDirect = "deepseek_direct"
   case unknown
 }
 
@@ -28,6 +30,8 @@ public enum InferenceProvider: String, Codable, Sendable {
   case googleVertex = "google_vertex"
   case openrouter
   case xai
+  case moonshot
+  case deepseek
   case unknown
 
   public var displayName: String {
@@ -39,6 +43,8 @@ public enum InferenceProvider: String, Codable, Sendable {
     case .googleVertex: "Google Vertex AI"
     case .openrouter: "OpenRouter"
     case .xai: "xAI"
+    case .moonshot: "Moonshot AI"
+    case .deepseek: "DeepSeek"
     case .unknown: "Unknown Provider"
     }
   }

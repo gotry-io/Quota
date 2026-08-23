@@ -85,6 +85,8 @@
         "google_vertex",
         "openrouter",
         "xai",
+        "moonshot",
+        "deepseek",
         "unknown"
       ]
     },

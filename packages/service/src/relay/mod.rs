@@ -277,35 +277,35 @@ impl RelayClient {
         if !parts.iter().any(|part| part.starts_with("usage_agents=")) {
             parts.push("usage_agents=all".to_owned());
         }
-        let added_usage_clients = !parts.iter().any(|part| part.starts_with("usage_clients="));
-        if added_usage_clients {
-            parts.push("usage_clients=1".to_owned());
-        }
-        let added_model_catalog = !parts.iter().any(|part| part.starts_with("model_catalog="));
-        if added_model_catalog {
-            parts.push("model_catalog=1".to_owned());
-        }
-        let added_device_health = path == "/api/v3/account/summary"
-            && !parts.iter().any(|part| part.starts_with("device_health="));
-        if added_device_health {
-            parts.push("device_health=1".to_owned());
+        // Opt-ins this build understands. `usage_channels` keeps billing channels added after
+        // menubar-v0.0.19 unnarrowed; without it the Relay reports them as unknown.
+        let mut added: Vec<&'static str> = Vec::new();
+        for (prefix, applies) in [
+            ("usage_clients=", true),
+            ("model_catalog=", true),
+            ("device_health=", path == "/api/v3/account/summary"),
+            ("usage_channels=", path.starts_with("/api/v3/")),
+        ] {
+            if applies && !parts.iter().any(|part| part.starts_with(prefix)) {
+                parts.push(format!("{prefix}1"));
+                added.push(prefix);
+            }
         }
         let mut result = self.get_json(&format!("{path}?{}", parts.join("&")), token, 200);
-        if (added_usage_clients || added_model_catalog || added_device_health)
+        if !added.is_empty()
             && matches!(
                 &result,
                 Err(RelayError::Rejected { code, status: 400 }) if code == "invalid_request"
             )
         {
-            // Released Relay versions reject these new opt-ins. Remove this after QuotaBar and
-            // QuotaCLI 0.0.10 have completed their compatibility window.
-            parts.retain(|part| {
-                !(added_usage_clients && part.starts_with("usage_clients="))
-                    && !(added_model_catalog && part.starts_with("model_catalog="))
-                    && !(added_device_health && part.starts_with("device_health="))
-            });
+            // A Relay older than the newest opt-in rejects the whole request without naming the
+            // parameter, so retry with every opt-in this call added. Remove an entry once no
+            // deployed Relay predates it.
+            parts.retain(|part| !added.iter().any(|prefix| part.starts_with(prefix)));
             result = self.get_json(&format!("{path}?{}", parts.join("&")), token, 200);
-            if added_device_health && let Ok(summary) = result.as_mut() {
+            if added.contains(&"device_health=")
+                && let Ok(summary) = result.as_mut()
+            {
                 normalize_released_account_summary(summary)?;
             }
         }
@@ -2329,7 +2329,7 @@ impl AccountManager {
     /// rotation; this process is the sole local writer, so writing the response is atomic at the
     /// SQLite row boundary.
     pub fn refresh_account_state(&self, cancel: &AtomicBool) -> Result<Value, BackendError> {
-        let (summary, session) = self.read_account_summary("cost_mode=calculate", cancel)?;
+        let (summary, session) = self.read_account_summary("cost_mode=auto", cancel)?;
         let account_id = session
             .get("account_id")
             .and_then(Value::as_str)
@@ -3270,19 +3270,11 @@ fn valid_billing_agent(value: Option<&str>) -> bool {
 }
 
 fn valid_billing_channel(value: Option<&str>) -> bool {
-    matches!(
-        value,
-        Some(
-            "openai_direct"
-                | "azure_openai"
-                | "anthropic_direct"
-                | "aws_bedrock"
-                | "google_vertex"
-                | "openrouter"
-                | "xai_direct"
-                | "unknown"
-        )
-    )
+    value.is_some_and(|value| {
+        crate::usage::BillingChannel::ALL
+            .iter()
+            .any(|channel| channel.as_str() == value)
+    })
 }
 
 fn invalid_response_backend() -> BackendError {
@@ -4099,7 +4091,11 @@ mod tests {
 
         assert!(result["devices"][0]["health"].is_null());
         assert!(validate_account_summary(&result).is_ok());
-        server.join().expect("mock server");
+        // This build asks for the current channel set, then drops every opt-in it added when a
+        // released Relay rejects the request rather than failing the read.
+        let sent = server.join().expect("mock server");
+        assert!(sent[0].contains("usage_channels=1"), "{}", sent[0]);
+        assert!(!sent[1].contains("usage_channels="), "{}", sent[1]);
     }
 
     #[test]
@@ -4236,21 +4232,32 @@ mod tests {
         )
     }
 
-    fn spawn_mock_server(responses: Vec<String>) -> (String, thread::JoinHandle<()>) {
+    /// Joining the handle yields each request's start line, so a test can assert the query the
+    /// client actually sent.
+    fn spawn_mock_server(responses: Vec<String>) -> (String, thread::JoinHandle<Vec<String>>) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("mock listener");
         let address = listener.local_addr().expect("mock address");
         let server = thread::spawn(move || {
+            let mut recorded = Vec::new();
             for response in responses {
                 let (mut stream, _) = listener.accept().expect("mock request");
                 stream
                     .set_read_timeout(Some(Duration::from_secs(2)))
                     .expect("mock timeout");
                 let mut request = [0_u8; 8_192];
-                let _ = stream.read(&mut request);
+                let read = stream.read(&mut request).unwrap_or(0);
+                recorded.push(
+                    String::from_utf8_lossy(&request[..read])
+                        .lines()
+                        .next()
+                        .unwrap_or_default()
+                        .to_owned(),
+                );
                 stream
                     .write_all(response.as_bytes())
                     .expect("mock response");
             }
+            recorded
         });
         (format!("http://{address}"), server)
     }

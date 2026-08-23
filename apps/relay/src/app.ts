@@ -56,6 +56,7 @@ import {
   UsageUploadResponseSchema,
   UsageUploadResponseV3Schema,
   UtcHourSchema,
+  isReleasedBillingChannel,
 } from "@gotry-io/quota-protocol";
 import type {
   AccountMaintenanceInput,
@@ -65,6 +66,7 @@ import type {
   DevicePrincipal,
   DeviceScope,
   UsageAgent,
+  UsageQueryResult,
   UsageState,
 } from "@gotry-io/relay-core";
 import { type Context, Hono } from "hono";
@@ -150,7 +152,9 @@ export function createRelayApp(options: RelayAppOptions): Hono {
   const app = new Hono();
   const now = options.now ?? (() => new Date());
   // Checked-in defaults are schema-constructed by their source modules and semantic-validation
-  // tested. Keep the production request path free of the pricing validator's pairwise scan.
+  // tested, so app construction skips the pricing validator's pairwise scan. Costing validates
+  // the catalog it is handed, but memoizes by identity, so this one object is scanned at most
+  // once per isolate rather than once per request.
   const catalog = options.pricingCatalog
     ? requireValidPricingCatalog(PricingCatalogSchema.parse(options.pricingCatalog))
     : PRICING_CATALOG;
@@ -603,6 +607,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
           includeHourlyBreakdowns: false,
           agents: route.agents,
           allowDeviceHealth: route.deviceHealth,
+          allowUsageChannels: route.version === MANAGED_DATA_PROTOCOL_VERSION,
         },
       );
       if (selected instanceof Response) return selected;
@@ -774,7 +779,12 @@ export function createRelayApp(options: RelayAppOptions): Hono {
           catalog,
           modelCatalog,
           now(),
-          { allByDefault: false, includeHourlyBreakdowns: false, agents: route.agents },
+          {
+            allByDefault: false,
+            includeHourlyBreakdowns: false,
+            agents: route.agents,
+            allowUsageChannels: route.version === MANAGED_DATA_PROTOCOL_VERSION,
+          },
         );
         return selected instanceof Response
           ? selected
@@ -806,13 +816,25 @@ export function createRelayApp(options: RelayAppOptions): Hono {
       if (principal instanceof Response) {
         return principal;
       }
+      const allowUsageChannels = route.version === MANAGED_DATA_PROTOCOL_VERSION;
       if (
-        !hasOnlyQueryKeys(context, ["start_at", "end_at", "device_id", "cost_mode", "usage_agents"])
+        !hasOnlyQueryKeys(context, [
+          "start_at",
+          "end_at",
+          "device_id",
+          "cost_mode",
+          "usage_agents",
+          ...(allowUsageChannels ? ["usage_channels"] : []),
+        ])
       ) {
         return invalidRequest(context);
       }
       const requestedAgents = context.req.query("usage_agents");
-      if (requestedAgents !== undefined && requestedAgents !== "all") {
+      const usageChannelsQuery = context.req.query("usage_channels");
+      if (
+        (requestedAgents !== undefined && requestedAgents !== "all") ||
+        (usageChannelsQuery !== undefined && usageChannelsQuery !== "1")
+      ) {
         return invalidRequest(context);
       }
       const start = UtcHourSchema.safeParse(context.req.query("start_at"));
@@ -834,16 +856,22 @@ export function createRelayApp(options: RelayAppOptions): Hono {
       ) {
         return notFound(context);
       }
-      const result = await options.usageState.queryAccountUsage(principal.account_id, {
+      const queried = await options.usageState.queryAccountUsage(principal.account_id, {
         ...(deviceId ? { device_id: deviceId } : {}),
         agents: route.agents,
         start_at: start.data,
         end_at: end.data,
         limit: MAXIMUM_USAGE_READ_ROWS,
       });
-      if (result.truncated) {
+      if (queried.truncated) {
         return resultLimit(context);
       }
+      // These routes hand back raw facts, so they carry `billing_channel`
+      // directly and need the same narrowing the summary routes apply.
+      const result =
+        allowUsageChannels && usageChannelsQuery === "1"
+          ? queried
+          : narrowUnreleasedChannels(queried);
       try {
         return context.json(
           route.schema.parse({
@@ -1237,6 +1265,7 @@ async function accountUsageQuery(
     includeHourlyBreakdowns: boolean;
     agents: readonly UsageAgent[];
     allowDeviceHealth?: boolean;
+    allowUsageChannels?: boolean;
   } = {
     allByDefault: false,
     includeHourlyBreakdowns: false,
@@ -1253,6 +1282,7 @@ async function accountUsageQuery(
       "model_catalog",
       "usage_clients",
       ...(summaryOptions.allowDeviceHealth ? ["device_health"] : []),
+      ...(summaryOptions.allowUsageChannels ? ["usage_channels"] : []),
     ])
   ) {
     return invalidRequest(context);
@@ -1261,16 +1291,20 @@ async function accountUsageQuery(
   const modelCatalogQuery = context.req.query("model_catalog");
   const usageClientsQuery = context.req.query("usage_clients");
   const deviceHealthQuery = context.req.query("device_health");
+  const usageChannelsQuery = context.req.query("usage_channels");
   if (
     (modelCatalogQuery !== undefined && modelCatalogQuery !== "1") ||
     (usageClientsQuery !== undefined && usageClientsQuery !== "1") ||
-    (deviceHealthQuery !== undefined && deviceHealthQuery !== "1")
+    (deviceHealthQuery !== undefined && deviceHealthQuery !== "1") ||
+    (usageChannelsQuery !== undefined && usageChannelsQuery !== "1")
   ) {
     return invalidRequest(context);
   }
   const modelCatalogOptIn = modelCatalogQuery === "1";
   const usageClientsOptIn = usageClientsQuery === "1";
   const deviceHealthOptIn = summaryOptions.allowDeviceHealth === true && deviceHealthQuery === "1";
+  const usageChannelsOptIn =
+    summaryOptions.allowUsageChannels === true && usageChannelsQuery === "1";
   if (requestedAgents !== undefined && requestedAgents !== "all") {
     return invalidRequest(context);
   }
@@ -1313,11 +1347,12 @@ async function accountUsageQuery(
   if (result.truncated) {
     return resultLimit(context);
   }
+  const selected = usageChannelsOptIn ? result : narrowUnreleasedChannels(result);
   try {
     return {
       summary: buildUsageSummary(
-        result,
-        range?.success ? range.data : retainedUsageRange(result.rows, defaultTo),
+        selected,
+        range?.success ? range.data : retainedUsageRange(selected.rows, defaultTo),
         mode.data,
         catalog,
         summaryOptions.includeHourlyBreakdowns,
@@ -1332,6 +1367,35 @@ async function accountUsageQuery(
     }
     throw error;
   }
+}
+
+/**
+ * menubar-v0.0.19 and earlier decode `billing_channel` and the inference
+ * provider derived from it with exhaustive Swift enums, so a channel added
+ * after that release fails to decode instead of degrading. Narrow those rows to
+ * the unknown channel unless the caller states it understands the current set
+ * with `usage_channels=1`. Narrowing happens before grouping so a narrowed row
+ * folds into the existing unknown provider rather than producing a second one,
+ * and `channel_source` moves with it to keep the two fields consistent.
+ *
+ * Narrowing therefore also reaches pricing: a narrowed row resolves as
+ * `unknown_channel` rather than against its real channel. That matches what a
+ * released client can represent, but it means the first Moonshot or DeepSeek
+ * catalog entry would price only for opted-in callers. Move the rewrite to the
+ * emission points if the two views must report the same amount.
+ */
+function narrowUnreleasedChannels(result: UsageQueryResult): UsageQueryResult {
+  if (result.rows.every((row) => isReleasedBillingChannel(row.billing_channel))) {
+    return result;
+  }
+  return {
+    ...result,
+    rows: result.rows.map((row) =>
+      isReleasedBillingChannel(row.billing_channel)
+        ? row
+        : { ...row, billing_channel: "unknown", channel_source: "unknown" },
+    ),
+  };
 }
 
 function retainedUsageRange(

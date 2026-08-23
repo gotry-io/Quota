@@ -57,6 +57,31 @@ describe("quota protocol v2", () => {
     expect(LocalProviderIdSchema.safeParse("cursor").success).toBe(true);
   });
 
+  it("pins the billing channels menubar-v0.0.19 can decode", () => {
+    // Widening BillingChannelSchema must not widen what released clients are sent.
+    expect([...protocol.RELEASED_BILLING_CHANNELS]).toEqual([
+      "openai_direct",
+      "azure_openai",
+      "anthropic_direct",
+      "aws_bedrock",
+      "google_vertex",
+      "openrouter",
+      "xai_direct",
+      "unknown",
+    ]);
+    for (const channel of protocol.BillingChannelSchema.options) {
+      expect(protocol.isReleasedBillingChannel(channel)).toBe(
+        (protocol.RELEASED_BILLING_CHANNELS as readonly string[]).includes(channel),
+      );
+    }
+    expect(protocol.isReleasedBillingChannel("moonshot_direct")).toBe(false);
+    expect(protocol.isReleasedBillingChannel("deepseek_direct")).toBe(false);
+    // Every channel stays priceable except the sentinel.
+    expect(protocol.PricedBillingChannelSchema.options).toEqual(
+      protocol.BillingChannelSchema.options.filter((channel) => channel !== "unknown"),
+    );
+  });
+
   it("adds Cursor only to managed-data v3", () => {
     expect(MANAGED_DATA_PROTOCOL_VERSION).toBe(3);
     expect(PROVIDER_IDS).not.toContain("cursor");
