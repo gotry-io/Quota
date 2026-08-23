@@ -2897,14 +2897,12 @@ fn validate_usage_submission_session(
     // Refusing to send it wedged the entire queue behind that one entry, with a
     // reinstall as the only documented way out. A submission *ahead* of the session
     // would skip a sequence the Relay has never seen, so it stays refused.
-    let ordered = match (
-        session.get("next_usage_sequence").and_then(Value::as_u64),
-        submission.get("sequence").and_then(Value::as_u64),
-    ) {
-        (Some(expected), Some(sequence)) => sequence <= expected,
-        _ => false,
-    };
-    if !ordered {
+    if session
+        .get("next_usage_sequence")
+        .and_then(Value::as_u64)
+        .zip(submission.get("sequence").and_then(Value::as_u64))
+        .is_none_or(|(expected, sequence)| sequence > expected)
+    {
         return Err(BackendError {
             error: crate::protocol::IpcError::new(
                 crate::protocol::ErrorCode::InvalidState,
@@ -3788,9 +3786,8 @@ mod tests {
             .code,
             crate::protocol::ErrorCode::AuthenticationRequired
         );
-        // An entry the Relay already answered for, whose acknowledgement was lost, is
-        // re-sent so the Relay can recognize the submission id and release it. Before
-        // this was allowed, one such entry wedged the whole outbox until reinstall.
+        // A replay below the session's next sequence is allowed so a lost
+        // acknowledgement can be released; see `validate_usage_submission_session`.
         assert!(
             validate_usage_submission_session(
                 &session,
