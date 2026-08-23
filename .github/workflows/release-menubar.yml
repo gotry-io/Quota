@@ -7,6 +7,8 @@ name: release-menubar
 # The bundled private Rust service follows the QuotaBar release version.
 # Sparkle appcast signing requires repository secret SPARKLE_ED_PRIVATE_KEY
 # (base64 Ed25519 seed matching Info.plist SUPublicEDKey).
+# A stable release claims the repository "Latest" alias explicitly rather than leaving it to the
+# date and version heuristic gh applies across both tag prefixes (docs/architecture.md).
 on:
   push:
     tags: ["menubar-v*"]
@@ -244,6 +246,8 @@ jobs:
             CREATE_ARGS=(--repo "$GITHUB_REPOSITORY" --title "$TAG" --generate-notes)
             if [ "$PRERELEASE" = "true" ]; then
               CREATE_ARGS+=(--prerelease)
+            else
+              CREATE_ARGS+=(--latest)
             fi
             echo "Creating GitHub release channel=${CHANNEL} prerelease=${PRERELEASE}"
             gh release create "$TAG" "${CREATE_ARGS[@]}"

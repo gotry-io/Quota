@@ -144,12 +144,14 @@ remote migrations or deploy manually without explicit authorization.
 
 ## Distribution
 
-QuotaBar and QuotaCLI release independently. A `menubar-vX.Y.Z` tag builds one signed and notarized
-Apple Silicon app, a drag-install `.dmg`, a Sparkle `appcast.xml` for in-app updates, and
-updates the Homebrew Cask. The Cask installs only `QuotaBar.app`; it does not expose the private
-service as a command. Install with `brew install gotry-io/tap/quotabar` or the website `.dmg`. A
-`cli-vX.Y.Z` tag publishes a static x86_64 Linux binary and checksum to GitHub Releases. QuotaCLI is
-not published to npm or Homebrew; Windows is not built or released.
+QuotaBar and QuotaCLI release on independent tags, coupled only by the repository `latest` alias
+that QuotaBar distribution resolves through (see [architecture](docs/architecture.md)). A
+`menubar-vX.Y.Z` tag builds one signed and notarized Apple Silicon app, a drag-install `.dmg`, a
+Sparkle `appcast.xml` for in-app updates, and updates the Homebrew Cask. The Cask installs only
+`QuotaBar.app`; it does not expose the private service as a command. Install with `brew install
+gotry-io/tap/quotabar` or the website `.dmg`. A `cli-vX.Y.Z` tag publishes a static x86_64 Linux
+binary and checksum to GitHub Releases. QuotaCLI is not published to npm or Homebrew; Windows is not
+built or released.
 
 ```bash
 pnpm version:bump:cli patch      # or minor | major | explicit semver
