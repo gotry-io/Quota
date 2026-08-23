@@ -25,6 +25,7 @@ struct ProviderQuotaCard: View {
 
   private func observationBlock(_ snapshot: QuotaSnapshot, index: Int) -> some View {
     let label = PlanDisplay.accountLabel(snapshot.account.label) ?? "Account \(index + 1)"
+    let isStale = snapshot.isStale()
     return VStack(alignment: .leading, spacing: 12) {
       HStack(alignment: .firstTextBaseline, spacing: 8) {
         Text(label)
@@ -49,7 +50,7 @@ struct ProviderQuotaCard: View {
           .foregroundStyle(.secondary)
       } else {
         ForEach(snapshot.windows) { window in
-          QuotaWindowBlock(window: window, isStale: snapshot.status == .stale)
+          QuotaWindowBlock(window: window, isStale: isStale)
         }
       }
     }
@@ -81,20 +82,24 @@ struct QuotaWindowBlock: View {
           .accessibilityHidden(true)
       }
 
-      if let resets = window.resetsAt {
-        Text("Resets \(QuotaFormat.resetTime(resets))")
+      if let support = supportLine {
+        Text(support)
           .font(.footnote)
           .foregroundStyle(.tertiary)
           .lineLimit(2)
           .fixedSize(horizontal: false, vertical: true)
-      } else if isStale {
-        Text("Stale")
-          .font(.footnote)
-          .foregroundStyle(.tertiary)
       }
     }
     .accessibilityElement(children: .combine)
     .accessibilityLabel(accessibilityText)
+  }
+
+  /// An expired observation says so even when it still carries a reset time, because the
+  /// reset it names may already have passed.
+  private var supportLine: String? {
+    let reset = window.resetsAt.map { "Resets \(QuotaFormat.resetTime($0))" }
+    guard isStale else { return reset }
+    return reset.map { "Stale · \($0)" } ?? "Stale"
   }
 
   private var accessibilityText: String {

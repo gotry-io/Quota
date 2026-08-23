@@ -139,7 +139,8 @@ private struct WidgetSnapshotCandidate {
       unit: window.valueUnit.map(mapUnit),
       hasLimit: hasLimit,
       resetsAt: window.resetsAt,
-      isStale: observation.snapshot.status == .stale
+      isAvailable: observation.snapshot.isAvailable,
+      validUntil: observation.snapshot.validUntil
     )
   }
 

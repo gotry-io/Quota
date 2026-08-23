@@ -14,6 +14,7 @@ import {
   type ModelCatalog,
   ModelCatalogSchema,
   type QuotaSnapshotV3 as QuotaSnapshot,
+  type QuotaStatus,
   Rfc3339InstantSchema,
   type UsageCostAssumption,
   type UsageCostMode,
@@ -40,6 +41,21 @@ export function isSnapshotStale(snapshot: QuotaSnapshot, now = new Date()): bool
     snapshot.status === "stale" ||
     (snapshot.valid_until !== undefined && Date.parse(snapshot.valid_until) <= now.getTime())
   );
+}
+
+/**
+ * The status to show for one account observation.
+ *
+ * The collecting device stamps `valid_until` on every snapshot it uploads: the first
+ * window reset it knows about, and at the latest a fixed age. Past that instant the
+ * counters no longer describe the account, so a device that stopped collecting reads as
+ * stale instead of staying available forever. A status the device already reported
+ * stands as reported.
+ */
+export function observedSnapshotStatus(snapshot: QuotaSnapshot, now = new Date()): QuotaStatus {
+  return snapshot.status === "available" && isSnapshotStale(snapshot, now)
+    ? "stale"
+    : snapshot.status;
 }
 
 export interface NormalizedUsageEvent {

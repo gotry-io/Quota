@@ -74,6 +74,35 @@ struct QuotaStatePresentationTests {
   }
 
   @Test
+  func aRejectedSignInExplainsItselfWhileMissingSetupKeepsTheGenericCopy() {
+    let expired = "The saved sign-in expired or was rejected. Sign in again."
+    let rejected = ProviderStatusCopy.from(
+      result: QuotaCollectionResult(
+        provider: .codex,
+        outcome: .authRequired,
+        snapshots: [],
+        source: nil,
+        message: expired
+      )
+    )
+    #expect(rejected?.kind == .needsSignIn)
+    #expect(rejected?.detail == expired)
+    #expect(rejected?.accessibilityLabel == expired)
+
+    let neverConfigured = ProviderStatusCopy.from(
+      result: QuotaCollectionResult(
+        provider: .codex,
+        outcome: .authRequired,
+        snapshots: [],
+        source: nil,
+        message: nil
+      )
+    )
+    #expect(neverConfigured?.kind == .needsSignIn)
+    #expect(neverConfigured?.detail == "Account setup required.")
+  }
+
+  @Test
   func sectionStatesKeepTheirScopeInAccessibilityCopy() {
     #expect(
       QuotaSectionStatePresentation.loading(title: "Preparing Usage…").accessibilityLabel

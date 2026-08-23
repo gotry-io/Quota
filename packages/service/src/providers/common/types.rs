@@ -1,10 +1,11 @@
 use crate::catalog::ProviderId;
+use chrono_tz::Tz;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, atomic::AtomicBool};
 
-use super::json::{parse_date, unix_now, unix_seconds_to_iso};
+use super::json::{parse_date, parse_rfc3339, unix_now, unix_seconds_to_iso};
 
 pub const BROWSER_COOKIE_HEADER_LIMIT: usize = 8_192;
 pub const BROWSER_SESSION_SOURCE: &str = "browser_session";
@@ -28,11 +29,13 @@ impl ErrorCategory {
     }
 }
 
+/// A failed provider read. The category is the whole answer: it is what the collection
+/// boundary branches on and what the client renders. Provider text never enters it, so a
+/// provider response can never carry a secret into an error, a log line, or the UI.
 #[derive(Debug, thiserror::Error)]
-#[error("{message}")]
+#[error("{}", category.as_str())]
 pub struct ProviderError {
     pub category: ErrorCategory,
-    pub message: &'static str,
     pub source_id: &'static str,
 }
 
@@ -40,30 +43,8 @@ impl ProviderError {
     pub const fn new(category: ErrorCategory, source: &'static str) -> Self {
         Self {
             category,
-            message: fixed_message(category),
             source_id: source,
         }
-    }
-
-    pub const fn with_message(
-        category: ErrorCategory,
-        source: &'static str,
-        message: &'static str,
-    ) -> Self {
-        Self {
-            category,
-            message,
-            source_id: source,
-        }
-    }
-}
-
-pub const fn fixed_message(category: ErrorCategory) -> &'static str {
-    match category {
-        ErrorCategory::AuthRequired => "Provider authentication is required.",
-        ErrorCategory::Unavailable => "Provider is temporarily unavailable.",
-        ErrorCategory::Unsupported => "Provider operation is not supported.",
-        ErrorCategory::Error => "Provider returned invalid quota data.",
     }
 }
 
@@ -105,6 +86,50 @@ pub struct QuotaSnapshot {
     pub source: &'static str,
     pub status: &'static str,
     pub observed_at: String,
+}
+
+/// How long an observation may claim to describe current quota when its own windows say
+/// nothing shorter. A device that stops collecting must stop answering for a live account.
+pub const MAX_SNAPSHOT_VALIDITY_SECONDS: i64 = 86_400;
+
+impl QuotaSnapshot {
+    /// The instant this observation stops describing current quota.
+    ///
+    /// The first window reset is the exact boundary: at it that window refills and the
+    /// number carried here is wrong. Windows that report no reset fall back to their own
+    /// cadence, and every observation ages out at [`MAX_SNAPSHOT_VALIDITY_SECONDS`].
+    /// The protocol JSON for this observation, stamped with [`Self::valid_until`].
+    ///
+    /// Deriving it here keeps the complete wire shape in one module: `valid_until` is not
+    /// provider input, so no collector sets the field and none can forget to.
+    pub fn into_wire_json(self) -> serde_json::Value {
+        let mut value = serde_json::to_value(&self).unwrap_or(serde_json::Value::Null);
+        value["valid_until"] = serde_json::Value::String(self.valid_until());
+        value
+    }
+
+    pub fn valid_until(&self) -> String {
+        let observed = parse_rfc3339(&self.observed_at).unwrap_or_else(unix_now);
+        let limit = observed.saturating_add(MAX_SNAPSHOT_VALIDITY_SECONDS);
+        let earliest_reset = self
+            .windows
+            .iter()
+            .filter_map(|window| window.resets_at.as_deref())
+            .filter_map(parse_rfc3339)
+            .filter(|reset| *reset > observed)
+            .min();
+        let shortest_cadence = self
+            .windows
+            .iter()
+            .filter_map(|window| window.duration_seconds)
+            .min()
+            .map(|seconds| observed.saturating_add(i64::try_from(seconds).unwrap_or(i64::MAX)));
+        unix_seconds_to_iso(
+            earliest_reset
+                .or(shortest_cadence)
+                .map_or(limit, |instant| instant.min(limit)),
+        )
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -151,7 +176,25 @@ impl Default for CollectionContext {
     }
 }
 
+/// The IANA zone this process runs in: an explicit valid `TZ`, then the host zone, then
+/// UTC. Provider text that names a wall-clock instant without a zone is read in it.
+pub fn resolve_timezone(environment: &HashMap<String, String>) -> Tz {
+    environment
+        .get("TZ")
+        .and_then(|value| value.parse::<Tz>().ok())
+        .or_else(|| {
+            iana_time_zone::get_timezone()
+                .ok()
+                .and_then(|value| value.parse::<Tz>().ok())
+        })
+        .unwrap_or(Tz::UTC)
+}
+
 impl CollectionContext {
+    pub fn timezone(&self) -> Tz {
+        resolve_timezone(&self.environment)
+    }
+
     pub fn user_agent(&self) -> String {
         format!("{}/{}", self.client_name, self.client_version)
     }
@@ -406,6 +449,72 @@ mod tests {
                 &format!("wos-session={}", "x".repeat(BROWSER_COOKIE_HEADER_LIMIT))
             )
             .is_err()
+        );
+    }
+
+    fn snapshot(windows: Vec<QuotaWindow>) -> QuotaSnapshot {
+        QuotaSnapshot {
+            provider: ProviderId::Codex,
+            account: QuotaAccount {
+                fingerprint: "account".to_owned(),
+                fingerprint_scope: "global",
+                label: None,
+                plan: None,
+            },
+            windows,
+            source: "chatgpt_usage_api",
+            status: "available",
+            observed_at: "2026-08-15T08:00:00Z".to_owned(),
+        }
+    }
+
+    fn window(resets_at: Option<&str>, duration_seconds: Option<u64>) -> QuotaWindow {
+        QuotaWindow {
+            id: "window".to_owned(),
+            title: "Window".to_owned(),
+            used_percent: 10.0,
+            resets_at: resets_at.map(str::to_owned),
+            duration_seconds,
+            remaining_value: None,
+            limit_value: None,
+            value_unit: None,
+        }
+    }
+
+    #[test]
+    fn snapshot_validity_ends_at_the_first_reset_and_always_ages_out() {
+        // The nearest future reset is the exact boundary, whatever order it arrives in.
+        assert_eq!(
+            snapshot(vec![
+                window(Some("2026-08-22T08:00:00Z"), Some(604_800)),
+                window(Some("2026-08-15T11:30:00Z"), Some(18_000)),
+            ])
+            .valid_until(),
+            "2026-08-15T11:30:00Z"
+        );
+        // A reset the provider already passed is not a validity boundary; the shortest
+        // cadence answers instead.
+        assert_eq!(
+            snapshot(vec![window(Some("2026-08-15T07:00:00Z"), Some(18_000))]).valid_until(),
+            "2026-08-15T13:00:00Z"
+        );
+        // Windows without a reset fall back to their own cadence.
+        assert_eq!(
+            snapshot(vec![
+                window(None, Some(604_800)),
+                window(None, Some(18_000))
+            ])
+            .valid_until(),
+            "2026-08-15T13:00:00Z"
+        );
+        // A monthly horizon and a snapshot that describes neither still age out.
+        assert_eq!(
+            snapshot(vec![window(Some("2026-09-14T08:00:00Z"), Some(2_592_000))]).valid_until(),
+            "2026-08-16T08:00:00Z"
+        );
+        assert_eq!(
+            snapshot(vec![window(None, None)]).valid_until(),
+            "2026-08-16T08:00:00Z"
         );
     }
 

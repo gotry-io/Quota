@@ -71,9 +71,11 @@ Body, in order:
    time.
 3. Provider quota cards in catalog order. Each observation shows provider name, optional account
    label and plan, remaining value as the strongest number, one meter per percent window, and reset
-   time. Remaining has no "left" or "remaining" suffix. Budget windows with an amount use
-   `71% · $3.75`, percent-only windows use `71%`, and balance-only windows use **Balance** plus the
-   unit amount.
+   time. An observation past its `valid_until`, or one the device did not report as available, reads
+   **Stale** in place of, or ahead of, that reset time, because the reset it names may already have
+   passed. Widgets apply the same rule at the instant they draw. Remaining has no "left" or "remaining"
+   suffix. Budget windows with an amount use `71% · $3.75`, percent-only windows use `71%`, and
+   balance-only windows use **Balance** plus the unit amount.
 4. Devices: display name, platform, app product/version, and compact server-authoritative last
    report/refresh/sync. Fresh healthy/current-or-empty reports with none/automatic attention are
    **Healthy**. Fresh problem states are **Needs attention** or **Check device** and say **Review

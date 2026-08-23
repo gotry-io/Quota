@@ -1,4 +1,5 @@
 import Foundation
+import QuotaPresentation
 
 public enum QuotaStatus: String, Codable, Sendable {
   case available
@@ -205,4 +206,8 @@ public struct QuotaSnapshot: Codable, Equatable, Sendable {
     case observedAt
     case validUntil
   }
+}
+
+extension QuotaSnapshot: QuotaObservationFreshness {
+  public var isAvailable: Bool { status == .available }
 }

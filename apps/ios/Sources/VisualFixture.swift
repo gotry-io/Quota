@@ -288,7 +288,8 @@ enum VisualFixture: String, CaseIterable, Sendable {
           source: "visual_fixture",
           status: .available,
           observedAt: observedAt,
-          validUntil: updatedAt.addingTimeInterval(300)
+          // Same rule the collector applies: valid until the first window reset.
+          validUntil: windows.compactMap(\.resetsAt).min() ?? updatedAt.addingTimeInterval(300)
         ),
         updatedAt: updatedAt
       )

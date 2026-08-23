@@ -39,7 +39,6 @@ use crate::usage::{
 const PARSER_REVISION: &str = "quota-usage-rust-4";
 const MAX_USAGE_OUTBOX_ENTRIES: usize = 64;
 const MAX_USAGE_MULTIPART_PARTS: usize = 64;
-const DEFAULT_TIMEZONE: &str = "UTC";
 
 fn metrics<const N: usize>(values: [(&str, i64); N]) -> BTreeMap<String, i64> {
     values
@@ -2252,7 +2251,9 @@ impl NativeBackend {
     }
 
     fn timezone(&self) -> String {
-        resolve_timezone(&self.environment)
+        crate::providers::common::resolve_timezone(&self.environment)
+            .name()
+            .to_owned()
     }
 
     fn refresh_account_usage_periods(
@@ -2268,12 +2269,13 @@ impl NativeBackend {
         {
             push_account_usage_period(&mut periods, UsagePeriod::All, all);
         }
+        let timezone = self.timezone();
         for period in [
             UsagePeriod::Today,
             UsagePeriod::Last7Days,
             UsagePeriod::Last30Days,
         ] {
-            let (_, range) = usage_period_range(period, &self.timezone(), Utc::now())?;
+            let (_, range) = usage_period_range(period, &timezone, Utc::now())?;
             let (from, to) = range.ok_or_else(BackendError::unavailable)?;
             let query = format!("cost_mode=auto&from={from}&to={to}");
             match self.account.account_usage(&query, cancel) {
@@ -2312,6 +2314,12 @@ impl NativeBackend {
             .and_then(|value| value.get("account_summary"))
             .and_then(Value::as_object)
         {
+            // The account summary replays what this device uploaded. Local collection is
+            // the only authority for this device, so reading its own upload back would keep
+            // a rejected or removed local source on screen as another device's report.
+            let this_device = account
+                .and_then(|value| value.get("device_id"))
+                .and_then(Value::as_str);
             let display_names = summary
                 .get("devices")
                 .and_then(Value::as_array)
@@ -2330,6 +2338,9 @@ impl NativeBackend {
                     else {
                         continue;
                     };
+                    if Some(device_id) == this_device {
+                        continue;
+                    }
                     let Some(snapshot) = observation.get("snapshot") else {
                         continue;
                     };
@@ -2380,19 +2391,6 @@ impl NativeBackend {
     }
 }
 
-fn resolve_timezone(environment: &HashMap<String, String>) -> String {
-    if let Some(value) = environment
-        .get("TZ")
-        .filter(|value| value.parse::<chrono_tz::Tz>().is_ok())
-    {
-        return value.clone();
-    }
-    iana_time_zone::get_timezone()
-        .ok()
-        .filter(|value| value.parse::<chrono_tz::Tz>().is_ok())
-        .unwrap_or_else(|| DEFAULT_TIMEZONE.to_owned())
-}
-
 fn collect_discovered_provider(
     provider: ProviderId,
     sessions: Vec<ProviderSession>,
@@ -2409,18 +2407,24 @@ fn collect_discovered_provider(
     let mut failure = None;
     for session in sessions {
         match providers::collect(provider, &session, context) {
-            Ok(snapshot) => snapshots.push(serde_json::to_value(snapshot).unwrap_or(Value::Null)),
+            // `valid_until` is what makes this observation expire: the Overview merge,
+            // the account summary readers, and every device that reads this upload treat
+            // a passed instant as stale rather than current.
+            Ok(snapshot) => snapshots.push(snapshot.into_wire_json()),
             Err(error) => failure = Some(error.category),
         }
     }
     if snapshots.is_empty() {
-        let outcome = match failure.unwrap_or(ErrorCategory::Unavailable) {
-            ErrorCategory::AuthRequired => "auth_required",
-            ErrorCategory::Unsupported => "unsupported",
-            ErrorCategory::Unavailable => "unavailable",
-            ErrorCategory::Error => "error",
-        };
-        json!({"provider": provider, "outcome": outcome, "snapshots": []})
+        let category = failure.unwrap_or(ErrorCategory::Unavailable);
+        let mut result =
+            json!({"provider": provider, "outcome": category.as_str(), "snapshots": []});
+        // A discovered source that answers `auth_required` is a sign-in this machine still
+        // holds and the provider no longer accepts. That is a different recovery from a
+        // provider that was never set up here, so it is reported as its own message.
+        if category == ErrorCategory::AuthRequired {
+            result["message"] = json!("The saved sign-in expired or was rejected. Sign in again.");
+        }
+        result
     } else {
         json!({
             "provider": provider,
@@ -4237,6 +4241,155 @@ mod tests {
     }
 
     #[test]
+    fn rejected_local_sign_in_is_reported_separately_from_missing_setup() {
+        let context = CollectionContext {
+            home_directory: PathBuf::from("/tmp/quota-rejected-sign-in-missing-home"),
+            environment: HashMap::new(),
+            config_path: None,
+            browser_sessions: HashMap::new(),
+            client_name: "QuotaTest".to_owned(),
+            client_version: "test".to_owned(),
+            now: Some("2026-08-15T08:00:00Z".to_owned()),
+            cancel: None,
+        };
+        let rejected = collect_discovered_provider(
+            ProviderId::Claude,
+            vec![ProviderSession {
+                provider: ProviderId::Claude,
+                credential_source: "fixture".to_owned(),
+            }],
+            &context,
+        );
+        assert_eq!(
+            rejected.get("outcome").and_then(Value::as_str),
+            Some("auth_required")
+        );
+        assert_eq!(
+            rejected.get("message").and_then(Value::as_str),
+            Some("The saved sign-in expired or was rejected. Sign in again.")
+        );
+        let never_configured =
+            collect_discovered_provider(ProviderId::Claude, Vec::new(), &context);
+        assert_eq!(
+            never_configured.get("outcome").and_then(Value::as_str),
+            Some("auth_required")
+        );
+        assert_eq!(never_configured.get("message"), None);
+    }
+
+    #[test]
+    fn expired_observations_are_stale_and_lose_to_a_still_valid_device() {
+        let root = std::env::temp_dir().join(format!("quota-overview-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        let backend = NativeBackend::new(
+            state,
+            Arc::new(RelayClient::new().expect("relay")),
+            "QuotaTest",
+            "test",
+        );
+        let snapshot = |valid_until: &str| {
+            json!({
+                "provider": "codex",
+                "account": {"fingerprint": "account", "fingerprint_scope": "global"},
+                "windows": [{"id": "five_hour", "title": "5 hour", "used_percent": 40.0}],
+                "source": "chatgpt_usage_api",
+                "status": "available",
+                "observed_at": "2026-08-15T08:00:00Z",
+                "valid_until": valid_until
+            })
+        };
+        let quota = json!({"results": []});
+        let mut account = json!({
+            "auth_status": "signed_in",
+            "device_id": "this-device",
+            "account_summary": {
+                "devices": [{"device_id": "asleep", "display_name": "Asleep"}],
+                "quota": [{"device_id": "asleep", "snapshot": snapshot("2026-08-15T13:00:00Z")}]
+            }
+        });
+        let expired = backend.build_overview(&quota, Some(&account));
+        assert_eq!(expired.len(), 1);
+        assert!(expired[0].is_stale);
+
+        account["account_summary"]["devices"]
+            .as_array_mut()
+            .expect("devices")
+            .push(json!({"device_id": "awake", "display_name": "Studio"}));
+        account["account_summary"]["quota"]
+            .as_array_mut()
+            .expect("observations")
+            .push(json!({
+                "device_id": "awake",
+                "snapshot": snapshot("2099-01-01T00:00:00Z")
+            }));
+        let items = backend.build_overview(&quota, Some(&account));
+        assert_eq!(items.len(), 1);
+        assert!(!items[0].is_stale);
+        assert_eq!(items[0].selected_source_display_name, "Studio");
+        drop(backend);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn overview_ignores_this_device_upload_and_keeps_other_devices() {
+        let root = std::env::temp_dir().join(format!("quota-overview-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        let backend = NativeBackend::new(
+            state,
+            Arc::new(RelayClient::new().expect("relay")),
+            "QuotaTest",
+            "test",
+        );
+        let snapshot = |observed_at: &str| {
+            json!({
+                "provider": "codex",
+                "account": {"fingerprint": "account", "fingerprint_scope": "global"},
+                "windows": [{"id": "five_hour", "title": "5 hour", "used_percent": 40.0}],
+                "source": "chatgpt_usage_api",
+                "status": "available",
+                "observed_at": observed_at
+            })
+        };
+        // The local sign-in was rejected, so this device collected nothing this refresh.
+        let quota = json!({
+            "results": [{"provider": "codex", "outcome": "auth_required", "snapshots": []}]
+        });
+        let mut account = json!({
+            "auth_status": "signed_in",
+            "account_id": "account",
+            "device_id": "this-device",
+            "device_generation": 1,
+            "account_summary": {
+                "devices": [
+                    {"device_id": "this-device", "display_name": "This Mac"},
+                    {"device_id": "other-device", "display_name": "Studio"}
+                ],
+                "quota": [
+                    {"device_id": "this-device", "snapshot": snapshot("2026-08-15T08:00:00Z")}
+                ]
+            }
+        });
+
+        assert!(backend.build_overview(&quota, Some(&account)).is_empty());
+
+        account["account_summary"]["quota"]
+            .as_array_mut()
+            .expect("observations")
+            .push(json!({
+                "device_id": "other-device",
+                "snapshot": snapshot("2026-08-15T09:00:00Z")
+            }));
+        let items = backend.build_overview(&quota, Some(&account));
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].sources.len(), 1);
+        assert_eq!(items[0].selected_source_display_name, "Studio");
+        drop(backend);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
     fn account_quota_masks_opportunistic_local_auth_failure() {
         let root = std::env::temp_dir().join(format!("quota-diagnostics-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).expect("root");
@@ -4628,10 +4781,11 @@ mod tests {
 
     #[test]
     fn timezone_prefers_explicit_valid_tz_and_resolves_without_tz() {
+        use crate::providers::common::resolve_timezone;
         let explicit = HashMap::from([(String::from("TZ"), String::from("Asia/Tokyo"))]);
-        assert_eq!(resolve_timezone(&explicit), "Asia/Tokyo");
+        assert_eq!(resolve_timezone(&explicit).name(), "Asia/Tokyo");
         let invalid = HashMap::from([(String::from("TZ"), String::from("not/a-zone"))]);
-        assert_ne!(resolve_timezone(&invalid), "not/a-zone");
+        assert_ne!(resolve_timezone(&invalid).name(), "not/a-zone");
     }
 
     #[test]

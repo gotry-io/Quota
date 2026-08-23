@@ -54,6 +54,9 @@ importers:
 
   apps/web:
     devDependencies:
+      '@gotry-io/quota-model':
+        specifier: workspace:*
+        version: link:../../packages/quota-model
       '@gotry-io/quota-protocol':
         specifier: workspace:*
         version: link:../../packages/protocol

@@ -1,4 +1,5 @@
 #if DEBUG
+  import QuotaPresentation
   import SwiftUI
 
   enum VisualTestDataSource: String {
@@ -404,7 +405,7 @@
         deviceID: deviceID,
         displayName: displayName,
         observedAt: snapshot.observedAt,
-        isStale: snapshot.status == .stale || snapshot.validUntil.map { $0 <= now } == true
+        isStale: snapshot.isStale(now: now)
       )
       return LocalServiceOverviewItem(
         identity: LocalServiceOverviewIdentity(

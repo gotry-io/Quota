@@ -121,7 +121,7 @@ fn parse_numeric_date(value: f64) -> Option<i64> {
     })
 }
 
-fn parse_rfc3339(value: &str) -> Option<i64> {
+pub(super) fn parse_rfc3339(value: &str) -> Option<i64> {
     let (date, time_and_zone) = value.split_once('T').or_else(|| value.split_once(' '))?;
     let mut date_parts = date.split('-');
     let year: i32 = date_parts.next()?.parse().ok()?;
