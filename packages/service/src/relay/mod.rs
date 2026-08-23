@@ -2889,9 +2889,22 @@ fn validate_usage_submission_session(
     {
         return Err(session_changed_error());
     }
-    if session.get("next_usage_sequence").and_then(Value::as_u64)
-        != submission.get("sequence").and_then(Value::as_u64)
-    {
+    // A submission numbered below the session's next sequence is one the Relay has
+    // already answered for and whose acknowledgement did not land -- an upload
+    // interrupted between recording the response and removing the outbox entry
+    // leaves exactly that. Re-sending it is safe and is how it gets released: the
+    // Relay deduplicates by the immutable submission id and replies `duplicate`.
+    // Refusing to send it wedged the entire queue behind that one entry, with a
+    // reinstall as the only documented way out. A submission *ahead* of the session
+    // would skip a sequence the Relay has never seen, so it stays refused.
+    let ordered = match (
+        session.get("next_usage_sequence").and_then(Value::as_u64),
+        submission.get("sequence").and_then(Value::as_u64),
+    ) {
+        (Some(expected), Some(sequence)) => sequence <= expected,
+        _ => false,
+    };
+    if !ordered {
         return Err(BackendError {
             error: crate::protocol::IpcError::new(
                 crate::protocol::ErrorCode::InvalidState,
@@ -3775,12 +3788,33 @@ mod tests {
             .code,
             crate::protocol::ErrorCode::AuthenticationRequired
         );
-        assert_eq!(
+        // An entry the Relay already answered for, whose acknowledgement was lost, is
+        // re-sent so the Relay can recognize the submission id and release it. Before
+        // this was allowed, one such entry wedged the whole outbox until reinstall.
+        assert!(
             validate_usage_submission_session(
                 &session,
                 &serde_json::json!({"device_id": "device_1", "generation": 2, "sequence": 3})
             )
-            .expect_err("sequence mismatch")
+            .is_ok()
+        );
+        // Skipping ahead of the sequence the Relay expects is still refused.
+        assert_eq!(
+            validate_usage_submission_session(
+                &session,
+                &serde_json::json!({"device_id": "device_1", "generation": 2, "sequence": 5})
+            )
+            .expect_err("sequence ahead of the session")
+            .error
+            .code,
+            crate::protocol::ErrorCode::InvalidState
+        );
+        assert_eq!(
+            validate_usage_submission_session(
+                &session,
+                &serde_json::json!({"device_id": "device_1", "generation": 2})
+            )
+            .expect_err("missing sequence")
             .error
             .code,
             crate::protocol::ErrorCode::InvalidState
