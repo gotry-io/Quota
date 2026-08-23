@@ -27,7 +27,7 @@ struct WidgetSnapshotTests {
     for key in forbidden {
       #expect(!encoded.contains("\"\(key)\""), "encoded snapshot must not contain key \(key)")
     }
-    #expect(encoded.contains("\"version\":1"))
+    #expect(encoded.contains("\"version\":2"))
     #expect(encoded.contains("provider_id"))
     #expect(encoded.contains("remaining_percent"))
     #expect(encoded.contains("input_tokens"))
@@ -43,7 +43,7 @@ struct WidgetSnapshotTests {
   func rejectsInvalidVersion() throws {
     let json = """
       {
-        "version": 2,
+        "version": 3,
         "fetched_at": "2026-08-14T16:00:00Z",
         "items": [],
         "today": {
@@ -72,7 +72,7 @@ struct WidgetSnapshotTests {
     }.joined(separator: ",")
     let json = """
       {
-        "version": 1,
+        "version": 2,
         "fetched_at": "2026-08-14T16:00:00Z",
         "items": [\(items)],
         "today": {
@@ -131,7 +131,7 @@ struct WidgetSnapshotTests {
 
     let nanPercent = """
       {
-        "version": 1,
+        "version": 2,
         "fetched_at": "2026-08-14T16:00:00Z",
         "items": [{
           "provider_id": "codex",
@@ -152,7 +152,7 @@ struct WidgetSnapshotTests {
 
     let negativeTokens = """
       {
-        "version": 1,
+        "version": 2,
         "fetched_at": "2026-08-14T16:00:00Z",
         "items": [],
         "today": {
@@ -168,7 +168,7 @@ struct WidgetSnapshotTests {
 
     let badMicrousd = """
       {
-        "version": 1,
+        "version": 2,
         "fetched_at": "2026-08-14T16:00:00Z",
         "items": [],
         "today": {
@@ -184,7 +184,7 @@ struct WidgetSnapshotTests {
 
     let unknownUnit = """
       {
-        "version": 1,
+        "version": 2,
         "fetched_at": "2026-08-14T16:00:00Z",
         "items": [{
           "provider_id": "codex",
@@ -244,7 +244,7 @@ struct WidgetSnapshotTests {
 
     let completeMissingAmount = """
       {
-        "version": 1,
+        "version": 2,
         "fetched_at": "2026-08-14T16:00:00Z",
         "items": [],
         "today": {
@@ -260,7 +260,7 @@ struct WidgetSnapshotTests {
 
     let partialMissingAmount = """
       {
-        "version": 1,
+        "version": 2,
         "fetched_at": "2026-08-14T16:00:00Z",
         "items": [],
         "today": {
@@ -276,7 +276,7 @@ struct WidgetSnapshotTests {
 
     let unavailableWithAmount = """
       {
-        "version": 1,
+        "version": 2,
         "fetched_at": "2026-08-14T16:00:00Z",
         "items": [],
         "today": {
@@ -349,7 +349,7 @@ struct WidgetSnapshotTests {
   ) -> String {
     """
     {
-      "version": 1,
+      "version": 2,
       "fetched_at": "2026-08-14T16:00:00Z",
       "items": [{
         "provider_id": \(jsonString(providerID)),

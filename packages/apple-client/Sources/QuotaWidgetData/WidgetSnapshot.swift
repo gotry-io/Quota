@@ -3,7 +3,10 @@ import QuotaPresentation
 
 /// Versioned, bounded widget-facing quota projection. Foundation-only; no account/session fields.
 public struct WidgetSnapshot: Codable, Equatable, Sendable {
-  public static let currentVersion = 1
+  /// 2 carries per-item freshness facts (`isAvailable`, `validUntil`) where 1 carried a
+  /// published `isStale` verdict. A file written by the older shape is rejected by this
+  /// gate and the app republishes.
+  public static let currentVersion = 2
   public static let maximumItemCount = 16
 
   public let version: Int

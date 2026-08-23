@@ -778,9 +778,9 @@ fn map_cli_usage_text(text: &str, observed_at: i64, zone: Tz) -> Vec<QuotaWindow
         .iter()
         .find(|window| window.field == FIVE_HOUR_FIELD);
     if let Some(window) = five_hour
-        && let Some(index) = compact.lower.find("currentsession")
+        && let Some(index) = compact.lower.find(SESSION_TITLE)
     {
-        let segment = window_segment(&compact, index + "currentsession".len());
+        let segment = window_segment(&compact, index + SESSION_TITLE.len());
         if let Some(used) = percent_used(segment.lower) {
             push(
                 window.id.to_owned(),
@@ -793,8 +793,8 @@ fn map_cli_usage_text(text: &str, observed_at: i64, zone: Tz) -> Vec<QuotaWindow
         }
     }
     let mut cursor = 0;
-    while let Some(offset) = compact.lower[cursor..].find("currentweek(") {
-        let open = cursor + offset + "currentweek(".len();
+    while let Some(offset) = compact.lower[cursor..].find(WEEK_TITLE) {
+        let open = cursor + offset + WEEK_TITLE.len();
         let Some(close) = compact.lower[open..].find(')').map(|index| open + index) else {
             break;
         };
@@ -834,10 +834,11 @@ fn map_cli_usage_text(text: &str, observed_at: i64, zone: Tz) -> Vec<QuotaWindow
 /// One window's text: from `start` up to the next window title, bounded so a panel that
 /// never starts another window cannot pull in the whole screen. Both the percentage and
 /// the reset line for that window live inside it.
+///
+/// The bound is a title, not the word `current`: a promo line or footnote that compacts
+/// to `currently` would otherwise cut a real row off before its percentage or reset.
 fn window_segment(compact: &CompactText, start: usize) -> Segment<'_> {
-    let mut end = compact.lower[start..]
-        .find("current")
-        .map(|index| start + index)
+    let mut end = next_window_title(&compact.lower, start)
         .unwrap_or(compact.lower.len())
         .min(start + 600);
     // The bar glyphs survive compaction, so the byte bound can land inside one.
@@ -848,6 +849,19 @@ fn window_segment(compact: &CompactText, start: usize) -> Segment<'_> {
         text: &compact.text[start..end],
         lower: &compact.lower[start..end],
     }
+}
+
+const SESSION_TITLE: &str = "currentsession";
+const WEEK_TITLE: &str = "currentweek(";
+
+/// Where the next window's title starts, searching from `start`.
+fn next_window_title(lower: &str, start: usize) -> Option<usize> {
+    let rest = lower.get(start..)?;
+    [SESSION_TITLE, WEEK_TITLE]
+        .iter()
+        .filter_map(|title| rest.find(title))
+        .min()
+        .map(|index| start + index)
 }
 
 /// `Resets 4pm (Asia/Shanghai)` or `Resets Aug 25 at 9am`, as an instant.
@@ -1421,6 +1435,23 @@ mod tests {
         // Text that is not a clock is not a reset.
         assert_eq!(reset_at(&session("Resets soon"), 1_787_403_600), None);
         assert_eq!(reset_at(&session("Resets 25:00pm"), 1_787_403_600), None);
+        // Prose between rows is not a window boundary: the row keeps its own reset.
+        let promoted = concat!(
+            "Current session\n████ 20% used\nResets 4pm\n",
+            "You are currently on the Max plan\n",
+            "Current week (all models)\n██ 5% used\n"
+        );
+        let windows = map_cli_usage_text(promoted, 1_787_403_600, Tz::UTC);
+        assert_eq!(
+            windows
+                .iter()
+                .map(|window| (window.id.as_str(), window.resets_at.as_deref()))
+                .collect::<Vec<_>>(),
+            [
+                ("five_hour", Some("2026-08-22T16:00:00Z")),
+                ("seven_day", None),
+            ]
+        );
         // The window bound is a byte count over text whose bar glyphs are multibyte.
         let long_bar = format!("Current session\n{} 20% used\n", "█".repeat(250));
         assert!(map_cli_usage_text(&long_bar, 1_787_403_600, Tz::UTC).is_empty());

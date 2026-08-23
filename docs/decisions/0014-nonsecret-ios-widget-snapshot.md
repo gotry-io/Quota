@@ -36,7 +36,8 @@ Relay.
   available and when it stops describing current quota — not a stale verdict. The extension re-draws
   on its own timeline, so it applies the shared rule at the instant it renders, exactly as the app
   does. A published verdict would freeze at publish time and keep claiming a sleeping device's
-  counters are current.
+  counters are current. That shape is snapshot version 2; a file written by version 1 is rejected by
+  the version gate and the app republishes.
 - Missing, corrupt, or oversize snapshot files degrade to a safe no-data presentation. Logout,
   expired session, and absence of a trusted summary clear the published file and reload timelines.
 - `widgetURL` opens `io.gotry.quota:/overview` so taps return to the app Overview.
