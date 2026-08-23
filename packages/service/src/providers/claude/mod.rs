@@ -1429,8 +1429,8 @@ mod tests {
             reset_at(&session("Resets 4pm (Not/AZone)"), 1_787_403_600).as_deref(),
             Some("2026-08-22T16:00:00Z")
         );
-        // At 09:00 the same text can only mean tomorrow, which no five-hour window
-        // reaches, so nothing is claimed.
+        // At 09:00 the same text is seven hours out. A five-hour window cannot reset that
+        // far ahead, so the reading is a zone or parse mismatch and nothing is claimed.
         assert_eq!(reset_at(&session("Resets 4pm"), 1_787_389_200), None);
         // Text that is not a clock is not a reset.
         assert_eq!(reset_at(&session("Resets soon"), 1_787_403_600), None);
