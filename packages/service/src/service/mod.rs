@@ -152,7 +152,19 @@ struct RefreshState {
     active: Option<ActiveRefresh>,
     pending: bool,
     pending_trigger: Option<DiagnosticAttemptTrigger>,
-    aborted: bool,
+}
+
+/// How a refresh ended, which is what decides whether its outcome is worth
+/// reporting. `run_refresh` knows this directly; the worker used to re-derive a
+/// weaker answer from a flag it had itself written a few frames earlier.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RefreshEnd {
+    /// A repair took the refresh over. The components were left as they were, so
+    /// a report would describe the repair rather than a refresh.
+    Aborted,
+    /// The refresh reached its end, whether it completed, was cancelled, or
+    /// failed loudly. Its outcome is worth reporting.
+    Ran,
 }
 
 fn coalesce_refresh_trigger(
@@ -213,7 +225,6 @@ impl LocalService {
                     active: None,
                     pending: false,
                     pending_trigger: None,
-                    aborted: false,
                 }),
                 login: Mutex::new(LoginState { active: None }),
                 scheduler_wakeup: Condvar::new(),
@@ -758,7 +769,6 @@ impl LocalService {
             cancel: cancel.clone(),
             started_at: now_rfc3339(),
         });
-        refresh.aborted = false;
         drop(refresh);
 
         let components = [
@@ -785,8 +795,11 @@ impl LocalService {
                 .name("quota-refresh".to_owned())
                 .spawn(move || {
                     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        service.run_refresh(cancel, attempt);
+                        service.run_refresh(cancel, attempt)
                     }));
+                    // A panicking refresh still has an outcome worth reporting: the
+                    // recovery below marks every component unavailable.
+                    let end = *result.as_ref().unwrap_or(&RefreshEnd::Ran);
                     if result.is_err() {
                         let unavailable = || Err(BackendError::unavailable());
                         for (component, error) in [
@@ -812,23 +825,19 @@ impl LocalService {
                                 );
                         }
                     }
-                    let aborted = service
-                        .inner
-                        .refresh
-                        .lock()
-                        .map(|refresh| refresh.aborted)
-                        .unwrap_or(false);
-                    // A service that is tearing down neither builds a report nor publishes
-                    // device health. `!aborted` does not imply a live one: shutdown cancels
-                    // an in-flight refresh without aborting it, and a refresh aborted for a
-                    // write failure schedules a rerun that itself never aborts, because the
-                    // first abort repaired the fault the rerun would have detected.
-                    if !aborted
-                        && !service.is_shutdown()
-                        && let Ok(report) = service.inner.backend.complete_diagnostics()
-                    {
+                    if end == RefreshEnd::Ran {
+                        // Building a report and publishing device health is outbound work,
+                        // which a service that is tearing down skips. The post-refresh
+                        // repair is local durability -- it holds the service's only WAL
+                        // checkpoint and refreshes the last-good snapshot -- so it runs
+                        // either way, and after the report so the checkpoint covers it.
+                        let report = (!service.is_shutdown())
+                            .then(|| service.inner.backend.complete_diagnostics().ok())
+                            .flatten();
                         let _ = service.inner.state.run_repair(RepairSite::PostRefresh);
-                        let _ = service.inner.backend.publish_device_health(&report);
+                        if let Some(report) = report {
+                            let _ = service.inner.backend.publish_device_health(&report);
+                        }
                     }
                     let rerun = service
                         .inner
@@ -836,7 +845,6 @@ impl LocalService {
                         .lock()
                         .map(|mut refresh| {
                             refresh.active = None;
-                            refresh.aborted = false;
                             let rerun = refresh.pending.then_some(
                                 refresh
                                     .pending_trigger
@@ -951,9 +959,9 @@ impl LocalService {
         }
     }
 
-    fn mark_refresh_aborted(&self, pending: bool) {
+    /// Records whether an aborted refresh should be retried once its repair lands.
+    fn set_refresh_rerun(&self, pending: bool) {
         if let Ok(mut refresh) = self.inner.refresh.lock() {
-            refresh.aborted = true;
             if pending {
                 refresh.pending = true;
                 if refresh.pending_trigger.is_none() {
@@ -977,7 +985,7 @@ impl LocalService {
                     RecoveryAction::Reinstall,
                 ));
                 self.finish_aborted_refresh_attempt(attempt);
-                self.mark_refresh_aborted(false);
+                self.set_refresh_rerun(false);
                 true
             }
             Ok(report)
@@ -990,7 +998,7 @@ impl LocalService {
                 }) =>
             {
                 self.finish_aborted_refresh_attempt(attempt);
-                self.mark_refresh_aborted(true);
+                self.set_refresh_rerun(true);
                 true
             }
             Err(error) if sqlite_io_or_full_error(&error) => {
@@ -999,7 +1007,7 @@ impl LocalService {
                     RecoveryAction::Retry,
                 ));
                 self.finish_aborted_refresh_attempt(attempt);
-                self.mark_refresh_aborted(true);
+                self.set_refresh_rerun(true);
                 true
             }
             Err(error) if sqlite_durable_corruption_error(&error) => {
@@ -1008,7 +1016,7 @@ impl LocalService {
                     RecoveryAction::Reinstall,
                 ));
                 self.finish_aborted_refresh_attempt(attempt);
-                self.mark_refresh_aborted(false);
+                self.set_refresh_rerun(false);
                 true
             }
             Ok(_) | Err(_) => {
@@ -1017,16 +1025,20 @@ impl LocalService {
                     RecoveryAction::Retry,
                 ));
                 self.finish_aborted_refresh_attempt(attempt);
-                self.mark_refresh_aborted(false);
+                self.set_refresh_rerun(false);
                 true
             }
         }
     }
 
-    fn run_refresh(&self, cancel: Arc<AtomicBool>, attempt: Option<DiagnosticAttemptHandle>) {
+    fn run_refresh(
+        &self,
+        cancel: Arc<AtomicBool>,
+        attempt: Option<DiagnosticAttemptHandle>,
+    ) -> RefreshEnd {
         let _ = self.inner.state.run_repair(RepairSite::RefreshWorker);
         if self.abort_refresh_on_write_failure(attempt) {
-            return;
+            return RefreshEnd::Aborted;
         }
         let outcome = if cancel.load(Ordering::Acquire) || self.is_shutdown() {
             let cancelled = || Err(BackendError::cancelled());
@@ -1041,7 +1053,7 @@ impl LocalService {
             self.inner.backend.refresh(cancel.clone())
         };
         if self.abort_refresh_on_write_failure(attempt) {
-            return;
+            return RefreshEnd::Aborted;
         }
         let session_required = self
             .inner
@@ -1069,7 +1081,7 @@ impl LocalService {
             let _ = self.inner.state.set_overview(&overview);
         }
         if self.abort_refresh_on_write_failure(attempt) {
-            return;
+            return RefreshEnd::Aborted;
         }
         if let Some(attempt) = attempt {
             let _ = self
@@ -1077,6 +1089,7 @@ impl LocalService {
                 .state
                 .finish_diagnostic_attempt_with_interrupted_children(attempt, &completion);
         }
+        RefreshEnd::Ran
     }
 
     fn apply_component_result(
@@ -2522,10 +2535,16 @@ mod tests {
         complete_calls: Arc<std::sync::atomic::AtomicUsize>,
         publish_calls: Arc<std::sync::atomic::AtomicUsize>,
         noted: Arc<(Mutex<bool>, std::sync::Condvar)>,
+        /// When set, `refresh` blocks here after signalling `noted`, so a test can
+        /// act on a refresh that is provably still in flight.
+        gate: Arc<(Mutex<bool>, std::sync::Condvar)>,
     }
 
     #[derive(Clone, Copy)]
     enum WriteFailureKind {
+        /// Refreshes without touching persistence, for the cases that are about
+        /// the worker's own lifecycle rather than a write failure.
+        Healthy,
         UsageIsolated,
         UsageIsolatedThenProbe,
         DurableFailClosed,
@@ -2540,7 +2559,19 @@ mod tests {
                 complete_calls: Arc::new(AtomicUsize::new(0)),
                 publish_calls: Arc::new(AtomicUsize::new(0)),
                 noted: Arc::new((Mutex::new(false), std::sync::Condvar::new())),
+                gate: Arc::new((Mutex::new(true), std::sync::Condvar::new())),
             }
+        }
+
+        /// Makes `refresh` wait after it reports itself started, until `release`.
+        fn gated(self) -> Self {
+            *self.gate.0.lock().expect("gate") = false;
+            self
+        }
+
+        fn release(&self) {
+            *self.gate.0.lock().expect("gate") = true;
+            self.gate.1.notify_all();
         }
 
         fn wait_noted(&self) {
@@ -2561,6 +2592,28 @@ mod tests {
 
     impl LocalBackend for WriteFailureBackend {
         fn refresh(&self, _: Arc<AtomicBool>) -> RefreshOutcome {
+            if matches!(self.kind, WriteFailureKind::Healthy) {
+                *self.noted.0.lock().expect("noted") = true;
+                self.noted.1.notify_all();
+                let (lock, cond) = &*self.gate;
+                let mut open = lock.lock().expect("gate");
+                let deadline = Instant::now() + Duration::from_secs(2);
+                while !*open {
+                    let remaining = deadline.saturating_duration_since(Instant::now());
+                    if remaining.is_zero() {
+                        break;
+                    }
+                    let (guard, _) = cond.wait_timeout(open, remaining).expect("wait");
+                    open = guard;
+                }
+                return RefreshOutcome {
+                    quota: Ok(serde_json::json!({})),
+                    usage: Ok(serde_json::json!({})),
+                    account: Ok(serde_json::json!({})),
+                    pricing: Ok(serde_json::json!({})),
+                    overview: None,
+                };
+            }
             let error = match self.kind {
                 WriteFailureKind::UsageIsolated | WriteFailureKind::UsageIsolatedThenProbe => {
                     StateError::Sql(rusqlite::Error::SqliteFailure(
@@ -2584,6 +2637,8 @@ mod tests {
                     std::io::ErrorKind::StorageFull,
                     "disk full",
                 )),
+                // Returned above, before any persistence is touched.
+                WriteFailureKind::Healthy => unreachable!(),
             };
             self.state.note_persistence_failure(&error);
             if matches!(self.kind, WriteFailureKind::UsageIsolatedThenProbe) {
@@ -2654,6 +2709,50 @@ mod tests {
                 .active
                 .is_none()
         );
+    }
+
+    #[test]
+    fn shutdown_during_a_refresh_skips_the_report_but_still_checkpoints() {
+        // The guard's common case, which the aborted-refresh test does not reach:
+        // an ordinary refresh caught by a shutdown never aborts, so nothing marks
+        // it, yet a tearing-down service must not build or publish a report. The
+        // post-refresh repair is local durability and runs regardless.
+        let root = std::env::temp_dir().join(format!("quota-shutdown-mid-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        let backend =
+            Arc::new(WriteFailureBackend::new(state.clone(), WriteFailureKind::Healthy).gated());
+        let service = LocalService::new(
+            state.clone(),
+            Arc::new(RecordingSink::default()),
+            backend.clone(),
+        );
+
+        assert!(
+            service
+                .request_refresh_with_trigger(DiagnosticAttemptTrigger::Recheck)
+                .accepted
+        );
+        // The refresh is provably inside `backend.refresh` here, so the shutdown
+        // lands mid-flight rather than racing the worker's completion check.
+        backend.wait_noted();
+        service.shutdown();
+        backend.release();
+        wait_refresh_idle(&service);
+
+        assert_eq!(backend.complete_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(backend.publish_calls.load(Ordering::SeqCst), 0);
+        // Local durability is no longer gated behind the report it used to sit
+        // behind: the post-refresh repair still wrote its last-good snapshot.
+        assert!(
+            root.join("state.sqlite.good").exists(),
+            "post-refresh repair ran despite the shutdown"
+        );
+
+        drop(service);
+        drop(backend);
+        drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
     }
 
     #[test]
