@@ -8,18 +8,28 @@ describe("managed pricing catalog", () => {
     expect(validatePricingCatalog(PRICING_CATALOG)).toMatchObject({ valid: true });
     expect(new Set(PRICING_CATALOG.entries.map((entry) => entry.model))).toEqual(
       new Set([
+        "gpt-5.1",
+        "gpt-5.2",
         "gpt-5.2-codex",
         "gpt-5.3-codex",
         "gpt-5.4",
         "gpt-5.5",
         "gpt-5.6-sol",
         "gpt-5.6-luna",
+        "gpt-5.6-terra",
         "grok-4.5",
+        "grok-4.6",
         "claude-opus-4-6",
         "claude-sonnet-4-6",
+        "claude-opus-5",
+        "claude-sonnet-5",
+        "claude-fable-5",
       ]),
     );
-    expect(PRICING_CATALOG_ETAG).toBe('"official-2026-08-10-4"');
+    expect(PRICING_CATALOG_ETAG).toBe('"official-2026-08-23-1"');
+    // Pins the dimension expansion so a refactor cannot silently drop entries.
+    expect(PRICING_CATALOG.entries).toHaveLength(184);
+    expect(new Set(PRICING_CATALOG.entries.map((entry) => entry.entry_id)).size).toBe(184);
   });
 
   it("prices Grok 4.5 short and long context rows", () => {
@@ -45,12 +55,16 @@ describe("managed pricing catalog", () => {
     }
   });
 
-  it("prices the collected GPT-5.4, GPT-5.5, and effective-dated GPT-5.6 Luna rows", () => {
-    for (const [model, date, amount] of [
-      ["gpt-5.4", "2026-03-06", "17500000"],
-      ["gpt-5.5", "2026-04-24", "35000000"],
-      ["gpt-5.6-luna", "2026-07-29", "7000000"],
-      ["gpt-5.6-luna", "2026-07-30", "1400000"],
+  it("prices every effective-dated OpenAI row the collectors report", () => {
+    for (const [model, date, context_bucket, amount] of [
+      ["gpt-5.1", "2025-11-13", "le_128k", "11250000"],
+      ["gpt-5.2", "2025-12-11", "le_128k", "15750000"],
+      ["gpt-5.4", "2026-03-06", "le_128k", "17500000"],
+      ["gpt-5.5", "2026-04-24", "le_128k", "35000000"],
+      ["gpt-5.6-luna", "2026-07-29", "le_128k", "7000000"],
+      ["gpt-5.6-luna", "2026-07-30", "le_128k", "1400000"],
+      ["gpt-5.6-terra", "2026-07-30", "le_128k", "14000000"],
+      ["gpt-5.6-terra", "2026-07-30", "gt_272k", "22000000"],
     ] as const) {
       expect(
         calculateUsageCost(
@@ -59,6 +73,7 @@ describe("managed pricing catalog", () => {
               model,
               bucket_start_utc: `${date}T00:00:00Z`,
               usage_date: date,
+              context_bucket,
               input_tokens: 1_000_000,
               output_tokens: 1_000_000,
             }),
@@ -67,6 +82,58 @@ describe("managed pricing catalog", () => {
         ),
       ).toMatchObject({ status: "complete", amount_microusd: amount });
     }
+  });
+
+  it("prices the Claude 5 generation, including fast mode and US inference geo", () => {
+    for (const [model, overrides, amount_microusd] of [
+      ["claude-fable-5", {}, "60000000"],
+      ["claude-sonnet-5", {}, "12000000"],
+      ["claude-opus-5", {}, "30000000"],
+      ["claude-opus-5", { speed: "fast" }, "60000000"],
+      ["claude-opus-5", { inference_geo: "us" }, "33000000"],
+    ] as const) {
+      expect(
+        calculateUsageCost(
+          [
+            usageRow({
+              agent: "claude_code",
+              billing_channel: "anthropic_direct",
+              model,
+              input_tokens: 1_000_000,
+              output_tokens: 1_000_000,
+              ...overrides,
+            }),
+          ],
+          PRICING_CATALOG,
+        ),
+      ).toMatchObject({ status: "complete", amount_microusd });
+    }
+  });
+
+  it("prices Grok 4.6 only from its launch date", () => {
+    const row = (usage_date: string, context_bucket: UsageHourlyFact["context_bucket"]) =>
+      usageRow({
+        agent: "grok",
+        billing_channel: "xai_direct",
+        model: "grok-4.6",
+        bucket_start_utc: `${usage_date}T00:00:00Z`,
+        usage_date,
+        context_bucket,
+        input_tokens: 1_000_000,
+        output_tokens: 1_000_000,
+      });
+    expect(calculateUsageCost([row("2026-08-12", "le_128k")], PRICING_CATALOG)).toMatchObject({
+      status: "complete",
+      amount_microusd: "8000000",
+    });
+    expect(calculateUsageCost([row("2026-08-12", "gt_272k")], PRICING_CATALOG)).toMatchObject({
+      status: "complete",
+      amount_microusd: "16000000",
+    });
+    expect(calculateUsageCost([row("2026-08-11", "le_128k")], PRICING_CATALOG)).toMatchObject({
+      status: "unavailable",
+      unpriced: [{ model: "grok-4.6", reason: "outside_effective_range" }],
+    });
   });
 
   it("prices the actual Codex models when parser dimensions are unknown", () => {
