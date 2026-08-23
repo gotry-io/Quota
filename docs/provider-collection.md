@@ -56,7 +56,7 @@ Every collected snapshot carries `valid_until`, derived from the observation as 
    changing their used/remaining meaning. Classify primary and secondary by reported duration
    (5-hour, weekly, or 30-day monthly) rather than by payload slot, so a Free-tier monthly
    window is not labeled as 5-hour. A null code-review object is absent, not malformed.
-5. Fall back to `codex -s read-only -a untrusted app-server` and call
+5. Fall back to `codex -s read-only -a never app-server` and call
    `account/rateLimits/read` when the direct OAuth result is unavailable or rejects the cached
    access token. Codex owns any access-token renewal performed while its app-server starts.
 6. If OAuth credentials are missing or WHAM/RPC return 401/403, and a stored ChatGPT browser session
