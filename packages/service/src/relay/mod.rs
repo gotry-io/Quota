@@ -2878,6 +2878,15 @@ fn snapshot_payload_from_quota_report(report: &Value) -> Result<(&str, Vec<Value
     Ok((captured_at, snapshots))
 }
 
+/// Refuses a submission that does not belong to the session that would carry it.
+///
+/// Device identity is a local question and is answered here. Sequence ordering is
+/// not: the Relay owns that counter, refuses anything but `last + 1`, and reports
+/// `sequence_conflict` when it disagrees. Answering it locally from a cached copy
+/// of that counter only produced the same verdict unattested -- a refusal with no
+/// Relay outcome behind it, which is how a queue could sit wedged for a week
+/// reporting `attempted: 0`. An ordering the Relay will not take costs one
+/// rejected request; it can never be stored, because the Relay checks it too.
 fn validate_usage_submission_session(
     session: &Value,
     submission: &Value,
@@ -2888,27 +2897,6 @@ fn validate_usage_submission_session(
             != submission.get("generation").and_then(Value::as_u64)
     {
         return Err(session_changed_error());
-    }
-    // A submission numbered below the session's next sequence is one the Relay has
-    // already answered for and whose acknowledgement did not land -- an upload
-    // interrupted between recording the response and removing the outbox entry
-    // leaves exactly that. Re-sending it is safe and is how it gets released: the
-    // Relay deduplicates by the immutable submission id and replies `duplicate`.
-    // Refusing to send it wedged the entire queue behind that one entry, with a
-    // reinstall as the only documented way out. A submission *ahead* of the session
-    // would skip a sequence the Relay has never seen, so it stays refused.
-    if session
-        .get("next_usage_sequence")
-        .and_then(Value::as_u64)
-        .zip(submission.get("sequence").and_then(Value::as_u64))
-        .is_none_or(|(expected, sequence)| sequence > expected)
-    {
-        return Err(BackendError {
-            error: crate::protocol::IpcError::new(
-                crate::protocol::ErrorCode::InvalidState,
-                crate::protocol::RecoveryAction::Reinstall,
-            ),
-        });
     }
     Ok(())
 }
@@ -3786,36 +3774,26 @@ mod tests {
             .code,
             crate::protocol::ErrorCode::AuthenticationRequired
         );
-        // A replay below the session's next sequence is allowed so a lost
-        // acknowledgement can be released; see `validate_usage_submission_session`.
-        assert!(
-            validate_usage_submission_session(
-                &session,
-                &serde_json::json!({"device_id": "device_1", "generation": 2, "sequence": 3})
-            )
-            .is_ok()
-        );
-        // Skipping ahead of the sequence the Relay expects is still refused.
-        assert_eq!(
-            validate_usage_submission_session(
-                &session,
-                &serde_json::json!({"device_id": "device_1", "generation": 2, "sequence": 5})
-            )
-            .expect_err("sequence ahead of the session")
-            .error
-            .code,
-            crate::protocol::ErrorCode::InvalidState
-        );
-        assert_eq!(
-            validate_usage_submission_session(
-                &session,
-                &serde_json::json!({"device_id": "device_1", "generation": 2})
-            )
-            .expect_err("missing sequence")
-            .error
-            .code,
-            crate::protocol::ErrorCode::InvalidState
-        );
+        // Ordering is the Relay's answer, so every sequence leaves here: a replay
+        // below the session's next releases a lost acknowledgement, and one above it
+        // is refused by the Relay with an outcome attached rather than silently here.
+        for sequence in [
+            serde_json::json!(3),
+            serde_json::json!(4),
+            serde_json::json!(5),
+        ] {
+            assert!(
+                validate_usage_submission_session(
+                    &session,
+                    &serde_json::json!({
+                        "device_id": "device_1",
+                        "generation": 2,
+                        "sequence": sequence
+                    })
+                )
+                .is_ok()
+            );
+        }
     }
 
     #[test]
