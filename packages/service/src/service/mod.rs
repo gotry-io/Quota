@@ -818,11 +818,11 @@ impl LocalService {
                         .lock()
                         .map(|refresh| refresh.aborted)
                         .unwrap_or(false);
-                    // A refresh aborted for a write failure schedules a rerun, and that
-                    // rerun no longer aborts: the first abort consumed the persistence
-                    // class while repairing it. Shutdown can land between scheduling the
-                    // rerun and running it, so without this guard a tearing-down service
-                    // still built a diagnostics report and published device health.
+                    // A service that is tearing down neither builds a report nor publishes
+                    // device health. `!aborted` does not imply a live one: shutdown cancels
+                    // an in-flight refresh without aborting it, and a refresh aborted for a
+                    // write failure schedules a rerun that itself never aborts, because the
+                    // first abort repaired the fault the rerun would have detected.
                     if !aborted
                         && !service.is_shutdown()
                         && let Ok(report) = service.inner.backend.complete_diagnostics()
