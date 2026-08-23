@@ -884,7 +884,13 @@ fn panel_reset_at(
         index = next;
     }
     let (hour, minute, next) = read_clock(segment.lower, index)?;
-    let zone = read_zone(segment, next).unwrap_or(zone);
+    let zone = match named_zone(segment, next) {
+        // The panel named a zone. Reading its clock in this machine's instead would be a
+        // guess about an instant it did not print, and a near-miss guess still passes the
+        // horizon below.
+        Some(named) => named.parse::<Tz>().ok()?,
+        None => zone,
+    };
     let reset = resolve_reset(month_day, hour, minute, zone, observed_at)?;
     // `resolve_reset` already refused anything before the observation.
     let horizon = observed_at.saturating_add(i64::try_from(duration_seconds).unwrap_or(i64::MAX));
@@ -936,11 +942,12 @@ fn read_clock(lower: &str, index: usize) -> Option<(u32, u32, usize)> {
     Some((hour, minute, after_minute + 2))
 }
 
-/// The IANA zone the panel names in parentheses, read from the original case.
-fn read_zone(segment: &Segment<'_>, index: usize) -> Option<Tz> {
+/// The zone the panel names in parentheses, in its original case. `None` when it names
+/// none, which is the panel printing this machine's own wall-clock time.
+fn named_zone<'a>(segment: &Segment<'a>, index: usize) -> Option<&'a str> {
     let open = index + 1;
     let close = open + segment.lower.get(index..)?.strip_prefix('(')?.find(')')?;
-    segment.text.get(open..close)?.parse::<Tz>().ok()
+    segment.text.get(open..close)
 }
 
 /// A one- or two-digit number at `index`, with the index after it.
@@ -1424,10 +1431,11 @@ mod tests {
             reset_at(&session("Resets 4pm"), 1_787_403_600).as_deref(),
             Some("2026-08-22T16:00:00Z")
         );
-        // An unparseable zone leaves the collection timezone in place.
+        // A zone the panel names but this build cannot resolve is refused, rather than
+        // read in a different zone that happens to survive the horizon.
         assert_eq!(
-            reset_at(&session("Resets 4pm (Not/AZone)"), 1_787_403_600).as_deref(),
-            Some("2026-08-22T16:00:00Z")
+            reset_at(&session("Resets 4pm (Not/AZone)"), 1_787_403_600),
+            None
         );
         // At 09:00 the same text is seven hours out. A five-hour window cannot reset that
         // far ahead, so the reading is a zone or parse mismatch and nothing is claimed.

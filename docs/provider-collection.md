@@ -107,9 +107,10 @@ dashboard scraping and reset-credit redemption are not used.
    `Current week (<Model>)` row is the same `claude-weekly-scoped-<model>` window the OAuth usage
    body reports. A window's own `Resets 4pm (Asia/Shanghai)` / `Resets Aug 25 at 9am` line is read as
    a fixed grammar rather than as words, because compaction removes the spacing the TUI never
-   guaranteed: the panel prints local wall-clock time, an unnamed zone is the collection timezone, and
-   the instant must fall inside the window it belongs to. Anything that does not match exactly leaves
-   the reset unset rather than guessing. Missing credentials skip the probe so an unsigned-in machine
+   guaranteed: the panel prints local wall-clock time, an unnamed zone is the collection timezone, a
+   named zone that does not resolve is refused rather than read in this machine's, and the instant
+   must fall inside the window it belongs to. Anything that does not match exactly leaves the reset
+   unset rather than guessing. Missing credentials skip the probe so an unsigned-in machine
    never spawns the CLI.
 9. If OAuth and CLI usage are unavailable or return 401/403, and a stored Claude browser session
    exists, send the stored allowlisted Cookie header (`sessionKey` plus optional `lastActiveOrg`)
