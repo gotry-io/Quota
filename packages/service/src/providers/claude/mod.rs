@@ -1,4 +1,6 @@
 use crate::catalog::ProviderId;
+use chrono::{DateTime, Datelike, NaiveDate, TimeZone};
+use chrono_tz::Tz;
 use serde_json::Value;
 use std::fs;
 use std::io::{Read, Write};
@@ -294,7 +296,7 @@ fn collect_cli_usage(
     let output = run_cli_slash_command(context, "/usage")
         .ok_or_else(|| ProviderError::new(ErrorCategory::Unavailable, CLI_SOURCE))?;
     let text = String::from_utf8_lossy(&output);
-    let windows = map_cli_usage_text(&text);
+    let windows = map_cli_usage_text(&text, context.observed_unix(), context.timezone());
     if windows.is_empty() {
         return Err(ProviderError::new(ErrorCategory::Unavailable, CLI_SOURCE));
     }
@@ -631,6 +633,12 @@ struct CompactText {
     lower: String,
 }
 
+/// One window's slice of [`CompactText`], keeping the same byte alignment.
+struct Segment<'a> {
+    text: &'a str,
+    lower: &'a str,
+}
+
 fn compact_terminal_text(raw: &str) -> CompactText {
     let text: String = strip_ansi(raw)
         .chars()
@@ -652,6 +660,9 @@ struct ClaudeWindow {
     id: &'static str,
     title: &'static str,
     duration_seconds: u64,
+    /// Weekly-group limits meter one seven-day cycle and therefore share its reset.
+    /// Claude's other seven-day-long limits, such as Routines, are not in that group.
+    weekly_group: bool,
 }
 
 const FIVE_HOUR_FIELD: &str = "five_hour";
@@ -663,6 +674,7 @@ const CLAUDE_WINDOWS: &[ClaudeWindow] = &[
         id: "five_hour",
         title: "5 hour",
         duration_seconds: 18_000,
+        weekly_group: false,
     },
     ClaudeWindow {
         field: "seven_day",
@@ -670,6 +682,7 @@ const CLAUDE_WINDOWS: &[ClaudeWindow] = &[
         id: "seven_day",
         title: "Weekly",
         duration_seconds: 604_800,
+        weekly_group: true,
     },
     ClaudeWindow {
         field: "seven_day_sonnet",
@@ -677,6 +690,7 @@ const CLAUDE_WINDOWS: &[ClaudeWindow] = &[
         id: "seven_day_sonnet",
         title: "Sonnet weekly",
         duration_seconds: 604_800,
+        weekly_group: true,
     },
     ClaudeWindow {
         field: "seven_day_opus",
@@ -684,6 +698,7 @@ const CLAUDE_WINDOWS: &[ClaudeWindow] = &[
         id: "seven_day_opus",
         title: "Opus weekly",
         duration_seconds: 604_800,
+        weekly_group: true,
     },
     ClaudeWindow {
         field: "seven_day_oauth_apps",
@@ -691,33 +706,68 @@ const CLAUDE_WINDOWS: &[ClaudeWindow] = &[
         id: "seven_day_oauth_apps",
         title: "OAuth apps weekly",
         duration_seconds: 604_800,
+        weekly_group: true,
     },
 ];
+
+const WEEK_SECONDS: u64 = 604_800;
+const SCOPED_WEEKLY_PREFIX: &str = "claude-weekly-scoped-";
 
 /// The weekly window a model-scoped row belongs to, whether it comes from the
 /// OAuth `limits[]` array or the panel's `Current week (<Model>)` heading.
 fn scoped_weekly_window(name: &str) -> (String, String) {
     (
-        format!("claude-weekly-scoped-{}", slug(name, '-')),
+        format!("{SCOPED_WEEKLY_PREFIX}{}", slug(name, '-')),
         format!("{name} only"),
     )
 }
 
+/// Every weekly limit meters the same seven-day cycle, so a weekly window that reports no
+/// reset of its own resets with `seven_day`.
+///
+/// `group` lists the windows that belong to that cycle, recorded by the code that built
+/// each one. Membership is a Claude limit group, not a duration: Routines also spans seven
+/// days and does not share the weekly reset, so it is never added.
+fn inherit_weekly_reset(windows: &mut [QuotaWindow], group: &[String]) {
+    let Some(weekly) = windows
+        .iter()
+        .find(|window| window.id == "seven_day")
+        .and_then(|window| window.resets_at.clone())
+    else {
+        return;
+    };
+    for window in windows
+        .iter_mut()
+        .filter(|window| window.resets_at.is_none() && group.contains(&window.id))
+    {
+        window.resets_at = Some(weekly.clone());
+    }
+}
+
 /// Maps the text of Claude's Settings → Usage panel. Each window is a title such
-/// as `Current session` or `Current week (Fable)` followed by a bar and
-/// `<n>% used`; Claude reports percent *used*, taken verbatim.
-fn map_cli_usage_text(text: &str) -> Vec<QuotaWindow> {
+/// as `Current session` or `Current week (Fable)` followed by a bar,
+/// `<n>% used`, and its own reset line; Claude reports percent *used*, taken verbatim.
+fn map_cli_usage_text(text: &str, observed_at: i64, zone: Tz) -> Vec<QuotaWindow> {
     let compact = compact_terminal_text(text);
     let mut windows: Vec<QuotaWindow> = Vec::new();
-    let mut push = |id: String, title: String, used: f64, duration: u64| {
+    let mut weekly_group: Vec<String> = Vec::new();
+    let mut push = |id: String,
+                    title: String,
+                    used: f64,
+                    duration: u64,
+                    resets_at: Option<i64>,
+                    weekly: bool| {
         if windows.iter().any(|window| window.id == id) {
             return;
+        }
+        if weekly {
+            weekly_group.push(id.clone());
         }
         windows.push(QuotaWindow {
             id,
             title,
             used_percent: clamp_percent(used),
-            resets_at: None,
+            resets_at: resets_at.map(super::common::unix_seconds_to_iso),
             duration_seconds: Some(duration),
             remaining_value: None,
             limit_value: None,
@@ -728,14 +778,19 @@ fn map_cli_usage_text(text: &str) -> Vec<QuotaWindow> {
         .iter()
         .find(|window| window.field == FIVE_HOUR_FIELD);
     if let Some(window) = five_hour
-        && let Some(used) = percent_used_after(&compact.lower, "currentsession", 0)
+        && let Some(index) = compact.lower.find("currentsession")
     {
-        push(
-            window.id.to_owned(),
-            window.title.to_owned(),
-            used,
-            window.duration_seconds,
-        );
+        let segment = window_segment(&compact, index + "currentsession".len());
+        if let Some(used) = percent_used(segment.lower) {
+            push(
+                window.id.to_owned(),
+                window.title.to_owned(),
+                used,
+                window.duration_seconds,
+                panel_reset_at(&segment, observed_at, zone, window.duration_seconds),
+                window.weekly_group,
+            );
+        }
     }
     let mut cursor = 0;
     while let Some(offset) = compact.lower[cursor..].find("currentweek(") {
@@ -744,7 +799,8 @@ fn map_cli_usage_text(text: &str) -> Vec<QuotaWindow> {
             break;
         };
         cursor = close + 1;
-        let Some(used) = percent_used_after(&compact.lower, ")", close) else {
+        let segment = window_segment(&compact, close + 1);
+        let Some(used) = percent_used(segment.lower) else {
             continue;
         };
         let scope = &compact.lower[open..close];
@@ -761,9 +817,154 @@ fn map_cli_usage_text(text: &str) -> Vec<QuotaWindow> {
                 scoped_weekly_window(name)
             }
         };
-        push(id, title, used, 604_800);
+        push(
+            id,
+            title,
+            used,
+            WEEK_SECONDS,
+            panel_reset_at(&segment, observed_at, zone, WEEK_SECONDS),
+            // Every `Current week (…)` row is a weekly-group limit, named or model-scoped.
+            true,
+        );
     }
+    inherit_weekly_reset(&mut windows, &weekly_group);
     windows
+}
+
+/// One window's text: from `start` up to the next window title, bounded so a panel that
+/// never starts another window cannot pull in the whole screen. Both the percentage and
+/// the reset line for that window live inside it.
+fn window_segment(compact: &CompactText, start: usize) -> Segment<'_> {
+    let mut end = compact.lower[start..]
+        .find("current")
+        .map(|index| start + index)
+        .unwrap_or(compact.lower.len())
+        .min(start + 600);
+    // The bar glyphs survive compaction, so the byte bound can land inside one.
+    while end > start && !compact.lower.is_char_boundary(end) {
+        end -= 1;
+    }
+    Segment {
+        text: &compact.text[start..end],
+        lower: &compact.lower[start..end],
+    }
+}
+
+/// `Resets 4pm (Asia/Shanghai)` or `Resets Aug 25 at 9am`, as an instant.
+///
+/// Compaction removes the spacing the TUI never guaranteed, so this reads a fixed
+/// grammar rather than words: `resets` [`<mon><day>` `at`] `<hour>[:<minute>]<am|pm>`
+/// [`(<zone>)`]. The panel prints local wall-clock time; an unnamed zone is this
+/// machine's. The result must land inside the window it belongs to, and anything that
+/// does not match exactly is left unset, because a guessed reset instant reads as fact.
+fn panel_reset_at(
+    segment: &Segment<'_>,
+    observed_at: i64,
+    zone: Tz,
+    duration_seconds: u64,
+) -> Option<i64> {
+    let mut index = segment.lower.find("resets")? + "resets".len();
+    let mut month_day = None;
+    if let Some((month, day, next)) = read_month_day(segment.lower, index) {
+        month_day = Some((month, day));
+        index = next;
+    }
+    let (hour, minute, next) = read_clock(segment.lower, index)?;
+    let zone = read_zone(segment, next).unwrap_or(zone);
+    let reset = resolve_reset(month_day, hour, minute, zone, observed_at)?;
+    // `resolve_reset` already refused anything before the observation.
+    let horizon = observed_at.saturating_add(i64::try_from(duration_seconds).unwrap_or(i64::MAX));
+    (reset <= horizon.saturating_add(3_600)).then_some(reset)
+}
+
+const MONTHS: [&str; 12] = [
+    "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec",
+];
+
+/// `aug25at` / `aug25`, returning the month, day, and the index after it.
+fn read_month_day(lower: &str, index: usize) -> Option<(u32, u32, usize)> {
+    let rest = lower.get(index..)?;
+    let month = MONTHS
+        .iter()
+        .position(|month| rest.starts_with(month))
+        .map(|position| position as u32 + 1)?;
+    let after_month = index + 3;
+    let (day, after_day) = read_number(lower, after_month)?;
+    if !(1..=31).contains(&day) {
+        return None;
+    }
+    let skips_at = lower
+        .get(after_day..)
+        .is_some_and(|rest| rest.starts_with("at"));
+    Some((month, day, after_day + if skips_at { 2 } else { 0 }))
+}
+
+/// `9am` / `10:30pm`, returning 24-hour time and the index after it.
+fn read_clock(lower: &str, index: usize) -> Option<(u32, u32, usize)> {
+    let (hour, after_hour) = read_number(lower, index)?;
+    if !(1..=12).contains(&hour) {
+        return None;
+    }
+    let (minute, after_minute) = if lower.get(after_hour..).is_some_and(|r| r.starts_with(':')) {
+        read_number(lower, after_hour + 1)?
+    } else {
+        (0, after_hour)
+    };
+    if minute > 59 {
+        return None;
+    }
+    let rest = lower.get(after_minute..)?;
+    let hour = match (rest.starts_with("am"), rest.starts_with("pm")) {
+        (true, _) => hour % 12,
+        (_, true) => hour % 12 + 12,
+        _ => return None,
+    };
+    Some((hour, minute, after_minute + 2))
+}
+
+/// The IANA zone the panel names in parentheses, read from the original case.
+fn read_zone(segment: &Segment<'_>, index: usize) -> Option<Tz> {
+    let open = index + 1;
+    let close = open + segment.lower.get(index..)?.strip_prefix('(')?.find(')')?;
+    segment.text.get(open..close)?.parse::<Tz>().ok()
+}
+
+/// A one- or two-digit number at `index`, with the index after it.
+fn read_number(lower: &str, index: usize) -> Option<(u32, usize)> {
+    let rest = lower.get(index..)?;
+    let width = rest.bytes().take(2).take_while(u8::is_ascii_digit).count();
+    Some((rest.get(..width)?.parse().ok()?, index + width))
+}
+
+/// The next occurrence of a wall-clock reset, in the zone the panel printed it in.
+/// A dated reset is anchored to the year that puts it ahead of the observation.
+fn resolve_reset(
+    month_day: Option<(u32, u32)>,
+    hour: u32,
+    minute: u32,
+    zone: Tz,
+    observed_at: i64,
+) -> Option<i64> {
+    let observed = DateTime::from_timestamp(observed_at, 0)?.with_timezone(&zone);
+    let today = observed.date_naive();
+    let dates = match month_day {
+        Some((month, day)) => {
+            [-1, 0, 1].map(|shift| NaiveDate::from_ymd_opt(observed.year() + shift, month, day))
+        }
+        // A reset the panel prints without a date is today's or tomorrow's wall time,
+        // which stays correct across a daylight-saving shift.
+        None => [Some(today), today.succ_opt(), None],
+    };
+    dates
+        .into_iter()
+        .flatten()
+        .filter_map(|date| {
+            zone.with_ymd_and_hms(date.year(), date.month(), date.day(), hour, minute, 0)
+                .earliest()
+        })
+        .map(|value| value.timestamp())
+        .filter(|value| *value >= observed_at)
+        .min()
 }
 
 /// Wording that marks a percentage as consumed versus remaining. Claude's panel
@@ -772,16 +973,8 @@ fn map_cli_usage_text(text: &str) -> Vec<QuotaWindow> {
 const USED_WORDS: &[&str] = &["used", "spent", "consumed"];
 const REMAINING_WORDS: &[&str] = &["left", "remaining", "available"];
 
-/// The first labelled percentage after `label` (searched from `from`), as a
-/// used percent, without crossing into the next window's title.
-fn percent_used_after(lower: &str, label: &str, from: usize) -> Option<f64> {
-    let start = from + lower[from..].find(label)? + label.len();
-    let end = lower[start..]
-        .find("current")
-        .map(|index| start + index)
-        .unwrap_or(lower.len())
-        .min(start + 600);
-    let window = &lower[start..end];
+/// The first labelled percentage inside one window's text, as a used percent.
+fn percent_used(window: &str) -> Option<f64> {
     let bytes = window.as_bytes();
     for (index, byte) in bytes.iter().enumerate() {
         if *byte != b'%' {
@@ -917,6 +1110,7 @@ fn collect_with_credentials(
 
 pub(super) fn map_usage(value: &Value) -> Vec<QuotaWindow> {
     let mut windows = Vec::new();
+    let mut weekly_group: Vec<String> = Vec::new();
     for entry in CLAUDE_WINDOWS {
         if let Some(window) = usage_window(
             obj_get(value, entry.field),
@@ -924,9 +1118,13 @@ pub(super) fn map_usage(value: &Value) -> Vec<QuotaWindow> {
             entry.title,
             entry.duration_seconds,
         ) {
+            if entry.weekly_group {
+                weekly_group.push(window.id.clone());
+            }
             windows.push(window);
         }
     }
+    // `limits[]` reports only `weekly_scoped` entries of the `weekly` group, filtered below.
     if let Some(limits) = obj_get(value, "limits").and_then(Value::as_array) {
         let mut seen = std::collections::HashSet::new();
         for entry in limits {
@@ -956,6 +1154,7 @@ pub(super) fn map_usage(value: &Value) -> Vec<QuotaWindow> {
             if !seen.insert(id.clone()) {
                 continue;
             }
+            weekly_group.push(id.clone());
             windows.push(QuotaWindow {
                 id,
                 title: format!("{model_name} only"),
@@ -963,7 +1162,7 @@ pub(super) fn map_usage(value: &Value) -> Vec<QuotaWindow> {
                 resets_at: obj_get_any(entry, &["resets_at", "resetsAt"])
                     .and_then(|v| parse_date(Some(v)))
                     .map(super::common::unix_seconds_to_iso),
-                duration_seconds: Some(604_800),
+                duration_seconds: Some(WEEK_SECONDS),
                 remaining_value: None,
                 limit_value: None,
                 value_unit: None,
@@ -981,7 +1180,8 @@ pub(super) fn map_usage(value: &Value) -> Vec<QuotaWindow> {
     ]
     .iter()
     .find_map(|key| obj_get(value, key));
-    if let Some(window) = usage_window(routines, "claude-routines", "Daily Routines", 604_800) {
+    if let Some(window) = usage_window(routines, "claude-routines", "Daily Routines", WEEK_SECONDS)
+    {
         windows.push(window);
     }
     let extra = obj_get(value, "extra_usage").or_else(|| obj_get(value, "extraUsage"));
@@ -997,6 +1197,7 @@ pub(super) fn map_usage(value: &Value) -> Vec<QuotaWindow> {
             value_unit: None,
         });
     }
+    inherit_weekly_reset(&mut windows, &weekly_group);
     windows
 }
 
@@ -1120,28 +1321,42 @@ mod tests {
             "Current week (Sonnet only)\n",
             "██░░░░░░░░░░░░░░░░░░ 10% used\n",
         );
-        let windows = map_cli_usage_text(panel);
+        // 2026-08-22T04:00:00Z is 12:00 in the zone the panel names.
+        let observed = 1_787_371_200;
+        let windows = map_cli_usage_text(panel, observed, Tz::UTC);
         assert_eq!(
             windows
                 .iter()
-                .map(|window| (window.id.as_str(), window.used_percent))
+                .map(|window| (
+                    window.id.as_str(),
+                    window.used_percent,
+                    window.resets_at.as_deref()
+                ))
                 .collect::<Vec<_>>(),
             [
-                ("five_hour", 20.0),
-                ("seven_day", 45.0),
-                ("seven_day_sonnet", 10.0),
+                ("five_hour", 20.0, Some("2026-08-22T08:00:00Z")),
+                ("seven_day", 45.0, Some("2026-08-25T01:00:00Z")),
+                // The panel prints no reset for a scoped week; it shares the weekly cycle.
+                ("seven_day_sonnet", 10.0, Some("2026-08-25T01:00:00Z")),
             ]
         );
-        assert!(map_cli_usage_text("Not logged in\n").is_empty());
+        assert!(map_cli_usage_text("Not logged in\n", observed, Tz::UTC).is_empty());
         // A remaining-style phrasing is converted; a bare percentage is ignored.
-        let remaining =
-            map_cli_usage_text("Current session\n████ 80% left\nCurrent week (all models)\n45%\n");
+        let remaining = map_cli_usage_text(
+            "Current session\n████ 80% left\nCurrent week (all models)\n45%\n",
+            observed,
+            Tz::UTC,
+        );
         assert_eq!(
             remaining
                 .iter()
-                .map(|window| (window.id.as_str(), window.used_percent))
+                .map(|window| (
+                    window.id.as_str(),
+                    window.used_percent,
+                    window.resets_at.clone()
+                ))
                 .collect::<Vec<_>>(),
-            [("five_hour", 20.0)]
+            [("five_hour", 20.0, None)]
         );
     }
 
@@ -1156,22 +1371,59 @@ mod tests {
             "\u{1b}[7;1H+50% weekly limits promo through Aug 31",
             "\u{1b}[9;1HCurrent week (Fable)██▌\u{1b}[40C5% used",
         );
-        let windows = map_cli_usage_text(panel);
+        // 2026-08-22T13:00:00Z is 21:00 in the zone the session row names; the weekly row
+        // names no zone, so it is read in the collection timezone.
+        let windows = map_cli_usage_text(panel, 1_787_403_600, Tz::UTC);
         assert_eq!(
             windows
                 .iter()
                 .map(|window| (
                     window.id.as_str(),
                     window.title.as_str(),
-                    window.used_percent
+                    window.used_percent,
+                    window.resets_at.as_deref()
                 ))
                 .collect::<Vec<_>>(),
             [
-                ("five_hour", "5 hour", 33.0),
-                ("seven_day", "Weekly", 5.0),
-                ("claude-weekly-scoped-fable", "Fable only", 5.0),
+                ("five_hour", "5 hour", 33.0, Some("2026-08-22T14:30:00Z")),
+                ("seven_day", "Weekly", 5.0, Some("2026-08-23T12:00:00Z")),
+                (
+                    "claude-weekly-scoped-fable",
+                    "Fable only",
+                    5.0,
+                    Some("2026-08-23T12:00:00Z")
+                ),
             ]
         );
+    }
+
+    #[test]
+    fn a_panel_reset_is_read_strictly_and_must_belong_to_its_window() {
+        let session = |reset: &str| format!("Current session\n████ 20% used\n{reset}\n");
+        let reset_at = |panel: &str, observed: i64| {
+            map_cli_usage_text(panel, observed, Tz::UTC)
+                .first()
+                .and_then(|window| window.resets_at.clone())
+        };
+        // 2026-08-22T13:00:00Z: the printed 4pm is three hours into a five-hour window.
+        assert_eq!(
+            reset_at(&session("Resets 4pm"), 1_787_403_600).as_deref(),
+            Some("2026-08-22T16:00:00Z")
+        );
+        // An unparseable zone leaves the collection timezone in place.
+        assert_eq!(
+            reset_at(&session("Resets 4pm (Not/AZone)"), 1_787_403_600).as_deref(),
+            Some("2026-08-22T16:00:00Z")
+        );
+        // At 09:00 the same text can only mean tomorrow, which no five-hour window
+        // reaches, so nothing is claimed.
+        assert_eq!(reset_at(&session("Resets 4pm"), 1_787_389_200), None);
+        // Text that is not a clock is not a reset.
+        assert_eq!(reset_at(&session("Resets soon"), 1_787_403_600), None);
+        assert_eq!(reset_at(&session("Resets 25:00pm"), 1_787_403_600), None);
+        // The window bound is a byte count over text whose bar glyphs are multibyte.
+        let long_bar = format!("Current session\n{} 20% used\n", "█".repeat(250));
+        assert!(map_cli_usage_text(&long_bar, 1_787_403_600, Tz::UTC).is_empty());
     }
 
     #[test]
@@ -1228,5 +1480,51 @@ mod tests {
         assert_eq!(windows.len(), 1);
         assert_eq!(windows[0].id, "claude-weekly-scoped-claude-sonnet-4");
         assert_eq!(windows[0].used_percent, 17.0);
+        assert_eq!(
+            windows[0].resets_at.as_deref(),
+            Some("2026-08-12T00:00:00Z")
+        );
+    }
+
+    #[test]
+    fn scoped_weekly_limit_without_its_own_reset_uses_the_weekly_reset() {
+        let windows = map_usage(&serde_json::json!({
+            "seven_day": {"utilization": 5, "resets_at": "2026-08-23T04:00:00Z"},
+            "limits": [
+                {"kind": "weekly_scoped", "group": "weekly", "percent": 5,
+                 "scope": {"model": {"id": "claude-fable-5", "display_name": "Fable"}}}
+            ]
+        }));
+        let scoped = windows
+            .iter()
+            .find(|window| window.id == "claude-weekly-scoped-claude-fable-5")
+            .expect("scoped window");
+        assert_eq!(scoped.title, "Fable only");
+        assert_eq!(scoped.resets_at.as_deref(), Some("2026-08-23T04:00:00Z"));
+        // Routines spans seven days but is not a weekly-group limit, so it keeps its own.
+        let routines = map_usage(&serde_json::json!({
+            "seven_day": {"utilization": 5, "resets_at": "2026-08-23T04:00:00Z"},
+            "seven_day_opus": {"utilization": 1},
+            "routines": {"utilization": 2}
+        }));
+        let reset_for = |id: &str| {
+            routines
+                .iter()
+                .find(|window| window.id == id)
+                .and_then(|window| window.resets_at.clone())
+        };
+        assert_eq!(
+            reset_for("seven_day_opus").as_deref(),
+            Some("2026-08-23T04:00:00Z")
+        );
+        assert_eq!(reset_for("claude-routines"), None);
+        // Without a weekly window there is nothing to inherit.
+        let alone = map_usage(&serde_json::json!({
+            "limits": [
+                {"kind": "weekly_scoped", "group": "weekly", "percent": 5,
+                 "scope": {"model": {"id": "claude-fable-5", "display_name": "Fable"}}}
+            ]
+        }));
+        assert_eq!(alone[0].resets_at, None);
     }
 }

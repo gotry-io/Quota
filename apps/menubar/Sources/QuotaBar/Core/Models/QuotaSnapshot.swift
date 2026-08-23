@@ -1,4 +1,5 @@
 import Foundation
+import QuotaPresentation
 
 private let quotaJSONSafeIntegerMaximum = 9_007_199_254_740_991
 
@@ -118,6 +119,10 @@ struct QuotaSnapshot: Codable, Equatable, Sendable {
   let status: QuotaStatus
   let observedAt: Date
   let validUntil: Date?
+}
+
+extension QuotaSnapshot: QuotaObservationFreshness {
+  var isAvailable: Bool { status == .available }
 }
 
 extension QuotaSnapshot {

@@ -1,4 +1,5 @@
 import Foundation
+import QuotaPresentation
 import QuotaWidgetData
 import QuotaWire
 import Testing
@@ -164,7 +165,7 @@ struct WidgetSnapshotProjectionTests {
   }
 
   @Test
-  func mapsTodayCostAndStaleFlag() throws {
+  func mapsTodayCostAndReportedStatus() throws {
     let summary = try decodeSummary(
       quota: [
         observation(
@@ -182,11 +183,35 @@ struct WidgetSnapshotProjectionTests {
       summary: summary,
       fetchedAt: date("2026-08-14T16:00:00Z")
     )
-    #expect(snapshot.items.first?.isStale == true)
+    #expect(snapshot.items.first?.isAvailable == false)
     #expect(snapshot.today.inputTokens == 1000)
     #expect(snapshot.today.outputTokens == 200)
     #expect(snapshot.today.cost.status == .complete)
     #expect(snapshot.today.cost.amountMicrousd == "3138")
+  }
+
+  @Test
+  func carriesTheFreshnessFactsSoTheWidgetCanJudgeAtRenderTime() throws {
+    let summary = try decodeSummary(
+      quota: [
+        observation(
+          provider: "codex",
+          fingerprint: "fp_codex_01",
+          windowID: "weekly",
+          title: "Weekly",
+          usedPercent: 29,
+          validUntil: "2026-08-14T16:00:00Z",
+          updatedAt: "2026-08-14T15:00:00Z"
+        )
+      ]
+    )
+    let item = try #require(WidgetSnapshotProjection.projectItems(from: summary.quota).first)
+
+    #expect(item.isAvailable)
+    #expect(item.validUntil == date("2026-08-14T16:00:00Z"))
+    // The widget re-renders long after the app published this.
+    #expect(item.isStale(now: date("2026-08-14T16:00:01Z")))
+    #expect(!item.isStale(now: date("2026-08-14T15:59:59Z")))
   }
 
   @Test
@@ -253,6 +278,7 @@ struct WidgetSnapshotProjectionTests {
     valueUnit: String? = nil,
     limitValue: Double? = nil,
     status: String = "available",
+    validUntil: String? = nil,
     updatedAt: String,
     deviceID: String = "device_01",
     sequence: Int = 1,
@@ -272,22 +298,26 @@ struct WidgetSnapshotProjectionTests {
     if let limitValue {
       window["limit_value"] = limitValue
     }
+    var snapshot: [String: Any] = [
+      "provider": provider,
+      "account": [
+        "fingerprint": fingerprint,
+        "fingerprint_scope": "global",
+      ],
+      "windows": [window],
+      "source": source,
+      "status": status,
+      "observed_at": "2026-08-14T15:00:00Z",
+    ]
+    if let validUntil {
+      snapshot["valid_until"] = validUntil
+    }
     return [
       "device_id": deviceID,
       "sequence": sequence,
       "captured_at": "2026-08-14T15:00:00Z",
       "updated_at": updatedAt,
-      "snapshot": [
-        "provider": provider,
-        "account": [
-          "fingerprint": fingerprint,
-          "fingerprint_scope": "global",
-        ],
-        "windows": [window],
-        "source": source,
-        "status": status,
-        "observed_at": "2026-08-14T15:00:00Z",
-      ],
+      "snapshot": snapshot,
     ]
   }
 

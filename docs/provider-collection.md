@@ -34,6 +34,13 @@ Supported order today: Codex, Claude Code, Grok, OpenRouter, DeepSeek, Kimi Code
 API-key HTTPS providers share the bounded request, credential resolution, URL validation, and
 snapshot helpers in `packages/service/src/providers/common/`.
 
+`auth_required` carries a result message when discovery found a source and the provider then rejected
+it. A stored sign-in the provider no longer accepts recovers differently from a provider that was
+never set up on this device, and that second case keeps the bare outcome and the client's setup copy.
+
+Every collected snapshot carries `valid_until`, derived from the observation as described in
+[`architecture.md`](architecture.md). Collectors do not set it and providers do not report it.
+
 ## Codex
 
 1. Discover `$CODEX_HOME/auth.json` or `~/.codex/auth.json`.
@@ -85,7 +92,10 @@ dashboard scraping and reset-credit redemption are not used.
    `anthropic-beta: oauth-2025-04-20`.
 5. On HTTP 401, perform the same Claude-owned refresh once, reload credentials, and retry exactly
    once. Do not refresh for missing scopes, rate limits, malformed responses, or other failures.
-6. Map the five-hour, seven-day, model-scoped, and extra-usage windows that are present.
+6. Map the five-hour, seven-day, model-scoped, and extra-usage windows that are present. Every
+   weekly limit meters one seven-day cycle, so a weekly window that reports no reset of its own —
+   model-scoped or not — takes the seven-day window's reset. This applies to both the OAuth body and
+   the CLI panel.
 7. Enrich identity best-effort through `/api/oauth/profile`; usage remains valid if enrichment fails.
 8. If local OAuth credentials exist but the usage API fails (except a successful but malformed
    body), and the official Claude CLI is available on macOS, run the same bounded PTY probe with
@@ -95,7 +105,12 @@ dashboard scraping and reset-credit redemption are not used.
    moves. `Current session` is the five-hour window, `Current week (all models)` is
    `seven_day`, `Current week (Sonnet only)` / `(Opus)` keep their OAuth ids, and any other
    `Current week (<Model>)` row is the same `claude-weekly-scoped-<model>` window the OAuth usage
-   body reports. Missing credentials skip the probe so an unsigned-in machine never spawns the CLI.
+   body reports. A window's own `Resets 4pm (Asia/Shanghai)` / `Resets Aug 25 at 9am` line is read as
+   a fixed grammar rather than as words, because compaction removes the spacing the TUI never
+   guaranteed: the panel prints local wall-clock time, an unnamed zone is the collection timezone, and
+   the instant must fall inside the window it belongs to. Anything that does not match exactly leaves
+   the reset unset rather than guessing. Missing credentials skip the probe so an unsigned-in machine
+   never spawns the CLI.
 9. If OAuth and CLI usage are unavailable or return 401/403, and a stored Claude browser session
    exists, send the stored allowlisted Cookie header (`sessionKey` plus optional `lastActiveOrg`)
    to `https://claude.ai/api/organizations` then `/organizations/{id}/usage`. Prefer the listed org

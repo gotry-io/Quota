@@ -26,6 +26,7 @@ import {
   titleCase,
 } from "$lib/format";
 import { deviceHealthStatus } from "$lib/device-health";
+import { observedSnapshotStatus } from "@gotry-io/quota-model";
 import { DASHBOARD_PATH, planDisplayName } from "$lib/routes";
 import { usageDateBreakdowns } from "$lib/usage-activity";
 import type { PageProps } from "./$types";
@@ -202,6 +203,7 @@ async function loadDay(date: string): Promise<void> {
         <p class="empty-state">No quota snapshots yet. Sign in from QuotaBar to add this Mac.</p>
       {:else if summary}
         {#each summary.quota as observation (observation.device_id + observation.snapshot.provider)}
+          {@const quotaStatus = observedSnapshotStatus(observation.snapshot)}
           <article class="quota-card">
             <div class="quota-card-heading">
               <div class="quota-card-identity">
@@ -212,8 +214,8 @@ async function loadDay(date: string): Promise<void> {
                     .join(" · ") || "Account"}
                 </p>
               </div>
-              <span class="status-pill status-{observation.snapshot.status}"
-                >{observation.snapshot.status.replaceAll("_", " ")}</span
+              <span class="status-pill status-{quotaStatus}"
+                >{quotaStatus.replaceAll("_", " ")}</span
               >
             </div>
             <QuotaWindows

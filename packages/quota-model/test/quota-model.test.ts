@@ -3,6 +3,7 @@ import pricingConformanceJson from "../../protocol/fixtures/pricing-conformance.
 };
 import type {
   BillingChannel,
+  QuotaSnapshotV3 as QuotaSnapshot,
   PricingCatalog,
   PricingCatalogEntry,
   UsageHourlyFact,
@@ -16,6 +17,7 @@ import {
   foldUsageFacts,
   type NormalizedUsageEvent,
   prepareUsageCosts,
+  observedSnapshotStatus,
   remainingPercent,
   resolvePricingEntry,
   validatePricingCatalog,
@@ -93,6 +95,31 @@ describe("quota calculations", () => {
     expect(remainingPercent(25)).toBe(75);
     expect(remainingPercent(-2)).toBe(100);
     expect(remainingPercent(120)).toBe(0);
+  });
+
+  it("expires an observation at the validity instant its device stamped", () => {
+    const now = new Date("2026-08-15T08:10:00Z");
+    const observation = (status: QuotaSnapshot["status"], valid_until?: string): QuotaSnapshot => ({
+      provider: "codex",
+      account: { fingerprint: "account", fingerprint_scope: "global" },
+      windows: [],
+      source: "chatgpt_usage_api",
+      status,
+      observed_at: "2026-08-15T08:00:00Z",
+      ...(valid_until === undefined ? {} : { valid_until }),
+    });
+
+    expect(observedSnapshotStatus(observation("available", "2026-08-15T08:10:01Z"), now)).toBe(
+      "available",
+    );
+    expect(observedSnapshotStatus(observation("available", "2026-08-15T08:10:00Z"), now)).toBe(
+      "stale",
+    );
+    expect(observedSnapshotStatus(observation("available"), now)).toBe("available");
+    // A status the device already reported stands as reported.
+    expect(observedSnapshotStatus(observation("auth_required", "2099-01-01T00:00:00Z"), now)).toBe(
+      "auth_required",
+    );
   });
 });
 

@@ -487,6 +487,7 @@ describe("managed Relay on real Workers and D1", () => {
   });
 
   it("stores current account data while v2 reads exclude Cursor", async () => {
+    const validUntil = new Date(now.getTime() + 18_000_000).toISOString();
     const quotaSnapshot = (provider: "codex" | "cursor", fingerprint: string) =>
       JSON.stringify({
         provider,
@@ -495,6 +496,7 @@ describe("managed Relay on real Workers and D1", () => {
         source: `${provider}_test`,
         status: "available",
         observed_at: now.toISOString(),
+        valid_until: validUntil,
       });
     await env.DB.batch([
       env.DB.prepare(
@@ -588,6 +590,11 @@ describe("managed Relay on real Workers and D1", () => {
       "codex",
       "cursor",
     ]);
+    // Readers expire an observation by the instant the collecting device stamped on it,
+    // so it has to survive storage and both summary routes.
+    expect(
+      v3.quota.map((observation) => (observation.snapshot as { valid_until?: string }).valid_until),
+    ).toEqual([validUntil, validUntil]);
   });
 
   it("narrows channels newer than menubar-v0.0.19 unless the caller opts in", async () => {

@@ -32,6 +32,11 @@ Relay.
   `QuotaWire`, `QuotaRelay`, `QuotaAccount`, Security, or use `URLSession`/Keychain.
 - Timeline policy is local only: placeholder plus a modest fifteen-minute refresh so reset and
   updated ages can advance. There is no background network task and no extension-initiated fetch.
+- Each item carries the freshness facts the collecting device reported — whether the reading was
+  available and when it stops describing current quota — not a stale verdict. The extension re-draws
+  on its own timeline, so it applies the shared rule at the instant it renders, exactly as the app
+  does. A published verdict would freeze at publish time and keep claiming a sleeping device's
+  counters are current.
 - Missing, corrupt, or oversize snapshot files degrade to a safe no-data presentation. Logout,
   expired session, and absence of a trusted summary clear the published file and reload timelines.
 - `widgetURL` opens `io.gotry.quota:/overview` so taps return to the app Overview.

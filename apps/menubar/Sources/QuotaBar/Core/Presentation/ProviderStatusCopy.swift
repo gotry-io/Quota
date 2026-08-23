@@ -23,11 +23,13 @@ struct ProviderStatusCopy: Equatable {
     case .success:
       return nil
     case .authRequired:
+      // A rejected sign-in explains itself; an absent one is setup that never happened.
+      let detail = conciseMessage(result.message) ?? "Account setup required."
       return ProviderStatusCopy(
         kind: .needsSignIn,
         title: nil,
-        detail: "Account setup required.",
-        accessibilityLabel: "Account setup required."
+        detail: detail,
+        accessibilityLabel: detail
       )
     case .unavailable:
       return ProviderStatusCopy(

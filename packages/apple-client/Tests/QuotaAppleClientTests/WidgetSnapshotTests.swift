@@ -323,7 +323,8 @@ struct WidgetSnapshotTests {
           unit: .usd,
           hasLimit: true,
           resetsAt: date("2026-08-14T21:00:00Z"),
-          isStale: false
+          isAvailable: true,
+          validUntil: date("2026-08-14T21:00:00Z")
         ),
         WidgetQuotaItem(
           providerID: "claude",
@@ -354,7 +355,8 @@ struct WidgetSnapshotTests {
         "provider_id": \(jsonString(providerID)),
         "provider_display_name": \(jsonString(displayName)),
         "window_title": \(jsonString(windowTitle)),
-        "remaining_percent": \(remainingPercent)
+        "remaining_percent": \(remainingPercent),
+        "is_available": true
       }],
       "today": {
         "input_tokens": 0,

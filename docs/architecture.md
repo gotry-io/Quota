@@ -30,10 +30,11 @@ provider, Usage, pricing, persistence, and Relay logic used by both Rust applica
 `apps/menubar/helper` supplies the private macOS stdio binary and `apps/cli` supplies the Linux-only
 `quotacli` command. `packages/apple-client` is the shared Apple wire, fixed-origin Relay, session,
 last-good cache, and non-secret widget-snapshot boundary consumed by Quota iOS. `packages/apple-shared`
-is the Foundation-only presentation package consumed by QuotaBar, Quota iOS, and the Quota widget
-extension for remaining-quota, plan/account label, compact count, Usage cost, and compact
-relative-age text. It does not decode protocol or app wire types, own ProviderID, network, persist,
-or access Relay. QuotaBar still owns its Swift IPC and network-wire models; those types stay out of
+is the Foundation-only presentation package consumed by QuotaBar, Quota iOS, the Quota widget
+extension, and `packages/apple-client` for remaining-quota, plan/account label, compact count,
+Usage cost, compact relative-age text, and the observation-freshness rule each snapshot type
+conforms to. It does not decode protocol or app wire types, own ProviderID, network, persist, or
+access Relay. QuotaBar still owns its Swift IPC and network-wire models; those types stay out of
 both Apple packages.
 
 GitHub is the only account identity provider. The managed origin is fixed at
@@ -100,10 +101,22 @@ journal supplies full retained latest-attempt/latest-success facts and the bound
 projection; its retention and redaction are canonical in
 [ADR 0015](decisions/0015-diagnostic-attempts-and-device-health.md).
 
+Every collected snapshot is stamped with `valid_until` at the collection boundary: the first window
+reset it reports, and at the latest a fixed maximum age. That instant is what expires an
+observation, locally and after upload. It is derived from the observation rather than reported by a
+provider, so it is computed once for every collector.
+
 Rust returns the merged Overview directly. Global fingerprints merge local and account-device
-observations; source-scoped fingerprints remain separate. Selection favors a valid non-expired
-observation, then newest observation time, then local source, then stable source ID. Swift never
-reimplements this policy.
+observations; source-scoped fingerprints remain separate. Account observations this device uploaded
+are dropped before the merge, because local collection is the only authority for this device:
+reading its own upload back would keep a rejected or removed local source on screen as another
+device's report. Selection favors a valid non-expired observation, then newest observation time,
+then local source, then stable source ID. Swift never reimplements this policy. Quota iOS, its widgets,
+and the website read account observations without that merge, so they apply the same expiry
+themselves: `packages/quota-model` owns the TypeScript rule and `packages/apple-shared` owns the
+Swift one, which each Apple observation type answers by conforming rather than by restating. A
+device that sleeps or loses a provider sign-in therefore stops presenting its last counters as
+current anywhere.
 
 ## Local collection and persistence
 

@@ -3,6 +3,11 @@
 //! Provider-specific HTTP, credential, and mapping logic stays in the collector modules.
 //! This package only owns the reusable boundaries: errors, collection context, config
 //! resolution, HTTP, identity, and bounded IO.
+//!
+//! A failed read reports a category, not prose. What a failure means for the user depends
+//! on collection context the provider does not have — whether this device holds a sign-in
+//! at all, whether the provider is explicitly configured here — so the copy is written at
+//! the boundary that knows those, and there is exactly one such place.
 
 mod config;
 mod http;
@@ -25,5 +30,5 @@ pub use types::{
     BROWSER_COOKIE_HEADER_LIMIT, BROWSER_SESSION_SOURCE, CollectionContext, ErrorCategory,
     ProviderError, ProviderSession, QuotaAccount, QuotaSnapshot, QuotaWindow,
     ValidatedBrowserSession, collect_official_or_browser, cookie_named_value,
-    discover_official_or_browser, fixed_message, normalize_browser_cookie_header,
+    discover_official_or_browser, normalize_browser_cookie_header, resolve_timezone,
 };

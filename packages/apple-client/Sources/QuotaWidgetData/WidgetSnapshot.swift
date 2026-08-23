@@ -1,4 +1,5 @@
 import Foundation
+import QuotaPresentation
 
 /// Versioned, bounded widget-facing quota projection. Foundation-only; no account/session fields.
 public struct WidgetSnapshot: Codable, Equatable, Sendable {
@@ -90,7 +91,10 @@ public struct WidgetQuotaItem: Codable, Equatable, Sendable {
   public let unit: WidgetQuotaUnit?
   public let hasLimit: Bool?
   public let resetsAt: Date?
-  public let isStale: Bool?
+  /// The freshness facts, not a verdict: the widget re-renders on its own timeline, so it
+  /// decides staleness at the instant it draws rather than at the instant it was written.
+  public let isAvailable: Bool
+  public let validUntil: Date?
 
   public init(
     providerID: String,
@@ -101,7 +105,8 @@ public struct WidgetQuotaItem: Codable, Equatable, Sendable {
     unit: WidgetQuotaUnit? = nil,
     hasLimit: Bool? = nil,
     resetsAt: Date? = nil,
-    isStale: Bool? = nil
+    isAvailable: Bool = true,
+    validUntil: Date? = nil
   ) {
     self.providerID = providerID
     self.providerDisplayName = providerDisplayName
@@ -111,13 +116,14 @@ public struct WidgetQuotaItem: Codable, Equatable, Sendable {
     self.unit = unit
     self.hasLimit = hasLimit
     self.resetsAt = resetsAt
-    self.isStale = isStale
+    self.isAvailable = isAvailable
+    self.validUntil = validUntil
   }
 
   public init(from decoder: Decoder) throws {
     try decoder.rejectUnknownKeys([
       "providerId", "providerDisplayName", "windowTitle", "remainingPercent", "remainingValue",
-      "unit", "hasLimit", "resetsAt", "isStale",
+      "unit", "hasLimit", "resetsAt", "isAvailable", "validUntil",
     ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     providerID = try container.decode(String.self, forKey: .providerID)
@@ -128,7 +134,8 @@ public struct WidgetQuotaItem: Codable, Equatable, Sendable {
     unit = try container.decodeIfPresent(WidgetQuotaUnit.self, forKey: .unit)
     hasLimit = try container.decodeIfPresent(Bool.self, forKey: .hasLimit)
     resetsAt = try container.decodeIfPresent(Date.self, forKey: .resetsAt)
-    isStale = try container.decodeIfPresent(Bool.self, forKey: .isStale)
+    isAvailable = try container.decode(Bool.self, forKey: .isAvailable)
+    validUntil = try container.decodeIfPresent(Date.self, forKey: .validUntil)
     guard isValid else {
       throw DecodingError.dataCorruptedError(
         forKey: .providerID,
@@ -157,7 +164,8 @@ public struct WidgetQuotaItem: Codable, Equatable, Sendable {
     try container.encodeIfPresent(unit, forKey: .unit)
     try container.encodeIfPresent(hasLimit, forKey: .hasLimit)
     try container.encodeIfPresent(resetsAt, forKey: .resetsAt)
-    try container.encodeIfPresent(isStale, forKey: .isStale)
+    try container.encode(isAvailable, forKey: .isAvailable)
+    try container.encodeIfPresent(validUntil, forKey: .validUntil)
   }
 
   public var isValid: Bool {
@@ -169,6 +177,7 @@ public struct WidgetQuotaItem: Codable, Equatable, Sendable {
       && (0...100).contains(remainingPercent)
       && (remainingValue?.isFinite ?? true)
       && (resetsAt.map(WidgetValidation.isFiniteDate) ?? true)
+      && (validUntil.map(WidgetValidation.isFiniteDate) ?? true)
   }
 
   private enum CodingKeys: String, CodingKey {
@@ -180,9 +189,12 @@ public struct WidgetQuotaItem: Codable, Equatable, Sendable {
     case unit
     case hasLimit
     case resetsAt
-    case isStale
+    case isAvailable
+    case validUntil
   }
 }
+
+extension WidgetQuotaItem: QuotaObservationFreshness {}
 
 public struct WidgetTodayUsage: Codable, Equatable, Sendable {
   public let inputTokens: Int
