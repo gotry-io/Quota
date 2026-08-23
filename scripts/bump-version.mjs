@@ -120,9 +120,12 @@ function bumpCli(current, spec) {
     process.exit(1);
   }
   writeFileSync(manifestPath, manifest.replace(currentLine, `version = "${next}"`));
-  const lockfile = run("cargo", ["generate-lockfile", "--offline"]);
+  // --workspace pins every non-member to its current lock entry, so the release commit carries
+  // one version line. `cargo generate-lockfile` re-resolves from scratch and would sweep
+  // unrelated dependency upgrades in with the bump.
+  const lockfile = run("cargo", ["update", "--workspace", "--offline"]);
   if (lockfile.status !== 0) {
-    console.error(lockfile.stderr || "cargo generate-lockfile failed");
+    console.error(lockfile.stderr || "cargo update --workspace failed");
     process.exit(lockfile.status ?? 1);
   }
   return ["apps/cli/Cargo.toml", "Cargo.lock"];

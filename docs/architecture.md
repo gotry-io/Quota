@@ -229,10 +229,13 @@ upgrade, or a host-name change. QuotaBar uses Sparkle 2 for in-app updates. The 
 `https://github.com/gotry-io/Quota/releases/latest/download/appcast.xml` and verifies EdDSA
 signatures with the `SUPublicEDKey` embedded in `Info.plist`. The release workflow signs the
 notarized `.dmg` with the `SPARKLE_ED_PRIVATE_KEY` repository secret. Releases still publish
-`menubar-update.json` so QuotaBar 0.0.10 can update once onto Sparkle. Collection login returns
-separate account-read and current-device-write sessions; access and refresh expiry are explicit and
-refresh rotates atomically. The network `client_id` value `quotacli` remains unchanged because it is
-part of released protocol v2.
+`menubar-update.json` so QuotaBar 0.0.10 can update once onto Sparkle. The repository `latest`
+release alias is a QuotaBar distribution surface: both that appcast and the website `.dmg` button
+resolve through it, and only a `menubar-v*` release carries either asset. The newest stable
+`menubar-v*` release must therefore hold `latest`, so every other release train publishes without
+claiming it. Collection login returns separate account-read and current-device-write sessions;
+access and refresh expiry are explicit and refresh rotates atomically. The network `client_id` value
+`quotacli` remains unchanged because it is part of released protocol v2.
 
 The registered public client `quota-ios` uses the same GitHub identity and `/oauth/v2/authorize`
 PKCE route with the exact redirect `io.gotry.quota:/oauth/callback`. Its token exchange rejects
