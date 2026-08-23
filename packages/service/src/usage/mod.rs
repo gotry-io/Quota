@@ -103,10 +103,25 @@ pub enum BillingChannel {
     GoogleVertex,
     Openrouter,
     XaiDirect,
+    MoonshotDirect,
+    DeepseekDirect,
     Unknown,
 }
 
 impl BillingChannel {
+    pub const ALL: [Self; 10] = [
+        Self::OpenaiDirect,
+        Self::AzureOpenai,
+        Self::AnthropicDirect,
+        Self::AwsBedrock,
+        Self::GoogleVertex,
+        Self::Openrouter,
+        Self::XaiDirect,
+        Self::MoonshotDirect,
+        Self::DeepseekDirect,
+        Self::Unknown,
+    ];
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::OpenaiDirect => "openai_direct",
@@ -116,6 +131,8 @@ impl BillingChannel {
             Self::GoogleVertex => "google_vertex",
             Self::Openrouter => "openrouter",
             Self::XaiDirect => "xai_direct",
+            Self::MoonshotDirect => "moonshot_direct",
+            Self::DeepseekDirect => "deepseek_direct",
             Self::Unknown => "unknown",
         }
     }
@@ -131,6 +148,8 @@ pub enum InferenceProvider {
     GoogleVertex,
     Openrouter,
     Xai,
+    Moonshot,
+    Deepseek,
     Unknown,
 }
 
@@ -144,6 +163,8 @@ impl InferenceProvider {
             Self::GoogleVertex => "google_vertex",
             Self::Openrouter => "openrouter",
             Self::Xai => "xai",
+            Self::Moonshot => "moonshot",
+            Self::Deepseek => "deepseek",
             Self::Unknown => "unknown",
         }
     }
@@ -159,6 +180,8 @@ impl From<BillingChannel> for InferenceProvider {
             BillingChannel::GoogleVertex => Self::GoogleVertex,
             BillingChannel::Openrouter => Self::Openrouter,
             BillingChannel::XaiDirect => Self::Xai,
+            BillingChannel::MoonshotDirect => Self::Moonshot,
+            BillingChannel::DeepseekDirect => Self::Deepseek,
             BillingChannel::Unknown => Self::Unknown,
         }
     }

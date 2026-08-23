@@ -2276,7 +2276,7 @@ impl NativeBackend {
         ] {
             let (_, range) = usage_period_range(period, &self.timezone(), Utc::now())?;
             let (from, to) = range.ok_or_else(BackendError::unavailable)?;
-            let query = format!("cost_mode=calculate&from={from}&to={to}");
+            let query = format!("cost_mode=auto&from={from}&to={to}");
             match self.account.account_usage(&query, cancel) {
                 Ok(usage) => push_account_usage_period(&mut periods, period, usage),
                 Err(error) if error.error.code.requires_login() => return Err(error),

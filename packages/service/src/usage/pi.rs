@@ -155,6 +155,8 @@ fn billing_channel(provider: Option<&str>) -> BillingChannel {
         Some("google-vertex") => BillingChannel::GoogleVertex,
         Some("openrouter") => BillingChannel::Openrouter,
         Some("xai") => BillingChannel::XaiDirect,
+        Some("moonshotai") | Some("kimi-for-coding") => BillingChannel::MoonshotDirect,
+        Some("deepseek") => BillingChannel::DeepseekDirect,
         _ => BillingChannel::Unknown,
     }
 }

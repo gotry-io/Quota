@@ -590,6 +590,85 @@ describe("managed Relay on real Workers and D1", () => {
     ]);
   });
 
+  it("narrows channels newer than menubar-v0.0.19 unless the caller opts in", async () => {
+    const channelFact = (channel: string, channelSource: string, model: string) =>
+      usageFactInsert("opencode", channel, model, {
+        deviceID: "device_channels",
+        channelSource,
+        timezone: "UTC",
+      });
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_channels', 'subject_channels', ?1, ?1)",
+      ).bind(now.toISOString()),
+      env.DB.prepare(
+        `INSERT INTO devices (
+           id, account_id, installation_id_hash, generation, created_at, last_login_at
+         ) VALUES ('device_channels', 'account_channels', 'installation_channels', 1, ?1, ?1)`,
+      ).bind(now.toISOString()),
+      channelFact("moonshot_direct", "explicit", "k2p5"),
+      channelFact("deepseek_direct", "explicit", "deepseek-v4-flash"),
+      // Already unknown, so a narrowed row must fold into this group instead of
+      // producing a second `unknown` provider.
+      channelFact("unknown", "unknown", "big-pickle"),
+    ]);
+    const state = new D1AccountState(env.DB);
+    const hasher = new SecretHasher(secret);
+    const webAuth: WebAccountAuth = {
+      handler: async () => new Response(null, { status: 404 }),
+      beginGitHubSignIn: async () => new Response(null, { status: 302 }),
+      getSession: async () => ({
+        user: { id: "account_channels", name: "Quota Tester" },
+        session: {
+          id: "web_channels",
+          createdAt: now,
+          expiresAt: new Date(now.getTime() + 60_000),
+        },
+      }),
+    };
+    const app = createRelayApp({
+      state,
+      usageState: new D1UsageState(env.DB),
+      accountService: new AccountService(state, hasher, secret),
+      webAuth,
+      hasher,
+      now: () => now,
+    });
+    const providersFor = async (query: string) => {
+      const response = await app.request(`https://quota.gotry.io${query}`);
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as {
+        usage: { clients?: Array<{ providers: Array<{ provider: string }> }> };
+      };
+      return (body.usage.clients ?? []).flatMap((client) =>
+        client.providers.map(({ provider }) => provider),
+      );
+    };
+
+    expect(await providersFor("/api/v3/account/summary?usage_agents=all&usage_clients=1")).toEqual([
+      "unknown",
+    ]);
+    expect(
+      await providersFor(
+        "/api/v3/account/summary?usage_agents=all&usage_clients=1&usage_channels=1",
+      ),
+    ).toEqual(["deepseek", "moonshot", "unknown"]);
+    // The released v2 routes never expose the newer channels at all.
+    expect(await providersFor("/api/v2/account/summary?usage_agents=all&usage_clients=1")).toEqual([
+      "unknown",
+    ]);
+    expect(
+      (
+        await app.request(
+          "https://quota.gotry.io/api/v2/account/summary?usage_agents=all&usage_channels=1",
+        )
+      ).status,
+    ).toBe(400);
+    expect(
+      (await app.request("https://quota.gotry.io/api/v3/account/summary?usage_channels=0")).status,
+    ).toBe(400);
+  });
+
   it("serves the current pricing and model catalogs", async () => {
     const state = new D1AccountState(env.DB);
     const hasher = new SecretHasher(secret);
@@ -1185,7 +1264,12 @@ describe("managed Relay on real Workers and D1", () => {
   });
 });
 
-function usageFactInsert(agent: string, channel: string, model: string): D1PreparedStatement {
+function usageFactInsert(
+  agent: string,
+  channel: string,
+  model: string,
+  overrides: { deviceID?: string; channelSource?: string; timezone?: string } = {},
+): D1PreparedStatement {
   return env.DB.prepare(
     `INSERT INTO usage_hourly (
          device_id, bucket_start_utc, usage_date, usage_hour, aggregation_timezone,
@@ -1195,12 +1279,19 @@ function usageFactInsert(agent: string, channel: string, model: string): D1Prepa
          output_tokens, reasoning_tokens, requests, web_search_requests, web_fetch_requests,
          source_cost_microusd, source_cost_covered_requests
        ) VALUES (
-         'device_agents', '2026-08-10T00:00:00Z', '2026-08-10', 8, 'Asia/Singapore',
-         ?1, ?2, 'agent_default', ?3, 'le_128k',
+         ?4, '2026-08-10T00:00:00Z', '2026-08-10', 8, ?5,
+         ?1, ?2, ?6, ?3, 'le_128k',
          'unknown', 'unknown', 'unknown', 10, 0,
          0, 0, 0, 2, 0, 1, 0, 0, NULL, 0
        )`,
-  ).bind(agent, channel, model);
+  ).bind(
+    agent,
+    channel,
+    model,
+    overrides.deviceID ?? "device_agents",
+    overrides.timezone ?? "Asia/Singapore",
+    overrides.channelSource ?? "agent_default",
+  );
 }
 
 function usageFactInsertAt(

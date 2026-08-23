@@ -534,6 +534,11 @@ fn provider_billing_channel(value: Option<&str>) -> BillingChannel {
         Some("google-vertex") => BillingChannel::GoogleVertex,
         Some("openrouter") => BillingChannel::Openrouter,
         Some("xai") => BillingChannel::XaiDirect,
+        // `kimi-for-coding` and `moonshotai` are registered provider ids that
+        // authenticate against Moonshot's own endpoints. Gateway spellings such
+        // as `kimi-for-coding-oauth` are not registered and stay unknown.
+        Some("moonshotai") | Some("kimi-for-coding") => BillingChannel::MoonshotDirect,
+        Some("deepseek") => BillingChannel::DeepseekDirect,
         _ => BillingChannel::Unknown,
     }
 }

@@ -341,6 +341,10 @@ export function inferenceProvider(channel: BillingChannel): InferenceProvider {
       return "anthropic";
     case "xai_direct":
       return "xai";
+    case "moonshot_direct":
+      return "moonshot";
+    case "deepseek_direct":
+      return "deepseek";
     default:
       return channel;
   }
@@ -438,6 +442,24 @@ export interface PreparedUsageCosts {
   rows: readonly PreparedUsageCostRow[];
 }
 
+/**
+ * Validating a catalog parses every entry and compares every pair, so a caller
+ * that serves requests from one long-lived catalog object pays it once instead
+ * of per request. Keyed by identity: a different object still revalidates.
+ */
+const validatedCatalogs = new WeakMap<object, PricingCatalogValidationResult>();
+
+function validatePricingCatalogOnce(catalogInput: unknown): PricingCatalogValidationResult {
+  if (typeof catalogInput !== "object" || catalogInput === null) {
+    return validatePricingCatalog(catalogInput);
+  }
+  const cached = validatedCatalogs.get(catalogInput);
+  if (cached) return cached;
+  const validation = validatePricingCatalog(catalogInput);
+  validatedCatalogs.set(catalogInput, validation);
+  return validation;
+}
+
 /** Resolve and round every row once so callers can cheaply fold overlapping breakdown groups. */
 export function prepareUsageCosts(
   inputRows: readonly UsageHourlyFact[],
@@ -445,7 +467,7 @@ export function prepareUsageCosts(
   mode: UsageCostMode = "calculate",
 ): PreparedUsageCosts {
   const rows = inputRows.map((row) => UsageHourlyFactSchema.parse(row));
-  const validation = mode === "reported" ? null : validatePricingCatalog(catalogInput);
+  const validation = mode === "reported" ? null : validatePricingCatalogOnce(catalogInput);
   const catalog = validation?.valid === true ? validation.catalog : null;
   const prepared = rows.map((row): PreparedUsageCostRow => {
     const calculated =

@@ -1,9 +1,10 @@
 use super::{
-    BillingChannel, ContextBucket, CoverageReasonCode, CoverageStatus, InferenceProvider,
-    MAX_JSONL_LINE_BYTES, MAX_USAGE_MODELS, MAX_USAGE_ROWS, NormalizedUsageEvent, UsageAgent,
-    UsageFileIndex, UsageHourlyFact, UsageScanOptions, aggregate_usage_events,
-    build_local_usage_summary, fold_usage_facts, scan_claude_usage, scan_codex_usage,
-    scan_cursor_usage, scan_grok_usage, scan_local_usage, scan_opencode_usage, scan_pi_usage,
+    BillingChannel, ChannelSource, ContextBucket, CoverageReasonCode, CoverageStatus,
+    InferenceProvider, MAX_JSONL_LINE_BYTES, MAX_USAGE_MODELS, MAX_USAGE_ROWS,
+    NormalizedUsageEvent, UsageAgent, UsageFileIndex, UsageHourlyFact, UsageScanOptions,
+    aggregate_usage_events, build_local_usage_summary, fold_usage_facts, scan_claude_usage,
+    scan_codex_usage, scan_cursor_usage, scan_grok_usage, scan_local_usage, scan_opencode_usage,
+    scan_pi_usage,
 };
 use crate::pricing::{
     CalculatedUsageRowCost, PricingCatalog, PricingCatalogEntry, PricingRates, UsageCostAssumption,
@@ -621,6 +622,95 @@ fn opencode_sqlite_reads_completed_or_created_and_ignores_empty_models() {
     assert_eq!(event.reasoning_tokens, 5);
     assert_eq!(event.source_cost_microusd.as_deref(), Some("10000"));
     assert_eq!(result.sources.len(), 1);
+    let _ = fs::remove_dir_all(path);
+}
+
+#[test]
+fn opencode_resolves_registered_moonshot_and_deepseek_provider_ids() {
+    let path = root("opencode-moonshot-deepseek");
+    let database_path = path.join("opencode.db");
+    let connection = Connection::open(&database_path).expect("open SQLite fixture");
+    connection
+        .execute_batch(
+            "CREATE TABLE message(
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                time_created INTEGER NOT NULL,
+                time_updated INTEGER NOT NULL,
+                data TEXT NOT NULL
+            )",
+        )
+        .expect("create OpenCode schema");
+    let insert = "INSERT INTO message(id, session_id, time_created, time_updated, data)
+                  VALUES (?1, 'session', ?2, ?2, ?3)";
+    let timestamp = epoch_millis("2026-08-02T10:00:00Z");
+    // Registered provider ids resolve a channel; an unregistered gateway spelling
+    // of the same vendor stays unknown because the collector never reads the model.
+    for (index, (provider, model)) in [
+        ("kimi-for-coding", "k2p5"),
+        ("moonshotai", "kimi-k2"),
+        ("deepseek", "deepseek-v4-flash"),
+        ("kimi-for-coding-oauth", "kimi-for-coding"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let occurred = timestamp + index as i64 * 60_000;
+        let message = json!({
+            "role": "assistant",
+            "modelID": model,
+            "providerID": provider,
+            "time": {"created": occurred, "completed": occurred},
+            "tokens": {"input": 100, "output": 20, "reasoning": 0, "cache": {"read": 0, "write": 0}},
+            "cost": 0
+        });
+        connection
+            .execute(
+                insert,
+                params![format!("message-{index}"), occurred, message.to_string()],
+            )
+            .expect("insert OpenCode usage");
+    }
+    connection.close().expect("close SQLite fixture");
+
+    let result = scan_opencode_usage(&options(&path)).expect("scan OpenCode SQLite");
+    assert_eq!(result.coverage.status, CoverageStatus::Complete);
+    let resolved: Vec<(&str, BillingChannel, ChannelSource)> = result
+        .records
+        .iter()
+        .map(|record| {
+            (
+                record.event.model.as_str(),
+                record.event.billing_channel,
+                record.event.channel_source,
+            )
+        })
+        .collect();
+    assert_eq!(
+        resolved,
+        vec![
+            (
+                "k2p5",
+                BillingChannel::MoonshotDirect,
+                ChannelSource::Explicit
+            ),
+            (
+                "kimi-k2",
+                BillingChannel::MoonshotDirect,
+                ChannelSource::Explicit
+            ),
+            (
+                "deepseek-v4-flash",
+                BillingChannel::DeepseekDirect,
+                ChannelSource::Explicit
+            ),
+            (
+                "kimi-for-coding",
+                BillingChannel::Unknown,
+                ChannelSource::Unknown
+            ),
+        ]
+    );
     let _ = fs::remove_dir_all(path);
 }
 

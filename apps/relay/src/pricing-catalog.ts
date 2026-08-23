@@ -23,12 +23,24 @@ import {
  * - https://raw.githubusercontent.com/anomalyco/models.dev/921ec8f8fcc9/providers/anthropic/models/claude-opus-4-6.toml
  * - https://raw.githubusercontent.com/anomalyco/models.dev/a39260825d360f08eb3af659516e5be9f93e7836/providers/anthropic/models/claude-opus-4-6.toml
  * - https://raw.githubusercontent.com/anomalyco/models.dev/df3fa55fefea90465335c9489d52721c16d89284/providers/anthropic/models/claude-sonnet-4-6.toml
+ * - https://raw.githubusercontent.com/anomalyco/models.dev/dev/providers/openai/models/gpt-5.1.toml
+ * - https://raw.githubusercontent.com/anomalyco/models.dev/dev/providers/openai/models/gpt-5.2.toml
+ * - https://raw.githubusercontent.com/anomalyco/models.dev/dev/providers/openai/models/gpt-5.6-terra.toml
+ * - https://raw.githubusercontent.com/anomalyco/models.dev/dev/providers/anthropic/models/claude-opus-5.toml
+ * - https://raw.githubusercontent.com/anomalyco/models.dev/dev/providers/anthropic/models/claude-sonnet-5.toml
+ * - https://raw.githubusercontent.com/anomalyco/models.dev/dev/providers/anthropic/models/claude-fable-5.toml
+ * - https://raw.githubusercontent.com/anomalyco/models.dev/dev/providers/xai/models/grok-4.6.toml
  *
  * The source repository is available at https://github.com/anomalyco/models.dev
  * and its license is https://github.com/anomalyco/models.dev/blob/dev/LICENSE.
+ *
+ * `verified_at` is per entry: entries keep the date their rates were last
+ * checked against the cited page, so adding a model never restates when the
+ * existing rates were verified.
  */
 
 const VERIFIED_AT = "2026-08-10T00:00:00.000Z";
+const VERIFIED_AT_2026_08_23 = "2026-08-23T00:00:00.000Z";
 const OPENAI_PRICING_SOURCE = "https://developers.openai.com/api/docs/pricing";
 const OPENAI_CODEX_52_SOURCE = "https://developers.openai.com/api/docs/models/gpt-5.2-codex";
 const OPENAI_CODEX_53_SOURCE = "https://developers.openai.com/api/docs/models/gpt-5.3-codex";
@@ -39,6 +51,7 @@ const OPENAI_LUNA_SOURCE = "https://developers.openai.com/api/docs/models/gpt-5.
 const OPENAI_56_PRICE_CHANGE_SOURCE =
   "https://openai.com/index/advancing-the-price-performance-frontier-with-gpt-5-6/";
 const XAI_GROK_45_SOURCE = "https://docs.x.ai/developers/models/grok-4.5";
+const XAI_GROK_46_SOURCE = "https://docs.x.ai/developers/models/grok-4.6";
 const ANTHROPIC_PRICING_SOURCE = "https://platform.claude.com/docs/en/about-claude/pricing";
 const ANTHROPIC_OPUS_46_SOURCE = "https://www.anthropic.com/news/claude-opus-4-6";
 const ANTHROPIC_RELEASE_NOTES_SOURCE = "https://platform.claude.com/docs/en/release-notes/overview";
@@ -118,6 +131,7 @@ interface EntryExpansion {
   contexts: readonly (ContextBucket | "*")[];
   rates: PricingRates | ((context: ContextBucket | "*") => PricingRates);
   sourceUrl: string;
+  verifiedAt?: string;
 }
 
 function expandEntries(input: EntryExpansion): PricingCatalogEntry[] {
@@ -148,7 +162,7 @@ function expandEntries(input: EntryExpansion): PricingCatalogEntry[] {
             currency: "USD",
             rates: typeof input.rates === "function" ? input.rates(contextBucket) : input.rates,
             source_url: input.sourceUrl,
-            verified_at: VERIFIED_AT,
+            verified_at: input.verifiedAt ?? VERIFIED_AT,
           } satisfies PricingCatalogEntry;
           return entry;
         }),
@@ -170,29 +184,46 @@ function openAIStandardRates(
 function openAIEntries(): PricingCatalogEntry[] {
   const entries: PricingCatalogEntry[] = [];
 
-  // GPT-5.2/5.3 Codex have one documented API rate independent of context
+  // These models each publish one documented API rate independent of context
   // length.  No separate service/speed/geo/context rates are published, so
   // one explicit wildcard entry is the closest documented approximation.
   // Codex's parser reports an inferred cache-write bucket; use the uncached
   // input rate for that bucket as an explicit approximation, while retaining
-  // null for the undocumented 5m/1h cache-write buckets.
+  // null for the undocumented 5m/1h cache-write buckets.  The GPT-5.1/5.2
+  // release dates come from the models.dev TOMLs cited in the file header.
+  const flatRate = (input: string, cacheRead: string, output: string) =>
+    openAIStandardRates(input, cacheRead, null, output, input);
   for (const model of [
     {
       model: "gpt-5.2-codex",
       effectiveFrom: "2025-12-11",
       sourceUrl: OPENAI_CODEX_52_SOURCE,
-      prefix: "openai-gpt-5.2-codex",
+      rates: flatRate("1.75", "0.175", "14"),
     },
     {
       model: "gpt-5.3-codex",
       effectiveFrom: "2026-02-05",
       sourceUrl: OPENAI_CODEX_53_SOURCE,
-      prefix: "openai-gpt-5.3-codex",
+      rates: flatRate("1.75", "0.175", "14"),
+    },
+    {
+      model: "gpt-5.1",
+      effectiveFrom: "2025-11-13",
+      sourceUrl: OPENAI_PRICING_SOURCE,
+      rates: flatRate("1.25", "0.125", "10"),
+      verifiedAt: VERIFIED_AT_2026_08_23,
+    },
+    {
+      model: "gpt-5.2",
+      effectiveFrom: "2025-12-11",
+      sourceUrl: OPENAI_PRICING_SOURCE,
+      rates: flatRate("1.75", "0.175", "14"),
+      verifiedAt: VERIFIED_AT_2026_08_23,
     },
   ]) {
     entries.push(
       ...expandEntries({
-        entryPrefix: model.prefix,
+        entryPrefix: `openai-${model.model}`,
         model: model.model,
         effectiveFrom: model.effectiveFrom,
         effectiveTo: null,
@@ -200,8 +231,9 @@ function openAIEntries(): PricingCatalogEntry[] {
         speeds: ["*"],
         inferenceGeos: ["*"],
         contexts: ["*"],
-        rates: openAIStandardRates("1.75", "0.175", null, "14", "1.75"),
+        rates: model.rates,
         sourceUrl: model.sourceUrl,
+        ...(model.verifiedAt ? { verifiedAt: model.verifiedAt } : {}),
       }),
     );
   }
@@ -258,24 +290,15 @@ function openAIEntries(): PricingCatalogEntry[] {
     );
   }
 
-  const solContexts = (context: ContextBucket | "*"): PricingRates => {
-    const long = context === "gt_272k";
-    return openAIStandardRates(
-      long ? "10" : "5",
-      long ? "1" : "0.5",
-      long ? "12.5" : "6.25",
-      long ? "45" : "30",
-    );
-  };
-  const solFastContexts = (context: ContextBucket | "*"): PricingRates => {
-    const long = context === "gt_272k";
-    return openAIStandardRates(
-      long ? "20" : "10",
-      long ? "2" : "1",
-      long ? "25" : "12.5",
-      long ? "90" : "60",
-    );
-  };
+  // OpenAI's GPT-5.6 family prices one short and one long tier, with the long
+  // tier beginning after the 272k billable-input cap.  Each rate array is
+  // [uncached input, cache read, cache write, output].
+  const shortLongRates =
+    (short: readonly string[], long: readonly string[]) => (context: ContextBucket | "*") => {
+      const [input = "0", cacheRead = "0", cacheWrite = "0", output = "0"] =
+        context === "gt_272k" ? long : short;
+      return openAIStandardRates(input, cacheRead, cacheWrite, output);
+    };
 
   // GPT-5.6 Sol launched on 2026-07-09.  OpenAI documents short/long
   // pricing with the long tier beginning after the 272k billable-input cap.
@@ -292,7 +315,7 @@ function openAIEntries(): PricingCatalogEntry[] {
       speeds: STANDARD_SPEEDS,
       inferenceGeos: ["*"],
       contexts: SHORT_AND_LONG_CONTEXTS,
-      rates: solContexts,
+      rates: shortLongRates(["5", "0.5", "6.25", "30"], ["10", "1", "12.5", "45"]),
       sourceUrl: OPENAI_SOL_SOURCE,
     }),
     ...expandEntries({
@@ -305,17 +328,11 @@ function openAIEntries(): PricingCatalogEntry[] {
       speeds: ["fast"],
       inferenceGeos: ["*"],
       contexts: SHORT_AND_LONG_CONTEXTS,
-      rates: solFastContexts,
+      rates: shortLongRates(["10", "1", "12.5", "60"], ["20", "2", "25", "90"]),
       sourceUrl: OPENAI_PRICING_SOURCE,
     }),
   );
 
-  const lunaRates =
-    (short: readonly string[], long: readonly string[]) => (context: ContextBucket | "*") => {
-      const [input = "0", cacheRead = "0", cacheWrite = "0", output = "0"] =
-        context === "gt_272k" ? long : short;
-      return openAIStandardRates(input, cacheRead, cacheWrite, output);
-    };
   entries.push(
     ...expandEntries({
       entryPrefix: "openai-gpt-5.6-luna-launch",
@@ -326,7 +343,7 @@ function openAIEntries(): PricingCatalogEntry[] {
       speeds: STANDARD_SPEEDS,
       inferenceGeos: ["*"],
       contexts: SHORT_AND_LONG_CONTEXTS,
-      rates: lunaRates(["1", "0.1", "1.25", "6"], ["2", "0.2", "2.5", "9"]),
+      rates: shortLongRates(["1", "0.1", "1.25", "6"], ["2", "0.2", "2.5", "9"]),
       sourceUrl: OPENAI_LUNA_SOURCE,
     }),
     ...expandEntries({
@@ -338,7 +355,7 @@ function openAIEntries(): PricingCatalogEntry[] {
       speeds: STANDARD_SPEEDS,
       inferenceGeos: ["*"],
       contexts: SHORT_AND_LONG_CONTEXTS,
-      rates: lunaRates(["0.2", "0.02", "0.25", "1.2"], ["0.4", "0.04", "0.5", "1.8"]),
+      rates: shortLongRates(["0.2", "0.02", "0.25", "1.2"], ["0.4", "0.04", "0.5", "1.8"]),
       sourceUrl: OPENAI_56_PRICE_CHANGE_SOURCE,
     }),
     ...expandEntries({
@@ -350,8 +367,42 @@ function openAIEntries(): PricingCatalogEntry[] {
       speeds: ["fast"],
       inferenceGeos: ["*"],
       contexts: SHORT_AND_LONG_CONTEXTS,
-      rates: lunaRates(["0.4", "0.04", "0.5", "2.4"], ["0.8", "0.08", "1", "3.6"]),
+      rates: shortLongRates(["0.4", "0.04", "0.5", "2.4"], ["0.8", "0.08", "1", "3.6"]),
       sourceUrl: OPENAI_PRICING_SOURCE,
+    }),
+  );
+
+  // GPT-5.6 Terra shares Luna's 2026-07-30 price change.  Only the post-change
+  // rates are published, so Terra starts at that date and rows before it stay
+  // outside the effective range instead of being priced from a guessed launch
+  // rate.  The fast tier documents one rate with no long-context counterpart,
+  // so it covers the short buckets only.
+  entries.push(
+    ...expandEntries({
+      entryPrefix: "openai-gpt-5.6-terra-standard",
+      model: "gpt-5.6-terra",
+      effectiveFrom: "2026-07-30",
+      effectiveTo: null,
+      serviceTiers: STANDARD_SERVICE_TIERS,
+      speeds: STANDARD_SPEEDS,
+      inferenceGeos: ["*"],
+      contexts: SHORT_AND_LONG_CONTEXTS,
+      rates: shortLongRates(["2", "0.2", "2.5", "12"], ["4", "0.4", "5", "18"]),
+      sourceUrl: OPENAI_56_PRICE_CHANGE_SOURCE,
+      verifiedAt: VERIFIED_AT_2026_08_23,
+    }),
+    ...expandEntries({
+      entryPrefix: "openai-gpt-5.6-terra-fast",
+      model: "gpt-5.6-terra",
+      effectiveFrom: "2026-07-30",
+      effectiveTo: null,
+      serviceTiers: ["priority"],
+      speeds: ["fast"],
+      inferenceGeos: ["*"],
+      contexts: CONTEXT_BUCKETS.slice(0, -1),
+      rates: openAIStandardRates("4", "0.4", "5", "24"),
+      sourceUrl: OPENAI_PRICING_SOURCE,
+      verifiedAt: VERIFIED_AT_2026_08_23,
     }),
   );
 
@@ -482,42 +533,122 @@ function anthropicEntries(): PricingCatalogEntry[] {
     }),
   );
 
+  // The Claude 5 generation includes the full 1M context window at standard
+  // pricing, so each model needs one context-independent entry.  Launch dates
+  // come from the Claude Platform release notes: Fable 5 on 2026-06-09,
+  // Sonnet 5 on 2026-06-30, Opus 5 on 2026-07-24.  Sonnet 5's launch price of
+  // $2/$10 became the standard price on 2026-08-10 and the scheduled increase
+  // was cancelled, so one entry covers its whole life.
+  // Opus 5 fast mode is billed at $10/$50 across the full context window, with
+  // the prompt-caching multipliers applied on top of the fast input rate.
+  // Fable 5 and Sonnet 5 do not offer fast mode, so they get no fast rates.
+  for (const model of [
+    {
+      model: "claude-fable-5",
+      effectiveFrom: "2026-06-09",
+      rates: anthropicRates("10", "1", "12.5", "20", "50"),
+      fastRates: null,
+    },
+    {
+      model: "claude-sonnet-5",
+      effectiveFrom: "2026-06-30",
+      rates: anthropicRates("2", "0.2", "2.5", "4", "10"),
+      fastRates: null,
+    },
+    {
+      model: "claude-opus-5",
+      effectiveFrom: "2026-07-24",
+      rates: standardOpus,
+      fastRates: anthropicRates("10", "1", "12.5", "20", "50"),
+    },
+  ]) {
+    const shared = {
+      model: model.model,
+      effectiveFrom: model.effectiveFrom,
+      effectiveTo: null,
+      serviceTiers: ["*"],
+      contexts: ["*"],
+      sourceUrl: ANTHROPIC_PRICING_SOURCE,
+      verifiedAt: VERIFIED_AT_2026_08_23,
+    } as const;
+    entries.push(
+      ...expandAnthropicWithUs({
+        ...shared,
+        entryPrefix: `anthropic-${model.model}-standard`,
+        speeds: ["standard", "unknown"],
+        rates: model.rates,
+      }),
+      ...(model.fastRates
+        ? expandAnthropicWithUs({
+            ...shared,
+            entryPrefix: `anthropic-${model.model}-fast`,
+            speeds: ["fast"],
+            rates: model.fastRates,
+          })
+        : []),
+    );
+  }
+
   return entries;
 }
 
 function xaiEntries(): PricingCatalogEntry[] {
-  return expandEntries({
-    entryPrefix: "xai-grok-4.5-standard",
-    model: "grok-4.5",
-    billingChannel: "xai_direct",
-    aliases: ["grok-4.5-latest"],
-    effectiveFrom: "2026-07-08",
-    effectiveTo: null,
-    serviceTiers: ["standard", "unknown"],
-    speeds: ["standard", "unknown"],
-    inferenceGeos: ["*"],
-    contexts: ["*", "gt_200k_le_256k", "gt_256k_le_272k", "gt_272k"],
-    rates: (context) => {
-      const long =
-        context === "gt_200k_le_256k" || context === "gt_256k_le_272k" || context === "gt_272k";
+  // xAI bills a request that reaches 200k prompt tokens at the long rate for
+  // every token in the request, so the long tier starts at the 200k bucket.
+  const isLongContext = (context: ContextBucket | "*") =>
+    context === "gt_200k_le_256k" || context === "gt_256k_le_272k" || context === "gt_272k";
+  const grokRates =
+    (shortCacheRead: string, longCacheRead: string) => (context: ContextBucket | "*") => {
+      const long = isLongContext(context);
       return tokenRates(
         long ? "4" : "2",
-        long ? "0.6" : "0.3",
+        long ? longCacheRead : shortCacheRead,
         null,
         null,
         long ? "12" : "6",
         false,
         long ? "4" : "2",
       );
-    },
-    sourceUrl: XAI_GROK_45_SOURCE,
-  });
+    };
+  const grokContexts = ["*", "gt_200k_le_256k", "gt_256k_le_272k", "gt_272k"] as const;
+  return [
+    ...expandEntries({
+      entryPrefix: "xai-grok-4.5-standard",
+      model: "grok-4.5",
+      billingChannel: "xai_direct",
+      aliases: ["grok-4.5-latest"],
+      effectiveFrom: "2026-07-08",
+      effectiveTo: null,
+      serviceTiers: ["standard", "unknown"],
+      speeds: ["standard", "unknown"],
+      inferenceGeos: ["*"],
+      contexts: grokContexts,
+      rates: grokRates("0.3", "0.6"),
+      sourceUrl: XAI_GROK_45_SOURCE,
+    }),
+    // Grok 4.6 launched on 2026-08-12 with the same token rates as Grok 4.5
+    // and a higher cached-input rate.
+    ...expandEntries({
+      entryPrefix: "xai-grok-4.6-standard",
+      model: "grok-4.6",
+      billingChannel: "xai_direct",
+      effectiveFrom: "2026-08-12",
+      effectiveTo: null,
+      serviceTiers: ["standard", "unknown"],
+      speeds: ["standard", "unknown"],
+      inferenceGeos: ["*"],
+      contexts: grokContexts,
+      rates: grokRates("0.5", "1"),
+      sourceUrl: XAI_GROK_46_SOURCE,
+      verifiedAt: VERIFIED_AT_2026_08_23,
+    }),
+  ];
 }
 
 export const PRICING_CATALOG: PricingCatalog = PricingCatalogSchema.parse({
   protocol_version: 2,
-  revision: "official-2026-08-10-4",
-  published_at: VERIFIED_AT,
+  revision: "official-2026-08-23-1",
+  published_at: VERIFIED_AT_2026_08_23,
   entries: [...openAIEntries(), ...anthropicEntries(), ...xaiEntries()],
 });
 

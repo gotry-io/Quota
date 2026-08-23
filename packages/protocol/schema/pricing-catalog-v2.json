@@ -111,7 +111,9 @@
         "aws_bedrock",
         "google_vertex",
         "openrouter",
-        "xai_direct"
+        "xai_direct",
+        "moonshot_direct",
+        "deepseek_direct"
       ]
     },
     "__schema4": {

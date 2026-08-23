@@ -57,7 +57,7 @@ export default {
         async getAccountSummary(headers) {
           try {
             const url = new URL(
-              "/api/v3/account/summary?cost_mode=calculate&usage_agents=all&model_catalog=1&device_health=1",
+              "/api/v3/account/summary?cost_mode=auto&usage_agents=all&model_catalog=1&device_health=1&usage_channels=1",
               request.url,
             );
             const response = await relay.fetch(new Request(url, { headers }));

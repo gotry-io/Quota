@@ -1374,6 +1374,8 @@
         "google_vertex",
         "openrouter",
         "xai_direct",
+        "moonshot_direct",
+        "deepseek_direct",
         "unknown"
       ]
     },
@@ -1479,7 +1481,7 @@
           "$ref": "#/$defs/__schema20"
         },
         "providers": {
-          "maxItems": 8,
+          "maxItems": 10,
           "type": "array",
           "items": {
             "$ref": "#/$defs/__schema40"
@@ -1538,6 +1540,8 @@
             "google_vertex",
             "openrouter",
             "xai",
+            "moonshot",
+            "deepseek",
             "unknown"
           ]
         },

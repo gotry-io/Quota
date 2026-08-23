@@ -632,6 +632,8 @@ export const InferenceProviderSchema = z.enum([
   "google_vertex",
   "openrouter",
   "xai",
+  "moonshot",
+  "deepseek",
   "unknown",
 ]);
 export type InferenceProvider = z.infer<typeof InferenceProviderSchema>;
@@ -640,7 +642,8 @@ export const MAXIMUM_MODEL_CATALOG_MODELS = 512;
 export const MAXIMUM_MODEL_CATALOG_ALIASES_PER_MODEL = 32;
 export const MAXIMUM_MODEL_CATALOG_ALIASES = 4_096;
 
-export const BillingChannelSchema = z.enum([
+/** Channels menubar-v0.0.19 shipped with, kept as the base every wider list derives from. */
+const RELEASED_DIRECT_BILLING_CHANNELS = [
   "openai_direct",
   "azure_openai",
   "anthropic_direct",
@@ -648,9 +651,33 @@ export const BillingChannelSchema = z.enum([
   "google_vertex",
   "openrouter",
   "xai_direct",
+] as const;
+const ADDED_DIRECT_BILLING_CHANNELS = ["moonshot_direct", "deepseek_direct"] as const;
+
+export const BillingChannelSchema = z.enum([
+  ...RELEASED_DIRECT_BILLING_CHANNELS,
+  ...ADDED_DIRECT_BILLING_CHANNELS,
   "unknown",
 ]);
+
 export type BillingChannel = z.infer<typeof BillingChannelSchema>;
+
+/**
+ * The channels menubar-v0.0.19 and earlier can decode. Their Swift enums are
+ * exhaustive, so a response that names a newer channel fails to decode there
+ * instead of degrading. Responses narrow anything outside this set unless the
+ * caller opts in with `usage_channels=1`.
+ *
+ * Derived from the released base so widening `BillingChannelSchema` cannot
+ * silently widen this set. Remove the narrowing once menubar-v0.0.19 is no
+ * longer a supported client.
+ */
+export const RELEASED_BILLING_CHANNELS = [...RELEASED_DIRECT_BILLING_CHANNELS, "unknown"] as const;
+const releasedBillingChannels = new Set<string>(RELEASED_BILLING_CHANNELS);
+
+export function isReleasedBillingChannel(value: BillingChannel): boolean {
+  return releasedBillingChannels.has(value);
+}
 
 const ModelCatalogCanonicalIDSchema = z.string().min(1).max(128).regex(OPAQUE_ID_PATTERN);
 
@@ -695,13 +722,8 @@ export type ModelCatalog = z.infer<typeof ModelCatalogSchema>;
 export const MODEL_CATALOG: ModelCatalog = ModelCatalogSchema.parse(modelCatalogDocument);
 
 export const PricedBillingChannelSchema = z.enum([
-  "openai_direct",
-  "azure_openai",
-  "anthropic_direct",
-  "aws_bedrock",
-  "google_vertex",
-  "openrouter",
-  "xai_direct",
+  ...RELEASED_DIRECT_BILLING_CHANNELS,
+  ...ADDED_DIRECT_BILLING_CHANNELS,
 ]);
 export type PricedBillingChannel = z.infer<typeof PricedBillingChannelSchema>;
 

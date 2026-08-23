@@ -131,6 +131,14 @@ which agent emitted the usage-bearing output. Summaries are nested as
 `clients[].providers[].models[]`; unknown channels remain the `unknown` provider within their
 originating client.
 
+A provider id resolves a channel only when it is a registered id that authenticates against that
+vendor's own endpoints. Gateway spellings that merely proxy a vendor, such as an `-oauth` suffix on a
+registered id, are not registered and stay unknown. `kimi-for-coding` and `moonshotai` resolve
+`moonshot_direct`, and `deepseek` resolves `deepseek_direct`, for every collector that reads an
+explicit provider id: OpenCode, Pi, and Cursor. Both channels were added after menubar-v0.0.19, so
+responses narrow them for callers that do not send `usage_channels=1`;
+[ADR 0012](decisions/0012-managed-data-v3.md) owns that rule.
+
 ### Report-time model catalog
 
 Collectors preserve every non-empty bounded `model` value exactly as reported, including punctuation,
@@ -198,7 +206,9 @@ make an otherwise unpriced fact priced.
    `storage/message`.
 2. Parse assistant messages with nonzero tokens or source cost. Add cache-read and cache-write tokens
    to uncached input so protocol input remains the billable total. Resolve a billing channel only
-   from an explicit recognized `providerID`; custom providers remain unknown.
+   from an explicit recognized `providerID`; custom providers remain unknown. Gateway spellings such
+   as `kimi-for-coding-oauth`, `right-code`, and `crabot-codex` are not registered ids and stay
+   unknown.
 3. Rust opens the SQLite database read-only and never mutates the agent-owned store.
 
 ### Pi Usage

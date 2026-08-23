@@ -59,13 +59,14 @@ test("builds the managed-data v3 single-day usage summary URL", () => {
   const url = new URL(path, "https://quota.gotry.io");
   assert.equal(url.pathname, "/api/v3/account/usage/summary");
   assert.equal(url.searchParams.get("usage_agents"), "all");
-  assert.equal(url.searchParams.get("cost_mode"), "calculate");
+  assert.equal(url.searchParams.get("cost_mode"), "auto");
   assert.equal(url.searchParams.get("model_catalog"), "1");
+  assert.equal(url.searchParams.get("usage_channels"), "1");
   assert.equal(url.searchParams.get("from"), "2026-08-14");
   assert.equal(url.searchParams.get("to"), "2026-08-14");
   assert.equal(
     [...url.searchParams.keys()].sort().join(","),
-    "cost_mode,from,model_catalog,to,usage_agents",
+    "cost_mode,from,model_catalog,to,usage_agents,usage_channels",
   );
 });
 

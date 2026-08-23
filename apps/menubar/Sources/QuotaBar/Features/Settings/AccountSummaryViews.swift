@@ -603,6 +603,8 @@ extension InferenceProvider {
     case .googleVertex: "vertexai"
     case .openrouter: "openrouter"
     case .xai: "grok"
+    case .moonshot: "kimi"
+    case .deepseek: "deepseek"
     case .unknown: nil
     }
   }
