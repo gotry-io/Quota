@@ -1,19 +1,12 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.5.6/schema.json",
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true
+  },
   "files": {
-    "includes": [
-      "**",
-      "!**/dist",
-      "!**/.wrangler",
-      "!**/.build",
-      "!**/target",
-      "!**/node_modules",
-      "!**/.svelte-kit",
-      "!apps/menubar/.swiftpm",
-      "!packages/apple-client/.swiftpm",
-      "!packages/apple-shared/.swiftpm",
-      "!apps/ios/Quota.xcodeproj"
-    ]
+    "includes": ["**", "!apps/ios/Quota.xcodeproj"]
   },
   "formatter": {
     "enabled": true,
