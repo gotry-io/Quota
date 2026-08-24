@@ -111,11 +111,11 @@ enum OverviewWidgetContent {
       item.providerDisplayName,
       remainingAccessibility(for: item),
     ]
-    if let resetsAt = item.resetsAt {
-      parts.append("Resets \(resetAge(resetsAt: resetsAt, now: now))")
-    }
     if let state = item.stateLabel(now: now) {
       parts.append(state)
+    }
+    if let resetsAt = item.resetsAt {
+      parts.append("Resets \(resetAge(resetsAt: resetsAt, now: now))")
     }
     if let fetchedAt {
       parts.append("Updated \(updatedAge(fetchedAt: fetchedAt, now: now))")

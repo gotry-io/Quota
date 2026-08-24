@@ -185,7 +185,8 @@ provider and support, and no custom card chrome beyond the system widget contain
 - Remaining meters expose the remaining percent and window title, not only a graphic.
 - Cost states include the words **complete**, **partial**, or **unpriced**.
 - Fetched time / refreshed age includes **Last updated**.
-- Widget entries combine provider, remaining, reset, stale, and updated age into one label.
+- Widget entries combine provider, remaining, why the reading is not current, reset, and updated
+  age into one label, in the order the entry shows them.
 - Do not announce raw account, device, or token identifiers.
 - Reduce Motion uses opacity-only transitions for Connect ↔ Overview phase changes.
 

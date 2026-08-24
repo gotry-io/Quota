@@ -167,3 +167,25 @@ struct OverviewWidgetContentTests {
     return formatter.date(from: value)!
   }
 }
+
+@Test
+func aReportedFailureIsNamedEvenWhenTheReadingStillCarriesAReset() {
+  let item = WidgetQuotaItem(
+    providerID: "codex",
+    providerDisplayName: "Codex",
+    windowTitle: "Weekly",
+    remainingPercent: 71,
+    resetsAt: Date(timeIntervalSince1970: 1_786_000_000 + 3_600),
+    state: .signInNeeded
+  )
+
+  let label = OverviewWidgetContent.itemAccessibility(
+    item: item,
+    fetchedAt: nil,
+    now: Date(timeIntervalSince1970: 1_786_000_000)
+  )
+
+  // The reset it names may already have passed, so the reason comes first.
+  #expect(label.contains("Sign-in needed"))
+  #expect(label.range(of: "Sign-in needed")!.lowerBound < label.range(of: "Resets")!.lowerBound)
+}
