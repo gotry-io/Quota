@@ -71,9 +71,10 @@ Body, in order:
    time.
 3. Provider quota cards in catalog order. Each observation shows provider name, optional account
    label and plan, remaining value as the strongest number, one meter per percent window, and reset
-   time. An observation past its `valid_until`, or one the device did not report as available, reads
-   **Stale** in place of, or ahead of, that reset time, because the reset it names may already have
-   passed. Widgets apply the same rule at the instant they draw. Remaining has no "left" or "remaining"
+   time. A reading that is not current names why in place of, or ahead of, that reset time, because
+   the reset it names may already have passed: **Sign-in needed**, **Unavailable**, **Unsupported**,
+   or **Can’t refresh** for a state its device reported, and **Stale** for one that aged past its
+   `valid_until`. Widgets apply the same rule at the instant they draw. Remaining has no "left" or "remaining"
    suffix. Budget windows with an amount use `71% · $3.75`, percent-only windows use `71%`, and
    balance-only windows use **Balance** plus the unit amount.
 4. Devices: display name, platform, app product/version, and compact server-authoritative last
@@ -184,7 +185,8 @@ provider and support, and no custom card chrome beyond the system widget contain
 - Remaining meters expose the remaining percent and window title, not only a graphic.
 - Cost states include the words **complete**, **partial**, or **unpriced**.
 - Fetched time / refreshed age includes **Last updated**.
-- Widget entries combine provider, remaining, reset, stale, and updated age into one label.
+- Widget entries combine provider, remaining, why the reading is not current, reset, and updated
+  age into one label, in the order the entry shows them.
 - Do not announce raw account, device, or token identifiers.
 - Reduce Motion uses opacity-only transitions for Connect ↔ Overview phase changes.
 

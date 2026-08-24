@@ -728,7 +728,11 @@ impl RpcClient {
     fn spawn(executable: &str, context: &CollectionContext) -> Result<Self, ProviderError> {
         let mut command = Command::new(executable);
         command
-            .args(["-s", "read-only", "-a", "untrusted", "app-server"])
+            // `never` is the only approval policy that suits a probe: the alternative,
+            // `on-request`, would wait on a prompt nothing is there to answer. Codex
+            // removed the `untrusted` value it once took here, and rejects the whole
+            // invocation when it sees one it does not know.
+            .args(["-s", "read-only", "-a", "never", "app-server"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());

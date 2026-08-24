@@ -34,9 +34,11 @@ Supported order today: Codex, Claude Code, Grok, OpenRouter, DeepSeek, Kimi Code
 API-key HTTPS providers share the bounded request, credential resolution, URL validation, and
 snapshot helpers in `packages/service/src/providers/common/`.
 
-`auth_required` carries a result message when discovery found a source and the provider then rejected
-it. A stored sign-in the provider no longer accepts recovers differently from a provider that was
-never set up on this device, and that second case keeps the bare outcome and the client's setup copy.
+Every collection result reports `sources`, the number of local credential sources discovery found.
+Zero means the provider was never set up on this device, which is a different state from collection
+failing here and is what lets a client stay quiet about the first and speak about the second.
+`auth_required` additionally carries a result message when a discovered source was rejected, because
+a stored sign-in the provider no longer accepts recovers differently from one that never existed.
 
 Every collected snapshot carries `valid_until`, derived from the observation as described in
 [`architecture.md`](architecture.md). Collectors do not set it and providers do not report it.
@@ -56,7 +58,7 @@ Every collected snapshot carries `valid_until`, derived from the observation as 
    changing their used/remaining meaning. Classify primary and secondary by reported duration
    (5-hour, weekly, or 30-day monthly) rather than by payload slot, so a Free-tier monthly
    window is not labeled as 5-hour. A null code-review object is absent, not malformed.
-5. Fall back to `codex -s read-only -a untrusted app-server` and call
+5. Fall back to `codex -s read-only -a never app-server` and call
    `account/rateLimits/read` when the direct OAuth result is unavailable or rejects the cached
    access token. Codex owns any access-token renewal performed while its app-server starts.
 6. If OAuth credentials are missing or WHAM/RPC return 401/403, and a stored ChatGPT browser session

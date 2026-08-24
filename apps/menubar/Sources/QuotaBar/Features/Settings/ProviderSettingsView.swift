@@ -1,3 +1,4 @@
+import QuotaWire
 import SwiftUI
 
 /// Settings → Agents → <Provider>: visibility, reporting provenance, and local configuration.

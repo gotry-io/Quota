@@ -25,7 +25,7 @@ struct ProviderQuotaCard: View {
 
   private func observationBlock(_ snapshot: QuotaSnapshot, index: Int) -> some View {
     let label = PlanDisplay.accountLabel(snapshot.account.label) ?? "Account \(index + 1)"
-    let isStale = snapshot.isStale()
+    let stateLabel = snapshot.stateLabel()
     return VStack(alignment: .leading, spacing: 12) {
       HStack(alignment: .firstTextBaseline, spacing: 8) {
         Text(label)
@@ -50,7 +50,7 @@ struct ProviderQuotaCard: View {
           .foregroundStyle(.secondary)
       } else {
         ForEach(snapshot.windows) { window in
-          QuotaWindowBlock(window: window, isStale: isStale)
+          QuotaWindowBlock(window: window, stateLabel: stateLabel)
         }
       }
     }
@@ -59,7 +59,8 @@ struct ProviderQuotaCard: View {
 
 struct QuotaWindowBlock: View {
   let window: QuotaWindow
-  let isStale: Bool
+  /// Why the reading is not current, or `nil` while it is.
+  let stateLabel: String?
 
   var body: some View {
     VStack(alignment: .leading, spacing: 6) {
@@ -77,7 +78,7 @@ struct QuotaWindowBlock: View {
         .frame(maxWidth: .infinity, alignment: .leading)
 
       if !window.isBalanceOnly {
-        ProgressView(value: QuotaFormat.remainingPercent(window), total: 100)
+        ProgressView(value: window.remainingPercent, total: 100)
           .tint(QuotaTheme.emerald)
           .accessibilityHidden(true)
       }
@@ -94,12 +95,12 @@ struct QuotaWindowBlock: View {
     .accessibilityLabel(accessibilityText)
   }
 
-  /// An expired observation says so even when it still carries a reset time, because the
-  /// reset it names may already have passed.
+  /// A reading that is not current says so even when it still carries a reset time,
+  /// because the reset it names may already have passed.
   private var supportLine: String? {
     let reset = window.resetsAt.map { "Resets \(QuotaFormat.resetTime($0))" }
-    guard isStale else { return reset }
-    return reset.map { "Stale · \($0)" } ?? "Stale"
+    guard let stateLabel else { return reset }
+    return reset.map { "\(stateLabel) · \($0)" } ?? stateLabel
   }
 
   private var accessibilityText: String {
@@ -107,8 +108,8 @@ struct QuotaWindowBlock: View {
     if let resets = window.resetsAt {
       parts.append("Resets \(QuotaFormat.resetTime(resets))")
     }
-    if isStale {
-      parts.append("Stale")
+    if let stateLabel {
+      parts.append(stateLabel)
     }
     return parts.joined(separator: ", ")
   }

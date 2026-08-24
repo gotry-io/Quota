@@ -3,9 +3,9 @@ import QuotaPresentation
 
 /// Versioned, bounded widget-facing quota projection. Foundation-only; no account/session fields.
 public struct WidgetSnapshot: Codable, Equatable, Sendable {
-  /// 2 carries per-item freshness facts (`isAvailable`, `validUntil`) where 1 carried a
-  /// published `isStale` verdict. A file written by the older shape is rejected by this
-  /// gate and the app republishes.
+  /// 2 carries per-item freshness facts (`state`, `validUntil`) where 1 carried a published
+  /// `isStale` verdict. A file written by the older shape is rejected by this gate and the
+  /// app republishes.
   public static let currentVersion = 2
   public static let maximumItemCount = 16
 
@@ -96,7 +96,8 @@ public struct WidgetQuotaItem: Codable, Equatable, Sendable {
   public let resetsAt: Date?
   /// The freshness facts, not a verdict: the widget re-renders on its own timeline, so it
   /// decides staleness at the instant it draws rather than at the instant it was written.
-  public let isAvailable: Bool
+  /// The reported state carries why a reading is not current, not merely that it is not.
+  public let state: WidgetQuotaState
   public let validUntil: Date?
 
   public init(
@@ -108,7 +109,7 @@ public struct WidgetQuotaItem: Codable, Equatable, Sendable {
     unit: WidgetQuotaUnit? = nil,
     hasLimit: Bool? = nil,
     resetsAt: Date? = nil,
-    isAvailable: Bool = true,
+    state: WidgetQuotaState = .available,
     validUntil: Date? = nil
   ) {
     self.providerID = providerID
@@ -119,14 +120,14 @@ public struct WidgetQuotaItem: Codable, Equatable, Sendable {
     self.unit = unit
     self.hasLimit = hasLimit
     self.resetsAt = resetsAt
-    self.isAvailable = isAvailable
+    self.state = state
     self.validUntil = validUntil
   }
 
   public init(from decoder: Decoder) throws {
     try decoder.rejectUnknownKeys([
       "providerId", "providerDisplayName", "windowTitle", "remainingPercent", "remainingValue",
-      "unit", "hasLimit", "resetsAt", "isAvailable", "validUntil",
+      "unit", "hasLimit", "resetsAt", "state", "validUntil",
     ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     providerID = try container.decode(String.self, forKey: .providerID)
@@ -137,7 +138,7 @@ public struct WidgetQuotaItem: Codable, Equatable, Sendable {
     unit = try container.decodeIfPresent(WidgetQuotaUnit.self, forKey: .unit)
     hasLimit = try container.decodeIfPresent(Bool.self, forKey: .hasLimit)
     resetsAt = try container.decodeIfPresent(Date.self, forKey: .resetsAt)
-    isAvailable = try container.decode(Bool.self, forKey: .isAvailable)
+    state = try container.decode(WidgetQuotaState.self, forKey: .state)
     validUntil = try container.decodeIfPresent(Date.self, forKey: .validUntil)
     guard isValid else {
       throw DecodingError.dataCorruptedError(
@@ -167,7 +168,7 @@ public struct WidgetQuotaItem: Codable, Equatable, Sendable {
     try container.encodeIfPresent(unit, forKey: .unit)
     try container.encodeIfPresent(hasLimit, forKey: .hasLimit)
     try container.encodeIfPresent(resetsAt, forKey: .resetsAt)
-    try container.encode(isAvailable, forKey: .isAvailable)
+    try container.encode(state, forKey: .state)
     try container.encodeIfPresent(validUntil, forKey: .validUntil)
   }
 
@@ -192,12 +193,50 @@ public struct WidgetQuotaItem: Codable, Equatable, Sendable {
     case unit
     case hasLimit
     case resetsAt
-    case isAvailable
+    case state
     case validUntil
   }
 }
 
-extension WidgetQuotaItem: QuotaObservationFreshness {}
+extension WidgetQuotaItem: QuotaObservationFreshness {
+  public var reportedState: QuotaObservationState { state.observationState }
+}
+
+/// The published states a widget item can carry, mirroring what the source reported.
+///
+/// Deliberately its own type rather than `QuotaObservationState`: these spellings are a
+/// stored file format, so renaming a case is a payload migration, while the shared
+/// vocabulary exists to be reworded whenever the UI needs different words.
+public enum WidgetQuotaState: String, Codable, Equatable, Sendable {
+  case available
+  case stale
+  case signInNeeded = "sign_in_needed"
+  case unavailable
+  case unsupported
+  case failed
+
+  public init(_ state: QuotaObservationState) {
+    switch state {
+    case .available: self = .available
+    case .stale: self = .stale
+    case .signInNeeded: self = .signInNeeded
+    case .unavailable: self = .unavailable
+    case .unsupported: self = .unsupported
+    case .failed: self = .failed
+    }
+  }
+
+  public var observationState: QuotaObservationState {
+    switch self {
+    case .available: .available
+    case .stale: .stale
+    case .signInNeeded: .signInNeeded
+    case .unavailable: .unavailable
+    case .unsupported: .unsupported
+    case .failed: .failed
+    }
+  }
+}
 
 public struct WidgetTodayUsage: Codable, Equatable, Sendable {
   public let inputTokens: Int

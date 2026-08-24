@@ -1,3 +1,4 @@
+import QuotaWire
 import Testing
 
 @testable import QuotaBar

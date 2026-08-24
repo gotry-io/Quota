@@ -1498,12 +1498,7 @@ fn validate_quota_snapshot(value: &Value) -> Result<(), RelayError> {
         .get("provider")
         .and_then(Value::as_str)
         .and_then(crate::catalog::ProviderId::parse)
-        .is_some_and(|provider| {
-            provider
-                .metadata()
-                .account_sync_protocol
-                .is_some_and(|version| version <= 3)
-        })
+        .is_some_and(|provider| provider.syncs_to_account(MANAGED_DATA_PROTOCOL))
         || !object
             .get("source")
             .and_then(Value::as_str)
@@ -2517,7 +2512,14 @@ impl AccountManager {
         Ok(control)
     }
 
-    pub(crate) fn upload_quota_report(&self, report: &Value) -> Result<Value, BackendError> {
+    /// `republished` carries this device's earlier readings restated with the status its
+    /// latest collection found. They ride the same envelope and the same provider gate as
+    /// the report's own snapshots.
+    pub(crate) fn upload_quota_report(
+        &self,
+        report: &Value,
+        republished: &[Value],
+    ) -> Result<Value, BackendError> {
         let (session, session_epoch) = self
             .state
             .session_snapshot()
@@ -2532,7 +2534,8 @@ impl AccountManager {
             return Err(session_changed_error());
         }
         let token = session_access_token_from(&session, "device")?;
-        let (report_captured_at, snapshots) = snapshot_payload_from_quota_report(report)?;
+        let (report_captured_at, snapshots) =
+            snapshot_payload_from_quota_report(report, republished)?;
         let expected_device_id = session
             .get("device_id")
             .and_then(Value::as_str)
@@ -2841,7 +2844,13 @@ fn session_changed_error() -> BackendError {
     }
 }
 
-fn snapshot_payload_from_quota_report(report: &Value) -> Result<(&str, Vec<Value>), BackendError> {
+/// The managed-data protocol this build uploads and reads.
+const MANAGED_DATA_PROTOCOL: u8 = 3;
+
+fn snapshot_payload_from_quota_report<'a>(
+    report: &'a Value,
+    republished: &[Value],
+) -> Result<(&'a str, Vec<Value>), BackendError> {
     let object = report.as_object().ok_or_else(BackendError::unavailable)?;
     if object.get("protocol_version").and_then(Value::as_u64) != Some(2) {
         return Err(BackendError::unavailable());
@@ -2854,25 +2863,24 @@ fn snapshot_payload_from_quota_report(report: &Value) -> Result<(&str, Vec<Value
         .get("results")
         .and_then(Value::as_array)
         .ok_or_else(BackendError::unavailable)?;
+    let collected = results
+        .iter()
+        .map(|result| {
+            result
+                .get("snapshots")
+                .and_then(Value::as_array)
+                .ok_or_else(BackendError::unavailable)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let mut snapshots = Vec::new();
-    for result in results {
-        let values = result
-            .get("snapshots")
-            .and_then(Value::as_array)
+    for snapshot in collected.into_iter().flatten().chain(republished) {
+        let provider = snapshot
+            .get("provider")
+            .and_then(Value::as_str)
+            .and_then(crate::catalog::ProviderId::parse)
             .ok_or_else(BackendError::unavailable)?;
-        for snapshot in values {
-            let provider = snapshot
-                .get("provider")
-                .and_then(Value::as_str)
-                .and_then(crate::catalog::ProviderId::parse)
-                .ok_or_else(BackendError::unavailable)?;
-            if provider
-                .metadata()
-                .account_sync_protocol
-                .is_some_and(|version| version <= 3)
-            {
-                snapshots.push(snapshot.clone());
-            }
+        if provider.syncs_to_account(MANAGED_DATA_PROTOCOL) {
+            snapshots.push(snapshot.clone());
         }
     }
     Ok((captured_at, snapshots))
@@ -3893,52 +3901,67 @@ mod tests {
             "results": [{"snapshots": [snapshot.clone()]}]
         });
         let (captured_at, snapshots) =
-            snapshot_payload_from_quota_report(&report).expect("quota report");
+            snapshot_payload_from_quota_report(&report, &[]).expect("quota report");
         assert_eq!(captured_at, "2026-08-10T00:00:00Z");
         assert_eq!(snapshots, [snapshot.clone()]);
 
         let mut cursor = snapshot.clone();
         cursor["provider"] = serde_json::json!("cursor");
-        let (_, mixed) = snapshot_payload_from_quota_report(&serde_json::json!({
-            "protocol_version": 2,
-            "captured_at": "2026-08-10T00:00:00Z",
-            "results": [{"snapshots": [snapshot.clone(), cursor.clone()]}]
-        }))
+        let (_, mixed) = snapshot_payload_from_quota_report(
+            &serde_json::json!({
+                "protocol_version": 2,
+                "captured_at": "2026-08-10T00:00:00Z",
+                "results": [{"snapshots": [snapshot.clone(), cursor.clone()]}]
+            }),
+            &[],
+        )
         .expect("mixed local report");
         assert_eq!(mixed, [snapshot.clone(), cursor.clone()]);
-        let (_, cursor_only) = snapshot_payload_from_quota_report(&serde_json::json!({
-            "protocol_version": 2,
-            "captured_at": "2026-08-10T00:00:00Z",
-            "results": [{"snapshots": [cursor.clone()]}]
-        }))
+        let (_, cursor_only) = snapshot_payload_from_quota_report(
+            &serde_json::json!({
+                "protocol_version": 2,
+                "captured_at": "2026-08-10T00:00:00Z",
+                "results": [{"snapshots": [cursor.clone()]}]
+            }),
+            &[],
+        )
         .expect("cursor report");
         assert_eq!(cursor_only, [cursor.clone()]);
         let mut unknown = cursor.clone();
         unknown["provider"] = serde_json::json!("unknown-provider");
         assert!(
-            snapshot_payload_from_quota_report(&serde_json::json!({
-                "protocol_version": 2,
-                "captured_at": "2026-08-10T00:00:00Z",
-                "results": [{"snapshots": [unknown]}]
-            }))
+            snapshot_payload_from_quota_report(
+                &serde_json::json!({
+                    "protocol_version": 2,
+                    "captured_at": "2026-08-10T00:00:00Z",
+                    "results": [{"snapshots": [unknown]}]
+                }),
+                &[]
+            )
             .is_err()
         );
         assert!(validate_quota_snapshot(&cursor).is_ok());
 
         assert!(
-            snapshot_payload_from_quota_report(&serde_json::json!({
-                "protocol_version": 2,
-                "captured_at": "2026-08-10T00:00:00Z",
-                "snapshots": []
-            }))
+            snapshot_payload_from_quota_report(
+                &serde_json::json!({
+                    "protocol_version": 2,
+                    "captured_at": "2026-08-10T00:00:00Z",
+                    "snapshots": []
+                }),
+                &[]
+            )
             .is_err()
         );
         assert!(
-            snapshot_payload_from_quota_report(&serde_json::json!({
-                "protocol_version": 2,
-                "captured_at": "2026-08-10T00:00:00Z",
-                "results": [{}]
-            }))
+            snapshot_payload_from_quota_report(
+                &serde_json::json!({
+                    "protocol_version": 2,
+                    "captured_at": "2026-08-10T00:00:00Z",
+                    "results": [{}]
+                }),
+                &[]
+            )
             .is_err()
         );
     }

@@ -34,8 +34,11 @@ is the Foundation-only presentation package consumed by QuotaBar, Quota iOS, the
 extension, and `packages/apple-client` for remaining-quota, plan/account label, compact count,
 Usage cost, compact relative-age text, and the observation-freshness rule each snapshot type
 conforms to. It does not decode protocol or app wire types, own ProviderID, network, persist, or
-access Relay. QuotaBar still owns its Swift IPC and network-wire models; those types stay out of
-both Apple packages.
+access Relay. QuotaBar reads the managed wire types — quota, account, and Usage — and
+`ProviderID` from `QuotaWire`, and generates its app-only provider behavior as an extension on that
+enum, so one catalog produces one Swift type and one decoder validates for both products. It still
+owns its private IPC models and its Usage upload and local-report types, which no other Apple
+product speaks; those stay out of both Apple packages.
 
 GitHub is the only account identity provider. The managed origin is fixed at
 `https://quota.gotry.io`. There is no anonymous owner, pairing group, arbitrary Relay URL, discovery
@@ -101,10 +104,18 @@ journal supplies full retained latest-attempt/latest-success facts and the bound
 projection; its retention and redaction are canonical in
 [ADR 0015](decisions/0015-diagnostic-attempts-and-device-health.md).
 
-Every collected snapshot is stamped with `valid_until` at the collection boundary: the first window
-reset it reports, and at the latest a fixed maximum age. That instant is what expires an
-observation, locally and after upload. It is derived from the observation rather than reported by a
-provider, so it is computed once for every collector.
+Two independent facts decide whether an observation still describes current quota, and a reader
+needs both. A device that fails to collect republishes its own last reading with the status it
+found — `auth_required`, `unavailable`, `unsupported`, or `error` — so a failure it detects becomes
+a fact every client shows at its next refresh instead of one they wait out; the reading and its
+`observed_at` are untouched, because the numbers really are that old, and the status returns to
+`available` when collection recovers. Republishing happens only when the status changes, so a
+provider that stays broken does not rewrite the row every refresh.
+
+Time covers what detection cannot: a device that stopped collecting entirely reports nothing at
+all. Every collected snapshot is therefore also stamped with `valid_until` at the collection
+boundary — the first window reset it reports, and at the latest a fixed maximum age. It is derived
+from the observation rather than reported by a provider, so it is computed once for every collector.
 
 Rust returns the merged Overview directly. Global fingerprints merge local and account-device
 observations; source-scoped fingerprints remain separate. Account observations this device uploaded
@@ -309,8 +320,8 @@ last-known-good cache. Catalog fetch failure never blocks collection, upload, to
 ```text
 packages/provider/catalog.json
         ├──generated──► packages/service Rust crate
-        ├──generated──► Swift QuotaBar
-        ├──generated──► Swift packages/apple-client
+        ├──generated──► Swift packages/apple-client (enum)
+        ├──generated──► Swift QuotaBar (app-behavior extension)
         └──generated──► protocol TypeScript IDs
 
 apps/menubar/helper ──private IPC──► Swift QuotaBar
@@ -318,6 +329,7 @@ apps/cli ──native CLI──► packages/service
 packages/apple-shared ──presentation──► Swift QuotaBar
 packages/apple-shared ──presentation──► Quota iOS
 packages/apple-shared ──presentation──► QuotaWidgets
+packages/apple-client QuotaWire ──wire types + ProviderID──► Swift QuotaBar
 packages/apple-client ──HTTPS──► Quota iOS (app only)
 packages/apple-client QuotaWidgetData ──App Group snapshot──► QuotaWidgets
 
@@ -333,13 +345,17 @@ protocol + quota-model + relay-core
   lifetime around `packages/service`.
 - `apps/cli` is the Linux-only `quotacli` entry point and owns command parsing/terminal output around
   `packages/service`; its release boundary is the native x86_64 Linux binary.
-- `apps/menubar` keeps private IPC/network-wire decoding separate from SwiftUI views and never reads
-  local service files or provider-owned credentials. It depends on `packages/apple-shared` for
-  presentation text only and must not depend on QuotaWire, QuotaRelay, or QuotaAccount.
-- `packages/apple-shared` owns reusable Apple presentation semantics with scalar inputs. QuotaBar and
-  Quota iOS map their own models onto those inputs. The package does not depend on
-  `packages/apple-client` or either app. QuotaBar local/provider IDs and the released iOS Account
-  `ProviderID` stay in their current owners because their future admissible sets differ.
+- `apps/menubar` keeps private IPC decoding separate from SwiftUI views and never reads local
+  service files or provider-owned credentials. It depends on `packages/apple-shared` for
+  presentation semantics and on QuotaWire for the managed wire types and `ProviderID`; it must not
+  depend on QuotaRelay or QuotaAccount, because the local service owns all Relay traffic for this
+  product. Its own models are the private IPC types, the Usage upload and local-report types, and
+  the generated app-only provider behavior.
+- `packages/apple-shared` owns reusable Apple presentation semantics with scalar inputs, and does not
+  depend on either app. `packages/apple-client` may depend on it so a wire type can answer a
+  presentation question about itself. QuotaWire's `ProviderID` carries only providers that sync to an
+  account; a local-only collector would have no case there and would force QuotaBar's enum to
+  diverge again.
 - `packages/apple-client` owns iOS account-read wire models, PKCE values, the fixed-origin Relay
   client, account session refresh/revoke, last-good Account summary cache, and the Foundation-only
   `QuotaWidgetData` snapshot types/store. `apps/ios` owns SwiftUI, `ASWebAuthenticationSession`, App

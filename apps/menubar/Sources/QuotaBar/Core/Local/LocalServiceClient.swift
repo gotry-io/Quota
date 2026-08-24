@@ -1,4 +1,5 @@
 @preconcurrency import Foundation
+import QuotaWire
 
 enum LocalServiceClientError: LocalizedError, Equatable {
   case serviceMissing

@@ -12,8 +12,9 @@ owns wire decoding, PKCE values, the fixed-origin HTTPS client, session refresh/
 session storage, last-good Account summary cache, and the Foundation-only `QuotaWidgetData`
 snapshot types/store. [`packages/apple-shared`](../../packages/apple-shared)
 owns remaining-quota, plan/account label, compact count, Usage cost, and compact relative-age
-presentation. Views never call `URLSession`, Security, or decode JSON. The iOS app does not share
-ProviderID or wire DTOs with QuotaBar.
+presentation. Views never call `URLSession`, Security, or decode JSON. `QuotaWire` is the one definition of the
+managed wire types and `ProviderID`; QuotaBar reads the same module, so a decoding rule written once
+protects both products.
 
 The embedded `QuotaWidgets` extension (`io.gotry.quota.widgets`) depends only on `QuotaWidgetData`
 and `QuotaPresentation`. It reads the App Group protected snapshot and never imports account wire,

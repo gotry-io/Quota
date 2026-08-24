@@ -11,6 +11,7 @@ let package = Package(
     .executable(name: "QuotaBar", targets: ["QuotaBar"])
   ],
   dependencies: [
+    .package(path: "../../packages/apple-client"),
     .package(path: "../../packages/apple-shared"),
     .package(url: "https://github.com/steipete/SweetCookieKit.git", exact: "0.5.2"),
     .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.9.5"),
@@ -19,6 +20,7 @@ let package = Package(
     .executableTarget(
       name: "QuotaBar",
       dependencies: [
+        .product(name: "QuotaWire", package: "apple-client"),
         .product(name: "QuotaPresentation", package: "apple-shared"),
         .product(name: "SweetCookieKit", package: "SweetCookieKit"),
         .product(name: "Sparkle", package: "Sparkle"),

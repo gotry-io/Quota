@@ -23,6 +23,7 @@ import {
   formatCost,
   formatCount,
   formatDate,
+  observedSnapshotStatusLabel,
   titleCase,
 } from "$lib/format";
 import { deviceHealthStatus } from "$lib/device-health";
@@ -215,7 +216,7 @@ async function loadDay(date: string): Promise<void> {
                 </p>
               </div>
               <span class="status-pill status-{quotaStatus}"
-                >{quotaStatus.replaceAll("_", " ")}</span
+                >{observedSnapshotStatusLabel(quotaStatus)}</span
               >
             </div>
             <QuotaWindows

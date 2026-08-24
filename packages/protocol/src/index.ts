@@ -181,25 +181,24 @@ export const CollectionOutcomeSchema = z.enum([
 ]);
 export type CollectionOutcome = z.infer<typeof CollectionOutcomeSchema>;
 
-const QuotaCollectionSuccessResultSchema = z
-  .object({
-    provider: LocalProviderIdSchema,
-    outcome: z.literal("success"),
-    snapshots: z.array(LocalQuotaSnapshotSchema).min(1).max(MAXIMUM_SNAPSHOTS_PER_ENVELOPE),
-    source: BillingDimensionSchema.optional(),
-    message: z.string().trim().min(1).max(512).optional(),
-  })
-  .strict();
+/** What every collection result carries; the outcome decides what `snapshots` may hold. */
+const QuotaCollectionResultFieldsSchema = z.object({
+  provider: LocalProviderIdSchema,
+  source: BillingDimensionSchema.optional(),
+  message: z.string().trim().min(1).max(512).optional(),
+  /** Local credential sources discovered for this provider; 0 means it is not set up here. */
+  sources: SafeNonnegativeIntegerSchema.optional(),
+});
 
-const QuotaCollectionFailureResultSchema = z
-  .object({
-    provider: LocalProviderIdSchema,
-    outcome: z.enum(["auth_required", "unavailable", "unsupported", "error"]),
-    snapshots: z.array(LocalQuotaSnapshotSchema).max(0),
-    source: BillingDimensionSchema.optional(),
-    message: z.string().trim().min(1).max(512).optional(),
-  })
-  .strict();
+const QuotaCollectionSuccessResultSchema = QuotaCollectionResultFieldsSchema.extend({
+  outcome: z.literal("success"),
+  snapshots: z.array(LocalQuotaSnapshotSchema).min(1).max(MAXIMUM_SNAPSHOTS_PER_ENVELOPE),
+}).strict();
+
+const QuotaCollectionFailureResultSchema = QuotaCollectionResultFieldsSchema.extend({
+  outcome: z.enum(["auth_required", "unavailable", "unsupported", "error"]),
+  snapshots: z.array(LocalQuotaSnapshotSchema).max(0),
+}).strict();
 
 export const QuotaCollectionResultSchema = z
   .discriminatedUnion("outcome", [

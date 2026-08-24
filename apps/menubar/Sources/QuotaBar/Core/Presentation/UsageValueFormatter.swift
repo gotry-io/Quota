@@ -1,5 +1,6 @@
 import Foundation
 import QuotaPresentation
+import QuotaWire
 
 enum UsageValueFormatter {
   static func count(_ value: Int) -> String {

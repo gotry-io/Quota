@@ -148,6 +148,15 @@ value or add a third Overview quota row.
 Expired `valid_until` and explicit stale status use stale presentation. A provider authentication
 failure is a setup task, not a generic network error. Never display collector raw output.
 
+A local collection failure is about this Mac, so an account device's reading fills the row without
+hiding it: the row shows both. A provider this Mac never set up reports no discovered source and
+stays quiet once the account covers it, because there is nothing here to recover.
+
+An account device's reading names why it is not current rather than only that it is not: **Sign-in
+needed**, **Unavailable**, **Unsupported**, **Can’t refresh** for a state its own device reported,
+and **Stale** for a reading that merely aged past `valid_until`. The numbers stay on screen with
+their age, because they remain the last known reading.
+
 Empty Overview recovery says to sign in to a provider CLI or enable an agent in Settings. A failed
 current sync keeps last-known content visible and adds one inline warning.
 

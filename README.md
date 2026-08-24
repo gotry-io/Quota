@@ -23,8 +23,9 @@ prompts, completions, raw events, local paths, and conversation identifiers neve
 Both collection clients expose the same service-owned diagnostics: Linux `quotacli doctor
 [--format text|json] [--pretty]` and the QuotaBar Settings **Diagnostics** action on macOS. The
 v2 report evaluates user-visible Quota/Usage surfaces and explains them with source-scoped checks and
-root-cause findings. Optional setup is healthy/inactive; Account data may fulfill Overview without a
-local provider login, and pending Usage waits normally until a completed upload attempt fails. The
+root-cause findings. Absent setup is healthy/inactive and Account data may fulfill Overview without a local provider
+login, but a local source this device holds and cannot collect stays actionable on both surfaces;
+pending Usage waits normally until a completed upload attempt fails. The
 report uses the last completed refresh boundary and contains only safe provider/agent identities,
 bounded counters, timestamps, impact, and recovery codes. It never includes credentials, tokens,
 local paths or filenames, model lists, raw logs/responses, parser excerpts, prompts, completions,

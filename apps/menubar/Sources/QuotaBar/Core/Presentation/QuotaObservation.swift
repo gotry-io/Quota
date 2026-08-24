@@ -1,4 +1,5 @@
 import Foundation
+import QuotaWire
 
 enum QuotaObservationSource: Equatable, Hashable, Sendable {
   case local
@@ -22,11 +23,6 @@ enum QuotaObservationSource: Equatable, Hashable, Sendable {
   }
 }
 
-struct QuotaObservation: Equatable, Sendable {
-  let snapshot: QuotaSnapshot
-  let source: QuotaObservationSource
-}
-
 struct QuotaSubscriptionIdentity: Equatable, Hashable, Sendable {
   enum Scope: Equatable, Hashable, Sendable {
     case global
@@ -36,12 +32,4 @@ struct QuotaSubscriptionIdentity: Equatable, Hashable, Sendable {
   let provider: ProviderID
   let fingerprint: String
   let scope: Scope
-}
-
-struct ResolvedQuotaSubscription: Equatable, Sendable {
-  let identity: QuotaSubscriptionIdentity
-  let sources: [QuotaObservationSource]
-  let selectedSource: QuotaObservationSource
-  let selectedSnapshot: QuotaSnapshot
-  let isStale: Bool
 }

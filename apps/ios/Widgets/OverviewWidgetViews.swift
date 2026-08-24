@@ -78,10 +78,13 @@ struct OverviewSmallView: View {
 
   private func supportLine(item: WidgetQuotaItem, fetchedAt: Date?) -> Text {
     var parts: [String] = []
+    // A reading that is not current says so even when it still carries a reset time,
+    // because the reset it names may already have passed.
+    if let state = item.stateLabel(now: entry.date) {
+      parts.append(state)
+    }
     if let resetsAt = item.resetsAt {
       parts.append("Resets \(OverviewWidgetContent.resetAge(resetsAt: resetsAt, now: entry.date))")
-    } else if item.isStale(now: entry.date) {
-      parts.append("Stale")
     }
     if let fetchedAt {
       parts.append("Updated \(OverviewWidgetContent.updatedAge(fetchedAt: fetchedAt, now: entry.date))")

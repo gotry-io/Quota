@@ -1,4 +1,5 @@
 import Foundation
+import QuotaWire
 
 /// Catalog-driven Agents visibility (`provider.<id>.visible` in UserDefaults).
 /// Missing keys fall back to `ProviderID.defaultVisible` from the generated catalog.

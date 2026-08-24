@@ -2,6 +2,7 @@
 // Source: packages/provider/catalog.json
 
 import Foundation
+import QuotaWire
 
 struct BrowserSessionSpec: Equatable, Sendable {
   let loginURL: String
@@ -11,32 +12,10 @@ struct BrowserSessionSpec: Equatable, Sendable {
   let exclusive: Bool
 }
 
-enum ProviderID: String, Codable, CaseIterable, Identifiable, Sendable {
-  // Every provider available to the local macOS app, including local-only collectors.
-  case `codex`
-  case `claude`
-  case `grok`
-  case `openrouter`
-  case `deepseek`
-  case `kimi`
-  case `litellm`
-  case `cursor`
-
-  var id: String { rawValue }
-
-  var displayName: String {
-    switch self {
-    case .`codex`: "Codex"
-    case .`claude`: "Claude Code"
-    case .`grok`: "Grok"
-    case .`openrouter`: "OpenRouter"
-    case .`deepseek`: "DeepSeek"
-    case .`kimi`: "Kimi Code"
-    case .`litellm`: "LiteLLM"
-    case .`cursor`: "Cursor"
-    }
-  }
-
+// The cases, id, displayName, and sortOrder come from QuotaWire's ProviderID, which is the
+// same catalog. What follows is behavior only the macOS app has: Settings fields, browser
+// session acquisition, and Agents visibility.
+extension ProviderID {
   /// Menubar Agents toggle default (catalog.default_visible).
   var defaultVisible: Bool {
     switch self {
@@ -75,19 +54,6 @@ enum ProviderID: String, Codable, CaseIterable, Identifiable, Sendable {
     case .`kimi`: "kimi"
     case .`litellm`: "litellm"
     case .`cursor`: "cursor"
-    }
-  }
-
-  var sortOrder: Int {
-    switch self {
-    case .`codex`: 0
-    case .`claude`: 1
-    case .`grok`: 2
-    case .`openrouter`: 3
-    case .`deepseek`: 4
-    case .`kimi`: 5
-    case .`litellm`: 6
-    case .`cursor`: 7
     }
   }
 
@@ -175,22 +141,5 @@ enum ProviderID: String, Codable, CaseIterable, Identifiable, Sendable {
       browserPriority: ["safari", "chrome", "edge", "brave", "arc", "dia", "chromium", "firefox"],
       exclusive: true)
     }
-  }
-
-  var accountSyncProtocol: Int? {
-    switch self {
-    case .`codex`: 2
-    case .`claude`: 2
-    case .`grok`: 2
-    case .`openrouter`: 2
-    case .`deepseek`: 2
-    case .`kimi`: 2
-    case .`litellm`: 2
-    case .`cursor`: 3
-    }
-  }
-
-  func syncsToAccount(protocolVersion: Int) -> Bool {
-    accountSyncProtocol.map { $0 <= protocolVersion } ?? false
   }
 }
