@@ -3,13 +3,9 @@ import QuotaPresentation
 import QuotaWire
 
 enum QuotaFormat {
-  static func remainingPercent(_ window: QuotaWindow) -> Double {
-    RemainingQuotaFormat.remainingPercent(usedPercent: window.usedPercent)
-  }
-
   static func remaining(_ window: QuotaWindow) -> String {
     RemainingQuotaFormat.remaining(
-      remainingPercent: remainingPercent(window),
+      remainingPercent: window.remainingPercent,
       remainingValue: window.remainingValue,
       hasLimit: window.limitValue != nil,
       unit: window.valueUnit?.remainingUnit
@@ -67,16 +63,6 @@ enum QuotaFormat {
   }
 }
 
-extension QuotaValueUnit {
-  fileprivate var remainingUnit: RemainingQuotaUnit {
-    switch self {
-    case .usd: .usd
-    case .credits: .credits
-    case .count: .count
-    }
-  }
-}
-
 extension UsageCostCoverage {
   fileprivate init(_ status: UsageCostStatus) {
     switch status {
@@ -86,3 +72,4 @@ extension UsageCostCoverage {
     }
   }
 }
+

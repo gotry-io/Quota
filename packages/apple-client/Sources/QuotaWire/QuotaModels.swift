@@ -76,12 +76,6 @@ public struct QuotaWindow: Codable, Equatable, Identifiable, Sendable {
   public let limitValue: Double?
   public let valueUnit: QuotaValueUnit?
 
-  public var remainingPercent: Double { 100 - usedPercent }
-
-  public var isBalanceOnly: Bool {
-    remainingValue != nil && limitValue == nil
-  }
-
   public init(
     id: String,
     title: String,
@@ -209,5 +203,49 @@ public struct QuotaSnapshot: Codable, Equatable, Sendable {
 }
 
 extension QuotaSnapshot: QuotaObservationFreshness {
-  public var isAvailable: Bool { status == .available }
+  public var reportedState: QuotaObservationState { status.observationState }
+}
+
+extension QuotaStatus {
+  public var observationState: QuotaObservationState {
+    switch self {
+    case .available: .available
+    case .stale: .stale
+    case .authRequired: .signInNeeded
+    case .unavailable: .unavailable
+    case .unsupported: .unsupported
+    case .error: .failed
+    }
+  }
+}
+
+// Derivations both Apple products need from a window. The rules live in QuotaPresentation;
+// these name them on the type so neither app restates them.
+extension QuotaValueUnit {
+  public var remainingUnit: RemainingQuotaUnit {
+    switch self {
+    case .usd: .usd
+    case .credits: .credits
+    case .count: .count
+    }
+  }
+}
+
+extension QuotaWindow {
+  public var remainingPercent: Double {
+    RemainingQuotaFormat.remainingPercent(usedPercent: usedPercent)
+  }
+
+  /// Wallet-style window: absolute remaining only, no budget/limit ratio.
+  public var isBalanceOnly: Bool {
+    RemainingQuotaFormat.isBalanceOnly(remainingValue: remainingValue, hasLimit: limitValue != nil)
+  }
+
+  /// Rate-limit / budget meters need a percent bar. Balance-only wallets do not.
+  public var showsPercentMeter: Bool {
+    RemainingQuotaFormat.showsPercentMeter(
+      remainingValue: remainingValue,
+      hasLimit: limitValue != nil
+    )
+  }
 }

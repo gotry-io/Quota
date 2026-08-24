@@ -1,4 +1,4 @@
-import type { UsageCostOutcome } from "@gotry-io/quota-protocol";
+import type { QuotaStatus, UsageCostOutcome } from "@gotry-io/quota-protocol";
 
 export const WEB_LOCALE = "en-US";
 
@@ -112,4 +112,27 @@ export function safeAdd(...values: number[]): number {
 export function activityLevel(value: number, maximum: number): number {
   if (value <= 0 || maximum <= 0) return 0;
   return Math.min(4, Math.ceil((value / maximum) * 4));
+}
+
+/**
+ * The words the dashboard shows for an observation status.
+ *
+ * A source that cannot read is the same problem wherever it runs, so these match what the
+ * Apple clients say about a failure on the machine in front of you.
+ */
+export function observedSnapshotStatusLabel(status: QuotaStatus): string {
+  switch (status) {
+    case "available":
+      return "Available";
+    case "stale":
+      return "Stale";
+    case "auth_required":
+      return "Sign-in needed";
+    case "unavailable":
+      return "Unavailable";
+    case "unsupported":
+      return "Unsupported";
+    case "error":
+      return "Can’t refresh";
+  }
 }

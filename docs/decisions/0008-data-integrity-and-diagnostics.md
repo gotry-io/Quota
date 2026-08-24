@@ -77,10 +77,13 @@ Diagnostic intent follows product behavior:
 
 - **Show in Overview** is a Swift presentation preference only. It never opts this device into local
   collection and never changes diagnostic mode.
-- Account-sourced provider observations can fully satisfy Quota Overview. A local collector without
-  explicit configuration is opportunistic, so a local authentication failure may be useful info but
-  does not degrade a current Account-backed surface. Explicit saved local configuration makes that
-  source required and its failure actionable. No local providers or credentials is healthy/empty.
+- Account-sourced provider observations can fully satisfy Quota Overview, but they do not answer for
+  this device. A local source this device discovered and could not collect is actionable however it
+  was set up, because Overview reports that failure rather than hiding it behind another device's
+  reading; explicit configuration decides `mode`, not whether the failure counts. Such a failure
+  raises attention without degrading `operation`, since the device itself is still working. A
+  provider with no discovered source and no explicit configuration is absent setup, stays unreported,
+  and no local providers or credentials is healthy/empty.
 - Signed-out Account state and disabled Usage upload are inactive/healthy. A closed dirty range or
   outbox entry that is waiting for the next scheduler opportunity is normal automatic work, not a
   failed upload. Only a recorded completed attempt that failed, was rejected, or found an

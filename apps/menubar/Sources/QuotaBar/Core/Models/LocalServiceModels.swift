@@ -1,4 +1,5 @@
 import Foundation
+import QuotaWire
 
 enum LocalServiceComponentStatus: String, Decodable, Sendable {
   case ready

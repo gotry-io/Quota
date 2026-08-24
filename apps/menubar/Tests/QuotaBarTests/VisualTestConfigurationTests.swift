@@ -1,5 +1,6 @@
 #if DEBUG
   import Foundation
+  import QuotaWire
   import Testing
 
   @testable import QuotaBar

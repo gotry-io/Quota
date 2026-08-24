@@ -1,4 +1,5 @@
 import Foundation
+import QuotaPresentation
 
 /// User-facing provider status. Protocol outcomes stay richer; UI collapses to these.
 enum ProviderStatusKind: Equatable {
@@ -19,11 +20,15 @@ struct ProviderStatusCopy: Equatable {
   let accessibilityLabel: String
 
   static func from(result: QuotaCollectionResult) -> ProviderStatusCopy? {
+    let kind: ProviderStatusKind
+    let state: QuotaObservationState
+    var detailFallback: String?
     switch result.outcome {
     case .success:
       return nil
     case .authRequired:
       // A rejected sign-in explains itself; an absent one is setup that never happened.
+      // Recovery is the whole message, so this one carries no title.
       let detail = conciseMessage(result.message) ?? "Account setup required."
       return ProviderStatusCopy(
         kind: .needsSignIn,
@@ -32,36 +37,25 @@ struct ProviderStatusCopy: Equatable {
         accessibilityLabel: detail
       )
     case .unavailable:
-      return ProviderStatusCopy(
-        kind: .unavailable,
-        title: "Unavailable",
-        detail: conciseMessage(result.message),
-        accessibilityLabel: accessibility(
-          title: "Unavailable",
-          detail: conciseMessage(result.message)
-        )
-      )
+      kind = .unavailable
+      state = .unavailable
     case .unsupported:
-      return ProviderStatusCopy(
-        kind: .unavailable,
-        title: "Unavailable",
-        detail: conciseMessage(result.message) ?? "Not supported here.",
-        accessibilityLabel: accessibility(
-          title: "Unavailable",
-          detail: conciseMessage(result.message) ?? "Not supported here."
-        )
-      )
+      kind = .unavailable
+      state = .unavailable
+      detailFallback = "Not supported here."
     case .error:
-      return ProviderStatusCopy(
-        kind: .cantRefresh,
-        title: "Can’t Refresh",
-        detail: conciseMessage(result.message),
-        accessibilityLabel: accessibility(
-          title: "Can’t Refresh",
-          detail: conciseMessage(result.message)
-        )
-      )
+      kind = .cantRefresh
+      state = .failed
     }
+    // One spelling for one word: the same failure can appear as this row's status and as an
+    // account device's observation state in the same block.
+    let detail = conciseMessage(result.message) ?? detailFallback
+    return ProviderStatusCopy(
+      kind: kind,
+      title: state.label,
+      detail: detail,
+      accessibilityLabel: accessibility(title: state.label, detail: detail)
+    )
   }
 
   static func conciseMessage(_ message: String?) -> String? {

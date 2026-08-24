@@ -1,4 +1,5 @@
 import QuotaPresentation
+import QuotaWire
 import SwiftUI
 
 struct ProviderQuotaView: View {
@@ -97,7 +98,7 @@ private struct AccountQuotaView: View {
         QuotaWindowRow(
           window: window,
           provider: presentation.snapshot.provider,
-          isStale: presentation.isStale
+          isStale: presentation.state != .available
         )
       }
 
@@ -151,13 +152,18 @@ private struct AccountQuotaView: View {
     .foregroundStyle(emphasizesMetadata ? QuotaPalette.body : QuotaPalette.mute)
   }
 
+  private var stateLabel: String? {
+    presentation.state == .available ? nil : presentation.state.label
+  }
+
   private var observationLabel: String {
-    presentation.isStale ? "Stale · \(observedAge) ago" : "\(observedAge) ago"
+    [stateLabel, "\(observedAge) ago"].compactMap { $0 }.joined(separator: " · ")
   }
 
   private var observationAccessibilityLabel: String {
     let observed = presentation.snapshot.observedAt.formatted(.relative(presentation: .named))
-    return presentation.isStale ? "Stale data. Observed \(observed)" : "Observed \(observed)"
+    guard let stateLabel else { return "Observed \(observed)" }
+    return "\(stateLabel). Observed \(observed)"
   }
 
   private var observedAge: String {

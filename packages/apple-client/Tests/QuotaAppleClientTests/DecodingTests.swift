@@ -41,7 +41,7 @@ struct DecodingTests {
     #expect(summary.protocolVersion == 3)
     #expect(summary.account.displayLabel == "octocat")
     #expect(summary.quota.first?.snapshot.provider == .codex)
-    #expect(summary.quota.first?.snapshot.windows.first?.remainingPercent == 71)
+    #expect(summary.quota.first?.snapshot.windows.first?.usedPercent == 29)
     #expect(summary.usage.cost.amountMicrousd == "3138")
 
     var extra = try JSONSerialization.jsonObject(with: data) as! [String: Any]

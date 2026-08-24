@@ -1,3 +1,4 @@
+import QuotaWire
 import SwiftUI
 
 struct MenuBarContentView: View {

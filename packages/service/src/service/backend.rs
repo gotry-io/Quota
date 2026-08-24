@@ -604,13 +604,9 @@ impl NativeBackend {
                         Some(&subject),
                     )
                     .map_err(|_| BackendError::unavailable())?;
-                let discovered = attempt_facts
-                    .latest_completed
-                    .as_ref()
-                    .and_then(|attempt| attempt.metrics.get("sources"))
-                    .copied()
-                    .unwrap_or(0)
-                    > 0;
+                // From the report in hand, which is the collection this check explains. The
+                // journal answers when it ran, not what it found.
+                let discovered = result.get("sources").and_then(Value::as_u64).unwrap_or(0) > 0;
                 if !explicit && !discovered {
                     continue;
                 }
@@ -660,24 +656,16 @@ impl NativeBackend {
                         "unavailable" => "unavailable",
                         _ => "provider_error",
                     };
+                    // A source this device holds and cannot use is actionable however it
+                    // was set up. Only absent setup is quiet, and it never reaches here.
                     findings.push(DiagnosticFinding {
                         component: "quota_collection".into(),
                         source: DiagnosticSource::ThisDevice,
                         subject: Some(subject),
                         code: code.into(),
-                        severity: if explicit {
-                            DiagnosticSeverity::Warning
-                        } else {
-                            DiagnosticSeverity::Info
-                        },
-                        impact: if explicit {
-                            DiagnosticImpact::Source
-                        } else {
-                            DiagnosticImpact::None
-                        },
-                        recovery: if !explicit {
-                            DiagnosticRecovery::None
-                        } else if code == "auth_required" {
+                        severity: DiagnosticSeverity::Warning,
+                        impact: DiagnosticImpact::Source,
+                        recovery: if code == "auth_required" {
                             DiagnosticRecovery::ConfigureProvider
                         } else {
                             DiagnosticRecovery::Retry
@@ -691,7 +679,7 @@ impl NativeBackend {
                         message: if explicit {
                             "Configured collection on this device did not produce quota data."
                         } else {
-                            "An opportunistically discovered local source could not be collected."
+                            "A local source this device discovered could not be collected."
                         }
                         .into(),
                     });
@@ -1439,7 +1427,7 @@ impl NativeBackend {
         let attempts = attempts?;
         let cancelled = cancel.load(Ordering::Acquire);
         let mut results = Vec::with_capacity(attempts.len());
-        for (_, mode, handle, source_count, result, panicked) in attempts {
+        for (_, mode, handle, source_count, mut result, panicked) in attempts {
             let snapshot_count = result
                 .get("snapshots")
                 .and_then(Value::as_array)
@@ -1494,6 +1482,9 @@ impl NativeBackend {
                     metrics([("sources", source_count), ("snapshots", snapshot_count)]),
                 )?;
             }
+            // Stamped here, with the count this loop already journals, so no collector
+            // return path can forget it — a panicked one included.
+            result["sources"] = json!(source_count);
             results.push(result);
         }
         if cancel.load(Ordering::Acquire) {
@@ -2348,12 +2339,7 @@ impl NativeBackend {
                         .get("provider")
                         .and_then(Value::as_str)
                         .and_then(ProviderId::parse)
-                        .is_some_and(|provider| {
-                            provider
-                                .metadata()
-                                .account_sync_protocol
-                                .is_some_and(|version| version <= 3)
-                        })
+                        .is_some_and(|provider| provider.syncs_to_account(3))
                     {
                         continue;
                     }
@@ -2389,6 +2375,61 @@ impl NativeBackend {
         });
         items
     }
+}
+
+/// This device's own readings, restated with the status its latest collection found.
+///
+/// A failed collection produces no snapshot, so without this the account keeps serving the
+/// last good reading and no other device can tell that the source behind it stopped
+/// working. Every reader already treats a status other than `available` as not current, so
+/// restating is what turns a local detection into a cross-device fact instead of one that
+/// other devices have to wait out. The reading itself is untouched, `observed_at`
+/// included: the numbers really are as old as they were.
+fn failure_status_snapshots(
+    report: &Value,
+    account: Option<&Value>,
+    device_id: &str,
+) -> Vec<Value> {
+    let failed = report
+        .get("results")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|result| {
+            let provider = result.get("provider")?.as_str()?;
+            // A failed outcome names the same word a snapshot status uses.
+            let status = result.get("outcome")?.as_str()?;
+            matches!(
+                status,
+                "auth_required" | "unavailable" | "unsupported" | "error"
+            )
+            .then_some((provider, status))
+        })
+        .collect::<Vec<_>>();
+    if failed.is_empty() {
+        return Vec::new();
+    }
+    account
+        .and_then(|value| value.get("account_summary"))
+        .and_then(|value| value.get("quota"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|observation| {
+            observation.get("device_id").and_then(Value::as_str) == Some(device_id)
+        })
+        .filter_map(|observation| {
+            let snapshot = observation.get("snapshot")?;
+            let provider = snapshot.get("provider")?.as_str()?;
+            let (_, status) = failed.iter().find(|(failed, _)| *failed == provider)?;
+            // Already restated; saying it again rewrites the row and spends a sequence.
+            (snapshot.get("status").and_then(Value::as_str) != Some(status)).then(|| {
+                let mut restated = snapshot.clone();
+                restated["status"] = Value::String((*status).to_owned());
+                restated
+            })
+        })
+        .collect()
 }
 
 fn collect_discovered_provider(
@@ -2710,6 +2751,18 @@ impl LocalBackend for NativeBackend {
                 overview: None,
             };
         }
+        // One read for the two things that need last refresh's account: restating this
+        // device's failed readings before the upload, and filling the Overview after it.
+        let stored_account = quota_value
+            .is_ok()
+            .then(|| {
+                self.state
+                    .component(crate::protocol::ComponentName::Account)
+                    .ok()
+                    .flatten()
+                    .and_then(|component| component.value)
+            })
+            .flatten();
         let mut account_value: Result<Value, BackendError> = Err(BackendError {
             error: IpcError::new(ErrorCode::AuthenticationRequired, RecoveryAction::Login),
         });
@@ -2737,10 +2790,21 @@ impl LocalBackend for NativeBackend {
                             let mut account_sync_error = None;
                             let mut attempt_journal_error = None;
                             let mut stage_blocked = false;
-                            if let Ok(quota_payload) = &quota_value
-                                && let Err(error) = self.account.upload_quota_report(quota_payload)
-                            {
-                                record_account_sync_error(&mut account_sync_error, error);
+                            if let Ok(quota_payload) = &quota_value {
+                                let device_id = current_session
+                                    .get("device_id")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or_default();
+                                let restated = failure_status_snapshots(
+                                    quota_payload,
+                                    stored_account.as_ref(),
+                                    device_id,
+                                );
+                                if let Err(error) =
+                                    self.account.upload_quota_report(quota_payload, &restated)
+                                {
+                                    record_account_sync_error(&mut account_sync_error, error);
+                                }
                             }
                             let usage_upload_enabled = match self.state.usage_upload_enabled() {
                                 Ok(enabled) => enabled,
@@ -2959,12 +3023,6 @@ impl LocalBackend for NativeBackend {
             Err(_) => account_value = Err(BackendError::unavailable()),
         }
         if let Ok(ref quota_payload) = quota_value {
-            let stored_account = self
-                .state
-                .component(crate::protocol::ComponentName::Account)
-                .ok()
-                .flatten()
-                .and_then(|component| component.value);
             let account_for_overview = account_value.as_ref().ok().cloned().or(stored_account);
             overview = Some(self.build_overview(quota_payload, account_for_overview.as_ref()));
         }
@@ -3986,11 +4044,13 @@ mod tests {
             .expect("quota results")
         {
             let result = result.as_object().expect("quota result object");
-            assert_eq!(result.len(), 3);
+            assert_eq!(result.len(), 4);
             assert!(result.contains_key("provider"));
             assert!(result.contains_key("outcome"));
             assert!(result.contains_key("snapshots"));
-            assert!(!result.contains_key("sources"));
+            // An isolated home has no credentials, so every provider reports that it was
+            // never set up here rather than that collection failed here.
+            assert_eq!(result.get("sources").and_then(Value::as_u64), Some(0));
         }
         assert!(state.session_json().expect("session state").is_none());
         drop(backend);
@@ -4241,6 +4301,57 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_collection_republishes_this_devices_reading_as_failed() {
+        let reading = |status: &str| {
+            serde_json::json!({
+                "device_id": "device_self",
+                "snapshot": {
+                    "provider": "codex",
+                    "account": {"fingerprint": "account", "fingerprint_scope": "global"},
+                    "windows": [{"id": "monthly", "title": "Monthly", "used_percent": 0.0}],
+                    "source": "chatgpt_usage_api",
+                    "status": status,
+                    "observed_at": "2026-08-22T14:51:36Z"
+                }
+            })
+        };
+        let summary =
+            |observations: Value| serde_json::json!({"account_summary": {"quota": observations}});
+        let report = serde_json::json!({
+            "results": [
+                {"provider": "codex", "outcome": "auth_required", "snapshots": [], "sources": 1},
+                {"provider": "claude", "outcome": "success", "snapshots": []}
+            ]
+        });
+
+        let account = summary(serde_json::json!([
+            reading("available"),
+            // Another device's reading of the same provider is not this device's to speak for.
+            {"device_id": "device_other", "snapshot": reading("available")["snapshot"]}
+        ]));
+        let republished = failure_status_snapshots(&report, Some(&account), "device_self");
+        assert_eq!(republished.len(), 1);
+        assert_eq!(
+            republished[0].get("status").and_then(Value::as_str),
+            Some("auth_required")
+        );
+        // The numbers and their age are untouched; only what the source can do changed.
+        assert_eq!(
+            republished[0].get("observed_at").and_then(Value::as_str),
+            Some("2026-08-22T14:51:36Z")
+        );
+
+        // Once published, saying it again would rewrite the row and spend a sequence.
+        let published = summary(serde_json::json!([reading("auth_required")]));
+        assert!(failure_status_snapshots(&report, Some(&published), "device_self").is_empty());
+
+        // A provider this device never uploaded has nothing to republish.
+        let empty = summary(serde_json::json!([]));
+        assert!(failure_status_snapshots(&report, Some(&empty), "device_self").is_empty());
+        assert!(failure_status_snapshots(&report, None, "device_self").is_empty());
+    }
+
+    #[test]
     fn rejected_local_sign_in_is_reported_separately_from_missing_setup() {
         let context = CollectionContext {
             home_directory: PathBuf::from("/tmp/quota-rejected-sign-in-missing-home"),
@@ -4390,7 +4501,7 @@ mod tests {
     }
 
     #[test]
-    fn account_quota_masks_opportunistic_local_auth_failure() {
+    fn a_discovered_local_source_that_failed_is_actionable_even_with_account_data() {
         let root = std::env::temp_dir().join(format!("quota-diagnostics-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).expect("root");
         let state = Arc::new(StateStore::open(&root).expect("state"));
@@ -4420,7 +4531,7 @@ mod tests {
                 crate::protocol::ComponentName::Quota,
                 crate::protocol::ComponentStatus::Ready,
                 Some(json!({"results":[{
-                    "provider":"codex","outcome":"auth_required","snapshots":[]
+                    "provider":"codex","outcome":"auth_required","snapshots":[],"sources":1
                 }]})),
                 Some("2026-08-15T08:00:00Z".into()),
                 None,
@@ -4456,13 +4567,17 @@ mod tests {
             "test",
         );
         let report = backend.diagnostic_report().expect("diagnostics");
-        assert_eq!(report.summary.operation, DiagnosticOperation::Healthy);
+        // Another device's reading keeps the surface current and the device itself is
+        // working, so operation stays healthy. But this Mac holds a sign-in it cannot use,
+        // which Overview now says out loud, so Diagnose cannot report nothing to do.
         assert_eq!(report.summary.data, DiagnosticDataState::Current);
+        assert_eq!(report.summary.operation, DiagnosticOperation::Healthy);
+        assert_eq!(report.summary.attention, DiagnosticAttention::Required);
         assert!(report.findings.iter().any(|finding| {
             finding.subject.as_deref() == Some("provider:codex")
-                && finding.severity == DiagnosticSeverity::Info
-                && finding.impact == DiagnosticImpact::None
-                && finding.recovery == DiagnosticRecovery::None
+                && finding.severity == DiagnosticSeverity::Warning
+                && finding.impact == DiagnosticImpact::Source
+                && finding.recovery == DiagnosticRecovery::ConfigureProvider
         }));
         let serialized = serde_json::to_string(&report).expect("serialize");
         assert!(!serialized.contains("redacted-in-report"));
@@ -4483,7 +4598,7 @@ mod tests {
                 crate::protocol::ComponentName::Quota,
                 crate::protocol::ComponentStatus::Ready,
                 Some(json!({"results":[{
-                    "provider":"openrouter","outcome":"auth_required","snapshots":[]
+                    "provider":"openrouter","outcome":"auth_required","snapshots":[],"sources":0
                 }]})),
                 Some("2026-08-15T08:00:00Z".into()),
                 None,

@@ -165,7 +165,7 @@ struct WidgetSnapshotProjectionTests {
   }
 
   @Test
-  func mapsTodayCostAndReportedStatus() throws {
+  func mapsTodayCostAndTheReportedState() throws {
     let summary = try decodeSummary(
       quota: [
         observation(
@@ -183,7 +183,7 @@ struct WidgetSnapshotProjectionTests {
       summary: summary,
       fetchedAt: date("2026-08-14T16:00:00Z")
     )
-    #expect(snapshot.items.first?.isAvailable == false)
+    #expect(snapshot.items.first?.state == .stale)
     #expect(snapshot.today.inputTokens == 1000)
     #expect(snapshot.today.outputTokens == 200)
     #expect(snapshot.today.cost.status == .complete)
@@ -207,11 +207,35 @@ struct WidgetSnapshotProjectionTests {
     )
     let item = try #require(WidgetSnapshotProjection.projectItems(from: summary.quota).first)
 
-    #expect(item.isAvailable)
+    #expect(item.state == .available)
     #expect(item.validUntil == date("2026-08-14T16:00:00Z"))
     // The widget re-renders long after the app published this.
-    #expect(item.isStale(now: date("2026-08-14T16:00:01Z")))
-    #expect(!item.isStale(now: date("2026-08-14T15:59:59Z")))
+    #expect(item.stateLabel(now: date("2026-08-14T16:00:01Z")) == "Stale")
+    #expect(item.stateLabel(now: date("2026-08-14T15:59:59Z")) == nil)
+  }
+
+  @Test
+  func aReportedFailureReachesTheWidgetAsItsOwnWord() throws {
+    let summary = try decodeSummary(
+      quota: [
+        observation(
+          provider: "codex",
+          fingerprint: "fp_codex_01",
+          windowID: "monthly",
+          title: "Monthly",
+          usedPercent: 0,
+          status: "auth_required",
+          validUntil: "2099-01-01T00:00:00Z",
+          updatedAt: "2026-08-14T15:00:00Z"
+        )
+      ]
+    )
+    let item = try #require(WidgetSnapshotProjection.projectItems(from: summary.quota).first)
+
+    // The wire status, the payload state, and the shared vocabulary have to agree; the
+    // reading has not aged out, so only what the source reported can say otherwise.
+    #expect(item.state == .signInNeeded)
+    #expect(item.observedState(now: date("2026-08-14T16:00:00Z")) == .signInNeeded)
   }
 
   @Test

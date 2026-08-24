@@ -1,37 +1,8 @@
 import Foundation
 import QuotaPresentation
-
-extension QuotaValueUnit {
-  var remainingUnit: RemainingQuotaUnit {
-    switch self {
-    case .usd: .usd
-    case .credits: .credits
-    case .count: .count
-    }
-  }
-}
+import QuotaWire
 
 extension QuotaWindow {
-  var remainingPercent: Double {
-    RemainingQuotaFormat.remainingPercent(usedPercent: usedPercent)
-  }
-
-  /// Wallet-style window: absolute remaining only, no budget/limit ratio.
-  var isBalanceOnly: Bool {
-    RemainingQuotaFormat.isBalanceOnly(
-      remainingValue: remainingValue,
-      hasLimit: limitValue != nil
-    )
-  }
-
-  /// Rate-limit / budget meters need a percent bar. Balance-only wallets do not.
-  var showsPercentMeter: Bool {
-    RemainingQuotaFormat.showsPercentMeter(
-      remainingValue: remainingValue,
-      hasLimit: limitValue != nil
-    )
-  }
-
   /// Absolute remaining when `value_unit`/`remaining_value` are present.
   /// Balance-only rows without a unit (e.g. DeepSeek CNY) still show the number.
   var absoluteRemainingLabel: String? {

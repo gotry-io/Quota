@@ -314,6 +314,15 @@ impl ProviderId {
             Self::Cursor => &PROVIDER_CATALOG[7],
         }
     }
+
+    /// Whether a managed-data protocol version accepts this provider. Mirrors the Swift
+    /// `ProviderID.syncsToAccount(protocolVersion:)` so one rule carries one name per language.
+    pub const fn syncs_to_account(self, protocol_version: u8) -> bool {
+        match self.metadata().account_sync_protocol {
+            Some(version) => version <= protocol_version,
+            None => false,
+        }
+    }
 }
 
 #[cfg(test)]

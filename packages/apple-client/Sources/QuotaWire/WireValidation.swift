@@ -5,11 +5,11 @@ public enum WireValidation {
     isWireIdentifier(value, maximum: 128, includesPlus: false)
   }
 
-  static func isBillingDimension(_ value: String, maximum: Int = 64) -> Bool {
+  public static func isBillingDimension(_ value: String, maximum: Int = 64) -> Bool {
     isWireIdentifier(value, maximum: maximum, includesPlus: true)
   }
 
-  static func isTrimmedText(_ value: String, maximum: Int) -> Bool {
+  public static func isTrimmedText(_ value: String, maximum: Int) -> Bool {
     !value.isEmpty && value.count <= maximum
       && value == value.trimmingCharacters(in: .whitespacesAndNewlines)
   }
@@ -45,7 +45,7 @@ public enum WireValidation {
     return formatter.date(from: value).map { formatter.string(from: $0) == value } ?? false
   }
 
-  static func isUTCHour(_ value: String) -> Date? {
+  public static func isUTCHour(_ value: String) -> Date? {
     guard value.count == 20, value.hasSuffix(":00:00Z") else { return nil }
     let formatter = ISO8601DateFormatter()
     formatter.formatOptions = [.withInternetDateTime]
@@ -55,21 +55,21 @@ public enum WireValidation {
     return instant
   }
 
-  static func isNonnegativeInteger(_ value: String) -> Bool {
+  public static func isNonnegativeInteger(_ value: String) -> Bool {
     guard !value.isEmpty, value.count <= 32,
       value.utf8.allSatisfy({ (48...57).contains($0) })
     else { return false }
     return value == "0" || value.first != "0"
   }
 
-  static func isModel(_ value: String) -> Bool {
+  public static func isModel(_ value: String) -> Bool {
     guard !value.isEmpty, value.unicodeScalars.count <= 128 else { return false }
     return value.unicodeScalars.allSatisfy { scalar in
       !((0...31).contains(scalar.value) || (127...159).contains(scalar.value))
     }
   }
 
-  static func isTimezone(_ value: String) -> Bool {
+  public static func isTimezone(_ value: String) -> Bool {
     guard !value.isEmpty, value.count <= 64 else { return false }
     return value.split(separator: "/", omittingEmptySubsequences: false).allSatisfy { component in
       !component.isEmpty
@@ -79,7 +79,7 @@ public enum WireValidation {
     }
   }
 
-  static func safeSum(_ values: [Int]) -> Int? {
+  public static func safeSum(_ values: [Int]) -> Int? {
     var total = 0
     for value in values {
       let (next, overflow) = total.addingReportingOverflow(value)
@@ -89,11 +89,11 @@ public enum WireValidation {
     return total
   }
 
-  static func isSafeNonnegative(_ value: Int) -> Bool {
+  public static func isSafeNonnegative(_ value: Int) -> Bool {
     (0...WireCodec.jsonSafeIntegerMaximum).contains(value)
   }
 
-  static func isSafePositive(_ value: Int) -> Bool {
+  public static func isSafePositive(_ value: Int) -> Bool {
     (1...WireCodec.jsonSafeIntegerMaximum).contains(value)
   }
 

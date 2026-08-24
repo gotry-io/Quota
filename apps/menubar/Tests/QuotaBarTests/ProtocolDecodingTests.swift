@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import QuotaWire
 import Testing
 
 @testable import QuotaBar
@@ -800,89 +801,6 @@ func decodesCursorBillingAgent() throws {
 }
 
 @Test
-func decodesQuotaSnapshotEnvelope() throws {
-  let data = Data(
-    #"""
-    {
-      "protocol_version": 3,
-      "device_id": "device_01",
-      "generation": 3,
-      "sequence": 1,
-      "captured_at": "2026-08-02T01:00:00Z",
-      "snapshots": [{
-        "provider": "codex",
-        "account": {
-          "fingerprint": "account_01",
-          "fingerprint_scope": "global"
-        },
-        "windows": [{
-          "id": "five_hour",
-          "title": "5 hour",
-          "used_percent": 20
-        }],
-        "source": "codex_api",
-        "status": "available",
-        "observed_at": "2026-08-02T01:00:00Z"
-      }]
-    }
-    """#.utf8
-  )
-
-  let envelope = try QuotaWireCodec.makeDecoder().decode(QuotaSnapshotEnvelope.self, from: data)
-
-  #expect(envelope.deviceID == "device_01")
-  #expect(envelope.generation == 3)
-  #expect(envelope.snapshots.first?.provider == .codex)
-  #expect(envelope.snapshots.first?.account.fingerprintScope == .global)
-}
-
-@Test
-func rejectsQuotaSnapshotWithoutFingerprintScope() {
-  let data = Data(
-    #"""
-    {
-      "protocol_version": 3,
-      "device_id": "device_01",
-      "generation": 3,
-      "sequence": 1,
-      "captured_at": "2026-08-02T01:00:00Z",
-      "snapshots": [{
-        "provider": "codex",
-        "account": { "fingerprint": "account_01" },
-        "windows": [],
-        "source": "codex_api",
-        "status": "available",
-        "observed_at": "2026-08-02T01:00:00Z"
-      }]
-    }
-    """#.utf8
-  )
-
-  #expect(throws: DecodingError.self) {
-    _ = try QuotaWireCodec.makeDecoder().decode(QuotaSnapshotEnvelope.self, from: data)
-  }
-}
-
-@Test
-func includesCursorInTheManagedAccountEnum() throws {
-  let snapshot =
-    #"{"provider":"cursor","account":{"fingerprint":"account_01","fingerprint_scope":"global"},"windows":[],"source":"cursor_dashboard_api","status":"available","observed_at":"2026-08-02T01:00:00Z"}"#
-  let envelope = Data(
-    #"{"protocol_version":3,"device_id":"device_01","generation":1,"sequence":0,"captured_at":"2026-08-02T01:00:00Z","snapshots":[\#(snapshot)]}"#
-      .utf8)
-  let decodedEnvelope = try QuotaWireCodec.makeDecoder().decode(
-    QuotaSnapshotEnvelope.self, from: envelope)
-  #expect(decodedEnvelope.snapshots.first?.provider == .cursor)
-
-  let localReport = Data(
-    #"{"protocol_version":2,"captured_at":"2026-08-02T01:00:00Z","results":[{"provider":"cursor","outcome":"success","snapshots":[\#(snapshot)],"source":"cursor_dashboard_api"}]}"#
-      .utf8)
-  let decoded = try QuotaWireCodec.makeDecoder().decode(
-    QuotaCollectionReport.self, from: localReport)
-  #expect(decoded.results.first?.provider == .cursor)
-}
-
-@Test
 func decodesCollectionReportAndCalculatesRemainingQuota() throws {
   let data = Data(
     #"""
@@ -946,25 +864,6 @@ func rejectsCollectionResultWithoutSnapshots() {
 
   #expect(throws: DecodingError.self) {
     try QuotaWireCodec.makeDecoder().decode(QuotaCollectionReport.self, from: data)
-  }
-}
-
-@Test
-func rejectsLegacyQuotaEnvelopeVersionAndFieldName() {
-  let data = Data(
-    #"""
-    {
-      "schema_version": 1,
-      "device_id": "device_01",
-      "sequence": 1,
-      "captured_at": "2026-08-02T01:00:00Z",
-      "snapshots": []
-    }
-    """#.utf8
-  )
-
-  #expect(throws: DecodingError.self) {
-    _ = try QuotaWireCodec.makeDecoder().decode(QuotaSnapshotEnvelope.self, from: data)
   }
 }
 
@@ -1175,4 +1074,22 @@ func decodesVersionedPricingCatalogWithoutRequiringBuiltInEntries() throws {
   let catalog = try QuotaWireCodec.makeDecoder().decode(PricingCatalog.self, from: data)
   #expect(catalog.entries.first?.rates.uncachedInputPerMillion == "1.25")
   #expect(catalog.entries.first?.sourceURL.scheme == "https")
+}
+
+@Test
+func aReportPersistedByAnEarlierBuildDecodesWithoutTheSourceCount() throws {
+  let data = Data(
+    #"""
+    {
+      "protocol_version": 2,
+      "captured_at": "2026-08-02T01:00:00Z",
+      "results": [{ "provider": "codex", "outcome": "unavailable", "snapshots": [] }]
+    }
+    """#.utf8
+  )
+
+  let report = try QuotaWireCodec.makeDecoder().decode(QuotaCollectionReport.self, from: data)
+
+  // The service always stamps it now; SQLite can still hold a report that predates it.
+  #expect(report.results.first?.sources == nil)
 }

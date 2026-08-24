@@ -1,5 +1,6 @@
 import Foundation
 import QuotaPresentation
+import QuotaWire
 import SwiftUI
 
 private enum AccountDevicesPageState: Equatable {

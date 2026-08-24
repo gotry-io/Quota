@@ -1,71 +1,5 @@
 import Foundation
-
-private let jsonSafeIntegerMaximum = 9_007_199_254_740_991
-
-private func decodeTrueMarker<Key: CodingKey>(
-  _ key: Key,
-  from container: KeyedDecodingContainer<Key>
-) throws -> Bool? {
-  guard container.contains(key) else { return nil }
-  guard try container.decode(Bool.self, forKey: key) else {
-    throw DecodingError.dataCorruptedError(
-      forKey: key,
-      in: container,
-      debugDescription: "Truncation markers must be true."
-    )
-  }
-  return true
-}
-
-enum BillingAgent: String, Codable, Sendable {
-  case codex
-  case claudeCode = "claude_code"
-  case grok
-  case opencode
-  case pi
-  case cursor
-}
-
-enum BillingChannel: String, Codable, Sendable {
-  case openaiDirect = "openai_direct"
-  case azureOpenAI = "azure_openai"
-  case anthropicDirect = "anthropic_direct"
-  case awsBedrock = "aws_bedrock"
-  case googleVertex = "google_vertex"
-  case openrouter
-  case xaiDirect = "xai_direct"
-  case moonshotDirect = "moonshot_direct"
-  case deepseekDirect = "deepseek_direct"
-  case unknown
-}
-
-enum InferenceProvider: String, Codable, Sendable {
-  case openai
-  case azureOpenAI = "azure_openai"
-  case anthropic
-  case awsBedrock = "aws_bedrock"
-  case googleVertex = "google_vertex"
-  case openrouter
-  case xai
-  case moonshot
-  case deepseek
-  case unknown
-
-  var displayName: String {
-    switch self {
-    case .openai: "OpenAI"
-    case .azureOpenAI: "Azure OpenAI"
-    case .anthropic: "Anthropic"
-    case .awsBedrock: "AWS Bedrock"
-    case .googleVertex: "Google Vertex AI"
-    case .openrouter: "OpenRouter"
-    case .xai: "xAI"
-    case .moonshot: "Moonshot AI"
-    case .deepseek: "DeepSeek"
-    case .unknown: "Unknown Provider"
-    }
-  }
-}
+import QuotaWire
 
 enum ChannelSource: String, Codable, Sendable {
   case explicit
@@ -79,11 +13,6 @@ enum ContextBucket: String, Codable, Sendable {
   case gt200kLe256k = "gt_200k_le_256k"
   case gt256kLe272k = "gt_256k_le_272k"
   case gt272k = "gt_272k"
-}
-
-enum CoverageStatus: String, Codable, Sendable {
-  case complete
-  case partial
 }
 
 struct UsageCoverage: Codable, Equatable, Sendable {
@@ -190,12 +119,12 @@ struct UsageHourlyFact: Codable, Equatable, Sendable {
       webFetchRequests, sourceCostCoveredRequests,
     ]
     guard UsageCoverage.utcHour(bucketStartUTC) != nil,
-      isUsageDate(usageDate),
+      WireValidation.isCalendarDate(usageDate),
       (0...23).contains(usageHour),
-      isUsageModel(model),
-      isUsageBillingDimension(serviceTier), isUsageBillingDimension(speed),
-      isUsageBillingDimension(inferenceGeo),
-      counts.allSatisfy({ (0...jsonSafeIntegerMaximum).contains($0) }),
+      WireValidation.isModel(model),
+      WireValidation.isBillingDimension(serviceTier), WireValidation.isBillingDimension(speed),
+      WireValidation.isBillingDimension(inferenceGeo),
+      counts.allSatisfy({ (0...WireCodec.jsonSafeIntegerMaximum).contains($0) }),
       requests > 0,
       reasoningTokens <= outputTokens,
       sourceCostCoveredRequests <= requests,
@@ -212,7 +141,7 @@ struct UsageHourlyFact: Codable, Equatable, Sendable {
     let hasSourceCost = sourceCostMicrousd != nil
     return cacheTotal <= inputTokens
       && hasSourceCost == (sourceCostCoveredRequests > 0)
-      && (sourceCostMicrousd.map(isNonnegativeInteger) ?? true)
+      && (sourceCostMicrousd.map(WireValidation.isNonnegativeInteger) ?? true)
   }
 }
 
@@ -313,10 +242,10 @@ struct UsageSubmissionV3: Decodable, Equatable, Sendable {
     let start = UsageCoverage.utcHour(coverage.startAt)
     let end = UsageCoverage.utcHour(coverage.endAt)
     guard protocolVersion == 3,
-      isUsageOpaqueID(submissionID), isUsageOpaqueID(deviceID), isUsageOpaqueID(parserRevision),
-      (1...jsonSafeIntegerMaximum).contains(generation),
-      (0...jsonSafeIntegerMaximum).contains(sequence),
-      isUsageTimezone(aggregationTimezone), TimeZone(identifier: aggregationTimezone) != nil,
+      WireValidation.isOpaqueID(submissionID), WireValidation.isOpaqueID(deviceID), WireValidation.isOpaqueID(parserRevision),
+      (1...WireCodec.jsonSafeIntegerMaximum).contains(generation),
+      (0...WireCodec.jsonSafeIntegerMaximum).contains(sequence),
+      WireValidation.isTimezone(aggregationTimezone), TimeZone(identifier: aggregationTimezone) != nil,
       coverage.isValid,
       writeMode == nil || coverage.status == .partial,
       rows.count <= 2_048,
@@ -364,7 +293,7 @@ struct UsageSubmissionMultipart: Decodable, Equatable, Sendable {
     batchID = try container.decode(String.self, forKey: .batchID)
     partIndex = try container.decode(Int.self, forKey: .partIndex)
     partCount = try container.decode(Int.self, forKey: .partCount)
-    guard isUsageOpaqueID(batchID), (2...64).contains(partCount),
+    guard WireValidation.isOpaqueID(batchID), (2...64).contains(partCount),
       (0..<partCount).contains(partIndex)
     else {
       throw DecodingError.dataCorruptedError(
@@ -376,679 +305,10 @@ struct UsageSubmissionMultipart: Decodable, Equatable, Sendable {
   }
 }
 
-enum UsageCostMode: String, Codable, Sendable {
-  case calculate
-  case auto
-  case reported
-}
-
-enum UsageCostBasis: String, Codable, Sendable {
-  case calculated
-  case reported
-  case mixed
-  case none
-}
-
-enum UsageCostStatus: String, Codable, Sendable {
-  case complete
-  case partial
-  case unavailable
-}
-
-enum UsageCostAssumption: String, Codable, Sendable {
-  case agentDefaultChannel = "agent_default_channel"
-  case modelAlias = "model_alias"
-  case wildcardServiceTier = "wildcard_service_tier"
-  case wildcardSpeed = "wildcard_speed"
-  case wildcardInferenceGeo = "wildcard_inference_geo"
-  case wildcardContextBucket = "wildcard_context_bucket"
-  case cacheWriteInferredRate = "cache_write_inferred_rate"
-  case sourceReported = "source_reported"
-}
-
-enum UsageUnpricedReason: String, Codable, Sendable {
-  case unknownChannel = "unknown_channel"
-  case unknownModel = "unknown_model"
-  case outsideEffectiveRange = "outside_effective_range"
-  case unsupportedDimensions = "unsupported_dimensions"
-  case ambiguousPrice = "ambiguous_price"
-  case missingRate = "missing_rate"
-  case incompleteSourceCost = "incomplete_source_cost"
-  case invalidCatalog = "invalid_catalog"
-}
-
-struct UsageUnpricedItem: Codable, Equatable, Sendable {
-  let billingChannel: BillingChannel
-  let model: String
-  let reason: UsageUnpricedReason
-  let rows: Int
-
-  private enum CodingKeys: String, CodingKey {
-    case billingChannel
-    case model
-    case reason
-    case rows
-  }
-
-  var isValid: Bool {
-    isUsageModel(model)
-      && (1...jsonSafeIntegerMaximum).contains(rows)
-  }
-}
-
-extension UsageUnpricedItem {
-  init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys(["billingChannel", "model", "reason", "rows"])
-    let container = try decoder.container(keyedBy: CodingKeys.self)
-    billingChannel = try container.decode(BillingChannel.self, forKey: .billingChannel)
-    model = try container.decode(String.self, forKey: .model)
-    reason = try container.decode(UsageUnpricedReason.self, forKey: .reason)
-    rows = try container.decode(Int.self, forKey: .rows)
-  }
-}
-
-struct UsageCostOutcome: Codable, Equatable, Sendable {
-  let mode: UsageCostMode
-  let basis: UsageCostBasis
-  let status: UsageCostStatus
-  let amountMicrousd: String?
-  let catalogRevision: String?
-  let calculatedRows: Int
-  let reportedRows: Int
-  let unpricedRows: Int
-  let assumptions: [UsageCostAssumption]
-  let unpriced: [UsageUnpricedItem]
-  let unpricedTruncated: Bool?
-
-  private enum CodingKeys: String, CodingKey {
-    case mode
-    case basis
-    case status
-    case amountMicrousd
-    case catalogRevision
-    case calculatedRows
-    case reportedRows
-    case unpricedRows
-    case assumptions
-    case unpriced
-    case unpricedTruncated
-  }
-
-  init(
-    mode: UsageCostMode,
-    basis: UsageCostBasis,
-    status: UsageCostStatus,
-    amountMicrousd: String?,
-    catalogRevision: String?,
-    calculatedRows: Int,
-    reportedRows: Int,
-    unpricedRows: Int,
-    assumptions: [UsageCostAssumption],
-    unpriced: [UsageUnpricedItem],
-    unpricedTruncated: Bool? = nil
-  ) {
-    self.mode = mode
-    self.basis = basis
-    self.status = status
-    self.amountMicrousd = amountMicrousd
-    self.catalogRevision = catalogRevision
-    self.calculatedRows = calculatedRows
-    self.reportedRows = reportedRows
-    self.unpricedRows = unpricedRows
-    self.assumptions = assumptions
-    self.unpriced = unpriced
-    self.unpricedTruncated = unpricedTruncated
-  }
-
-  var isValid: Bool {
-    let rowCounts = [calculatedRows, reportedRows, unpricedRows]
-    guard rowCounts.allSatisfy({ (0...jsonSafeIntegerMaximum).contains($0) }),
-      assumptions.count <= 16,
-      Set(assumptions.map(\.rawValue)).count == assumptions.count,
-      unpriced.count <= 100,
-      unpriced.allSatisfy(\.isValid),
-      amountMicrousd.map(isNonnegativeInteger) ?? true,
-      catalogRevision.map(isUsageOpaqueID) ?? true,
-      let pricedRows = safeSum([calculatedRows, reportedRows]),
-      let itemRows = safeSum(unpriced.map(\.rows)),
-      unpricedTruncated != false,
-      itemRows <= unpricedRows,
-      unpricedTruncated == true || itemRows == unpricedRows
-    else { return false }
-
-    let expectedBasis: UsageCostBasis =
-      if calculatedRows > 0 && reportedRows > 0 {
-        .mixed
-      } else if calculatedRows > 0 {
-        .calculated
-      } else if reportedRows > 0 {
-        .reported
-      } else {
-        .none
-      }
-    let expectedStatus: UsageCostStatus =
-      if unpricedRows == 0 {
-        .complete
-      } else if pricedRows > 0 {
-        .partial
-      } else {
-        .unavailable
-      }
-    return basis == expectedBasis
-      && status == expectedStatus
-      && (amountMicrousd != nil) == (pricedRows > 0)
-      && (unpricedTruncated == true || itemRows == unpricedRows)
-  }
-
-  var hasUnpricedTruncatedDetails: Bool { unpricedTruncated == true }
-}
-
-extension UsageCostOutcome {
-  init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys([
-      "mode", "basis", "status", "amountMicrousd", "catalogRevision", "calculatedRows",
-      "reportedRows",
-      "unpricedRows", "assumptions", "unpriced", "unpricedTruncated",
-    ])
-    let container = try decoder.container(keyedBy: CodingKeys.self)
-    mode = try container.decode(UsageCostMode.self, forKey: .mode)
-    basis = try container.decode(UsageCostBasis.self, forKey: .basis)
-    status = try container.decode(UsageCostStatus.self, forKey: .status)
-    amountMicrousd = try container.decode(String?.self, forKey: .amountMicrousd)
-    catalogRevision = try container.decode(String?.self, forKey: .catalogRevision)
-    calculatedRows = try container.decode(Int.self, forKey: .calculatedRows)
-    reportedRows = try container.decode(Int.self, forKey: .reportedRows)
-    unpricedRows = try container.decode(Int.self, forKey: .unpricedRows)
-    assumptions = try container.decode([UsageCostAssumption].self, forKey: .assumptions)
-    unpriced = try container.decode([UsageUnpricedItem].self, forKey: .unpriced)
-    unpricedTruncated = try decodeTrueMarker(.unpricedTruncated, from: container)
-    guard isValid else {
-      throw DecodingError.dataCorruptedError(
-        forKey: .status,
-        in: container,
-        debugDescription: "Invalid Usage cost outcome."
-      )
-    }
-  }
-}
-
-struct UsageTokenTotals: Codable, Equatable, Sendable {
-  let inputTokens: Int
-  let cacheReadTokens: Int
-  let cacheWrite5mTokens: Int
-  let cacheWrite1hTokens: Int
-  let cacheWriteInferredTokens: Int
-  let outputTokens: Int
-  let reasoningTokens: Int
-  let requests: Int
-  let webSearchRequests: Int
-  let webFetchRequests: Int
-  let sourceCostMicrousd: String?
-  let sourceCostCoveredRequests: Int
-
-  private enum CodingKeys: String, CodingKey {
-    case inputTokens
-    case cacheReadTokens
-    case cacheWrite5mTokens = "cacheWrite5MTokens"
-    case cacheWrite1hTokens = "cacheWrite1HTokens"
-    case cacheWriteInferredTokens
-    case outputTokens
-    case reasoningTokens
-    case requests
-    case webSearchRequests
-    case webFetchRequests
-    case sourceCostMicrousd
-    case sourceCostCoveredRequests
-  }
-
-  var isValid: Bool {
-    let counts = [
-      inputTokens, cacheReadTokens, cacheWrite5mTokens, cacheWrite1hTokens,
-      cacheWriteInferredTokens, outputTokens, reasoningTokens, requests, webSearchRequests,
-      webFetchRequests, sourceCostCoveredRequests,
-    ]
-    guard counts.allSatisfy({ (0...jsonSafeIntegerMaximum).contains($0) }),
-      let classifiedInput = safeSum([
-        cacheReadTokens, cacheWrite5mTokens, cacheWrite1hTokens, cacheWriteInferredTokens,
-      ])
-    else { return false }
-    let hasSourceCost = sourceCostMicrousd != nil
-    return classifiedInput <= inputTokens
-      && reasoningTokens <= outputTokens
-      && sourceCostCoveredRequests <= requests
-      && (requests > 0 || (webSearchRequests == 0 && webFetchRequests == 0))
-      && hasSourceCost == (sourceCostCoveredRequests > 0)
-      && (sourceCostMicrousd.map(isNonnegativeInteger) ?? true)
-  }
-
-  var cachedInputTokens: Int {
-    safeSum([
-      cacheReadTokens, cacheWrite5mTokens, cacheWrite1hTokens, cacheWriteInferredTokens,
-    ]) ?? 0
-  }
-}
-
-extension UsageTokenTotals {
-  init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys([
-      "inputTokens", "cacheReadTokens", "cacheWrite5MTokens", "cacheWrite1HTokens",
-      "cacheWriteInferredTokens", "outputTokens", "reasoningTokens", "requests",
-      "webSearchRequests",
-      "webFetchRequests", "sourceCostMicrousd", "sourceCostCoveredRequests",
-    ])
-    let container = try decoder.container(keyedBy: CodingKeys.self)
-    inputTokens = try container.decode(Int.self, forKey: .inputTokens)
-    cacheReadTokens = try container.decode(Int.self, forKey: .cacheReadTokens)
-    cacheWrite5mTokens = try container.decode(Int.self, forKey: .cacheWrite5mTokens)
-    cacheWrite1hTokens = try container.decode(Int.self, forKey: .cacheWrite1hTokens)
-    cacheWriteInferredTokens = try container.decode(Int.self, forKey: .cacheWriteInferredTokens)
-    outputTokens = try container.decode(Int.self, forKey: .outputTokens)
-    reasoningTokens = try container.decode(Int.self, forKey: .reasoningTokens)
-    requests = try container.decode(Int.self, forKey: .requests)
-    webSearchRequests = try container.decode(Int.self, forKey: .webSearchRequests)
-    webFetchRequests = try container.decode(Int.self, forKey: .webFetchRequests)
-    sourceCostMicrousd = try container.decode(String?.self, forKey: .sourceCostMicrousd)
-    sourceCostCoveredRequests = try container.decode(Int.self, forKey: .sourceCostCoveredRequests)
-    guard isValid else {
-      throw DecodingError.dataCorruptedError(
-        forKey: .inputTokens,
-        in: container,
-        debugDescription: "Invalid Usage token totals."
-      )
-    }
-  }
-}
-
-enum UsageBreakdownDimension: String, Codable, Sendable {
-  case device
-  case agent
-  case model
-  case billingChannel = "billing_channel"
-  case usageDate = "usage_date"
-  case bucketStartUTC = "bucket_start_utc"
-}
-
-struct UsageBreakdown: Codable, Equatable, Sendable {
-  let dimension: UsageBreakdownDimension
-  let key: String
-  let totals: UsageTokenTotals
-  let cost: UsageCostOutcome
-
-  private enum CodingKeys: String, CodingKey {
-    case dimension
-    case key
-    case totals
-    case cost
-  }
-
-  var isValid: Bool {
-    isUsageBreakdownKey(dimension, key) && totals.isValid && cost.isValid
-  }
-}
-
-extension UsageBreakdown {
-  init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys(["dimension", "key", "totals", "cost"])
-    let container = try decoder.container(keyedBy: CodingKeys.self)
-    dimension = try container.decode(UsageBreakdownDimension.self, forKey: .dimension)
-    key = try container.decode(String.self, forKey: .key)
-    totals = try container.decode(UsageTokenTotals.self, forKey: .totals)
-    cost = try container.decode(UsageCostOutcome.self, forKey: .cost)
-    guard isValid else {
-      throw DecodingError.dataCorruptedError(
-        forKey: .key,
-        in: container,
-        debugDescription: "Invalid Usage breakdown key or totals."
-      )
-    }
-  }
-}
-
-struct UsageCoverageSummaryItem: Codable, Equatable, Sendable {
-  let deviceID: String
-  let agent: BillingAgent
-  let startAt: String
-  let endAt: String
-  let status: CoverageStatus
-
-  private enum CodingKeys: String, CodingKey {
-    case deviceID = "deviceId"
-    case agent
-    case startAt
-    case endAt
-    case status
-  }
-
-  var isValid: Bool {
-    isUsageOpaqueID(deviceID)
-      && UsageCoverage(agent: agent, startAt: startAt, endAt: endAt, status: status).isValid
-  }
-}
-
-extension UsageCoverageSummaryItem {
-  init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys(["deviceId", "agent", "startAt", "endAt", "status"])
-    let container = try decoder.container(keyedBy: CodingKeys.self)
-    deviceID = try container.decode(String.self, forKey: .deviceID)
-    agent = try container.decode(BillingAgent.self, forKey: .agent)
-    startAt = try container.decode(String.self, forKey: .startAt)
-    endAt = try container.decode(String.self, forKey: .endAt)
-    status = try container.decode(CoverageStatus.self, forKey: .status)
-  }
-}
-
-struct UsageDateRange: Codable, Equatable, Sendable {
-  let from: String
-  let to: String
-
-  private enum CodingKeys: String, CodingKey {
-    case from
-    case to
-  }
-
-  var isValid: Bool {
-    isUsageDate(from) && isUsageDate(to) && from <= to
-  }
-}
-
-extension UsageDateRange {
-  init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys(["from", "to"])
-    let container = try decoder.container(keyedBy: CodingKeys.self)
-    from = try container.decode(String.self, forKey: .from)
-    to = try container.decode(String.self, forKey: .to)
-  }
-}
-
-struct AccountUsageSummary: Codable, Equatable, Sendable {
-  let range: UsageDateRange
-  let totals: UsageTokenTotals
-  let cost: UsageCostOutcome
-  let modelCatalogRevision: String?
-  let coverage: [UsageCoverageSummaryItem]
-  let breakdowns: [UsageBreakdown]
-  let clients: [LocalUsageClientSummary]?
-  let coverageTruncated: Bool?
-  let breakdownsTruncated: Bool?
-
-  private enum CodingKeys: String, CodingKey {
-    case range
-    case totals
-    case cost
-    case modelCatalogRevision
-    case coverage
-    case breakdowns
-    case clients
-    case coverageTruncated
-    case breakdownsTruncated
-  }
-
-  init(
-    range: UsageDateRange,
-    totals: UsageTokenTotals,
-    cost: UsageCostOutcome,
-    modelCatalogRevision: String? = nil,
-    coverage: [UsageCoverageSummaryItem],
-    breakdowns: [UsageBreakdown],
-    clients: [LocalUsageClientSummary]? = nil,
-    coverageTruncated: Bool? = nil,
-    breakdownsTruncated: Bool? = nil
-  ) {
-    self.range = range
-    self.totals = totals
-    self.cost = cost
-    self.modelCatalogRevision = modelCatalogRevision
-    self.coverage = coverage
-    self.breakdowns = breakdowns
-    self.clients = clients
-    self.coverageTruncated = coverageTruncated
-    self.breakdownsTruncated = breakdownsTruncated
-  }
-
-  var hasTruncatedDetails: Bool {
-    coverageTruncated == true || breakdownsTruncated == true || cost.hasUnpricedTruncatedDetails
-  }
-
-  var isValid: Bool {
-    range.isValid
-      && totals.isValid
-      && cost.isValid
-      && modelCatalogRevision.map(isUsageOpaqueID) != false
-      && coverage.count <= 2_048
-      && coverage.allSatisfy(\.isValid)
-      && breakdowns.count <= 1_000
-      && breakdowns.allSatisfy(\.isValid)
-      && clients.map { $0.count <= 6 && $0.allSatisfy(\.isValid) } != false
-  }
-}
-
-extension AccountUsageSummary {
-  init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys([
-      "range", "totals", "cost", "modelCatalogRevision", "coverage", "breakdowns",
-      "clients",
-      "coverageTruncated",
-      "breakdownsTruncated",
-    ])
-    let container = try decoder.container(keyedBy: CodingKeys.self)
-    range = try container.decode(UsageDateRange.self, forKey: .range)
-    totals = try container.decode(UsageTokenTotals.self, forKey: .totals)
-    cost = try container.decode(UsageCostOutcome.self, forKey: .cost)
-    modelCatalogRevision = try container.decodeIfPresent(String.self, forKey: .modelCatalogRevision)
-    coverage = try container.decode([UsageCoverageSummaryItem].self, forKey: .coverage)
-    breakdowns = try container.decode([UsageBreakdown].self, forKey: .breakdowns)
-    clients = try container.decodeIfPresent([LocalUsageClientSummary].self, forKey: .clients)
-    coverageTruncated = try decodeTrueMarker(.coverageTruncated, from: container)
-    breakdownsTruncated = try decodeTrueMarker(.breakdownsTruncated, from: container)
-  }
-}
-
 enum LocalUsageReportStatus: String, Codable, Sendable {
   case complete
   case partial
   case unavailable
-}
-
-struct UsageSummaryTotals: Codable, Equatable, Sendable {
-  let totalTokens: Int
-  let inputTokens: Int
-  let outputTokens: Int
-  let cacheReadInputTokens: Int
-  let cacheWriteInputTokens: Int
-  let reasoningTokens: Int
-  let messages: Int
-
-  private enum CodingKeys: String, CodingKey {
-    case totalTokens
-    case inputTokens
-    case outputTokens
-    case cacheReadInputTokens
-    case cacheWriteInputTokens
-    case reasoningTokens
-    case messages
-  }
-
-  var isValid: Bool {
-    let counts = [
-      totalTokens, inputTokens, outputTokens, cacheReadInputTokens, cacheWriteInputTokens,
-      reasoningTokens, messages,
-    ]
-    return counts.allSatisfy { (0...jsonSafeIntegerMaximum).contains($0) }
-      && safeSum([inputTokens, outputTokens]) == totalTokens
-      && safeSum([cacheReadInputTokens, cacheWriteInputTokens]).map { $0 <= inputTokens } == true
-      && reasoningTokens <= outputTokens
-  }
-
-  init(
-    totalTokens: Int,
-    inputTokens: Int,
-    outputTokens: Int,
-    cacheReadInputTokens: Int,
-    cacheWriteInputTokens: Int,
-    reasoningTokens: Int,
-    messages: Int
-  ) {
-    self.totalTokens = totalTokens
-    self.inputTokens = inputTokens
-    self.outputTokens = outputTokens
-    self.cacheReadInputTokens = cacheReadInputTokens
-    self.cacheWriteInputTokens = cacheWriteInputTokens
-    self.reasoningTokens = reasoningTokens
-    self.messages = messages
-  }
-
-  init(_ totals: UsageTokenTotals) {
-    totalTokens = totals.inputTokens + totals.outputTokens
-    inputTokens = totals.inputTokens
-    outputTokens = totals.outputTokens
-    cacheReadInputTokens = totals.cacheReadTokens
-    cacheWriteInputTokens =
-      totals.cacheWrite5mTokens + totals.cacheWrite1hTokens + totals.cacheWriteInferredTokens
-    reasoningTokens = totals.reasoningTokens
-    messages = totals.requests
-  }
-
-  init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys([
-      "totalTokens", "inputTokens", "outputTokens", "cacheReadInputTokens",
-      "cacheWriteInputTokens", "reasoningTokens", "messages",
-    ])
-    let container = try decoder.container(keyedBy: CodingKeys.self)
-    totalTokens = try container.decode(Int.self, forKey: .totalTokens)
-    inputTokens = try container.decode(Int.self, forKey: .inputTokens)
-    outputTokens = try container.decode(Int.self, forKey: .outputTokens)
-    cacheReadInputTokens = try container.decode(Int.self, forKey: .cacheReadInputTokens)
-    cacheWriteInputTokens = try container.decode(Int.self, forKey: .cacheWriteInputTokens)
-    reasoningTokens = try container.decode(Int.self, forKey: .reasoningTokens)
-    messages = try container.decode(Int.self, forKey: .messages)
-    guard isValid else {
-      throw DecodingError.dataCorruptedError(
-        forKey: .totalTokens, in: container, debugDescription: "Invalid Usage summary totals.")
-    }
-  }
-}
-
-struct LocalUsageModelSummary: Codable, Equatable, Sendable {
-  let model: String
-  let totals: UsageSummaryTotals
-  let cost: UsageCostOutcome
-
-  private enum CodingKeys: String, CodingKey {
-    case model
-    case totals
-    case cost
-  }
-
-  var isValid: Bool { isUsageModel(model) && totals.isValid && cost.isValid }
-
-  init(
-    model: String,
-    totals: UsageSummaryTotals,
-    cost: UsageCostOutcome
-  ) {
-    self.model = model
-    self.totals = totals
-    self.cost = cost
-  }
-
-  init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys(["model", "totals", "cost"])
-    let container = try decoder.container(keyedBy: CodingKeys.self)
-    model = try container.decode(String.self, forKey: .model)
-    totals = try container.decode(UsageSummaryTotals.self, forKey: .totals)
-    cost = try container.decode(UsageCostOutcome.self, forKey: .cost)
-    guard isValid else {
-      throw DecodingError.dataCorruptedError(
-        forKey: .model, in: container, debugDescription: "Invalid local Usage model summary.")
-    }
-  }
-}
-
-struct LocalUsageProviderSummary: Codable, Equatable, Sendable {
-  let provider: InferenceProvider
-  let totals: UsageSummaryTotals
-  let cost: UsageCostOutcome
-  let models: [LocalUsageModelSummary]
-
-  private enum CodingKeys: String, CodingKey {
-    case provider
-    case totals
-    case cost
-    case models
-  }
-
-  var isValid: Bool {
-    totals.isValid && cost.isValid && models.count <= 1_000
-      && models.allSatisfy(\.isValid)
-  }
-
-  init(
-    provider: InferenceProvider,
-    totals: UsageSummaryTotals,
-    cost: UsageCostOutcome,
-    models: [LocalUsageModelSummary]
-  ) {
-    self.provider = provider
-    self.totals = totals
-    self.cost = cost
-    self.models = models
-  }
-
-  init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys(["provider", "totals", "cost", "models"])
-    let container = try decoder.container(keyedBy: CodingKeys.self)
-    provider = try container.decode(InferenceProvider.self, forKey: .provider)
-    totals = try container.decode(UsageSummaryTotals.self, forKey: .totals)
-    cost = try container.decode(UsageCostOutcome.self, forKey: .cost)
-    models = try container.decode([LocalUsageModelSummary].self, forKey: .models)
-    guard isValid else {
-      throw DecodingError.dataCorruptedError(
-        forKey: .provider, in: container, debugDescription: "Invalid local Usage provider summary.")
-    }
-  }
-}
-
-struct LocalUsageClientSummary: Codable, Equatable, Sendable {
-  let client: BillingAgent
-  let totals: UsageSummaryTotals
-  let cost: UsageCostOutcome
-  let providers: [LocalUsageProviderSummary]
-
-  private enum CodingKeys: String, CodingKey {
-    case client
-    case totals
-    case cost
-    case providers
-  }
-
-  var isValid: Bool {
-    totals.isValid && cost.isValid && providers.count <= 8 && providers.allSatisfy(\.isValid)
-  }
-
-  init(
-    client: BillingAgent,
-    totals: UsageSummaryTotals,
-    cost: UsageCostOutcome,
-    providers: [LocalUsageProviderSummary]
-  ) {
-    self.client = client
-    self.totals = totals
-    self.cost = cost
-    self.providers = providers
-  }
-
-  init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys(["client", "totals", "cost", "providers"])
-    let container = try decoder.container(keyedBy: CodingKeys.self)
-    client = try container.decode(BillingAgent.self, forKey: .client)
-    totals = try container.decode(UsageSummaryTotals.self, forKey: .totals)
-    cost = try container.decode(UsageCostOutcome.self, forKey: .cost)
-    providers = try container.decode([LocalUsageProviderSummary].self, forKey: .providers)
-    guard isValid else {
-      throw DecodingError.dataCorruptedError(
-        forKey: .client, in: container, debugDescription: "Invalid local Usage client summary.")
-    }
-  }
 }
 
 struct LocalUsagePeriodSummary: Codable, Equatable, Sendable {
@@ -1192,7 +452,7 @@ struct LocalUsageReport: Codable, Equatable, Sendable {
     let validAvailable =
       !unavailable
       && aggregationTimezone.flatMap(TimeZone.init(identifier:)) != nil
-      && modelCatalogRevision.map(isUsageOpaqueID) != false
+      && modelCatalogRevision.map(WireValidation.isOpaqueID) != false
       && status == expectedStatus
     let validUnavailable =
       unavailable
@@ -1261,253 +521,6 @@ struct AccountUsageResponse: Decodable, Equatable, Sendable {
   }
 }
 
-struct QuotaUserAccount: Codable, Equatable, Sendable {
-  let accountID: String
-  let displayLabel: String?
-  let createdAt: Date
-
-  private enum CodingKeys: String, CodingKey {
-    case accountID = "accountId"
-    case displayLabel
-    case createdAt
-  }
-
-  var isValid: Bool {
-    isUsageOpaqueID(accountID)
-      && (displayLabel.map {
-        let trimmed = $0.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !trimmed.isEmpty && trimmed.count <= 128 && trimmed == $0
-      } ?? true)
-  }
-}
-
-extension QuotaUserAccount {
-  init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys(["accountId", "displayLabel", "createdAt"])
-    let container = try decoder.container(keyedBy: CodingKeys.self)
-    accountID = try container.decode(String.self, forKey: .accountID)
-    displayLabel = try container.decode(String?.self, forKey: .displayLabel)
-    createdAt = try container.decode(Date.self, forKey: .createdAt)
-    guard isValid else {
-      throw DecodingError.dataCorruptedError(
-        forKey: .accountID,
-        in: container,
-        debugDescription: "Invalid account metadata."
-      )
-    }
-  }
-}
-
-enum AccountDeviceStatus: String, Codable, Sendable {
-  case active
-  case offline
-  case signedOut = "signed_out"
-}
-
-enum AccountDevicePlatform: String, Codable, Sendable {
-  case macos
-  case linux
-  case windows
-}
-
-enum AccountDeviceHealthClientProduct: String, Codable, Sendable {
-  case quotaBar = "quotabar"
-  case quotaCLI = "quotacli"
-}
-
-enum AccountDeviceHealthCode: String, Codable, Sendable {
-  case refreshFailed = "refresh_failed"
-  case quotaCollectionFailed = "quota_collection_failed"
-  case usageScanPartial = "usage_scan_partial"
-  case usageUploadFailed = "usage_upload_failed"
-  case accountSyncFailed = "account_sync_failed"
-  case pricingRefreshFailed = "pricing_refresh_failed"
-  case processInterrupted = "process_interrupted"
-  case localStateInvalid = "local_state_invalid"
-}
-
-struct AccountDeviceHealth: Codable, Equatable, Sendable {
-  let schemaVersion: Int
-  let clientProduct: AccountDeviceHealthClientProduct
-  let clientVersion: String
-  let platform: AccountDevicePlatform
-  let observedAt: Date
-  let refreshRevision: Int
-  let lastCompletedRefreshAt: Date?
-  let lastSuccessfulAccountSyncAt: Date?
-  let summary: LocalServiceDiagnosticSummary
-  let topCode: AccountDeviceHealthCode?
-  let consecutiveFailures: Int
-  let usageUploadEnabled: Bool
-  let receivedAt: Date
-  let freshUntil: Date
-
-  init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys([
-      "schemaVersion", "clientProduct", "clientVersion", "platform", "observedAt",
-      "refreshRevision", "lastCompletedRefreshAt", "lastSuccessfulAccountSyncAt", "summary",
-      "topCode", "consecutiveFailures", "usageUploadEnabled", "receivedAt", "freshUntil",
-    ])
-    let container = try decoder.container(keyedBy: CodingKeys.self)
-    schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
-    clientProduct = try container.decode(AccountDeviceHealthClientProduct.self, forKey: .clientProduct)
-    clientVersion = try container.decode(String.self, forKey: .clientVersion)
-    platform = try container.decode(AccountDevicePlatform.self, forKey: .platform)
-    observedAt = try container.decode(Date.self, forKey: .observedAt)
-    refreshRevision = try container.decode(Int.self, forKey: .refreshRevision)
-    lastCompletedRefreshAt = try container.decode(Date?.self, forKey: .lastCompletedRefreshAt)
-    lastSuccessfulAccountSyncAt = try container.decode(Date?.self, forKey: .lastSuccessfulAccountSyncAt)
-    summary = try container.decode(LocalServiceDiagnosticSummary.self, forKey: .summary)
-    topCode = try container.decode(AccountDeviceHealthCode?.self, forKey: .topCode)
-    consecutiveFailures = try container.decode(Int.self, forKey: .consecutiveFailures)
-    usageUploadEnabled = try container.decode(Bool.self, forKey: .usageUploadEnabled)
-    receivedAt = try container.decode(Date.self, forKey: .receivedAt)
-    freshUntil = try container.decode(Date.self, forKey: .freshUntil)
-    let versionValid = !clientVersion.isEmpty && clientVersion.count <= 32
-      && clientVersion.enumerated().allSatisfy { index, character in
-        character.isASCII && (character.isLetter || character.isNumber
-          || (index > 0 && ".+_-".contains(character)))
-      }
-    guard schemaVersion == 1, versionValid,
-      (0 ... jsonSafeIntegerMaximum).contains(refreshRevision),
-      (0 ... 1_000).contains(consecutiveFailures), freshUntil >= receivedAt,
-      lastCompletedRefreshAt.map({ $0 <= observedAt.addingTimeInterval(300) }) ?? true,
-      lastSuccessfulAccountSyncAt.map({ $0 <= observedAt.addingTimeInterval(300) }) ?? true
-    else {
-      throw DecodingError.dataCorruptedError(
-        forKey: .schemaVersion, in: container, debugDescription: "Invalid device health.")
-    }
-  }
-
-  private enum CodingKeys: String, CodingKey {
-    case schemaVersion, clientProduct, clientVersion, platform, observedAt, refreshRevision
-    case lastCompletedRefreshAt, lastSuccessfulAccountSyncAt, summary, topCode
-    case consecutiveFailures, usageUploadEnabled, receivedAt, freshUntil
-  }
-}
-
-struct AccountDevice: Codable, Equatable, Identifiable, Sendable {
-  let deviceID: String
-  let displayName: String
-  let platform: AccountDevicePlatform
-  let deviceGeneration: Int
-  let status: AccountDeviceStatus
-  let createdAt: Date
-  let lastLoginAt: Date
-  let lastSeenAt: Date?
-  let signedOutAt: Date?
-  let health: AccountDeviceHealth?
-
-  var id: String { deviceID }
-
-  private enum CodingKeys: String, CodingKey {
-    case deviceID = "deviceId"
-    case displayName
-    case platform
-    case deviceGeneration
-    case status
-    case createdAt
-    case lastLoginAt
-    case lastSeenAt
-    case signedOutAt
-    case health
-  }
-
-  var isValid: Bool {
-    isUsageOpaqueID(deviceID)
-      && !displayName.isEmpty && displayName.count <= 128
-      && displayName == displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-      && (1...jsonSafeIntegerMaximum).contains(deviceGeneration)
-      && (status == .signedOut) == (signedOutAt != nil)
-      && (health.map { $0.platform == platform } ?? true)
-  }
-
-  init(
-    deviceID: String,
-    displayName: String,
-    platform: AccountDevicePlatform,
-    deviceGeneration: Int,
-    status: AccountDeviceStatus,
-    createdAt: Date,
-    lastLoginAt: Date,
-    lastSeenAt: Date?,
-    signedOutAt: Date?,
-    health: AccountDeviceHealth? = nil
-  ) {
-    (self.deviceID, self.displayName, self.platform, self.deviceGeneration, self.status) = (
-      deviceID, displayName, platform, deviceGeneration, status
-    )
-    (self.createdAt, self.lastLoginAt, self.lastSeenAt, self.signedOutAt, self.health) = (
-      createdAt, lastLoginAt, lastSeenAt, signedOutAt, health
-    )
-  }
-}
-
-extension AccountDevice {
-  init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys([
-      "deviceId", "displayName", "platform", "deviceGeneration", "status", "createdAt",
-      "lastLoginAt",
-      "lastSeenAt", "signedOutAt",
-      "health",
-    ])
-    let container = try decoder.container(keyedBy: CodingKeys.self)
-    deviceID = try container.decode(String.self, forKey: .deviceID)
-    displayName = try container.decode(String.self, forKey: .displayName)
-    platform = try container.decode(AccountDevicePlatform.self, forKey: .platform)
-    deviceGeneration = try container.decode(Int.self, forKey: .deviceGeneration)
-    status = try container.decode(AccountDeviceStatus.self, forKey: .status)
-    createdAt = try container.decode(Date.self, forKey: .createdAt)
-    lastLoginAt = try container.decode(Date.self, forKey: .lastLoginAt)
-    lastSeenAt = try container.decode(Date?.self, forKey: .lastSeenAt)
-    signedOutAt = try container.decode(Date?.self, forKey: .signedOutAt)
-    health = try container.decode(AccountDeviceHealth?.self, forKey: .health)
-    guard isValid else {
-      throw DecodingError.dataCorruptedError(
-        forKey: .deviceID,
-        in: container,
-        debugDescription: "Invalid account device."
-      )
-    }
-  }
-}
-
-struct AccountQuotaObservation: Codable, Equatable, Sendable {
-  let deviceID: String
-  let sequence: Int
-  let capturedAt: Date
-  let snapshot: QuotaSnapshot
-  let updatedAt: Date
-
-  private enum CodingKeys: String, CodingKey {
-    case deviceID = "deviceId"
-    case sequence
-    case capturedAt
-    case snapshot
-    case updatedAt
-  }
-
-  var isValid: Bool {
-    isUsageOpaqueID(deviceID) && (0...jsonSafeIntegerMaximum).contains(sequence)
-      && snapshot.provider.syncsToAccount(protocolVersion: 3)
-  }
-
-}
-
-extension AccountQuotaObservation {
-  init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys([
-      "deviceId", "sequence", "capturedAt", "snapshot", "updatedAt",
-    ])
-    let container = try decoder.container(keyedBy: CodingKeys.self)
-    deviceID = try container.decode(String.self, forKey: .deviceID)
-    sequence = try container.decode(Int.self, forKey: .sequence)
-    capturedAt = try container.decode(Date.self, forKey: .capturedAt)
-    snapshot = try container.decode(QuotaSnapshot.self, forKey: .snapshot)
-    updatedAt = try container.decode(Date.self, forKey: .updatedAt)
-  }
-}
-
 struct AccountQuotaResponse: Decodable, Equatable, Sendable {
   let protocolVersion: Int
   let quota: [AccountQuotaObservation]
@@ -1556,7 +569,7 @@ struct AccountUsageHourlyFact: Decodable, Equatable, Sendable {
       allowingUnknownKeys: ["deviceId", "aggregationTimezone"]
     )
     let bucket = UsageCoverage.utcHour(fact.bucketStartUTC)
-    guard isUsageOpaqueID(deviceID), isUsageTimezone(aggregationTimezone),
+    guard WireValidation.isOpaqueID(deviceID), WireValidation.isTimezone(aggregationTimezone),
       TimeZone(identifier: aggregationTimezone) != nil,
       fact.isValid,
       bucket.map({
@@ -1605,7 +618,7 @@ struct AccountUsageHourlyResponse: Decodable, Equatable, Sendable {
     coverageTruncated = try decodeTrueMarker(.coverageTruncated, from: container)
     let decodedStart = UsageCoverage.utcHour(startAt)
     let decodedEnd = UsageCoverage.utcHour(endAt)
-    let costRows = safeSum([cost.calculatedRows, cost.reportedRows, cost.unpricedRows])
+    let costRows = WireValidation.safeSum([cost.calculatedRows, cost.reportedRows, cost.unpricedRows])
     guard protocolVersion == 3,
       let start = decodedStart, let end = decodedEnd,
       end > start, end.timeIntervalSince(start) <= 744 * 3_600,
@@ -1635,67 +648,6 @@ struct AccountUsageHourlyResponse: Decodable, Equatable, Sendable {
     case coverage
     case cost
     case coverageTruncated
-  }
-}
-
-struct AccountSummary: Codable, Equatable, Sendable {
-  let protocolVersion: Int
-  let generatedAt: Date
-  let account: QuotaUserAccount
-  let devices: [AccountDevice]
-  let quota: [AccountQuotaObservation]
-  let usage: AccountUsageSummary
-
-  private enum CodingKeys: String, CodingKey {
-    case protocolVersion
-    case generatedAt
-    case account
-    case devices
-    case quota
-    case usage
-  }
-
-  init(
-    protocolVersion: Int = 3,
-    generatedAt: Date,
-    account: QuotaUserAccount,
-    devices: [AccountDevice],
-    quota: [AccountQuotaObservation],
-    usage: AccountUsageSummary
-  ) {
-    self.protocolVersion = protocolVersion
-    self.generatedAt = generatedAt
-    self.account = account
-    self.devices = devices
-    self.quota = quota
-    self.usage = usage
-  }
-
-  init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys([
-      "protocolVersion", "generatedAt", "account", "devices", "quota", "usage",
-    ])
-    let container = try decoder.container(keyedBy: CodingKeys.self)
-    protocolVersion = try container.decode(Int.self, forKey: .protocolVersion)
-    generatedAt = try container.decode(Date.self, forKey: .generatedAt)
-    account = try container.decode(QuotaUserAccount.self, forKey: .account)
-    devices = try container.decode([AccountDevice].self, forKey: .devices)
-    quota = try container.decode([AccountQuotaObservation].self, forKey: .quota)
-    usage = try container.decode(AccountUsageSummary.self, forKey: .usage)
-    guard protocolVersion == 3,
-      account.isValid,
-      devices.count <= 256,
-      devices.allSatisfy(\.isValid),
-      quota.count <= 8_192,
-      quota.allSatisfy(\.isValid),
-      usage.isValid
-    else {
-      throw DecodingError.dataCorruptedError(
-        forKey: .protocolVersion,
-        in: container,
-        debugDescription: "Invalid account summary."
-      )
-    }
   }
 }
 
@@ -1734,10 +686,10 @@ struct QuotaSnapshotUploadResponse: Codable, Equatable, Sendable {
     acceptedSequence = try container.decode(Int.self, forKey: .acceptedSequence)
     nextSnapshotSequence = try container.decode(Int.self, forKey: .nextSnapshotSequence)
     guard protocolVersion == 3,
-      isUsageOpaqueID(deviceID),
-      (1...jsonSafeIntegerMaximum).contains(deviceGeneration),
-      (0...jsonSafeIntegerMaximum).contains(acceptedSequence),
-      (0...jsonSafeIntegerMaximum).contains(nextSnapshotSequence)
+      WireValidation.isOpaqueID(deviceID),
+      (1...WireCodec.jsonSafeIntegerMaximum).contains(deviceGeneration),
+      (0...WireCodec.jsonSafeIntegerMaximum).contains(acceptedSequence),
+      (0...WireCodec.jsonSafeIntegerMaximum).contains(nextSnapshotSequence)
     else {
       throw DecodingError.dataCorruptedError(
         forKey: .protocolVersion,
@@ -1784,11 +736,11 @@ struct DeviceSyncResponse: Codable, Equatable, Sendable {
     usageDeletedBefore = try container.decode(Date?.self, forKey: .usageDeletedBefore)
     usageSyncRevision = try container.decode(Int.self, forKey: .usageSyncRevision)
     guard protocolVersion == 2,
-      isUsageOpaqueID(accountID), isUsageOpaqueID(deviceID),
-      (1...jsonSafeIntegerMaximum).contains(deviceGeneration),
-      (0...jsonSafeIntegerMaximum).contains(nextSnapshotSequence),
-      (0...jsonSafeIntegerMaximum).contains(nextUsageSequence),
-      (0...jsonSafeIntegerMaximum).contains(usageSyncRevision)
+      WireValidation.isOpaqueID(accountID), WireValidation.isOpaqueID(deviceID),
+      (1...WireCodec.jsonSafeIntegerMaximum).contains(deviceGeneration),
+      (0...WireCodec.jsonSafeIntegerMaximum).contains(nextSnapshotSequence),
+      (0...WireCodec.jsonSafeIntegerMaximum).contains(nextUsageSequence),
+      (0...WireCodec.jsonSafeIntegerMaximum).contains(usageSyncRevision)
     else {
       throw DecodingError.dataCorruptedError(
         forKey: .protocolVersion,
@@ -1896,14 +848,14 @@ struct PricingCatalogEntry: Codable, Equatable, Sendable {
 
   var isValid: Bool {
     let names = [model] + aliases
-    return isUsageOpaqueID(entryID)
+    return WireValidation.isOpaqueID(entryID)
       && billingChannel != .unknown
-      && isUsageModel(model)
+      && WireValidation.isModel(model)
       && aliases.count <= 16
-      && aliases.allSatisfy(isUsageModel)
+      && aliases.allSatisfy(WireValidation.isModel)
       && Set(names).count == names.count
-      && isUsageDate(effectiveFrom)
-      && (effectiveTo.map({ isUsageDate($0) && $0 > effectiveFrom }) ?? true)
+      && WireValidation.isCalendarDate(effectiveFrom)
+      && (effectiveTo.map({ WireValidation.isCalendarDate($0) && $0 > effectiveFrom }) ?? true)
       && isUsagePricingDimension(serviceTier) && isUsagePricingDimension(speed)
       && isUsagePricingDimension(inferenceGeo)
       && (["le_128k", "gt_128k_le_200k", "gt_200k_le_256k", "gt_256k_le_272k", "gt_272k", "*"]
@@ -1967,7 +919,7 @@ struct PricingCatalog: Decodable, Equatable, Sendable {
     publishedAt = try container.decode(Date.self, forKey: .publishedAt)
     entries = try container.decode([PricingCatalogEntry].self, forKey: .entries)
     guard protocolVersion == 2,
-      isUsageOpaqueID(revision),
+      WireValidation.isOpaqueID(revision),
       entries.count <= 4_096,
       entries.allSatisfy(\.isValid),
       Set(entries.map(\.entryID)).count == entries.count
@@ -1979,17 +931,6 @@ struct PricingCatalog: Decodable, Equatable, Sendable {
       )
     }
   }
-}
-
-private func isUsageDate(_ value: String) -> Bool {
-  guard value.count == 10 else { return false }
-  let formatter = DateFormatter()
-  formatter.calendar = Calendar(identifier: .iso8601)
-  formatter.locale = Locale(identifier: "en_US_POSIX")
-  formatter.timeZone = TimeZone(secondsFromGMT: 0)
-  formatter.dateFormat = "yyyy-MM-dd"
-  formatter.isLenient = false
-  return formatter.date(from: value).map({ formatter.string(from: $0) == value }) ?? false
 }
 
 private func localProjectionMatches(
@@ -2027,81 +968,32 @@ private func usageHourlyFactIdentity(_ fact: UsageHourlyFact) -> String {
   ].joined(separator: "\u{0}")
 }
 
-private func isNonnegativeInteger(_ value: String) -> Bool {
-  guard !value.isEmpty, value.count <= 32,
-    value.utf8.allSatisfy({ (48...57).contains($0) })
-  else { return false }
-  return value == "0" || value.first != "0"
-}
-
 private func isDecimalAmount(_ value: String) -> Bool {
   guard !value.isEmpty, value.count <= 32 else { return false }
   let parts = value.split(separator: ".", omittingEmptySubsequences: false)
-  guard (1...2).contains(parts.count), isNonnegativeInteger(String(parts[0])) else { return false }
+  guard (1...2).contains(parts.count), WireValidation.isNonnegativeInteger(String(parts[0])) else { return false }
   return parts.count == 1
     || (!parts[1].isEmpty && parts[1].count <= 12
       && parts[1].utf8.allSatisfy({ (48...57).contains($0) }))
 }
 
-private func safeSum(_ values: [Int]) -> Int? {
-  var total = 0
-  for value in values {
-    let (next, overflow) = total.addingReportingOverflow(value)
-    guard !overflow, next <= jsonSafeIntegerMaximum else { return nil }
-    total = next
-  }
-  return total
-}
-
-private func isUsageOpaqueID(_ value: String) -> Bool {
-  guard let first = value.utf8.first, !value.isEmpty, value.count <= 128,
-    isUsageASCIIAlphaNumeric(first)
-  else { return false }
-  return value.utf8.allSatisfy { byte in
-    isUsageASCIIAlphaNumeric(byte) || byte == 46 || byte == 58 || byte == 95 || byte == 45
-  }
-}
-
-private func isUsageASCIIAlphaNumeric(_ byte: UInt8) -> Bool {
-  (48...57).contains(byte) || (65...90).contains(byte) || (97...122).contains(byte)
-}
-
-private func isUsageBillingDimension(_ value: String) -> Bool {
-  guard let first = value.utf8.first, !value.isEmpty, value.count <= 64,
-    isUsageASCIIAlphaNumeric(first)
-  else { return false }
-  return value.utf8.allSatisfy { byte in
-    isUsageASCIIAlphaNumeric(byte) || byte == 46 || byte == 58 || byte == 95 || byte == 43
-      || byte == 45
-  }
-}
-
 private func isUsagePricingDimension(_ value: String) -> Bool {
-  value == "*" || isUsageBillingDimension(value)
+  value == "*" || WireValidation.isBillingDimension(value)
 }
 
-private func isUsageModel(_ value: String) -> Bool {
-  guard !value.isEmpty, value.unicodeScalars.count <= 128 else { return false }
-  return value.unicodeScalars.allSatisfy { scalar in
-    !((0...31).contains(scalar.value) || (127...159).contains(scalar.value))
-  }
-}
-
-private func isUsageBreakdownKey(_ dimension: UsageBreakdownDimension, _ value: String) -> Bool {
-  if dimension == .model {
-    return isUsageModel(value)
-  }
-  return !value.isEmpty
-    && value.utf8.count <= 128
-    && value.trimmingCharacters(in: .whitespacesAndNewlines) == value
-}
-
-private func isUsageTimezone(_ value: String) -> Bool {
-  guard !value.isEmpty, value.count <= 64 else { return false }
-  return value.split(separator: "/", omittingEmptySubsequences: false).allSatisfy { component in
-    !component.isEmpty
-      && component.utf8.allSatisfy { byte in
-        isUsageASCIIAlphaNumeric(byte) || byte == 46 || byte == 95 || byte == 43 || byte == 45
-      }
+extension UsageSummaryTotals {
+  /// The local v3 summary shape, projected from the managed token totals. Which counts fold
+  /// into which is QuotaBar's Usage presentation, not part of either wire object.
+  init(_ totals: UsageTokenTotals) {
+    self.init(
+      totalTokens: totals.inputTokens + totals.outputTokens,
+      inputTokens: totals.inputTokens,
+      outputTokens: totals.outputTokens,
+      cacheReadInputTokens: totals.cacheReadTokens,
+      cacheWriteInputTokens: totals.cacheWrite5mTokens + totals.cacheWrite1hTokens
+        + totals.cacheWriteInferredTokens,
+      reasoningTokens: totals.reasoningTokens,
+      messages: totals.requests
+    )
   }
 }

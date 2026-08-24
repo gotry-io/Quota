@@ -711,9 +711,6 @@ pub(super) fn snapshot(
     }
 }
 
-/// Read-only, approval-free `app-server`, the shape current Codex accepts.
-const APP_SERVER_ARGS: [&str; 5] = ["-s", "read-only", "-a", "never", "app-server"];
-
 struct RpcClient {
     child: Child,
     stdin: ChildStdin,
@@ -735,7 +732,7 @@ impl RpcClient {
             // `on-request`, would wait on a prompt nothing is there to answer. Codex
             // removed the `untrusted` value it once took here, and rejects the whole
             // invocation when it sees one it does not know.
-            .args(APP_SERVER_ARGS)
+            .args(["-s", "read-only", "-a", "never", "app-server"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());

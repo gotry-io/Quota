@@ -1,3 +1,4 @@
+import QuotaWire
 import SwiftUI
 
 /// Settings → Agents: catalog providers with drill-in to visibility and configuration.

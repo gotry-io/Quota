@@ -135,7 +135,7 @@ public struct UsageUnpricedItem: Codable, Equatable, Sendable {
     }
   }
 
-  var isValid: Bool {
+  public var isValid: Bool {
     WireValidation.isModel(model) && WireValidation.isSafePositive(rows)
   }
 
@@ -229,7 +229,7 @@ public struct UsageCostOutcome: Codable, Equatable, Sendable {
 
   public var hasUnpricedTruncatedDetails: Bool { unpricedTruncated == true }
 
-  var isValid: Bool {
+  public var isValid: Bool {
     let rowCounts = [calculatedRows, reportedRows, unpricedRows]
     guard rowCounts.allSatisfy(WireValidation.isSafeNonnegative),
       assumptions.count <= 16,
@@ -369,7 +369,7 @@ public struct UsageTokenTotals: Codable, Equatable, Sendable {
     try container.encode(sourceCostCoveredRequests, forKey: .sourceCostCoveredRequests)
   }
 
-  var isValid: Bool {
+  public var isValid: Bool {
     let counts = [
       inputTokens, cacheReadTokens, cacheWrite5mTokens, cacheWrite1hTokens,
       cacheWriteInferredTokens, outputTokens, reasoningTokens, requests, webSearchRequests,
@@ -454,7 +454,7 @@ public struct UsageSummaryTotals: Codable, Equatable, Sendable {
     }
   }
 
-  var isValid: Bool {
+  public var isValid: Bool {
     let counts = [
       totalTokens, inputTokens, outputTokens, cacheReadInputTokens, cacheWriteInputTokens,
       reasoningTokens, messages,
@@ -479,13 +479,17 @@ public struct LocalUsageModelSummary: Codable, Equatable, Sendable {
     self.cost = cost
   }
 
+  public var isValid: Bool {
+    WireValidation.isModel(model) && totals.isValid && cost.isValid
+  }
+
   public init(from decoder: Decoder) throws {
     try decoder.rejectUnknownWireKeys(["model", "totals", "cost"])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     model = try container.decode(String.self, forKey: .model)
     totals = try container.decode(UsageSummaryTotals.self, forKey: .totals)
     cost = try container.decode(UsageCostOutcome.self, forKey: .cost)
-    guard WireValidation.isModel(model), totals.isValid, cost.isValid else {
+    guard isValid else {
       throw DecodingError.dataCorruptedError(
         forKey: .model,
         in: container,
@@ -519,6 +523,10 @@ public struct LocalUsageProviderSummary: Codable, Equatable, Sendable {
     self.models = models
   }
 
+  public var isValid: Bool {
+    totals.isValid && cost.isValid && models.count <= 1_000 && models.allSatisfy(\.isValid)
+  }
+
   public init(from decoder: Decoder) throws {
     try decoder.rejectUnknownWireKeys(["provider", "totals", "cost", "models"])
     let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -526,7 +534,7 @@ public struct LocalUsageProviderSummary: Codable, Equatable, Sendable {
     totals = try container.decode(UsageSummaryTotals.self, forKey: .totals)
     cost = try container.decode(UsageCostOutcome.self, forKey: .cost)
     models = try container.decode([LocalUsageModelSummary].self, forKey: .models)
-    guard totals.isValid, cost.isValid, models.count <= 1_000 else {
+    guard isValid else {
       throw DecodingError.dataCorruptedError(
         forKey: .provider,
         in: container,
@@ -561,6 +569,10 @@ public struct LocalUsageClientSummary: Codable, Equatable, Sendable {
     self.providers = providers
   }
 
+  public var isValid: Bool {
+    totals.isValid && cost.isValid && providers.count <= 8 && providers.allSatisfy(\.isValid)
+  }
+
   public init(from decoder: Decoder) throws {
     try decoder.rejectUnknownWireKeys(["client", "totals", "cost", "providers"])
     let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -568,7 +580,7 @@ public struct LocalUsageClientSummary: Codable, Equatable, Sendable {
     totals = try container.decode(UsageSummaryTotals.self, forKey: .totals)
     cost = try container.decode(UsageCostOutcome.self, forKey: .cost)
     providers = try container.decode([LocalUsageProviderSummary].self, forKey: .providers)
-    guard totals.isValid, cost.isValid, providers.count <= 8 else {
+    guard isValid else {
       throw DecodingError.dataCorruptedError(
         forKey: .client,
         in: container,
@@ -670,7 +682,7 @@ public struct UsageCoverageSummaryItem: Codable, Equatable, Sendable {
     }
   }
 
-  var isValid: Bool {
+  public var isValid: Bool {
     WireValidation.isOpaqueID(deviceID)
       && WireValidation.isUTCHour(startAt) != nil
       && WireValidation.isUTCHour(endAt) != nil
@@ -713,7 +725,7 @@ public struct UsageDateRange: Codable, Equatable, Sendable {
     }
   }
 
-  var isValid: Bool {
+  public var isValid: Bool {
     WireValidation.isCalendarDate(from) && WireValidation.isCalendarDate(to) && from <= to
   }
 
@@ -797,7 +809,7 @@ public struct AccountUsageSummary: Codable, Equatable, Sendable {
     coverageTruncated == true || breakdownsTruncated == true || cost.hasUnpricedTruncatedDetails
   }
 
-  var isValid: Bool {
+  public var isValid: Bool {
     range.isValid
       && totals.isValid
       && cost.isValid

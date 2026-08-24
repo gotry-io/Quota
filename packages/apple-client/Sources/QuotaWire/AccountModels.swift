@@ -33,7 +33,7 @@ public struct QuotaUserAccount: Codable, Equatable, Sendable {
     try container.encode(createdAt, forKey: .createdAt)
   }
 
-  var isValid: Bool {
+  public var isValid: Bool {
     WireValidation.isOpaqueID(accountID)
       && (displayLabel.map { WireValidation.isTrimmedText($0, maximum: 128) } ?? true)
   }
@@ -304,7 +304,7 @@ public struct AccountDevice: Codable, Equatable, Identifiable, Sendable {
     try container.encode(health, forKey: .health)
   }
 
-  var isValid: Bool {
+  public var isValid: Bool {
     WireValidation.isOpaqueID(deviceID)
       && WireValidation.isTrimmedText(displayName, maximum: 128)
       && WireValidation.isSafePositive(deviceGeneration)
@@ -357,13 +357,20 @@ public struct AccountQuotaObservation: Codable, Equatable, Sendable {
     capturedAt = try container.decode(Date.self, forKey: .capturedAt)
     snapshot = try container.decode(QuotaSnapshot.self, forKey: .snapshot)
     updatedAt = try container.decode(Date.self, forKey: .updatedAt)
-    guard WireValidation.isOpaqueID(deviceID), WireValidation.isSafeNonnegative(sequence) else {
+    guard isValid else {
       throw DecodingError.dataCorruptedError(
         forKey: .deviceID,
         in: container,
         debugDescription: "Invalid quota observation."
       )
     }
+  }
+
+  /// A managed observation names a device, a monotonic sequence, and a provider this
+  /// protocol version accepts. Composed so a reader validating a summary can reuse it.
+  public var isValid: Bool {
+    WireValidation.isOpaqueID(deviceID) && WireValidation.isSafeNonnegative(sequence)
+      && snapshot.provider.syncsToAccount(protocolVersion: WireCodec.managedDataProtocolVersion)
   }
 
   private enum CodingKeys: String, CodingKey {

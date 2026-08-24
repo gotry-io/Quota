@@ -18,9 +18,11 @@ the background. It owns the five-minute schedule, providers, Usage, pricing, OAu
 SQLite, outbox, and local/account observation merge. QuotaBar owns presentation, provider visibility
 and ordering preferences, native provider configuration fields, account actions, accessibility, and
 Launch at Login. Shared remaining-quota, plan/account label, compact count, Usage cost, and compact
-relative-age text come from [`packages/apple-shared`](../../packages/apple-shared). IPC models,
-ProviderID, and session/helper logic stay in this app; QuotaBar does not depend on QuotaWire,
-QuotaRelay, or QuotaAccount. The service persists the Usage upload preference so it applies before
+relative-age text come from [`packages/apple-shared`](../../packages/apple-shared), and the managed
+wire types plus `ProviderID` from its `QuotaWire` module. Private IPC models, the Usage upload and
+local-report types, app-only provider behavior, and session/helper logic stay in this app; QuotaBar
+does not depend on QuotaRelay or QuotaAccount, because the local service owns Relay traffic here.
+The service persists the Usage upload preference so it applies before
 its startup refresh. Quitting the app closes stdin and stops the service and all synchronization.
 
 For catalog browser-session providers, QuotaBar pins login and Cookie discovery to one supported

@@ -1,22 +1,22 @@
 import Foundation
 
-struct WireCodingKey: CodingKey {
-  let stringValue: String
-  let intValue: Int?
+public struct WireCodingKey: CodingKey {
+  public let stringValue: String
+  public let intValue: Int?
 
-  init?(stringValue: String) {
+  public init?(stringValue: String) {
     self.stringValue = stringValue
     intValue = nil
   }
 
-  init?(intValue: Int) {
+  public init?(intValue: Int) {
     stringValue = String(intValue)
     self.intValue = intValue
   }
 }
 
 extension Decoder {
-  func rejectUnknownWireKeys(_ knownKeys: Set<String>) throws {
+  public func rejectUnknownWireKeys(_ knownKeys: Set<String>) throws {
     let container = try container(keyedBy: WireCodingKey.self)
     guard let unknownKey = container.allKeys.first(where: { !knownKeys.contains($0.stringValue) })
     else {
@@ -31,7 +31,7 @@ extension Decoder {
   }
 }
 
-func decodeTrueMarker<Key: CodingKey>(
+public func decodeTrueMarker<Key: CodingKey>(
   _ key: Key,
   from container: KeyedDecodingContainer<Key>
 ) throws -> Bool? {

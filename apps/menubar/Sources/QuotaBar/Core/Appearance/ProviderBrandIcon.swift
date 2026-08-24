@@ -1,4 +1,5 @@
 import AppKit
+import QuotaWire
 import SwiftUI
 
 struct ProviderBrandIcon: View {

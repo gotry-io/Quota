@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import Observation
 import QuotaPresentation
+import QuotaWire
 
 enum QuotaOverviewState: Equatable {
   case loading
@@ -31,7 +32,9 @@ struct ProviderQuotaPresentation: Equatable, Identifiable {
 struct AccountQuotaPresentation: Equatable, Identifiable {
   let identity: QuotaSubscriptionIdentity
   let snapshot: QuotaSnapshot
-  let isStale: Bool
+  /// What the row says about this reading: the source's own report, or aged out by the
+  /// service's verdict. Resolved once here so the view never re-derives it.
+  let state: QuotaObservationState
   let sources: [QuotaObservationSource]
   let selectedSource: QuotaObservationSource
   let selectedSourceDisplayName: String
@@ -58,7 +61,7 @@ struct ProviderReportingSourcePresentation: Equatable, Identifiable {
 
   func detailLabel(now: Date) -> String {
     var parts = [kind.rawValue]
-    if isStale { parts.append("Stale") }
+    if isStale { parts.append(QuotaObservationState.stale.label) }
     parts.append("\(CompactAgeFormat.string(since: observedAt, now: now)) ago")
     return parts.joined(separator: " · ")
   }
@@ -738,7 +741,13 @@ final class MenuBarViewModel {
   ) -> QuotaOverviewState {
     let providers: [ProviderQuotaPresentation] = enabledProviders.compactMap { provider in
       let accounts = displaySnapshots(for: provider)
-      let status = accounts.isEmpty ? providerStatus(for: provider) : nil
+      let result = result(for: provider)
+      // A local failure is about this Mac. Another device's reading fills the row but does
+      // not mean collection here is fine, so the failure still shows. A provider that was
+      // never set up here has nothing to recover and stays quiet once the account covers it.
+      let collectedHere = (result?.sources ?? 0) > 0
+      let status =
+        accounts.isEmpty || collectedHere ? result.flatMap(ProviderStatusCopy.from) : nil
       guard !accounts.isEmpty || status != nil else { return nil }
       return ProviderQuotaPresentation(provider: provider, accounts: accounts, status: status)
     }
@@ -857,10 +866,6 @@ final class MenuBarViewModel {
     )
   }
 
-  private func providerStatus(for provider: ProviderID) -> ProviderStatusCopy? {
-    result(for: provider).flatMap(ProviderStatusCopy.from)
-  }
-
   private static func presentation(
     for item: LocalServiceOverviewItem
   ) -> AccountQuotaPresentation? {
@@ -890,7 +895,9 @@ final class MenuBarViewModel {
         scope: scope
       ),
       snapshot: item.snapshot,
-      isStale: item.isStale,
+      state: item.snapshot.reportedState == .available && item.isStale
+        ? .stale
+        : item.snapshot.reportedState,
       sources: sourcePairs.map(\.1),
       selectedSource: selectedSource,
       selectedSourceDisplayName: item.selectedSourceDisplayName

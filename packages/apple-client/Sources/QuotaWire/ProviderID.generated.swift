@@ -41,4 +41,23 @@ public enum ProviderID: String, Codable, CaseIterable, Identifiable, Sendable {
     case .`cursor`: 7
     }
   }
+
+  /// First managed-data protocol that accepts this provider. Every case in this enum
+  /// syncs; a provider that does not is absent from it.
+  public var accountSyncProtocol: Int {
+    switch self {
+    case .`codex`: 2
+    case .`claude`: 2
+    case .`grok`: 2
+    case .`openrouter`: 2
+    case .`deepseek`: 2
+    case .`kimi`: 2
+    case .`litellm`: 2
+    case .`cursor`: 3
+    }
+  }
+
+  public func syncsToAccount(protocolVersion: Int) -> Bool {
+    accountSyncProtocol <= protocolVersion
+  }
 }

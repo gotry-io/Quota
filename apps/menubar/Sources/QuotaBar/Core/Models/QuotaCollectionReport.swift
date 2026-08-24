@@ -1,4 +1,5 @@
 import Foundation
+import QuotaWire
 
 enum CollectionOutcome: String, Codable, Sendable {
   case success
@@ -14,17 +15,25 @@ struct QuotaCollectionResult: Codable, Equatable, Sendable {
   let snapshots: [QuotaSnapshot]
   let source: String?
   let message: String?
+  /// Local credential sources discovered for this provider. `0` means the provider was
+  /// never set up on this Mac, which is not the same failure as one that was. Optional
+  /// because the service persists this report in SQLite: after an upgrade `get_state`
+  /// replays the previous build's report until the first refresh rewrites it.
+  let sources: Int?
 }
 
 extension QuotaCollectionResult {
   init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys(["provider", "outcome", "snapshots", "source", "message"])
+    try decoder.rejectUnknownWireKeys([
+      "provider", "outcome", "snapshots", "source", "message", "sources",
+    ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     provider = try container.decode(ProviderID.self, forKey: .provider)
     outcome = try container.decode(CollectionOutcome.self, forKey: .outcome)
     snapshots = try container.decode([QuotaSnapshot].self, forKey: .snapshots)
     source = try container.decodeIfPresent(String.self, forKey: .source)
     message = try container.decodeIfPresent(String.self, forKey: .message)
+    sources = try container.decodeIfPresent(Int.self, forKey: .sources)
     let isSuccess = outcome == .success
     guard isSuccess == !snapshots.isEmpty,
       snapshots.count <= 32,
@@ -44,6 +53,7 @@ extension QuotaCollectionResult {
     case snapshots
     case source
     case message
+    case sources
   }
 }
 

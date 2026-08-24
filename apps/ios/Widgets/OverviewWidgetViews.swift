@@ -80,8 +80,8 @@ struct OverviewSmallView: View {
     var parts: [String] = []
     if let resetsAt = item.resetsAt {
       parts.append("Resets \(OverviewWidgetContent.resetAge(resetsAt: resetsAt, now: entry.date))")
-    } else if item.isStale(now: entry.date) {
-      parts.append("Stale")
+    } else if let state = item.stateLabel(now: entry.date) {
+      parts.append(state)
     }
     if let fetchedAt {
       parts.append("Updated \(OverviewWidgetContent.updatedAge(fetchedAt: fetchedAt, now: entry.date))")

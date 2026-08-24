@@ -30,6 +30,13 @@ Do not create a second description of a canonical rule. Update its source and li
 ## Repository boundaries
 
 - Put runnable and deployable products under `apps/` and shared code under `packages/`.
+- The Apple packages own what more than one Apple product speaks: `packages/apple-client` owns the
+  managed wire types — quota, account, and Usage — plus `ProviderID` and Relay access;
+  `packages/apple-shared` owns Foundation-only presentation semantics. QuotaBar owns its private IPC
+  models, its Usage upload and local-report types, and app-only provider behavior, and extends the
+  shared types rather than declaring a second copy. Wire validation lives with the type it protects,
+  so both products fail closed on the same input. Do not restate a type one of those packages
+  already owns; do not move a QuotaBar-only type into them to make it look shared.
 - Do not recreate legacy top-level `internal/`, `protocol/`, or `cmd/` trees.
 - Follow the dependency graph and runtime restrictions in `docs/architecture.md`.
 - Preserve documented protocol and platform interfaces that intentionally reserve future behavior.
@@ -128,9 +135,9 @@ Do not commit generated state such as `node_modules/`, `dist/`, `target/`, `.bui
 - Relay change: run Vitest, local D1 migration verification, and the Cloudflare dry-run build.
 - QuotaBar account-path change: on macOS, run affected Swift and Relay tests plus the signed-service
   integration tests available in the app package.
-- Quota iOS or `packages/apple-client` change: run `pnpm generate:ios`, `swift test --package-path
-  packages/apple-client`, and the iOS Simulator build/tests from `apps/ios/README.md`. Do not migrate
-  QuotaBar into `packages/apple-client` unless that is the requested change.
+- Quota iOS, `packages/apple-client`, or a QuotaBar change that crosses either: run
+  `pnpm generate:ios`, `swift test --package-path packages/apple-client`, `swift test --package-path
+  apps/menubar`, and the iOS Simulator build/tests from `apps/ios/README.md`.
 - Web change: run its type check and production build; inspect desktop and mobile rendering when
   browser tooling is available.
 - Deployment change: validate the Cloudflare workflow and the complete Worker + Static Assets

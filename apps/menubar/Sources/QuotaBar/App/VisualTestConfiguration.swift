@@ -1,5 +1,6 @@
 #if DEBUG
   import QuotaPresentation
+  import QuotaWire
   import SwiftUI
 
   enum VisualTestDataSource: String {
@@ -760,7 +761,8 @@
       outcome: .success,
       snapshots: snapshots,
       source: "visual_test_fixture",
-      message: nil
+      message: nil,
+      sources: 1
     )
   }
 
@@ -774,7 +776,9 @@
       outcome: outcome,
       snapshots: [],
       source: nil,
-      message: message
+      message: message,
+      // A Mac whose stored sign-ins were rejected, not one that never had them.
+      sources: 1
     )
   }
 

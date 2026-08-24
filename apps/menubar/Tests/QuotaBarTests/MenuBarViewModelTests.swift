@@ -1,4 +1,5 @@
 import Foundation
+import QuotaWire
 import Testing
 
 @testable import QuotaBar
@@ -29,7 +30,8 @@ func consumesServiceMergedOverviewWithoutReprocessingObservations() async throws
         outcome: .success,
         snapshots: [snapshot],
         source: "test",
-        message: nil
+        message: nil,
+        sources: 1
       )
     ]
   )
@@ -239,6 +241,100 @@ func accountActionErrorSurvivesAStateWithoutAServiceError() async throws {
   try await Task.sleep(nanoseconds: 20_000_000)
 
   #expect(model.accountErrorMessage == "QuotaBar's local service is unavailable.")
+}
+
+@Test @MainActor
+func anotherDeviceReadingDoesNotHideThisMacsOwnCollectionFailure() async throws {
+  let now = Date(timeIntervalSince1970: 1_786_300_000)
+  let snapshot = QuotaSnapshot(
+    provider: .codex,
+    account: QuotaAccount(
+      fingerprint: "account_test",
+      label: nil,
+      plan: "Plus",
+      fingerprintScope: .global
+    ),
+    windows: [QuotaWindow(id: "monthly", title: "Monthly", usedPercent: 0)],
+    source: "chatgpt_usage_api",
+    status: .available,
+    observedAt: now,
+    validUntil: now.addingTimeInterval(3_600)
+  )
+  let source = LocalServiceOverviewSource(
+    sourceID: "device:other",
+    kind: .device,
+    deviceID: "other",
+    displayName: "Kyle's MacBook Air",
+    observedAt: now,
+    isStale: false
+  )
+  func state(sources: Int) -> LocalServiceState {
+    LocalServiceState(
+      ipcVersion: 1,
+      revision: 3,
+      usageUploadEnabled: true,
+      usagePeriods: emptyUsagePeriods(),
+      quota: component(
+        value: QuotaCollectionReport(
+          protocolVersion: 2,
+          capturedAt: now,
+          results: [
+            QuotaCollectionResult(
+              provider: .codex,
+              outcome: .unavailable,
+              snapshots: [],
+              source: nil,
+              message: nil,
+              sources: sources
+            )
+          ]
+        ),
+        updatedAt: now
+      ),
+      usage: component(value: unavailableUsage(now: now), updatedAt: now),
+      account: emptyComponent(),
+      pricing: emptyComponent(),
+      providers: [],
+      providerBrowserSessions: [],
+      overview: [
+        LocalServiceOverviewItem(
+          identity: LocalServiceOverviewIdentity(
+            provider: .codex,
+            fingerprint: "account_test",
+            scope: .global,
+            sourceID: nil
+          ),
+          snapshot: snapshot,
+          sources: [source],
+          selectedSourceID: source.sourceID,
+          selectedSourceDisplayName: source.displayName,
+          isStale: false
+        )
+      ],
+      repair: .idle
+    )
+  }
+
+  func codexRow(sources: Int) async -> ProviderQuotaPresentation? {
+    let model = MenuBarViewModel(client: StubLocalService(state: state(sources: sources)))
+    await model.refreshIfNeeded()
+    guard case .content(let providers, _) = model.overviewState(enabledProviders: [.codex]) else {
+      Issue.record("Expected quota content")
+      return nil
+    }
+    return providers.first
+  }
+
+  // This Mac holds a Codex sign-in and could not read it. The MacBook Air's reading fills
+  // the row; it does not mean anything about this Mac.
+  let tried = await codexRow(sources: 1)
+  #expect(tried?.accounts.count == 1)
+  #expect(tried?.status?.kind == .unavailable)
+
+  // A Mac that never had Codex has nothing to recover, so the account keeps the row quiet.
+  let neverConfigured = await codexRow(sources: 0)
+  #expect(neverConfigured?.accounts.count == 1)
+  #expect(neverConfigured?.status == nil)
 }
 
 private func loggingInState() -> LocalServiceState {

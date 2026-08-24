@@ -114,8 +114,8 @@ enum OverviewWidgetContent {
     if let resetsAt = item.resetsAt {
       parts.append("Resets \(resetAge(resetsAt: resetsAt, now: now))")
     }
-    if item.isStale(now: now) {
-      parts.append("Stale")
+    if let state = item.stateLabel(now: now) {
+      parts.append(state)
     }
     if let fetchedAt {
       parts.append("Updated \(updatedAge(fetchedAt: fetchedAt, now: now))")

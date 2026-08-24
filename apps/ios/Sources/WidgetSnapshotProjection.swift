@@ -120,7 +120,7 @@ private struct WidgetSnapshotCandidate {
   }
 
   var remainingPercent: Double {
-    RemainingQuotaFormat.remainingPercent(usedPercent: window.usedPercent)
+    window.remainingPercent
   }
 
   var windowTitle: String {
@@ -139,7 +139,7 @@ private struct WidgetSnapshotCandidate {
       unit: window.valueUnit.map(mapUnit),
       hasLimit: hasLimit,
       resetsAt: window.resetsAt,
-      isAvailable: observation.snapshot.isAvailable,
+      state: WidgetQuotaState(observation.snapshot.reportedState),
       validUntil: observation.snapshot.validUntil
     )
   }
