@@ -2,20 +2,19 @@
 
 QuotaRelay is the managed Cloudflare Worker + D1 account and usage service for
 `https://quota.gotry.io`. It serves v2 GitHub account, native-client OAuth, Device control, and
-public catalog APIs alongside compatible v2 and current v3 quota/Usage data APIs. It renders Quota Web documents through SvelteKit
+public catalog APIs alongside the managed-data v4 quota/Usage data APIs. It renders Quota Web documents through SvelteKit
 `Server.respond` as described in [ADR 0011](../../docs/decisions/0011-sveltekit-document-worker.md).
 There is no self-hosted or SQLite runtime.
 
-QuotaBar 0.0.12 and Quota Web use managed-data v3 so Cursor can synchronize. Released v2 clients
-remain supported and receive only the provider and BillingAgent values defined by v2. See
-[ADR 0012](../../docs/decisions/0012-managed-data-v3.md) for the route and compatibility boundary.
+QuotaBar and Quota Web speak managed-data v4, the only data contract this Worker serves. A client
+that speaks an older shape is refused rather than translated; see
+[ADR 0018](../../docs/decisions/0018-single-managed-data-contract.md).
 
 Authenticated collection Devices publish only their own latest sanitized Device Health at
-`PUT /api/v3/device/health`. D1 uses the monotonic diagnostics refresh revision to reject delayed
+`PUT /api/v4/device/health`. D1 uses the monotonic diagnostics refresh revision to reject delayed
 older reports and server receipt time for freshness; Device/Account deletion cascades the row.
-`GET /api/v3/account/summary` keeps its shipped v3 Device shape unless a client explicitly sends
-`device_health=1`, in which case every Device has a required nullable `health` field. Relay stores no
-health history. See
+Every Device on `GET /api/v4/account/summary` carries a required nullable `health` field; a Device
+that has never reported says so rather than being absent. Relay stores no health history. See
 [ADR 0015](../../docs/decisions/0015-diagnostic-attempts-and-device-health.md).
 
 Apply local D1 migrations before starting Wrangler:

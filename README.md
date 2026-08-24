@@ -85,18 +85,17 @@ docs/                     Architecture, security, provider, and decision records
 
 Provider registration starts in `packages/provider/catalog.json`. Run
 `pnpm generate:provider-catalog` after a catalog change to regenerate Rust, Swift, and TypeScript
-provider IDs. Wire JSON uses `snake_case`. OAuth and Device control remain on released v2; quota,
-Usage, and Account summary use managed-data v3. Released v2 data routes remain compatible and never
-emit Cursor. Bundled private IPC v1 changes
+provider IDs. Wire JSON uses `snake_case`. OAuth and Device control remain on v2; quota,
+Usage, and Account summary use managed-data v4, the only data contract Relay serves.
+Bundled private IPC v1 changes
 atomically with QuotaBar. Its local Usage v3 report carries scan status and coverage; state snapshots
-carry precomputed period totals grouped by client, then inference provider, then model. Summary totals are total, input,
+carry precomputed period totals grouped by agent, then inference provider, then model. Summary totals are total, input,
 output, cache-read input, cache-write input, reasoning, and usage-bearing output messages; sessions
 are not collected.
 The service precomputes Today, 7 Days, 30 Days, and All detail for This Mac and the signed-in Account,
 so QuotaBar switches periods without collection or network work; Overview remains quota-only.
-Catalog `account_sync` declares whether a provider synchronizes, while `account_sync_protocol`
-records the first managed-data protocol that accepts it. Cursor starts at v3; v2 remains the closed
-provider set shipped by menubar-v0.0.9.
+Catalog `account_sync` declares whether a provider synchronizes to the managed Account. The local
+collection catalog may be broader than the set the Account accepts.
 
 ## Development
 
@@ -163,7 +162,7 @@ The marketing version lives in `apps/menubar/Support/Info.plist`.
 
 ## Current status
 
-The repository implements protocol-v2 account/device authentication, managed-data v3, a registered
+The repository implements protocol-v2 account/device authentication, managed-data v4, a registered
 read-only `quota-ios` account OAuth client, a Quota iOS Connect Account / Today overview slice on
 `packages/apple-client`, shared Apple presentation semantics in `packages/apple-shared`, a
 non-secret App Group widget snapshot with an embedded WidgetKit extension, independent

@@ -1,4 +1,5 @@
 import Foundation
+import QuotaPresentation
 import QuotaWire
 
 enum CollectionOutcome: String, Codable, Sendable {
@@ -76,7 +77,9 @@ extension QuotaCollectionReport {
     protocolVersion = try container.decode(Int.self, forKey: .protocolVersion)
     capturedAt = try container.decode(Date.self, forKey: .capturedAt)
     results = try container.decode([QuotaCollectionResult].self, forKey: .results)
-    guard protocolVersion == 2, results.count <= ProviderID.allCases.count else {
+    guard protocolVersion == QuotaProtocol.localCollection,
+      results.count <= ProviderID.allCases.count
+    else {
       throw DecodingError.dataCorruptedError(
         forKey: .protocolVersion,
         in: container,

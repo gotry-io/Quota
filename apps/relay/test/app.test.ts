@@ -61,7 +61,7 @@ describe("managed Relay on real Workers and D1", () => {
       scopes: ["usage:write:self"],
     };
     const submission: UsageSubmission = {
-      protocol_version: 3,
+      protocol_version: 4,
       submission_id: "submission_old",
       device_id: "device_watermark",
       generation: 2,
@@ -300,7 +300,7 @@ describe("managed Relay on real Workers and D1", () => {
     };
     const usage = new D1UsageState(env.DB);
     const common = {
-      protocol_version: 3 as const,
+      protocol_version: 4 as const,
       device_id: "device_multipart",
       generation: 1,
       parser_revision: "parser_multipart",
@@ -486,17 +486,14 @@ describe("managed Relay on real Workers and D1", () => {
     });
   });
 
-  it("stores current account data while v2 reads exclude Cursor", async () => {
-    const validUntil = new Date(now.getTime() + 18_000_000).toISOString();
+  it("serves every managed provider and agent from the one summary contract", async () => {
     const quotaSnapshot = (provider: "codex" | "cursor", fingerprint: string) =>
       JSON.stringify({
         provider,
         account: { fingerprint, fingerprint_scope: "global" },
         windows: [],
-        source: `${provider}_test`,
         status: "available",
         observed_at: now.toISOString(),
-        valid_until: validUntil,
       });
     await env.DB.batch([
       env.DB.prepare(
@@ -569,35 +566,27 @@ describe("managed Relay on real Workers and D1", () => {
       hasher,
       now: () => now,
     });
-    const v2 = (await (
-      await app.request("https://quota.gotry.io/api/v2/account/summary?usage_agents=all")
+    const summary = (await (
+      await app.request("https://quota.gotry.io/api/v4/account/summary?usage_agents=all")
     ).json()) as {
       protocol_version: number;
       quota: Array<{ snapshot: { provider: string } }>;
       usage: { totals: { requests: number } };
     };
-    const v3 = (await (
-      await app.request("https://quota.gotry.io/api/v3/account/summary?usage_agents=all")
-    ).json()) as {
-      protocol_version: number;
-      quota: Array<{ snapshot: { provider: string } }>;
-      usage: { totals: { requests: number } };
-    };
-    expect(v2).toMatchObject({ protocol_version: 2, usage: { totals: { requests: 2 } } });
-    expect(v3).toMatchObject({ protocol_version: 3, usage: { totals: { requests: 3 } } });
-    expect(v2.quota.map((observation) => observation.snapshot.provider)).toEqual(["codex"]);
-    expect(v3.quota.map((observation) => observation.snapshot.provider)).toEqual([
+
+    expect(summary).toMatchObject({ protocol_version: 4, usage: { totals: { requests: 3 } } });
+    expect(summary.quota.map((observation) => observation.snapshot.provider)).toEqual([
       "codex",
       "cursor",
     ]);
-    // Readers expire an observation by the instant the collecting device stamped on it,
-    // so it has to survive storage and both summary routes.
+    // The retired data routes are gone rather than kept answering an older shape.
     expect(
-      v3.quota.map((observation) => (observation.snapshot as { valid_until?: string }).valid_until),
-    ).toEqual([validUntil, validUntil]);
+      (await app.request("https://quota.gotry.io/api/v3/account/summary?usage_agents=all")).status,
+    ).toBe(404);
+    expect((await app.request("https://quota.gotry.io/api/v2/account/snapshots")).status).toBe(404);
   });
 
-  it("narrows channels newer than menubar-v0.0.19 unless the caller opts in", async () => {
+  it("reports every billing channel it stores without an opt-in", async () => {
     const channelFact = (channel: string, channelSource: string, model: string) =>
       usageFactInsert("opencode", channel, model, {
         deviceID: "device_channels",
@@ -645,34 +634,25 @@ describe("managed Relay on real Workers and D1", () => {
       const response = await app.request(`https://quota.gotry.io${query}`);
       expect(response.status).toBe(200);
       const body = (await response.json()) as {
-        usage: { clients?: Array<{ providers: Array<{ provider: string }> }> };
+        usage: { agents?: Array<{ providers: Array<{ provider: string }> }> };
       };
-      return (body.usage.clients ?? []).flatMap((client) =>
-        client.providers.map(({ provider }) => provider),
+      return (body.usage.agents ?? []).flatMap((agent) =>
+        agent.providers.map(({ provider }) => provider),
       );
     };
 
-    expect(await providersFor("/api/v3/account/summary?usage_agents=all&usage_clients=1")).toEqual([
+    expect(await providersFor("/api/v4/account/summary?usage_agents=all")).toEqual([
+      "deepseek",
+      "moonshot",
       "unknown",
     ]);
-    expect(
-      await providersFor(
-        "/api/v3/account/summary?usage_agents=all&usage_clients=1&usage_channels=1",
-      ),
-    ).toEqual(["deepseek", "moonshot", "unknown"]);
-    // The released v2 routes never expose the newer channels at all.
-    expect(await providersFor("/api/v2/account/summary?usage_agents=all&usage_clients=1")).toEqual([
-      "unknown",
-    ]);
+    // The retired opt-in is not a query key any more.
     expect(
       (
         await app.request(
-          "https://quota.gotry.io/api/v2/account/summary?usage_agents=all&usage_channels=1",
+          "https://quota.gotry.io/api/v4/account/summary?usage_agents=all&usage_channels=1",
         )
       ).status,
-    ).toBe(400);
-    expect(
-      (await app.request("https://quota.gotry.io/api/v3/account/summary?usage_channels=0")).status,
     ).toBe(400);
   });
 
@@ -722,7 +702,7 @@ describe("managed Relay on real Workers and D1", () => {
     ).toBe(400);
   });
 
-  it("serves retained account history and opted-in client groups", async () => {
+  it("serves retained account history with client groups", async () => {
     await env.DB.batch([
       env.DB.prepare(
         "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_history', 'account_history', ?1, ?1)",
@@ -759,23 +739,21 @@ describe("managed Relay on real Workers and D1", () => {
     });
 
     const current = (await (
-      await app.request("https://quota.gotry.io/api/v2/account/summary?usage_agents=all")
+      await app.request("https://quota.gotry.io/api/v4/account/summary?usage_agents=all")
     ).json()) as {
       usage: {
         range: { from: string; to: string };
         totals: { requests: number };
         breakdowns: Array<{ dimension: string }>;
-        clients?: unknown;
+        agents?: unknown;
       };
     };
     const structured = (await (
-      await app.request(
-        "https://quota.gotry.io/api/v2/account/summary?usage_agents=all&model_catalog=1&usage_clients=1",
-      )
+      await app.request("https://quota.gotry.io/api/v4/account/summary?usage_agents=all")
     ).json()) as {
       usage: {
-        clients: Array<{
-          client: string;
+        agents: Array<{
+          agent: string;
           totals: { messages: number };
           providers: Array<{ provider: string; models: Array<{ model: string }> }>;
         }>;
@@ -786,10 +764,13 @@ describe("managed Relay on real Workers and D1", () => {
       range: { from: "2025-01-01", to: "2026-08-09" },
       totals: { requests: 2 },
     });
-    expect(current.usage.clients).toBeUndefined();
-    expect(structured.usage.clients).toMatchObject([
+    // Client groups are part of the contract, not something a caller asks for.
+    expect(current.usage.agents).toMatchObject([
+      { agent: "codex", providers: [{ provider: "openai" }] },
+    ]);
+    expect(structured.usage.agents).toMatchObject([
       {
-        client: "codex",
+        agent: "codex",
         totals: { messages: 2 },
         providers: [{ provider: "openai", models: [{ model: "gpt-5.6-sol" }] }],
       },
@@ -801,13 +782,10 @@ describe("managed Relay on real Workers and D1", () => {
     expect(
       (
         await app.request(
-          "https://quota.gotry.io/api/v2/account/summary?usage_agents=all&from=2025-01-01&to=2026-08-10",
+          "https://quota.gotry.io/api/v4/account/summary?usage_agents=all&from=2025-01-01&to=2026-08-10",
         )
       ).status,
     ).toBe(200);
-    expect(
-      (await app.request("https://quota.gotry.io/api/v2/account/summary?usage_clients=0")).status,
-    ).toBe(400);
   });
 
   it("marks high-cardinality summaries as truncated", async () => {
@@ -861,7 +839,7 @@ describe("managed Relay on real Workers and D1", () => {
     });
 
     const summary = (await (
-      await app.request("https://quota.gotry.io/api/v2/account/summary?usage_agents=all")
+      await app.request("https://quota.gotry.io/api/v4/account/summary?usage_agents=all")
     ).json()) as {
       usage: { breakdowns_truncated?: boolean; cost: { unpriced_truncated?: boolean } };
     };
@@ -869,7 +847,7 @@ describe("managed Relay on real Workers and D1", () => {
     expect(summary.usage.cost.unpriced_truncated).toBe(true);
 
     const optedInResponse = await app.request(
-      "https://quota.gotry.io/api/v2/account/summary?usage_agents=all&model_catalog=1",
+      "https://quota.gotry.io/api/v4/account/summary?usage_agents=all",
     );
     const optedIn = (await optedInResponse.json()) as {
       usage: { model_catalog_revision?: string };
@@ -877,12 +855,12 @@ describe("managed Relay on real Workers and D1", () => {
     expect(optedInResponse.status).toBe(200);
     expect(optedIn.usage.model_catalog_revision).toEqual(expect.any(String));
     expect(
-      (await app.request("https://quota.gotry.io/api/v2/account/summary?model_catalog=0")).status,
+      (await app.request("https://quota.gotry.io/api/v4/account/summary?model_catalog=0")).status,
     ).toBe(400);
     expect(
       (
         await app.request(
-          "https://quota.gotry.io/api/v2/account/usage/summary?usage_agents=all&from=2026-08-09&to=2026-08-09",
+          "https://quota.gotry.io/api/v4/account/usage/summary?usage_agents=all&from=2026-08-09&to=2026-08-09",
         )
       ).status,
     ).toBe(200);
@@ -920,6 +898,88 @@ describe("managed Relay on real Workers and D1", () => {
         "SELECT COUNT(*) AS count FROM auth_session_store WHERE key_hash = 'expired'",
       ).first("count"),
     ).toBe(0);
+  });
+
+  it("answers an account whose stored reading this build cannot read", async () => {
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_unreadable', 'subject_unreadable', ?1, ?1)",
+      ).bind(now.toISOString()),
+      env.DB.prepare(
+        `INSERT INTO devices (
+             id, account_id, installation_id_hash, generation, created_at, last_login_at
+           ) VALUES ('device_unreadable', 'account_unreadable', 'installation_unreadable', 1, ?1, ?1)`,
+      ).bind(now.toISOString()),
+      // A row a retired build wrote, still carrying the fields this contract removed.
+      env.DB.prepare(
+        `INSERT INTO quota_snapshots (
+             device_id, provider, account_fingerprint, sequence,
+             captured_at, observed_at, snapshot_json, updated_at
+           ) VALUES ('device_unreadable', 'codex', 'fingerprint', 1, ?1, ?1, ?2, ?1)`,
+      ).bind(
+        now.toISOString(),
+        JSON.stringify({
+          provider: "codex",
+          account: { fingerprint: "fingerprint", fingerprint_scope: "global" },
+          windows: [],
+          source: "chatgpt_usage_api",
+          status: "available",
+          observed_at: now.toISOString(),
+          valid_until: now.toISOString(),
+        }),
+      ),
+      env.DB.prepare(
+        `INSERT INTO quota_snapshots (
+             device_id, provider, account_fingerprint, sequence,
+             captured_at, observed_at, snapshot_json, updated_at
+           ) VALUES ('device_unreadable', 'cursor', 'fingerprint', 1, ?1, ?1, ?2, ?1)`,
+      ).bind(
+        now.toISOString(),
+        JSON.stringify({
+          provider: "cursor",
+          account: { fingerprint: "fingerprint", fingerprint_scope: "global" },
+          windows: [],
+          status: "available",
+          observed_at: now.toISOString(),
+        }),
+      ),
+    ]);
+
+    const stored = await new D1AccountState(env.DB).listLatestSnapshots("account_unreadable");
+
+    // The reading it can read is answered; the one it cannot is dropped, not raised.
+    expect(stored.map((observation) => observation.snapshot.provider)).toEqual(["cursor"]);
+  });
+
+  it("keeps a sleeping device's reading and deletes one nothing will read again", async () => {
+    const snapshot = (provider: string, observedAt: string) =>
+      env.DB.prepare(
+        `INSERT INTO quota_snapshots (
+             device_id, provider, account_fingerprint, sequence,
+             captured_at, observed_at, snapshot_json, updated_at
+           ) VALUES ('device_retention', ?1, 'fingerprint', 1, ?2, ?2, '{}', ?3)`,
+      ).bind(provider, observedAt, now.toISOString());
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_retention', 'subject_retention', ?1, ?1)",
+      ).bind(now.toISOString()),
+      env.DB.prepare(
+        `INSERT INTO devices (
+             id, account_id, installation_id_hash, generation, created_at, last_login_at
+           ) VALUES ('device_retention', 'account_retention', 'installation_retention', 1, ?1, ?1)`,
+      ).bind(now.toISOString()),
+      // A Mac that has been closed for two days: still the account's only reading of it.
+      snapshot("codex", "2026-08-08T00:00:00Z"),
+      // A provider this device stopped collecting long enough ago that nothing reads it.
+      snapshot("cursor", "2026-08-01T00:00:00Z"),
+    ]);
+
+    await new D1AccountState(env.DB).performMaintenance(accountMaintenanceInput(now));
+
+    const remaining = await env.DB.prepare(
+      "SELECT provider FROM quota_snapshots WHERE device_id = 'device_retention' ORDER BY provider",
+    ).all<{ provider: string }>();
+    expect(remaining.results.map((row) => row.provider)).toEqual(["codex"]);
   });
 
   it("uses Better Auth's standard GitHub redirect and stores no provider token", async () => {
@@ -1357,7 +1417,7 @@ function usageSubmission(
   rows: ReturnType<typeof usageFact>[],
 ): UsageSubmission {
   return {
-    protocol_version: 3,
+    protocol_version: 4,
     submission_id: submissionID,
     device_id: "device_partial",
     generation: 1,
@@ -1376,7 +1436,7 @@ function usageSubmission(
 
 function unknownModelSubmission(): UsageSubmission {
   return {
-    protocol_version: 3,
+    protocol_version: 4,
     submission_id: "submission_unknown_model",
     device_id: "device_legacy",
     generation: 1,

@@ -8,14 +8,18 @@ import Testing
 
 struct WidgetSnapshotProjectionTests {
   @Test
-  func projectsDedupesByProviderFingerprintAndWindowKeepsNewest() throws {
+  func projectsOneItemPerSubscriptionAndKeepsTheNewestObservation() throws {
+    // One account collected on two Macs. The reading each device took decides which one
+    // speaks, not the order Relay happened to write the rows in: the device that wrote
+    // last here is the one holding the older reading.
     let older = observation(
       provider: "codex",
       fingerprint: "fp_codex_01",
       windowID: "weekly",
       title: "Weekly",
       usedPercent: 40,
-      updatedAt: "2026-08-14T15:00:00Z"
+      observedAt: "2026-08-14T15:00:00Z",
+      deviceID: "device_01"
     )
     let newer = observation(
       provider: "codex",
@@ -23,7 +27,8 @@ struct WidgetSnapshotProjectionTests {
       windowID: "weekly",
       title: "Weekly",
       usedPercent: 10,
-      updatedAt: "2026-08-14T16:00:00Z"
+      observedAt: "2026-08-14T16:00:00Z",
+      deviceID: "device_02"
     )
     let otherFingerprint = observation(
       provider: "codex",
@@ -31,10 +36,12 @@ struct WidgetSnapshotProjectionTests {
       windowID: "weekly",
       title: "Weekly",
       usedPercent: 50,
-      updatedAt: "2026-08-14T16:30:00Z"
     )
     let summary = try decodeSummary(quota: [older, newer, otherFingerprint])
-    let items = WidgetSnapshotProjection.projectItems(from: summary.quota)
+    let items = WidgetSnapshotProjection.projectItems(
+      from: summary.quota,
+      now: date("2026-08-14T16:05:00Z")
+    )
     #expect(items.count == 2)
     #expect(items.map(\.remainingPercent).sorted() == [50, 90])
     #expect(items.allSatisfy { $0.providerID == "codex" })
@@ -51,15 +58,14 @@ struct WidgetSnapshotProjectionTests {
           windowID: "weekly",
           title: "Weekly",
           usedPercent: 20,
-          updatedAt: "2026-08-14T15:00:00Z"
         ),
         observation(
           provider: "codex",
           fingerprint: "fp_codex",
-          windowID: "5h",
-          title: "5h",
-          usedPercent: 80,
-          updatedAt: "2026-08-14T15:00:00Z"
+          windows: [
+            (id: "5h", title: "5h", usedPercent: 80),
+            (id: "weekly", title: "Weekly", usedPercent: 80),
+          ],
         ),
         observation(
           provider: "grok",
@@ -70,15 +76,6 @@ struct WidgetSnapshotProjectionTests {
           remainingValue: 12.5,
           valueUnit: "usd",
           limitValue: nil,
-          updatedAt: "2026-08-14T15:00:00Z"
-        ),
-        observation(
-          provider: "codex",
-          fingerprint: "fp_codex",
-          windowID: "weekly",
-          title: "Weekly",
-          usedPercent: 80,
-          updatedAt: "2026-08-14T15:00:00Z"
         ),
       ]
     )
@@ -102,39 +99,23 @@ struct WidgetSnapshotProjectionTests {
 
   @Test
   func sortsDeterministicallyWithFingerprintAndWindowIdTieBreaks() throws {
+    // One account reporting several windows is one observation carrying all of them, so
+    // the tie-breaks have to order windows within a subscription as well as across them.
     let summary = try decodeSummary(
       quota: [
         observation(
           provider: "codex",
           fingerprint: "fp_b",
-          windowID: "weekly",
-          title: "Weekly",
-          usedPercent: 40,
-          updatedAt: "2026-08-14T15:00:00Z"
+          windows: [(id: "weekly", title: "Weekly", usedPercent: 40)],
         ),
         observation(
           provider: "codex",
           fingerprint: "fp_a",
-          windowID: "weekly",
-          title: "Weekly",
-          usedPercent: 40,
-          updatedAt: "2026-08-14T15:00:00Z"
-        ),
-        observation(
-          provider: "codex",
-          fingerprint: "fp_a",
-          windowID: "daily",
-          title: "Daily",
-          usedPercent: 40,
-          updatedAt: "2026-08-14T15:00:00Z"
-        ),
-        observation(
-          provider: "codex",
-          fingerprint: "fp_a",
-          windowID: "hourly",
-          title: "Daily",
-          usedPercent: 40,
-          updatedAt: "2026-08-14T15:00:00Z"
+          windows: [
+            (id: "weekly", title: "Weekly", usedPercent: 40),
+            (id: "daily", title: "Daily", usedPercent: 40),
+            (id: "hourly", title: "Daily", usedPercent: 40),
+          ],
         ),
       ]
     )
@@ -148,6 +129,40 @@ struct WidgetSnapshotProjectionTests {
   }
 
   @Test
+  func keepsSourceScopedSubscriptionsApartAndOrdersThemDeterministically() throws {
+    // A source-scoped fingerprint means nothing outside its source, so two Macs collecting
+    // the same provider share it. The source is what tells the two subscriptions apart.
+    let observation = { (deviceID: String, usedPercent: Double) in
+      [
+        "device_id": deviceID,
+        "snapshot": [
+          "provider": "litellm",
+          "account": ["fingerprint": "fp_source", "fingerprint_scope": "source"],
+          "windows": [
+            ["id": "weekly", "title": "Weekly", "used_percent": usedPercent] as [String: Any]
+          ],
+          "status": "available",
+          "observed_at": "2026-08-14T15:00:00Z",
+        ] as [String: Any],
+      ] as [String: Any]
+    }
+    let summary = try decodeSummary(quota: [observation("device_b", 40), observation("device_a", 40)])
+
+    let items = WidgetSnapshotProjection.projectItems(
+      from: summary.quota,
+      now: date("2026-08-14T15:05:00Z")
+    )
+
+    #expect(items.count == 2)
+    #expect(
+      WidgetSnapshotProjection.projectItems(
+        from: summary.quota,
+        now: date("2026-08-14T15:05:00Z")
+      ) == items
+    )
+  }
+
+  @Test
   func capsAtSixteenItems() throws {
     let quota = (0..<20).map { index in
       observation(
@@ -156,7 +171,6 @@ struct WidgetSnapshotProjectionTests {
         windowID: "w\(index)",
         title: String(format: "W%02d", index),
         usedPercent: Double(index),
-        updatedAt: "2026-08-14T15:00:00Z"
       )
     }
     let summary = try decodeSummary(quota: quota)
@@ -175,7 +189,6 @@ struct WidgetSnapshotProjectionTests {
           title: "Weekly",
           usedPercent: 29,
           status: "stale",
-          updatedAt: "2026-08-14T15:00:00Z"
         )
       ]
     )
@@ -200,8 +213,7 @@ struct WidgetSnapshotProjectionTests {
           windowID: "weekly",
           title: "Weekly",
           usedPercent: 29,
-          validUntil: "2026-08-14T16:00:00Z",
-          updatedAt: "2026-08-14T15:00:00Z"
+          resetsAt: "2026-08-14T16:00:00Z",
         )
       ]
     )
@@ -225,8 +237,6 @@ struct WidgetSnapshotProjectionTests {
           title: "Monthly",
           usedPercent: 0,
           status: "auth_required",
-          validUntil: "2099-01-01T00:00:00Z",
-          updatedAt: "2026-08-14T15:00:00Z"
         )
       ]
     )
@@ -248,9 +258,7 @@ struct WidgetSnapshotProjectionTests {
           windowID: "weekly",
           title: "Weekly",
           usedPercent: 29,
-          updatedAt: "2026-08-14T15:00:00Z",
           deviceID: "device_01",
-          sequence: 3,
           source: "chatgpt"
         )
       ],
@@ -295,6 +303,30 @@ struct WidgetSnapshotProjectionTests {
   private func observation(
     provider: String,
     fingerprint: String,
+    windows: [(id: String, title: String, usedPercent: Double)],
+    deviceID: String = "device_01",
+    observedAt: String = "2026-08-14T15:00:00Z"
+  ) -> [String: Any] {
+    [
+      "device_id": deviceID,
+      "snapshot": [
+        "provider": provider,
+        "account": [
+          "fingerprint": fingerprint,
+          "fingerprint_scope": "global",
+        ],
+        "windows": windows.map {
+          ["id": $0.id, "title": $0.title, "used_percent": $0.usedPercent] as [String: Any]
+        },
+        "status": "available",
+        "observed_at": observedAt,
+      ] as [String: Any],
+    ]
+  }
+
+  private func observation(
+    provider: String,
+    fingerprint: String,
     windowID: String,
     title: String,
     usedPercent: Double,
@@ -302,10 +334,9 @@ struct WidgetSnapshotProjectionTests {
     valueUnit: String? = nil,
     limitValue: Double? = nil,
     status: String = "available",
-    validUntil: String? = nil,
-    updatedAt: String,
+    resetsAt: String? = nil,
+    observedAt: String = "2026-08-14T15:00:00Z",
     deviceID: String = "device_01",
-    sequence: Int = 1,
     source: String = "chatgpt"
   ) -> [String: Any] {
     var window: [String: Any] = [
@@ -322,6 +353,9 @@ struct WidgetSnapshotProjectionTests {
     if let limitValue {
       window["limit_value"] = limitValue
     }
+    if let resetsAt {
+      window["resets_at"] = resetsAt
+    }
     var snapshot: [String: Any] = [
       "provider": provider,
       "account": [
@@ -329,20 +363,10 @@ struct WidgetSnapshotProjectionTests {
         "fingerprint_scope": "global",
       ],
       "windows": [window],
-      "source": source,
       "status": status,
-      "observed_at": "2026-08-14T15:00:00Z",
+      "observed_at": observedAt,
     ]
-    if let validUntil {
-      snapshot["valid_until"] = validUntil
-    }
-    return [
-      "device_id": deviceID,
-      "sequence": sequence,
-      "captured_at": "2026-08-14T15:00:00Z",
-      "updated_at": updatedAt,
-      "snapshot": snapshot,
-    ]
+    return ["device_id": deviceID, "snapshot": snapshot]
   }
 
   private func accountSummaryJSON(
@@ -351,8 +375,7 @@ struct WidgetSnapshotProjectionTests {
   ) throws -> Data {
     try JSONSerialization.data(
       withJSONObject: [
-        "protocol_version": 3,
-        "generated_at": "2026-08-14T16:00:00Z",
+        "protocol_version": 4,
         "account": [
           "account_id": accountID,
           "display_label": "octocat",

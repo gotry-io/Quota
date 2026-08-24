@@ -363,7 +363,19 @@ pub struct AccountComponentValue {
     pub account_summary: Option<Value>,
 }
 
-#[derive(Debug, Clone, Deserialize, Eq, PartialEq, Serialize)]
+/// OAuth, Device authorization and control, Account metadata, and the catalogs.
+pub const CONTROL_PROTOCOL: i64 = 2;
+
+/// The managed-data protocol this build uploads to and reads from Relay.
+pub const MANAGED_DATA_PROTOCOL: i64 = 4;
+
+/// The private local Usage report contract, versioned independently of managed data.
+pub const LOCAL_USAGE_PROTOCOL: i64 = 3;
+
+/// The private local quota collection report, versioned independently of both.
+pub const LOCAL_COLLECTION_PROTOCOL: i64 = 2;
+
+#[derive(Debug, Clone, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct QuotaOverviewIdentity {
     pub provider: String,

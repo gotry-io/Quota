@@ -11,11 +11,11 @@ struct ProviderQuotaCard: View {
         .font(.headline)
         .accessibilityAddTraits(.isHeader)
 
-      ForEach(Array(model.observations.enumerated()), id: \.offset) { index, observation in
+      ForEach(Array(model.subscriptions.enumerated()), id: \.offset) { index, subscription in
         if index > 0 {
           Divider()
         }
-        observationBlock(observation.snapshot, index: index)
+        observationBlock(subscription.reading, index: index)
       }
     }
     .padding(16)

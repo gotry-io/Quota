@@ -103,7 +103,6 @@ pub fn collect(
             plan: Some(key_info.key_name.unwrap_or_else(|| "LiteLLM".to_owned())),
         },
         windows,
-        source: SOURCE,
         status: "available",
         observed_at: context.observed_at(),
     })

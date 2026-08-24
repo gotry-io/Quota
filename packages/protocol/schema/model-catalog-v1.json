@@ -57,7 +57,7 @@
         "provider": {
           "$ref": "#/$defs/__schema3"
         },
-        "client": {
+        "agent": {
           "$ref": "#/$defs/__schema4"
         },
         "effective_from": {
@@ -92,7 +92,7 @@
     },
     "__schema4": {
       "type": "string",
-      "enum": ["codex", "claude_code", "grok", "opencode", "pi"]
+      "enum": ["codex", "claude_code", "grok", "opencode", "pi", "cursor"]
     },
     "__schema5": {
       "$ref": "#/$defs/__schema6"

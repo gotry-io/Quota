@@ -96,7 +96,6 @@ enum VisualFixture: String, CaseIterable, Sendable {
             ),
           ],
           observedAt: date.addingTimeInterval(-90),
-          updatedAt: date
         ),
         observation(
           provider: .claude,
@@ -113,7 +112,6 @@ enum VisualFixture: String, CaseIterable, Sendable {
             )
           ],
           observedAt: date.addingTimeInterval(-120),
-          updatedAt: date
         ),
         observation(
           provider: .grok,
@@ -130,12 +128,10 @@ enum VisualFixture: String, CaseIterable, Sendable {
             )
           ],
           observedAt: date.addingTimeInterval(-180),
-          updatedAt: date
         ),
       ]
 
       return AccountSummary(
-        generatedAt: date,
         account: QuotaUserAccount(
           accountID: "account_visual_octocat",
           displayLabel: "octocat",
@@ -180,7 +176,6 @@ enum VisualFixture: String, CaseIterable, Sendable {
 
     static func emptySummary(at date: Date) -> AccountSummary {
       AccountSummary(
-        generatedAt: date,
         account: QuotaUserAccount(
           accountID: "account_visual_empty",
           displayLabel: "octocat",
@@ -269,13 +264,10 @@ enum VisualFixture: String, CaseIterable, Sendable {
       label: String?,
       plan: String?,
       windows: [QuotaWindow],
-      observedAt: Date,
-      updatedAt: Date
+      observedAt: Date
     ) -> AccountQuotaObservation {
       AccountQuotaObservation(
         deviceID: deviceID,
-        sequence: 1,
-        capturedAt: observedAt,
         snapshot: QuotaSnapshot(
           provider: provider,
           account: QuotaAccount(
@@ -285,13 +277,9 @@ enum VisualFixture: String, CaseIterable, Sendable {
             fingerprintScope: .global
           ),
           windows: windows,
-          source: "visual_fixture",
           status: .available,
-          observedAt: observedAt,
-          // Same rule the collector applies: valid until the first window reset.
-          validUntil: windows.compactMap(\.resetsAt).min() ?? updatedAt.addingTimeInterval(300)
-        ),
-        updatedAt: updatedAt
+          observedAt: observedAt
+        )
       )
     }
 

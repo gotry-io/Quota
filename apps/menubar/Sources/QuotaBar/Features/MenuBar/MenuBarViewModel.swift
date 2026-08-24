@@ -270,10 +270,10 @@ final class MenuBarViewModel {
           usage: LocalUsagePeriodSummary(
             totals: UsageSummaryTotals(usage.totals),
             cost: usage.cost,
-            clients: usage.clients ?? [],
+            agents: usage.agents ?? [],
             modelsTruncated: usage.breakdownsTruncated
           ),
-          fallbackModels: usage.clients == nil
+          fallbackModels: usage.agents == nil
             ? usage.breakdowns.filter { $0.dimension == .model }.map {
               LocalUsageModelSummary(
                 model: $0.key,

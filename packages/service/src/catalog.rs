@@ -49,7 +49,6 @@ pub struct ProviderCatalogEntry {
     pub setup_action: &'static str,
     pub brand_icon_asset: &'static str,
     pub account_sync: bool,
-    pub account_sync_protocol: Option<u8>,
     pub environment_keys: &'static [&'static str],
     pub credential_config: Option<ApiKeyConfig>,
     pub browser_session: Option<BrowserSessionConfig>,
@@ -66,7 +65,6 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
         setup_action: "codex login",
         brand_icon_asset: "openai",
         account_sync: true,
-        account_sync_protocol: Some(2),
         environment_keys: &["CODEX_HOME"],
         credential_config: None,
         browser_session: Some(BrowserSessionConfig {
@@ -98,7 +96,6 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
         setup_action: "claude auth login",
         brand_icon_asset: "claude",
         account_sync: true,
-        account_sync_protocol: Some(2),
         environment_keys: &["CLAUDE_CONFIG_DIR"],
         credential_config: None,
         browser_session: Some(BrowserSessionConfig {
@@ -121,7 +118,6 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
         setup_action: "grok login",
         brand_icon_asset: "grok",
         account_sync: true,
-        account_sync_protocol: Some(2),
         environment_keys: &["GROK_HOME"],
         credential_config: None,
         browser_session: Some(BrowserSessionConfig {
@@ -144,7 +140,6 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
         setup_action: "Configure in QuotaBar",
         brand_icon_asset: "openrouter",
         account_sync: true,
-        account_sync_protocol: Some(2),
         environment_keys: &["OPENROUTER_API_KEY"],
         credential_config: Some(ApiKeyConfig {
             supports_base_url: false,
@@ -164,7 +159,6 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
         setup_action: "Configure in QuotaBar",
         brand_icon_asset: "deepseek",
         account_sync: true,
-        account_sync_protocol: Some(2),
         environment_keys: &["DEEPSEEK_API_KEY", "DEEPSEEK_KEY"],
         credential_config: Some(ApiKeyConfig {
             supports_base_url: false,
@@ -184,7 +178,6 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
         setup_action: "Configure in QuotaBar",
         brand_icon_asset: "kimi",
         account_sync: true,
-        account_sync_protocol: Some(2),
         environment_keys: &["KIMI_CODE_API_KEY", "KIMI_API_KEY"],
         credential_config: Some(ApiKeyConfig {
             supports_base_url: false,
@@ -212,7 +205,6 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
         setup_action: "Configure in QuotaBar",
         brand_icon_asset: "litellm",
         account_sync: true,
-        account_sync_protocol: Some(2),
         environment_keys: &["LITELLM_API_KEY", "LITELLM_BASE_URL"],
         credential_config: Some(ApiKeyConfig {
             supports_base_url: true,
@@ -232,7 +224,6 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
         setup_action: "Sign in with browser",
         brand_icon_asset: "cursor",
         account_sync: true,
-        account_sync_protocol: Some(3),
         environment_keys: &[],
         credential_config: None,
         browser_session: Some(BrowserSessionConfig {
@@ -263,7 +254,7 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
 ];
 
 impl ProviderId {
-    /// Every local collector. Use metadata.account_sync_protocol as the managed protocol boundary.
+    /// Every local collector. Use `syncs_to_account` for the managed Account boundary.
     pub const ALL: &'static [Self] = &[
         Self::Codex,
         Self::Claude,
@@ -315,13 +306,10 @@ impl ProviderId {
         }
     }
 
-    /// Whether a managed-data protocol version accepts this provider. Mirrors the Swift
-    /// `ProviderID.syncsToAccount(protocolVersion:)` so one rule carries one name per language.
-    pub const fn syncs_to_account(self, protocol_version: u8) -> bool {
-        match self.metadata().account_sync_protocol {
-            Some(version) => version <= protocol_version,
-            None => false,
-        }
+    /// Whether the managed Account accepts this provider. The Swift `ProviderID` carries the
+    /// same rule as its membership, because it lists only the providers the Account accepts.
+    pub const fn syncs_to_account(self) -> bool {
+        self.metadata().account_sync
     }
 }
 

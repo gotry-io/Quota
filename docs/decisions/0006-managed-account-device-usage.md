@@ -70,7 +70,8 @@ shared `providers.json`/`ProviderConfigLock` path and OAuth `client_id=quotacli`
 interfaces rather than compatibility behavior.
 
 OAuth and Device control retain their released v2 contracts. Quota, Usage, and Account summary use
-managed-data v3 from QuotaBar 0.0.12; compatible v2 data routes remain available and exclude Cursor.
+managed-data v3 from QuotaBar 0.0.12. The parallel v2 data routes were retired by
+[ADR 0018](0018-single-managed-data-contract.md).
 The version boundary is defined by [ADR 0012](0012-managed-data-v3.md).
 
 Logout first disables local upload and revokes sessions, but retains the remote Device and data.

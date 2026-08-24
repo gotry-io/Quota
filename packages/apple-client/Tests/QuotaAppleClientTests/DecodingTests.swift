@@ -4,7 +4,7 @@ import Testing
 
 struct DecodingTests {
   @Test
-  func deviceHealthOptInRequiresNullableKeyAndStrictBoundedPayload() throws {
+  func deviceHealthIsRequiredNullableAndStrictlyBounded() throws {
     let data = try Fixtures.accountSummaryJSON(
       devices: [Fixtures.accountDevice(health: Fixtures.deviceHealth())]
     )
@@ -38,7 +38,7 @@ struct DecodingTests {
   func decodesAccountSummaryAndRejectsUnknownFields() throws {
     let data = try Fixtures.accountSummaryJSON(quota: [Fixtures.quotaObservation()])
     let summary = try WireCodec.decode(AccountSummary.self, from: data)
-    #expect(summary.protocolVersion == 3)
+    #expect(summary.protocolVersion == WireCodec.managedDataProtocolVersion)
     #expect(summary.account.displayLabel == "octocat")
     #expect(summary.quota.first?.snapshot.provider == .codex)
     #expect(summary.quota.first?.snapshot.windows.first?.usedPercent == 29)
@@ -78,6 +78,22 @@ struct DecodingTests {
     }
   }
 
+  /// A reading says how long it describes current quota through its own windows, so the
+  /// stamp devices used to upload is not part of a snapshot and is refused, not ignored.
+  @Test
+  func rejectsASnapshotCarryingTheRetiredValidityStamp() throws {
+    var observation = Fixtures.quotaObservation()
+    var snapshot = observation["snapshot"] as! [String: Any]
+    snapshot["valid_until"] = "2026-12-31T00:00:00Z"
+    observation["snapshot"] = snapshot
+    #expect(throws: DecodingError.self) {
+      _ = try WireCodec.decode(
+        AccountSummary.self,
+        from: Fixtures.accountSummaryJSON(quota: [observation])
+      )
+    }
+  }
+
   @Test
   func acceptsCurrentManagedDataAndRejectsReleasedV2Summary() throws {
     var cursor = Fixtures.quotaObservation()
@@ -111,9 +127,9 @@ struct DecodingTests {
     let data = try Fixtures.accountSummaryJSON(
       extraUsage: [
         "model_catalog_revision": "catalog_1",
-        "clients": [
+        "agents": [
           [
-            "client": "codex",
+            "agent": "codex",
             "totals": structured,
             "cost": cost,
             "providers": [
@@ -135,7 +151,7 @@ struct DecodingTests {
       ]
     )
     let summary = try WireCodec.decode(AccountSummary.self, from: data)
-    #expect(summary.usage.clients?.first?.providers.first?.models.first?.model == "gpt-5.6-sol")
+    #expect(summary.usage.agents?.first?.providers.first?.models.first?.model == "gpt-5.6-sol")
 
     let tokens = try Fixtures.tokenResponse(extra: ["device_id": "device_01"])
     #expect(throws: DecodingError.self) {

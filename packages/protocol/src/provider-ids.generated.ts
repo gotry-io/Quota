@@ -3,21 +3,8 @@
 
 import { z } from "zod";
 
-// Released managed Account/Relay v2 IDs. The local provider catalog may be broader.
+// Every provider the managed Account accepts. The local provider catalog may be broader.
 export const PROVIDER_IDS = [
-  "codex",
-  "claude",
-  "grok",
-  "openrouter",
-  "deepseek",
-  "kimi",
-  "litellm",
-] as const;
-export type ProviderId = (typeof PROVIDER_IDS)[number];
-export const ProviderIdSchema = z.enum(PROVIDER_IDS);
-
-// Current managed Account/Relay v3 IDs.
-export const PROVIDER_IDS_V3 = [
   "codex",
   "claude",
   "grok",
@@ -27,8 +14,8 @@ export const PROVIDER_IDS_V3 = [
   "litellm",
   "cursor",
 ] as const;
-export type ProviderIdV3 = (typeof PROVIDER_IDS_V3)[number];
-export const ProviderIdV3Schema = z.enum(PROVIDER_IDS_V3);
+export type ProviderId = (typeof PROVIDER_IDS)[number];
+export const ProviderIdSchema = z.enum(PROVIDER_IDS);
 
 // Every provider accepted by the private local collection report.
 export const LOCAL_PROVIDER_IDS = [

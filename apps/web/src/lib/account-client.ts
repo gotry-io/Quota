@@ -1,6 +1,6 @@
 import {
-  type AccountSummaryV3DeviceHealth as AccountSummary,
-  AccountSummaryV3DeviceHealthSchema as AccountSummarySchema,
+  type AccountSummary,
+  AccountSummarySchema,
   DeviceAuthorizationDecisionRequestSchema,
   PROTOCOL_VERSION,
   type PublicProfile,
@@ -84,7 +84,7 @@ export async function fetchAccountSummary(): Promise<
   { status: "ok"; summary: AccountSummary } | { status: "unauthorized" } | { status: "error" }
 > {
   const response = await fetch(
-    "/api/v3/account/summary?cost_mode=auto&usage_agents=all&model_catalog=1&device_health=1&usage_channels=1",
+    "/api/v4/account/summary?cost_mode=auto&usage_agents=all",
     jsonRequest,
   );
   if (response.status === 401) return { status: "unauthorized" };

@@ -1445,7 +1445,7 @@ fn local_summary_caps_model_detail_without_failing_totals() {
         .collect::<Vec<_>>();
     let summary = build_local_usage_summary(&rows, None, None).expect("bounded models");
     assert_eq!(
-        summary.clients[0].providers[0].models.len(),
+        summary.agents[0].providers[0].models.len(),
         MAX_USAGE_MODELS
     );
     assert!(summary.models_truncated);
@@ -1455,7 +1455,7 @@ fn local_summary_caps_model_detail_without_failing_totals() {
 #[test]
 fn model_key_collision_keeps_canonical_and_raw_groups_separate() {
     let catalog = serde_json::from_value::<crate::model_catalog::ModelCatalog>(json!({
-        "schema_version": 1,
+        "schema_version": 2,
         "revision": "test-1",
         "models": [{
             "canonical_id": "gpt-5.5",
@@ -1468,7 +1468,7 @@ fn model_key_collision_keeps_canonical_and_raw_groups_separate() {
         test_fact("2026-08-02T13:00:00Z", "GPT-5.5"),
     ];
     let summary = build_local_usage_summary(&rows, None, Some(&catalog)).expect("summary");
-    let models = &summary.clients[0].providers[0].models;
+    let models = &summary.agents[0].providers[0].models;
     assert!(!summary.models_truncated);
     assert_eq!(models.len(), 2);
     assert_eq!(
@@ -1487,7 +1487,7 @@ fn model_key_collision_keeps_canonical_and_raw_groups_separate() {
 #[test]
 fn model_catalog_revision_regroups_retained_rows_without_rewriting_them() {
     let mut catalog = serde_json::from_value::<crate::model_catalog::ModelCatalog>(json!({
-        "schema_version": 1,
+        "schema_version": 2,
         "revision": "test-before",
         "models": [{
             "canonical_id": "gpt-5.5",
@@ -1499,7 +1499,7 @@ fn model_catalog_revision_regroups_retained_rows_without_rewriting_them() {
     let summarize = |catalog: &crate::model_catalog::ModelCatalog| {
         build_local_usage_summary(&rows, None, Some(catalog))
             .expect("summary")
-            .clients
+            .agents
             .into_iter()
             .next()
             .and_then(|client| client.providers.into_iter().next())
@@ -1513,7 +1513,7 @@ fn model_catalog_revision_regroups_retained_rows_without_rewriting_them() {
         serde_json::from_value(json!({
             "reported_model": "GPT-5.5[1m]",
             "provider": "openai",
-            "client": "codex",
+            "agent": "codex",
             "effective_from": "2026-04-24"
         }))
         .expect("alias"),
@@ -1553,19 +1553,19 @@ fn local_summary_groups_client_provider_model_and_counts_output_messages() {
     assert_eq!(summary.totals.cache_write_input_tokens, 15);
     assert_eq!(summary.totals.reasoning_tokens, 15);
     assert_eq!(summary.totals.messages, 3);
-    assert_eq!(summary.clients.len(), 1);
-    assert_eq!(summary.clients[0].client, UsageAgent::Codex);
-    assert_eq!(summary.clients[0].providers.len(), 2);
+    assert_eq!(summary.agents.len(), 1);
+    assert_eq!(summary.agents[0].agent, UsageAgent::Codex);
+    assert_eq!(summary.agents[0].providers.len(), 2);
     assert_eq!(
-        summary.clients[0].providers[0].provider,
+        summary.agents[0].providers[0].provider,
         InferenceProvider::Openai
     );
-    assert_eq!(summary.clients[0].providers[0].models[0].model, "gpt-5.5");
+    assert_eq!(summary.agents[0].providers[0].models[0].model, "gpt-5.5");
     assert_eq!(
-        summary.clients[0].providers[1].provider,
+        summary.agents[0].providers[1].provider,
         InferenceProvider::Anthropic
     );
-    assert_eq!(summary.clients[0].providers[1].models[0].model, "gpt-5.5");
+    assert_eq!(summary.agents[0].providers[1].models[0].model, "gpt-5.5");
 }
 
 #[test]
@@ -1587,7 +1587,7 @@ fn local_summary_uses_complete_source_cost_when_catalog_cannot_price_a_model() {
     assert_eq!(summary.cost.status, UsageCostStatus::Complete);
     assert_eq!(summary.cost.amount_microusd.as_deref(), Some("12699"));
     assert_eq!(
-        summary.clients[0].providers[0].models[0]
+        summary.agents[0].providers[0].models[0]
             .cost
             .amount_microusd
             .as_deref(),

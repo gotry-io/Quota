@@ -173,7 +173,6 @@ fn collect_with_bearer(
             plan: None,
         },
         windows,
-        source,
         status: "available",
         observed_at: context.observed_at(),
     })
@@ -242,7 +241,6 @@ fn collect_web(context: &CollectionContext) -> Result<QuotaSnapshot, ProviderErr
             plan: None,
         },
         windows,
-        source: WEB_SOURCE,
         status: "available",
         observed_at: context.observed_at(),
     })

@@ -77,12 +77,16 @@ final class AppModel {
     PlanDisplay.accountLabel(summary?.account.displayLabel) ?? "Account"
   }
 
+  /// One card per provider, and inside it one row per subscription rather than per
+  /// reporting device: an account collected on three Macs is one subscription, not three.
   var providerCards: [ProviderQuotaCardModel] {
     guard let summary else { return [] }
-    let grouped = Dictionary(grouping: summary.quota, by: \.snapshot.provider)
+    let grouped = Dictionary(grouping: AccountQuotaSubscriptions.resolve(summary.quota)) {
+      $0.reading.provider
+    }
     return ProviderID.allCases.compactMap { provider in
-      guard let observations = grouped[provider], !observations.isEmpty else { return nil }
-      return ProviderQuotaCardModel(provider: provider, observations: observations)
+      guard let subscriptions = grouped[provider], !subscriptions.isEmpty else { return nil }
+      return ProviderQuotaCardModel(provider: provider, subscriptions: subscriptions)
     }
   }
 
@@ -231,5 +235,5 @@ final class AppModel {
 struct ProviderQuotaCardModel: Identifiable, Equatable {
   var id: ProviderID { provider }
   let provider: ProviderID
-  let observations: [AccountQuotaObservation]
+  let subscriptions: [QuotaSubscription<QuotaSnapshot>]
 }

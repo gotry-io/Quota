@@ -10,7 +10,7 @@ struct RelayClientTests {
       Set(RelayRoute.allCases.map(\.path)) == [
         "/oauth/v2/token",
         "/oauth/v2/revoke",
-        "/api/v3/account/summary",
+        "/api/v4/account/summary",
       ])
     #expect(RelayRoute.allCases.allSatisfy { !$0.path.contains("/device/") })
     #expect(RelayRoute.allCases.allSatisfy { $0.method == "GET" || $0.method == "POST" })
@@ -46,16 +46,17 @@ struct RelayClientTests {
         url.scheme == "https" && url.host == "quota.gotry.io"
           && (url.port == nil || url.port == 443)
       })
-    #expect(transport.recordedURLs.first?.path == "/api/v3/account/summary")
+    #expect(transport.recordedURLs.first?.path == "/api/v4/account/summary")
     let query =
       URLComponents(url: transport.recordedURLs[0], resolvingAgainstBaseURL: false)?
       .queryItems ?? []
     let items = Dictionary(uniqueKeysWithValues: query.map { ($0.name, $0.value ?? "") })
     #expect(items["usage_agents"] == "all")
-    #expect(items["usage_clients"] == "1")
-    #expect(items["model_catalog"] == "1")
-    #expect(items["device_health"] == "1")
-    #expect(items["usage_channels"] == "1")
+    // One contract: the summary carries client groups, the catalog revision, and Device
+    // Health without being asked, so the request has no negotiation keys.
+    for retired in ["usage_clients", "model_catalog", "device_health", "usage_channels"] {
+      #expect(items[retired] == nil)
+    }
     #expect(items["cost_mode"] == "auto")
     #expect(items["from"] == "2026-08-14")
     #expect(items["to"] == "2026-08-14")

@@ -1,9 +1,11 @@
 import {
-  type AccountUsageSummaryV3 as AccountUsageSummary,
-  PROTOCOL_VERSION,
+  MAXIMUM_PUBLIC_PROFILE_QUOTA,
+  type AccountUsageSummary,
+  PUBLIC_PROFILE_PROTOCOL_VERSION,
   type PublicProfile,
   PublicProfileSlugSchema,
 } from "@gotry-io/quota-protocol";
+import { mergeQuotaObservations } from "@gotry-io/quota-model";
 import type { StoredQuotaSnapshot as RelaySnapshot } from "@gotry-io/relay-core";
 
 export function normalizePublicSlug(value: string): string | null {
@@ -17,22 +19,32 @@ export function normalizePublicSlug(value: string): string | null {
   return parsed.success ? parsed.data : null;
 }
 
+/**
+ * A shareable page publishes one row per subscription — the same unit the dashboard, the
+ * Overview, and the widget show, so two accounts on one provider read as two rows rather
+ * than one silently chosen for the viewer.
+ *
+ * The page carries no freshness of its own, so a reading it shows is read as current.
+ * Resolving the reporting devices first, and publishing only a subscription that still
+ * describes current quota, is what keeps that true: a device that stopped collecting can no
+ * longer speak for the account, and a device that re-uploaded an old reading cannot outrank
+ * a newer one.
+ */
 export function publicProfileFromAccount(input: {
   slug: string;
   displayLabel: string | null;
   snapshots: readonly RelaySnapshot[];
   usage: AccountUsageSummary;
+  now: Date;
 }): PublicProfile {
   const quota = [];
-  const seen = new Set<string>();
-  for (const observation of input.snapshots) {
-    const provider = observation.snapshot.provider;
-    if (seen.has(provider)) continue;
-    seen.add(provider);
+  for (const subscription of mergeQuotaObservations(input.snapshots, input.now)) {
+    if (subscription.is_stale) continue;
+    if (quota.length === MAXIMUM_PUBLIC_PROFILE_QUOTA) break;
     quota.push({
-      provider,
-      plan: observation.snapshot.account.plan ?? null,
-      windows: observation.snapshot.windows.map((window) => ({
+      provider: subscription.snapshot.provider,
+      plan: subscription.snapshot.account.plan ?? null,
+      windows: subscription.snapshot.windows.map((window) => ({
         title: window.title,
         used_percent: window.used_percent,
         ...(window.remaining_value !== undefined
@@ -52,7 +64,7 @@ export function publicProfileFromAccount(input: {
     .sort((left, right) => right.tokens - left.tokens)
     .slice(0, 5);
   return {
-    protocol_version: PROTOCOL_VERSION,
+    protocol_version: PUBLIC_PROFILE_PROTOCOL_VERSION,
     username: input.slug,
     display_label: input.displayLabel,
     quota,

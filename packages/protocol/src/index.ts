@@ -6,11 +6,8 @@ import {
   type LocalProviderId,
   LocalProviderIdSchema,
   PROVIDER_IDS,
-  PROVIDER_IDS_V3,
   type ProviderId,
   ProviderIdSchema,
-  type ProviderIdV3,
-  ProviderIdV3Schema,
 } from "./provider-ids.generated.ts";
 
 export {
@@ -18,17 +15,27 @@ export {
   type LocalProviderId,
   LocalProviderIdSchema,
   PROVIDER_IDS,
-  PROVIDER_IDS_V3,
   type ProviderId,
   ProviderIdSchema,
-  type ProviderIdV3,
-  ProviderIdV3Schema,
 };
 
+/**
+ * Each contract carries its own version, because each evolves on its own terms. Sharing a
+ * number couples two contracts that have nothing to say to each other: bumping one would
+ * force the other to move with it.
+ */
+/** OAuth, Device authorization and control, Account metadata, and the catalogs. */
 export const PROTOCOL_VERSION = 2 as const;
-export const MANAGED_DATA_PROTOCOL_VERSION = 3 as const;
+/** Quota, Usage, and Account summary between a Device and Relay. */
+export const MANAGED_DATA_PROTOCOL_VERSION = 4 as const;
+/** The private local Usage report the service hands its own app. */
 export const LOCAL_USAGE_PROTOCOL_VERSION = 3 as const;
+/** The private local quota collection report the service hands its own app. */
+export const LOCAL_COLLECTION_PROTOCOL_VERSION = 2 as const;
+/** The unauthenticated public profile projection. */
+export const PUBLIC_PROFILE_PROTOCOL_VERSION = 2 as const;
 export const MAXIMUM_SNAPSHOTS_PER_ENVELOPE = 32;
+export const MAXIMUM_PUBLIC_PROFILE_QUOTA = 32;
 export const MAXIMUM_WINDOWS_PER_SNAPSHOT = 16;
 export const MAXIMUM_USAGE_ROWS_PER_SUBMISSION = 2_048;
 export const MAXIMUM_USAGE_COVERAGE_HOURS = 24 * 31;
@@ -136,18 +143,11 @@ export const QuotaSnapshotSchema = z
     provider: ProviderIdSchema,
     account: QuotaAccountSchema,
     windows: z.array(QuotaWindowSchema).max(MAXIMUM_WINDOWS_PER_SNAPSHOT),
-    source: BillingDimensionSchema,
     status: QuotaStatusSchema,
     observed_at: Rfc3339InstantSchema,
-    valid_until: Rfc3339InstantSchema.optional(),
   })
   .strict();
 export type QuotaSnapshot = z.infer<typeof QuotaSnapshotSchema>;
-
-export const QuotaSnapshotV3Schema = QuotaSnapshotSchema.extend({
-  provider: ProviderIdV3Schema,
-});
-export type QuotaSnapshotV3 = z.infer<typeof QuotaSnapshotV3Schema>;
 
 const LocalQuotaSnapshotSchema = QuotaSnapshotSchema.extend({
   provider: LocalProviderIdSchema,
@@ -156,7 +156,7 @@ const LocalQuotaSnapshotSchema = QuotaSnapshotSchema.extend({
 /** The only supported remote quota upload envelope. */
 export const QuotaSnapshotEnvelopeSchema = z
   .object({
-    protocol_version: z.literal(PROTOCOL_VERSION),
+    protocol_version: z.literal(MANAGED_DATA_PROTOCOL_VERSION),
     device_id: OpaqueIdSchema,
     generation: SafePositiveIntegerSchema,
     sequence: SafeNonnegativeIntegerSchema,
@@ -165,12 +165,6 @@ export const QuotaSnapshotEnvelopeSchema = z
   })
   .strict();
 export type QuotaSnapshotEnvelope = z.infer<typeof QuotaSnapshotEnvelopeSchema>;
-
-export const QuotaSnapshotEnvelopeV3Schema = QuotaSnapshotEnvelopeSchema.extend({
-  protocol_version: z.literal(MANAGED_DATA_PROTOCOL_VERSION),
-  snapshots: z.array(QuotaSnapshotV3Schema).max(MAXIMUM_SNAPSHOTS_PER_ENVELOPE),
-});
-export type QuotaSnapshotEnvelopeV3 = z.infer<typeof QuotaSnapshotEnvelopeV3Schema>;
 
 export const CollectionOutcomeSchema = z.enum([
   "success",
@@ -220,7 +214,7 @@ export type QuotaCollectionResult = z.infer<typeof QuotaCollectionResultSchema>;
 
 export const QuotaCollectionReportSchema = z
   .object({
-    protocol_version: z.literal(PROTOCOL_VERSION),
+    protocol_version: z.literal(LOCAL_COLLECTION_PROTOCOL_VERSION),
     captured_at: Rfc3339InstantSchema,
     results: z.array(QuotaCollectionResultSchema).max(LOCAL_PROVIDER_IDS.length),
   })
@@ -615,13 +609,9 @@ export const DeleteDeviceResponseSchema = z
   .strict();
 export type DeleteDeviceResponse = z.infer<typeof DeleteDeviceResponseSchema>;
 
-export const BILLING_AGENTS = ["codex", "claude_code", "grok", "opencode", "pi"] as const;
+export const BILLING_AGENTS = ["codex", "claude_code", "grok", "opencode", "pi", "cursor"] as const;
 export const BillingAgentSchema = z.enum(BILLING_AGENTS);
 export type BillingAgent = z.infer<typeof BillingAgentSchema>;
-
-export const BILLING_AGENTS_V3 = [...BILLING_AGENTS, "cursor"] as const;
-export const BillingAgentV3Schema = z.enum(BILLING_AGENTS_V3);
-export type BillingAgentV3 = z.infer<typeof BillingAgentV3Schema>;
 
 export const InferenceProviderSchema = z.enum([
   "openai",
@@ -641,8 +631,7 @@ export const MAXIMUM_MODEL_CATALOG_MODELS = 512;
 export const MAXIMUM_MODEL_CATALOG_ALIASES_PER_MODEL = 32;
 export const MAXIMUM_MODEL_CATALOG_ALIASES = 4_096;
 
-/** Channels menubar-v0.0.19 shipped with, kept as the base every wider list derives from. */
-const RELEASED_DIRECT_BILLING_CHANNELS = [
+export const BillingChannelSchema = z.enum([
   "openai_direct",
   "azure_openai",
   "anthropic_direct",
@@ -650,33 +639,12 @@ const RELEASED_DIRECT_BILLING_CHANNELS = [
   "google_vertex",
   "openrouter",
   "xai_direct",
-] as const;
-const ADDED_DIRECT_BILLING_CHANNELS = ["moonshot_direct", "deepseek_direct"] as const;
-
-export const BillingChannelSchema = z.enum([
-  ...RELEASED_DIRECT_BILLING_CHANNELS,
-  ...ADDED_DIRECT_BILLING_CHANNELS,
+  "moonshot_direct",
+  "deepseek_direct",
   "unknown",
 ]);
 
 export type BillingChannel = z.infer<typeof BillingChannelSchema>;
-
-/**
- * The channels menubar-v0.0.19 and earlier can decode. Their Swift enums are
- * exhaustive, so a response that names a newer channel fails to decode there
- * instead of degrading. Responses narrow anything outside this set unless the
- * caller opts in with `usage_channels=1`.
- *
- * Derived from the released base so widening `BillingChannelSchema` cannot
- * silently widen this set. Remove the narrowing once menubar-v0.0.19 is no
- * longer a supported client.
- */
-export const RELEASED_BILLING_CHANNELS = [...RELEASED_DIRECT_BILLING_CHANNELS, "unknown"] as const;
-const releasedBillingChannels = new Set<string>(RELEASED_BILLING_CHANNELS);
-
-export function isReleasedBillingChannel(value: BillingChannel): boolean {
-  return releasedBillingChannels.has(value);
-}
 
 const ModelCatalogCanonicalIDSchema = z.string().min(1).max(128).regex(OPAQUE_ID_PATTERN);
 
@@ -684,7 +652,7 @@ export const ModelCatalogAliasSchema = z
   .object({
     reported_model: ModelSchema,
     provider: InferenceProviderSchema,
-    client: BillingAgentSchema.optional(),
+    agent: BillingAgentSchema.optional(),
     effective_from: UsageDateSchema.optional(),
     effective_to: UsageDateSchema.optional(),
   })
@@ -710,7 +678,7 @@ export type ModelCatalogModel = z.infer<typeof ModelCatalogModelSchema>;
 
 export const ModelCatalogSchema = z
   .object({
-    schema_version: z.literal(1),
+    schema_version: z.literal(2),
     revision: OpaqueIdSchema,
     models: z.array(ModelCatalogModelSchema).min(1).max(MAXIMUM_MODEL_CATALOG_MODELS),
   })
@@ -720,10 +688,13 @@ export type ModelCatalog = z.infer<typeof ModelCatalogSchema>;
 /** The checked-in, language-neutral model catalog source used by the Relay default. */
 export const MODEL_CATALOG: ModelCatalog = ModelCatalogSchema.parse(modelCatalogDocument);
 
-export const PricedBillingChannelSchema = z.enum([
-  ...RELEASED_DIRECT_BILLING_CHANNELS,
-  ...ADDED_DIRECT_BILLING_CHANNELS,
-]);
+/** Every channel except the sentinel: an unknown channel has no price to resolve. */
+export const PricedBillingChannelSchema = z.enum(
+  BillingChannelSchema.options.filter((channel) => channel !== "unknown") as [
+    Exclude<BillingChannel, "unknown">,
+    ...Exclude<BillingChannel, "unknown">[],
+  ],
+);
 export type PricedBillingChannel = z.infer<typeof PricedBillingChannelSchema>;
 
 export const ChannelSourceSchema = z.enum(["explicit", "agent_default", "unknown"]);
@@ -741,32 +712,31 @@ export type ContextBucket = z.infer<typeof ContextBucketSchema>;
 export const CoverageStatusSchema = z.enum(["complete", "partial"]);
 export type CoverageStatus = z.infer<typeof CoverageStatusSchema>;
 
+/**
+ * One agent's contiguous UTC-hour window and how completely it was scanned.
+ *
+ * A submission is bounded so one upload cannot claim an unbounded span; the private local
+ * report covers whatever range the app asked for, so it carries the order rule alone.
+ */
+const coverageFields = {
+  agent: BillingAgentSchema,
+  start_at: UtcHourSchema,
+  end_at: UtcHourSchema,
+  status: CoverageStatusSchema,
+};
+
+/** A submission is bounded so one upload cannot claim an unbounded span. */
 export const UsageCoverageSchema = z
-  .object({
-    agent: BillingAgentSchema,
-    start_at: UtcHourSchema,
-    end_at: UtcHourSchema,
-    status: CoverageStatusSchema,
-  })
+  .object(coverageFields)
   .strict()
   .superRefine(validateCoverageRange);
-export type UsageCoverage = z.infer<typeof UsageCoverageSchema>;
 
-export const UsageCoverageV3Schema = z
-  .object({ ...UsageCoverageSchema.shape, agent: BillingAgentV3Schema })
-  .strict()
-  .superRefine(validateCoverageRange);
-export type UsageCoverageV3 = z.infer<typeof UsageCoverageV3Schema>;
-
+/** The private local report covers whatever range the app asked for. */
 const LocalUsageCoverageSchema = z
-  .object({
-    agent: BillingAgentSchema,
-    start_at: UtcHourSchema,
-    end_at: UtcHourSchema,
-    status: CoverageStatusSchema,
-  })
+  .object(coverageFields)
   .strict()
   .superRefine(validateCoverageOrder);
+export type UsageCoverage = z.infer<typeof UsageCoverageSchema>;
 
 const UsageHourlyFactWireSchema = z
   .object({
@@ -809,21 +779,6 @@ const UsageHourlyFactWireSchema = z
 export const UsageHourlyFactSchema = UsageHourlyFactWireSchema;
 export type UsageHourlyFact = z.infer<typeof UsageHourlyFactSchema>;
 
-export const UsageHourlyFactV3Schema = z
-  .object({ ...UsageHourlyFactSchema.shape, agent: BillingAgentV3Schema })
-  .strict()
-  .superRefine((fact, context) => {
-    validateUsageCounts(fact, context);
-    if ((fact.billing_channel === "unknown") !== (fact.channel_source === "unknown")) {
-      context.addIssue({
-        code: "custom",
-        path: ["channel_source"],
-        message: "Unknown billing channel and channel source must be used together.",
-      });
-    }
-  });
-export type UsageHourlyFactV3 = z.infer<typeof UsageHourlyFactV3Schema>;
-
 export const UsageSubmissionWriteModeSchema = z.literal("merge_partial");
 export type UsageSubmissionWriteMode = z.infer<typeof UsageSubmissionWriteModeSchema>;
 
@@ -854,7 +809,7 @@ export type UsageSubmissionMultipart = z.infer<typeof UsageSubmissionMultipartSc
 
 export const UsageSubmissionSchema = z
   .object({
-    protocol_version: z.literal(PROTOCOL_VERSION),
+    protocol_version: z.literal(MANAGED_DATA_PROTOCOL_VERSION),
     submission_id: OpaqueIdSchema,
     device_id: OpaqueIdSchema,
     generation: SafePositiveIntegerSchema,
@@ -928,78 +883,7 @@ export const UsageSubmissionSchema = z
       identities.add(identity);
     }
   });
-export type UsageSubmissionV2 = z.infer<typeof UsageSubmissionSchema>;
-
-export const UsageSubmissionV3Schema = z
-  .object({
-    ...UsageSubmissionSchema.shape,
-    protocol_version: z.literal(MANAGED_DATA_PROTOCOL_VERSION),
-    coverage: UsageCoverageV3Schema,
-    rows: z.array(UsageHourlyFactV3Schema).max(MAXIMUM_USAGE_ROWS_PER_SUBMISSION),
-  })
-  .strict()
-  .superRefine((submission, context) => {
-    const start = Date.parse(submission.coverage.start_at);
-    const end = Date.parse(submission.coverage.end_at);
-    let localFormatter: Intl.DateTimeFormat | null = null;
-    try {
-      localFormatter = new Intl.DateTimeFormat("en", {
-        timeZone: submission.aggregation_timezone,
-        year: "numeric",
-        month: "2-digit",
-        day: "2-digit",
-        hour: "2-digit",
-        hourCycle: "h23",
-      });
-    } catch {
-      // IanaTimezoneSchema reports the boundary error.
-    }
-    const identities = new Set<string>();
-    if (submission.write_mode && submission.coverage.status !== "partial") {
-      context.addIssue({
-        code: "custom",
-        path: ["coverage", "status"],
-        message: "merge_partial submissions require partial coverage.",
-      });
-    }
-    for (const [index, row] of submission.rows.entries()) {
-      if (row.agent !== submission.coverage.agent) {
-        context.addIssue({
-          code: "custom",
-          path: ["rows", index, "agent"],
-          message: "Row agent must match coverage agent.",
-        });
-      }
-      const bucket = Date.parse(row.bucket_start_utc);
-      if (bucket < start || bucket >= end) {
-        context.addIssue({
-          code: "custom",
-          path: ["rows", index, "bucket_start_utc"],
-          message: "Row bucket must fall inside coverage.",
-        });
-      }
-      if (
-        localFormatter &&
-        !localProjectionMatches(localFormatter, bucket, row.usage_date, row.usage_hour)
-      ) {
-        context.addIssue({
-          code: "custom",
-          path: ["rows", index, "usage_date"],
-          message: "Row local date/hour must be possible in the aggregation timezone.",
-        });
-      }
-      const identity = usageHourlyFactIdentity(row);
-      if (identities.has(identity)) {
-        context.addIssue({
-          code: "custom",
-          path: ["rows", index],
-          message: "Hourly fact identities must be unique within a submission.",
-        });
-      }
-      identities.add(identity);
-    }
-  });
-export type UsageSubmissionV3 = z.infer<typeof UsageSubmissionV3Schema>;
+export type UsageSubmission = z.infer<typeof UsageSubmissionSchema>;
 
 export const UsageCostModeSchema = z.enum(["calculate", "auto", "reported"]);
 export type UsageCostMode = z.infer<typeof UsageCostModeSchema>;
@@ -1138,24 +1022,21 @@ export const LocalUsageProviderSummarySchema = z
   .strict();
 export type LocalUsageProviderSummary = z.infer<typeof LocalUsageProviderSummarySchema>;
 
-const LocalUsageClientSummaryV2Schema = z
+export const LocalUsageAgentSummarySchema = z
   .object({
-    client: BillingAgentSchema,
+    agent: BillingAgentSchema,
     totals: UsageSummaryTotalsSchema,
     cost: UsageCostOutcomeSchema,
     providers: z.array(LocalUsageProviderSummarySchema).max(InferenceProviderSchema.options.length),
   })
   .strict();
-export const LocalUsageClientSummarySchema = LocalUsageClientSummaryV2Schema.extend({
-  client: BillingAgentV3Schema,
-});
-export type LocalUsageClientSummary = z.infer<typeof LocalUsageClientSummarySchema>;
+export type LocalUsageAgentSummary = z.infer<typeof LocalUsageAgentSummarySchema>;
 
 export const LocalUsagePeriodSummarySchema = z
   .object({
     totals: UsageSummaryTotalsSchema,
     cost: UsageCostOutcomeSchema,
-    clients: z.array(LocalUsageClientSummarySchema).max(BillingAgentV3Schema.options.length),
+    agents: z.array(LocalUsageAgentSummarySchema).max(BillingAgentSchema.options.length),
     models_truncated: z.literal(true).optional(),
   })
   .strict();
@@ -1202,13 +1083,7 @@ export const UsageBreakdownSchema = z.discriminatedUnion("dimension", [
 export type UsageBreakdown = z.infer<typeof UsageBreakdownSchema>;
 
 export const UsageCoverageSummaryItemSchema = z
-  .object({
-    device_id: OpaqueIdSchema,
-    agent: BillingAgentSchema,
-    start_at: UtcHourSchema,
-    end_at: UtcHourSchema,
-    status: CoverageStatusSchema,
-  })
+  .object({ device_id: OpaqueIdSchema, ...coverageFields })
   .strict()
   .superRefine(validateCoverageRange);
 export type UsageCoverageSummaryItem = z.infer<typeof UsageCoverageSummaryItemSchema>;
@@ -1236,92 +1111,15 @@ export const AccountUsageSummarySchema = z
     model_catalog_revision: OpaqueIdSchema.optional(),
     coverage: z.array(UsageCoverageSummaryItemSchema).max(MAXIMUM_USAGE_COVERAGE_ITEMS),
     breakdowns: z.array(UsageBreakdownSchema).max(MAXIMUM_USAGE_BREAKDOWNS),
-    clients: z
-      .array(LocalUsageClientSummaryV2Schema)
-      .max(BillingAgentSchema.options.length)
-      .optional(),
+    agents: z.array(LocalUsageAgentSummarySchema).max(BillingAgentSchema.options.length).optional(),
     coverage_truncated: z.literal(true).optional(),
     breakdowns_truncated: z.literal(true).optional(),
   })
   .strict();
 export type AccountUsageSummary = z.infer<typeof AccountUsageSummarySchema>;
 
-export const UsageCoverageSummaryItemV3Schema = z
-  .object({ ...UsageCoverageSummaryItemSchema.shape, agent: BillingAgentV3Schema })
-  .strict()
-  .superRefine(validateCoverageRange);
-
-export const AccountUsageSummaryV3Schema = AccountUsageSummarySchema.extend({
-  coverage: z.array(UsageCoverageSummaryItemV3Schema).max(MAXIMUM_USAGE_COVERAGE_ITEMS),
-  clients: z
-    .array(LocalUsageClientSummarySchema)
-    .max(BillingAgentV3Schema.options.length)
-    .optional(),
-});
-export type AccountUsageSummaryV3 = z.infer<typeof AccountUsageSummaryV3Schema>;
-
 export const LocalUsageReportStatusSchema = z.enum(["complete", "partial", "unavailable"]);
 export type LocalUsageReportStatus = z.infer<typeof LocalUsageReportStatusSchema>;
-
-/** Released v2 local report retained for the exported v2 JSON Schema. */
-export const LocalUsageReportV2Schema = z
-  .object({
-    protocol_version: z.literal(PROTOCOL_VERSION),
-    generated_at: Rfc3339InstantSchema,
-    aggregation_timezone: IanaTimezoneSchema.nullable(),
-    range: UsageDateRangeSchema,
-    status: LocalUsageReportStatusSchema,
-    totals: UsageTokenTotalsSchema.nullable(),
-    cost: UsageCostOutcomeSchema.nullable(),
-    coverage: z.array(LocalUsageCoverageSchema).max(MAXIMUM_USAGE_COVERAGE_ITEMS),
-    breakdowns: z.array(UsageBreakdownSchema).max(MAXIMUM_USAGE_BREAKDOWNS),
-    coverage_truncated: z.literal(true).optional(),
-    breakdowns_truncated: z.literal(true).optional(),
-  })
-  .strict()
-  .superRefine((report, context) => {
-    const unavailable = report.status === "unavailable";
-    if (
-      unavailable !==
-      (report.aggregation_timezone === null && report.totals === null && report.cost === null)
-    ) {
-      context.addIssue({
-        code: "custom",
-        path: ["status"],
-        message: "Unavailable local Usage must omit timezone, totals, and cost.",
-      });
-    }
-    if (unavailable && (report.coverage.length > 0 || report.breakdowns.length > 0)) {
-      context.addIssue({
-        code: "custom",
-        path: ["coverage"],
-        message: "Unavailable local Usage cannot contain coverage or breakdowns.",
-      });
-    }
-    if (!unavailable) {
-      const expected = report.coverage.every((item) => item.status === "complete")
-        ? "complete"
-        : "partial";
-      if (report.status !== expected) {
-        context.addIssue({
-          code: "custom",
-          path: ["status"],
-          message: "Local Usage status must reflect its coverage.",
-        });
-      }
-    }
-  });
-export type LocalUsageReportV2 = z.infer<typeof LocalUsageReportV2Schema>;
-
-const LocalUsageCoverageV3Schema = z
-  .object({
-    client: BillingAgentV3Schema,
-    start_at: UtcHourSchema,
-    end_at: UtcHourSchema,
-    status: CoverageStatusSchema,
-  })
-  .strict()
-  .superRefine(validateCoverageOrder);
 
 export const LocalUsageReportSchema = z
   .object({
@@ -1331,7 +1129,7 @@ export const LocalUsageReportSchema = z
     range: UsageDateRangeSchema,
     status: LocalUsageReportStatusSchema,
     model_catalog_revision: OpaqueIdSchema.nullable(),
-    coverage: z.array(LocalUsageCoverageV3Schema).max(MAXIMUM_USAGE_COVERAGE_ITEMS),
+    coverage: z.array(LocalUsageCoverageSchema).max(MAXIMUM_USAGE_COVERAGE_ITEMS),
     coverage_truncated: z.literal(true).optional(),
   })
   .strict()
@@ -1371,47 +1169,27 @@ export type LocalUsageReport = z.infer<typeof LocalUsageReportSchema>;
 
 export const AccountUsageResponseSchema = z
   .object({
-    protocol_version: z.literal(PROTOCOL_VERSION),
+    protocol_version: z.literal(MANAGED_DATA_PROTOCOL_VERSION),
     usage: AccountUsageSummarySchema,
   })
   .strict();
 export type AccountUsageResponse = z.infer<typeof AccountUsageResponseSchema>;
 
-export const AccountUsageResponseV3Schema = AccountUsageResponseSchema.extend({
-  protocol_version: z.literal(MANAGED_DATA_PROTOCOL_VERSION),
-  usage: AccountUsageSummaryV3Schema,
-});
-export type AccountUsageResponseV3 = z.infer<typeof AccountUsageResponseV3Schema>;
-
 export const AccountQuotaObservationSchema = z
   .object({
     device_id: OpaqueIdSchema,
-    sequence: SafeNonnegativeIntegerSchema,
-    captured_at: Rfc3339InstantSchema,
     snapshot: QuotaSnapshotSchema,
-    updated_at: Rfc3339InstantSchema,
   })
   .strict();
 export type AccountQuotaObservation = z.infer<typeof AccountQuotaObservationSchema>;
 
-export const AccountQuotaObservationV3Schema = AccountQuotaObservationSchema.extend({
-  snapshot: QuotaSnapshotV3Schema,
-});
-export type AccountQuotaObservationV3 = z.infer<typeof AccountQuotaObservationV3Schema>;
-
 export const AccountQuotaResponseSchema = z
   .object({
-    protocol_version: z.literal(PROTOCOL_VERSION),
+    protocol_version: z.literal(MANAGED_DATA_PROTOCOL_VERSION),
     quota: z.array(AccountQuotaObservationSchema).max(8_192),
   })
   .strict();
 export type AccountQuotaResponse = z.infer<typeof AccountQuotaResponseSchema>;
-
-export const AccountQuotaResponseV3Schema = AccountQuotaResponseSchema.extend({
-  protocol_version: z.literal(MANAGED_DATA_PROTOCOL_VERSION),
-  quota: z.array(AccountQuotaObservationV3Schema).max(8_192),
-});
-export type AccountQuotaResponseV3 = z.infer<typeof AccountQuotaResponseV3Schema>;
 
 export const AccountUsageHourlyFactSchema = UsageHourlyFactSchema.safeExtend({
   device_id: OpaqueIdSchema,
@@ -1436,32 +1214,9 @@ export const AccountUsageHourlyFactSchema = UsageHourlyFactSchema.safeExtend({
 });
 export type AccountUsageHourlyFact = z.infer<typeof AccountUsageHourlyFactSchema>;
 
-export const AccountUsageHourlyFactV3Schema = UsageHourlyFactV3Schema.safeExtend({
-  device_id: OpaqueIdSchema,
-  aggregation_timezone: IanaTimezoneSchema,
-}).superRefine((fact, context) => {
-  const bucket = Date.parse(fact.bucket_start_utc);
-  const formatter = new Intl.DateTimeFormat("en", {
-    timeZone: fact.aggregation_timezone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    hourCycle: "h23",
-  });
-  if (!localProjectionMatches(formatter, bucket, fact.usage_date, fact.usage_hour)) {
-    context.addIssue({
-      code: "custom",
-      path: ["usage_date"],
-      message: "Row local date/hour must match aggregation_timezone.",
-    });
-  }
-});
-export type AccountUsageHourlyFactV3 = z.infer<typeof AccountUsageHourlyFactV3Schema>;
-
 export const AccountUsageHourlyResponseSchema = z
   .object({
-    protocol_version: z.literal(PROTOCOL_VERSION),
+    protocol_version: z.literal(MANAGED_DATA_PROTOCOL_VERSION),
     start_at: UtcHourSchema,
     end_at: UtcHourSchema,
     facts: z.array(AccountUsageHourlyFactSchema).max(MAXIMUM_USAGE_READ_ROWS),
@@ -1496,67 +1251,16 @@ export const AccountUsageHourlyResponseSchema = z
   });
 export type AccountUsageHourlyResponse = z.infer<typeof AccountUsageHourlyResponseSchema>;
 
-export const AccountUsageHourlyResponseV3Schema = z
-  .object({
-    ...AccountUsageHourlyResponseSchema.shape,
-    protocol_version: z.literal(MANAGED_DATA_PROTOCOL_VERSION),
-    facts: z.array(AccountUsageHourlyFactV3Schema).max(MAXIMUM_USAGE_READ_ROWS),
-    coverage: z.array(UsageCoverageSummaryItemV3Schema).max(MAXIMUM_USAGE_COVERAGE_ITEMS),
-  })
-  .strict()
-  .superRefine((response, context) => {
-    validateCoverageRange(response, context);
-    const start = Date.parse(response.start_at);
-    const end = Date.parse(response.end_at);
-    for (const [index, fact] of response.facts.entries()) {
-      const bucket = Date.parse(fact.bucket_start_utc);
-      if (bucket < start || bucket >= end) {
-        context.addIssue({
-          code: "custom",
-          path: ["facts", index, "bucket_start_utc"],
-          message: "Hourly fact must fall inside the response range.",
-        });
-      }
-    }
-    const costRows =
-      response.cost.calculated_rows + response.cost.reported_rows + response.cost.unpriced_rows;
-    if (!Number.isSafeInteger(costRows) || costRows !== response.facts.length) {
-      context.addIssue({
-        code: "custom",
-        path: ["cost"],
-        message: "Cost row counts must match the hourly facts.",
-      });
-    }
-  });
-export type AccountUsageHourlyResponseV3 = z.infer<typeof AccountUsageHourlyResponseV3Schema>;
-
 export const AccountSummarySchema = z
   .object({
-    protocol_version: z.literal(PROTOCOL_VERSION),
-    generated_at: Rfc3339InstantSchema,
+    protocol_version: z.literal(MANAGED_DATA_PROTOCOL_VERSION),
     account: AccountSchema,
-    devices: z.array(AccountDeviceSchema).max(256),
+    devices: z.array(AccountDeviceWithHealthSchema).max(256),
     quota: z.array(AccountQuotaObservationSchema).max(8_192),
     usage: AccountUsageSummarySchema,
   })
   .strict();
 export type AccountSummary = z.infer<typeof AccountSummarySchema>;
-
-export const AccountSummaryV3Schema = AccountSummarySchema.extend({
-  protocol_version: z.literal(MANAGED_DATA_PROTOCOL_VERSION),
-  quota: z.array(AccountQuotaObservationV3Schema).max(8_192),
-  usage: AccountUsageSummaryV3Schema,
-});
-export type AccountSummaryV3 = z.infer<typeof AccountSummaryV3Schema>;
-
-/**
- * Opt-in managed-data v3 summary returned only for `device_health=1`.
- * The shipped default v3 response intentionally remains byte-shape compatible.
- */
-export const AccountSummaryV3DeviceHealthSchema = AccountSummaryV3Schema.extend({
-  devices: z.array(AccountDeviceWithHealthSchema).max(256),
-});
-export type AccountSummaryV3DeviceHealth = z.infer<typeof AccountSummaryV3DeviceHealthSchema>;
 
 export const PublicProfileSlugSchema = z.string().regex(/^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/);
 export type PublicProfileSlug = z.infer<typeof PublicProfileSlugSchema>;
@@ -1609,10 +1313,10 @@ export type PublicUsageModel = z.infer<typeof PublicUsageModelSchema>;
 
 export const PublicProfileSchema = z
   .object({
-    protocol_version: z.literal(PROTOCOL_VERSION),
+    protocol_version: z.literal(PUBLIC_PROFILE_PROTOCOL_VERSION),
     username: PublicProfileSlugSchema,
     display_label: z.string().trim().min(1).max(128).nullable(),
-    quota: z.array(PublicQuotaProviderSchema).max(32),
+    quota: z.array(PublicQuotaProviderSchema).max(MAXIMUM_PUBLIC_PROFILE_QUOTA),
     usage: z
       .object({
         range: UsageDateRangeSchema,
@@ -1629,7 +1333,7 @@ export type PublicProfile = z.infer<typeof PublicProfileSchema>;
 
 export const QuotaSnapshotUploadResponseSchema = z
   .object({
-    protocol_version: z.literal(PROTOCOL_VERSION),
+    protocol_version: z.literal(MANAGED_DATA_PROTOCOL_VERSION),
     outcome: z.enum(["accepted", "duplicate"]),
     device_id: OpaqueIdSchema,
     device_generation: SafePositiveIntegerSchema,
@@ -1638,11 +1342,6 @@ export const QuotaSnapshotUploadResponseSchema = z
   })
   .strict();
 export type QuotaSnapshotUploadResponse = z.infer<typeof QuotaSnapshotUploadResponseSchema>;
-
-export const QuotaSnapshotUploadResponseV3Schema = QuotaSnapshotUploadResponseSchema.extend({
-  protocol_version: z.literal(MANAGED_DATA_PROTOCOL_VERSION),
-});
-export type QuotaSnapshotUploadResponseV3 = z.infer<typeof QuotaSnapshotUploadResponseV3Schema>;
 
 export const UsageUploadOutcomeSchema = z.enum([
   "accepted",
@@ -1660,7 +1359,7 @@ export type UsageUploadRejectionReason = z.infer<typeof UsageUploadRejectionReas
 
 export const UsageUploadResponseSchema = z
   .object({
-    protocol_version: z.literal(PROTOCOL_VERSION),
+    protocol_version: z.literal(MANAGED_DATA_PROTOCOL_VERSION),
     outcome: UsageUploadOutcomeSchema,
     device_id: OpaqueIdSchema,
     device_generation: SafePositiveIntegerSchema,
@@ -1696,38 +1395,6 @@ export const UsageUploadResponseSchema = z
     }
   });
 export type UsageUploadResponse = z.infer<typeof UsageUploadResponseSchema>;
-
-export const UsageUploadResponseV3Schema = z
-  .object({
-    ...UsageUploadResponseSchema.shape,
-    protocol_version: z.literal(MANAGED_DATA_PROTOCOL_VERSION),
-  })
-  .strict()
-  .superRefine((response, context) => {
-    const accepted = response.outcome === "accepted" || response.outcome === "duplicate";
-    if (accepted !== (response.accepted_sequence !== null)) {
-      context.addIssue({
-        code: "custom",
-        path: ["accepted_sequence"],
-        message: "accepted_sequence is present only for accepted or duplicate uploads.",
-      });
-    }
-    if ((response.outcome === "deleted") !== (response.deleted_before !== null)) {
-      context.addIssue({
-        code: "custom",
-        path: ["deleted_before"],
-        message: "deleted_before is present only for a deleted device.",
-      });
-    }
-    if ((response.outcome === "rejected") !== (response.rejection_reason !== undefined)) {
-      context.addIssue({
-        code: "custom",
-        path: ["rejection_reason"],
-        message: "rejection_reason is present only for rejected uploads.",
-      });
-    }
-  });
-export type UsageUploadResponseV3 = z.infer<typeof UsageUploadResponseV3Schema>;
 
 export const DecimalAmountSchema = z.string().min(1).max(32).regex(DECIMAL_PATTERN);
 export type DecimalAmount = z.infer<typeof DecimalAmountSchema>;
@@ -1900,9 +1567,7 @@ function localProjectionMatches(
   });
 }
 
-function usageHourlyFactIdentity(
-  fact: Omit<z.infer<typeof UsageHourlyFactSchema>, "agent"> & { agent: BillingAgentV3 },
-): string {
+function usageHourlyFactIdentity(fact: z.infer<typeof UsageHourlyFactSchema>): string {
   return JSON.stringify([
     fact.bucket_start_utc,
     fact.usage_date,

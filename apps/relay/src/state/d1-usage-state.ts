@@ -1,4 +1,7 @@
-import { MAXIMUM_USAGE_COVERAGE_ITEMS } from "@gotry-io/quota-protocol";
+import {
+  MANAGED_DATA_PROTOCOL_VERSION,
+  MAXIMUM_USAGE_COVERAGE_ITEMS,
+} from "@gotry-io/quota-protocol";
 import type {
   DevicePrincipal,
   StoredUsageCoverage,
@@ -573,7 +576,7 @@ export class D1UsageState implements UsageState {
     const finalPart = parts.results.at(-1);
     if (!finalPart) return "pending";
     const submission: UsageSubmission = {
-      protocol_version: 3,
+      protocol_version: MANAGED_DATA_PROTOCOL_VERSION,
       submission_id: finalPart.submission_id,
       device_id: finalPart.device_id,
       generation: finalPart.generation,

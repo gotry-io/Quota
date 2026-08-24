@@ -1,9 +1,8 @@
 <script lang="ts">
 import type {
   AccountDeviceWithHealth as AccountDevice,
-  AccountQuotaObservationV3 as AccountQuotaObservation,
-  AccountSummaryV3DeviceHealth as AccountSummary,
-  AccountUsageSummaryV3 as AccountUsageSummary,
+  AccountSummary,
+  AccountUsageSummary,
   UsageBreakdown,
 } from "@gotry-io/quota-protocol";
 import type { AccountSummaryDocumentResult } from "$lib/server/document-port";
@@ -27,7 +26,12 @@ import {
   titleCase,
 } from "$lib/format";
 import { deviceHealthStatus } from "$lib/device-health";
-import { observedSnapshotStatus } from "@gotry-io/quota-model";
+import {
+  type MergedQuotaObservation,
+  mergeQuotaObservations,
+  observedSnapshotStatus,
+  quotaSubscriptionKey,
+} from "@gotry-io/quota-model";
 import { DASHBOARD_PATH, planDisplayName } from "$lib/routes";
 import { usageDateBreakdowns } from "$lib/usage-activity";
 import type { PageProps } from "./$types";
@@ -35,6 +39,16 @@ import type { PageProps } from "./$types";
 let { data }: PageProps = $props();
 
 let summary = $state<AccountSummary | null>(null);
+/**
+ * One card per subscription, not per upload. Relay keeps every reporting device's
+ * observation; ADR 0003 resolves them to the one reading a person is asking about.
+ */
+let subscriptions = $derived<MergedQuotaObservation[]>(
+  summary ? mergeQuotaObservations(summary.quota) : [],
+);
+let deviceNames = $derived(
+  new Map(summary?.devices.map((device) => [device.device_id, device.display_name]) ?? []),
+);
 let loadError = $state<string | null>(null);
 let activityMessage = $state("Loading Usage activity…");
 let selectedDate = $state<string | null>(null);
@@ -106,11 +120,15 @@ async function onDeleteAccount(event: Event): Promise<void> {
   window.location.assign("/");
 }
 
-function deviceName(
-  observation: AccountQuotaObservation,
-  devices: AccountDevice[],
-): string | undefined {
-  return devices.find((device) => device.device_id === observation.device_id)?.display_name;
+function deviceName(deviceId: string): string {
+  return deviceNames.get(deviceId) ?? "Device";
+}
+
+function otherReportingDevices(subscription: MergedQuotaObservation): string {
+  return subscription.sources
+    .filter((source) => source.device_id !== subscription.selected_device_id)
+    .map((source) => deviceName(source.device_id))
+    .join(", ");
 }
 
 function agentBreakdowns(items: UsageBreakdown[]): UsageBreakdown[] {
@@ -200,17 +218,19 @@ async function loadDay(date: string): Promise<void> {
       </div>
     </div>
     <div id="quota-list" class="quota-grid">
-      {#if summary && summary.quota.length === 0}
+      {#if summary && subscriptions.length === 0}
         <p class="empty-state">No quota snapshots yet. Sign in from QuotaBar to add this Mac.</p>
       {:else if summary}
-        {#each summary.quota as observation (observation.device_id + observation.snapshot.provider)}
-          {@const quotaStatus = observedSnapshotStatus(observation.snapshot)}
+        {#each subscriptions as subscription (quotaSubscriptionKey(subscription.identity))}
+          {@const snapshot = subscription.snapshot}
+          {@const quotaStatus = observedSnapshotStatus(snapshot)}
+          {@const alsoReporting = otherReportingDevices(subscription)}
           <article class="quota-card">
             <div class="quota-card-heading">
               <div class="quota-card-identity">
-                <p class="quota-card-provider">{titleCase(observation.snapshot.provider)}</p>
+                <p class="quota-card-provider">{titleCase(snapshot.provider)}</p>
                 <p class="quota-card-account">
-                  {[observation.snapshot.account.label, planDisplayName(observation.snapshot.account.plan)]
+                  {[snapshot.account.label, planDisplayName(snapshot.account.plan)]
                     .filter(Boolean)
                     .join(" · ") || "Account"}
                 </p>
@@ -219,15 +239,15 @@ async function loadDay(date: string): Promise<void> {
                 >{observedSnapshotStatusLabel(quotaStatus)}</span
               >
             </div>
-            <QuotaWindows
-              windows={observation.snapshot.windows}
-              provider={observation.snapshot.provider}
-            />
+            <QuotaWindows windows={snapshot.windows} provider={snapshot.provider} />
             <p class="quota-card-meta">
-              {deviceName(observation, summary.devices) ?? "Device"} · {formatDate(
-                observation.snapshot.observed_at,
+              {deviceName(subscription.selected_device_id)} · {formatDate(
+                snapshot.observed_at,
               )}
             </p>
+            {#if alsoReporting}
+              <p class="quota-card-meta">Also reporting: {alsoReporting}</p>
+            {/if}
           </article>
         {/each}
       {/if}

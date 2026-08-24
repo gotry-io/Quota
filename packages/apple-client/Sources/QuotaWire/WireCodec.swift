@@ -1,8 +1,9 @@
 import Foundation
+import QuotaPresentation
 
 public enum WireCodec {
-  public static let oauthProtocolVersion = 2
-  public static let managedDataProtocolVersion = 3
+  public static let oauthProtocolVersion = QuotaProtocol.control
+  public static let managedDataProtocolVersion = QuotaProtocol.managedData
   public static let jsonSafeIntegerMaximum = 9_007_199_254_740_991
   public static let maximumResponseBytes = 1_048_576
 

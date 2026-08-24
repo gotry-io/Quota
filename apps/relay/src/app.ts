@@ -2,17 +2,11 @@ import { validateModelCatalog, validatePricingCatalog } from "@gotry-io/quota-mo
 import {
   AccountDevicesResponseSchema,
   AccountQuotaResponseSchema,
-  AccountQuotaResponseV3Schema,
   AccountResponseSchema,
   AccountSummarySchema,
-  AccountSummaryV3DeviceHealthSchema,
-  AccountSummaryV3Schema,
   AccountUsageHourlyResponseSchema,
-  AccountUsageHourlyResponseV3Schema,
   AccountUsageResponseSchema,
-  AccountUsageResponseV3Schema,
   BILLING_AGENTS,
-  BILLING_AGENTS_V3,
   DeleteDeviceResponseSchema,
   DeviceAuthorizationDecisionRequestSchema,
   DeviceAuthorizationRequestSchema,
@@ -35,16 +29,13 @@ import {
   OAuthTokenRequestSchema,
   OAuthTokenResponseSchema,
   PROTOCOL_VERSION,
-  PROVIDER_IDS,
   type PricingCatalog,
   PricingCatalogSchema,
   PublicProfileSchema,
   PublicProfileSettingsSchema,
   PublicProfileUpdateRequestSchema,
   QuotaSnapshotEnvelopeSchema,
-  QuotaSnapshotEnvelopeV3Schema,
   QuotaSnapshotUploadResponseSchema,
-  QuotaSnapshotUploadResponseV3Schema,
   type RelayErrorCode,
   type RelayErrorEnvelope,
   SessionRefreshRequestSchema,
@@ -52,11 +43,8 @@ import {
   UsageCostModeSchema,
   UsageDateRangeSchema,
   UsageSubmissionSchema,
-  UsageSubmissionV3Schema,
   UsageUploadResponseSchema,
-  UsageUploadResponseV3Schema,
   UtcHourSchema,
-  isReleasedBillingChannel,
 } from "@gotry-io/quota-protocol";
 import type {
   AccountMaintenanceInput,
@@ -65,8 +53,6 @@ import type {
   AccountState,
   DevicePrincipal,
   DeviceScope,
-  UsageAgent,
-  UsageQueryResult,
   UsageState,
 } from "@gotry-io/relay-core";
 import { type Context, Hono } from "hono";
@@ -94,6 +80,14 @@ const recentAuthenticationMilliseconds = 10 * 60 * 1000;
 const activeDeviceMilliseconds = 15 * 60 * 1000;
 const deviceHealthFreshMilliseconds = 20 * 60 * 1000;
 const expiredSessionRetentionMilliseconds = 7 * 24 * 60 * 60 * 1000;
+/**
+ * How long Relay keeps a quota observation after the moment it describes.
+ *
+ * Readers stop presenting a reading as current a day after it was observed. Keeping it a
+ * while longer leaves a device's last reading available while that device is merely asleep,
+ * and still bounds what an account accumulates from a provider it no longer collects.
+ */
+const quotaSnapshotRetentionMilliseconds = 7 * 24 * 60 * 60 * 1000;
 const maintenanceBatchLimit = 100;
 
 function requireValidPricingCatalog(value: PricingCatalog): PricingCatalog {
@@ -144,6 +138,9 @@ export function accountMaintenanceInput(checkedAt: Date): AccountMaintenanceInpu
     grant_expired_before: checkedAt.toISOString(),
     session_expired_before: retainedAfter,
     session_revoked_before: retainedAfter,
+    snapshot_observed_before: new Date(
+      checkedAt.getTime() - quotaSnapshotRetentionMilliseconds,
+    ).toISOString(),
     limit: maintenanceBatchLimit,
   };
 }
@@ -175,8 +172,8 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     "/api/v2/account",
     "/api/v2/account/*",
     "/api/v2/device/*",
-    "/api/v3/account/*",
-    "/api/v3/device/*",
+    "/api/v4/account/*",
+    "/api/v4/device/*",
   ]) {
     app.use(path, async (context, next) => {
       context.header("Cache-Control", "no-store");
@@ -187,19 +184,11 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     app.use(path, bodyLimit({ maxSize: maximumCredentialBodyBytes, onError: requestBodyTooLarge }));
   }
   app.use(
-    "/api/v2/device/snapshots",
+    "/api/v4/device/snapshots",
     bodyLimit({ maxSize: maximumSnapshotBodyBytes, onError: requestBodyTooLarge }),
   );
   app.use(
-    "/api/v3/device/snapshots",
-    bodyLimit({ maxSize: maximumSnapshotBodyBytes, onError: requestBodyTooLarge }),
-  );
-  app.use(
-    "/api/v2/device/usage",
-    bodyLimit({ maxSize: MAXIMUM_USAGE_SUBMISSION_BYTES, onError: requestBodyTooLarge }),
-  );
-  app.use(
-    "/api/v3/device/usage",
+    "/api/v4/device/usage",
     bodyLimit({ maxSize: MAXIMUM_USAGE_SUBMISSION_BYTES, onError: requestBodyTooLarge }),
   );
   app.use(
@@ -207,7 +196,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     bodyLimit({ maxSize: maximumCredentialBodyBytes, onError: requestBodyTooLarge }),
   );
   app.use(
-    "/api/v3/device/health",
+    "/api/v4/device/health",
     bodyLimit({ maxSize: maximumCredentialBodyBytes, onError: requestBodyTooLarge }),
   );
 
@@ -554,95 +543,58 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     );
   });
 
-  for (const route of [
-    {
-      path: "/api/v2/account/snapshots",
-      version: PROTOCOL_VERSION,
-      schema: AccountQuotaResponseSchema,
-    },
-    {
-      path: "/api/v3/account/snapshots",
-      version: MANAGED_DATA_PROTOCOL_VERSION,
-      schema: AccountQuotaResponseV3Schema,
-    },
-  ] as const) {
-    app.get(route.path, async (context) => {
-      const principal = await accountReader(context, options, now());
-      if (principal instanceof Response) return principal;
-      const stored = await options.state.listLatestSnapshots(principal.account_id);
-      const quota = route.version === PROTOCOL_VERSION ? v2Quota(stored) : stored;
-      if (quota.length > maximumAccountSnapshots) return resultLimit(context);
-      return context.json(route.schema.parse({ protocol_version: route.version, quota }));
-    });
-  }
-
-  for (const route of [
-    {
-      path: "/api/v2/account/summary",
-      version: PROTOCOL_VERSION,
-      schema: AccountSummarySchema,
-      agents: BILLING_AGENTS,
-      deviceHealth: false,
-    },
-    {
-      path: "/api/v3/account/summary",
-      version: MANAGED_DATA_PROTOCOL_VERSION,
-      schema: AccountSummaryV3Schema,
-      agents: BILLING_AGENTS_V3,
-      deviceHealth: true,
-    },
-  ] as const) {
-    app.get(route.path, async (context) => {
-      const principal = await accountReader(context, options, now());
-      if (principal instanceof Response) return principal;
-      const selected = await accountUsageQuery(
-        context,
-        principal,
-        options,
-        catalog,
-        modelCatalog,
-        now(),
-        {
-          allByDefault: true,
-          includeHourlyBreakdowns: false,
-          agents: route.agents,
-          allowDeviceHealth: route.deviceHealth,
-          allowUsageChannels: route.version === MANAGED_DATA_PROTOCOL_VERSION,
-        },
-      );
-      if (selected instanceof Response) return selected;
-      const account = await options.state.getAccount(principal.account_id);
-      if (!account) return unauthorized(context);
-      const [devices, storedQuota, deviceHealth] = await Promise.all([
-        options.state.listAccountDevices(principal.account_id),
-        options.state.listLatestSnapshots(principal.account_id),
-        selected.deviceHealthOptIn
-          ? options.state.listDeviceHealth(principal.account_id)
-          : Promise.resolve([]),
-      ]);
-      const quota = route.version === PROTOCOL_VERSION ? v2Quota(storedQuota) : storedQuota;
-      if (devices.length > maximumAccountDevices || quota.length > maximumAccountSnapshots) {
-        return resultLimit(context);
-      }
-      const publicDevices = devices.map((device) => publicDevice(device, now()));
-      const healthByDevice = new Map(deviceHealth.map((health) => [health.device_id, health]));
-      const response = {
-        protocol_version: route.version,
-        generated_at: now().toISOString(),
-        account: publicAccount(account),
-        devices: selected.deviceHealthOptIn
-          ? publicDevices.map((device) => ({
-              ...device,
-              health: publicDeviceHealth(healthByDevice.get(device.device_id)),
-            }))
-          : publicDevices,
+  app.get("/api/v4/account/snapshots", async (context) => {
+    const principal = await accountReader(context, options, now());
+    if (principal instanceof Response) return principal;
+    const stored = await options.state.listLatestSnapshots(principal.account_id);
+    if (stored.length > maximumAccountSnapshots) return resultLimit(context);
+    const quota = stored.map(publicObservation);
+    return context.json(
+      AccountQuotaResponseSchema.parse({
+        protocol_version: MANAGED_DATA_PROTOCOL_VERSION,
         quota,
-        usage: selected.summary,
-      };
-      const schema = selected.deviceHealthOptIn ? AccountSummaryV3DeviceHealthSchema : route.schema;
-      return context.json(schema.parse(response));
-    });
-  }
+      }),
+    );
+  });
+
+  app.get("/api/v4/account/summary", async (context) => {
+    const principal = await accountReader(context, options, now());
+    if (principal instanceof Response) return principal;
+    const selected = await accountUsageQuery(
+      context,
+      principal,
+      options,
+      catalog,
+      modelCatalog,
+      now(),
+      true,
+    );
+    if (selected instanceof Response) return selected;
+    const [account, devices, stored, deviceHealth] = await Promise.all([
+      options.state.getAccount(principal.account_id),
+      options.state.listAccountDevices(principal.account_id),
+      options.state.listLatestSnapshots(principal.account_id),
+      options.state.listDeviceHealth(principal.account_id),
+    ]);
+    if (!account) return unauthorized(context);
+    if (devices.length > maximumAccountDevices || stored.length > maximumAccountSnapshots) {
+      return resultLimit(context);
+    }
+    const quota = stored.map(publicObservation);
+    const publicDevices = devices.map((device) => publicDevice(device, now()));
+    const healthByDevice = new Map(deviceHealth.map((health) => [health.device_id, health]));
+    const response = {
+      protocol_version: MANAGED_DATA_PROTOCOL_VERSION,
+      account: publicAccount(account),
+      devices: publicDevices.map((device) => ({
+        ...device,
+        health: publicDeviceHealth(healthByDevice.get(device.device_id)),
+      })),
+      quota,
+      usage: selected.summary,
+    };
+    return context.json(AccountSummarySchema.parse(response));
+  });
 
   app.get("/api/v2/account/public-profile", async (context) => {
     const principal = await accountReader(context, options, now());
@@ -745,158 +697,108 @@ export function createRelayApp(options: RelayAppOptions): Hono {
         publicProfileFromAccount({
           slug,
           displayLabel: account.display_label,
-          snapshots: v2Quota(snapshots),
+          snapshots,
           usage,
+          now: now(),
         }),
       ),
     );
   });
 
-  for (const route of [
-    {
-      paths: ["/api/v2/account/usage", "/api/v2/account/usage/summary"],
-      version: PROTOCOL_VERSION,
-      schema: AccountUsageResponseSchema,
-      agents: BILLING_AGENTS,
-    },
-    {
-      paths: ["/api/v3/account/usage", "/api/v3/account/usage/summary"],
-      version: MANAGED_DATA_PROTOCOL_VERSION,
-      schema: AccountUsageResponseV3Schema,
-      agents: BILLING_AGENTS_V3,
-    },
-  ] as const) {
-    for (const path of route.paths)
-      app.get(path, async (context) => {
-        const principal = await accountReader(context, options, now());
-        if (principal instanceof Response) {
-          return principal;
-        }
-        const selected = await accountUsageQuery(
-          context,
-          principal,
-          options,
-          catalog,
-          modelCatalog,
-          now(),
-          {
-            allByDefault: false,
-            includeHourlyBreakdowns: false,
-            agents: route.agents,
-            allowUsageChannels: route.version === MANAGED_DATA_PROTOCOL_VERSION,
-          },
-        );
-        return selected instanceof Response
-          ? selected
-          : context.json(
-              route.schema.parse({
-                protocol_version: route.version,
-                usage: selected.summary,
-              }),
-            );
-      });
-  }
-
-  for (const route of [
-    {
-      path: "/api/v2/account/usage/hourly",
-      version: PROTOCOL_VERSION,
-      schema: AccountUsageHourlyResponseSchema,
-      agents: BILLING_AGENTS,
-    },
-    {
-      path: "/api/v3/account/usage/hourly",
-      version: MANAGED_DATA_PROTOCOL_VERSION,
-      schema: AccountUsageHourlyResponseV3Schema,
-      agents: BILLING_AGENTS_V3,
-    },
-  ] as const)
-    app.get(route.path, async (context) => {
+  for (const path of ["/api/v4/account/usage", "/api/v4/account/usage/summary"]) {
+    app.get(path, async (context) => {
       const principal = await accountReader(context, options, now());
       if (principal instanceof Response) {
         return principal;
       }
-      const allowUsageChannels = route.version === MANAGED_DATA_PROTOCOL_VERSION;
-      if (
-        !hasOnlyQueryKeys(context, [
-          "start_at",
-          "end_at",
-          "device_id",
-          "cost_mode",
-          "usage_agents",
-          ...(allowUsageChannels ? ["usage_channels"] : []),
-        ])
-      ) {
-        return invalidRequest(context);
-      }
-      const requestedAgents = context.req.query("usage_agents");
-      const usageChannelsQuery = context.req.query("usage_channels");
-      if (
-        (requestedAgents !== undefined && requestedAgents !== "all") ||
-        (usageChannelsQuery !== undefined && usageChannelsQuery !== "1")
-      ) {
-        return invalidRequest(context);
-      }
-      const start = UtcHourSchema.safeParse(context.req.query("start_at"));
-      const end = UtcHourSchema.safeParse(context.req.query("end_at"));
-      const mode = UsageCostModeSchema.safeParse(context.req.query("cost_mode") ?? "calculate");
-      if (
-        !start.success ||
-        !end.success ||
-        !mode.success ||
-        Date.parse(end.data) <= Date.parse(start.data) ||
-        Date.parse(end.data) - Date.parse(start.data) > 31 * 24 * 60 * 60 * 1000
-      ) {
-        return invalidRequest(context);
-      }
-      const deviceId = context.req.query("device_id");
-      if (
-        deviceId &&
-        !(await options.state.accountOwnsVisibleDevice(principal.account_id, deviceId))
-      ) {
-        return notFound(context);
-      }
-      const queried = await options.usageState.queryAccountUsage(principal.account_id, {
-        ...(deviceId ? { device_id: deviceId } : {}),
-        agents: route.agents,
-        start_at: start.data,
-        end_at: end.data,
-        limit: MAXIMUM_USAGE_READ_ROWS,
-      });
-      if (queried.truncated) {
+      const selected = await accountUsageQuery(
+        context,
+        principal,
+        options,
+        catalog,
+        modelCatalog,
+        now(),
+        false,
+      );
+      return selected instanceof Response
+        ? selected
+        : context.json(
+            AccountUsageResponseSchema.parse({
+              protocol_version: MANAGED_DATA_PROTOCOL_VERSION,
+              usage: selected.summary,
+            }),
+          );
+    });
+  }
+
+  app.get("/api/v4/account/usage/hourly", async (context) => {
+    const principal = await accountReader(context, options, now());
+    if (principal instanceof Response) {
+      return principal;
+    }
+    if (
+      !hasOnlyQueryKeys(context, ["start_at", "end_at", "device_id", "cost_mode", "usage_agents"])
+    ) {
+      return invalidRequest(context);
+    }
+    const requestedAgents = context.req.query("usage_agents");
+    if (requestedAgents !== undefined && requestedAgents !== "all") {
+      return invalidRequest(context);
+    }
+    const start = UtcHourSchema.safeParse(context.req.query("start_at"));
+    const end = UtcHourSchema.safeParse(context.req.query("end_at"));
+    const mode = UsageCostModeSchema.safeParse(context.req.query("cost_mode") ?? "calculate");
+    if (
+      !start.success ||
+      !end.success ||
+      !mode.success ||
+      Date.parse(end.data) <= Date.parse(start.data) ||
+      Date.parse(end.data) - Date.parse(start.data) > 31 * 24 * 60 * 60 * 1000
+    ) {
+      return invalidRequest(context);
+    }
+    const deviceId = context.req.query("device_id");
+    if (
+      deviceId &&
+      !(await options.state.accountOwnsVisibleDevice(principal.account_id, deviceId))
+    ) {
+      return notFound(context);
+    }
+    const queried = await options.usageState.queryAccountUsage(principal.account_id, {
+      ...(deviceId ? { device_id: deviceId } : {}),
+      agents: BILLING_AGENTS,
+      start_at: start.data,
+      end_at: end.data,
+      limit: MAXIMUM_USAGE_READ_ROWS,
+    });
+    if (queried.truncated) {
+      return resultLimit(context);
+    }
+    try {
+      return context.json(
+        AccountUsageHourlyResponseSchema.parse({
+          protocol_version: MANAGED_DATA_PROTOCOL_VERSION,
+          start_at: start.data,
+          end_at: end.data,
+          facts: queried.rows,
+          coverage: queried.coverage.map((item) => ({
+            device_id: item.device_id,
+            agent: item.agent,
+            start_at: item.start_at,
+            end_at: item.end_at,
+            status: item.status,
+          })),
+          cost: buildUsageCost(queried.rows, mode.data, catalog),
+          ...(queried.coverage_truncated ? { coverage_truncated: true } : {}),
+        }),
+      );
+    } catch (error) {
+      if (error instanceof UsageSummaryLimitError) {
         return resultLimit(context);
       }
-      // These routes hand back raw facts, so they carry `billing_channel`
-      // directly and need the same narrowing the summary routes apply.
-      const result =
-        allowUsageChannels && usageChannelsQuery === "1"
-          ? queried
-          : narrowUnreleasedChannels(queried);
-      try {
-        return context.json(
-          route.schema.parse({
-            protocol_version: route.version,
-            start_at: start.data,
-            end_at: end.data,
-            facts: result.rows,
-            coverage: result.coverage.map((item) => ({
-              device_id: item.device_id,
-              agent: item.agent,
-              start_at: item.start_at,
-              end_at: item.end_at,
-              status: item.status,
-            })),
-            cost: buildUsageCost(result.rows, mode.data, catalog),
-            ...(result.coverage_truncated ? { coverage_truncated: true } : {}),
-          }),
-        );
-      } catch (error) {
-        if (error instanceof UsageSummaryLimitError) {
-          return resultLimit(context);
-        }
-        throw error;
-      }
-    });
+      throw error;
+    }
+  });
 
   app.delete("/api/v2/account/devices/:device_id", async (context) => {
     const principal = await authorizeAccount(context, options, "account:manage", now());
@@ -997,7 +899,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     );
   });
 
-  app.put("/api/v3/device/health", async (context) => {
+  app.put("/api/v4/device/health", async (context) => {
     // Existing released device sessions carry sync:read:self. Health is a new self-only write
     // attached to that authenticated device principal so installed 0.0.15 sessions keep working.
     const checkedAt = now();
@@ -1076,151 +978,105 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     );
   });
 
-  for (const route of [
-    {
-      path: "/api/v2/device/snapshots",
-      version: PROTOCOL_VERSION,
-      requestSchema: QuotaSnapshotEnvelopeSchema,
-      responseSchema: QuotaSnapshotUploadResponseSchema,
-    },
-    {
-      path: "/api/v3/device/snapshots",
-      version: MANAGED_DATA_PROTOCOL_VERSION,
-      requestSchema: QuotaSnapshotEnvelopeV3Schema,
-      responseSchema: QuotaSnapshotUploadResponseV3Schema,
-    },
-  ] as const)
-    app.put(route.path, async (context) => {
-      const principal = await deviceWriter(context, options, "quota:write:self", now());
-      if (principal instanceof Response) {
-        return principal;
-      }
-      const envelope =
-        route.version === PROTOCOL_VERSION
-          ? await parseJSON(context, QuotaSnapshotEnvelopeSchema)
-          : await parseJSON(context, QuotaSnapshotEnvelopeV3Schema);
-      if (envelope instanceof Response) {
-        return envelope;
-      }
-      if (envelope.device_id !== principal.device_id) {
-        return forbidden(context);
-      }
-      const currentEnvelope = QuotaSnapshotEnvelopeV3Schema.parse({
-        ...envelope,
+  app.put("/api/v4/device/snapshots", async (context) => {
+    const principal = await deviceWriter(context, options, "quota:write:self", now());
+    if (principal instanceof Response) {
+      return principal;
+    }
+    const envelope = await parseJSON(context, QuotaSnapshotEnvelopeSchema);
+    if (envelope instanceof Response) {
+      return envelope;
+    }
+    if (envelope.device_id !== principal.device_id) {
+      return forbidden(context);
+    }
+    const outcome = await options.state.recordSnapshot(principal, envelope, now().toISOString());
+    if (outcome === "sequence_conflict") {
+      return relayError(
+        context,
+        409,
+        "sequence_conflict",
+        "The snapshot sequence was not accepted.",
+      );
+    }
+    if (outcome === "stale_device") {
+      return relayError(context, 409, "stale_generation", "The device generation is stale.");
+    }
+    const control = await options.state.getDeviceSyncControl(
+      principal.device_id,
+      principal.generation,
+    );
+    if (!control) {
+      return unauthorized(context);
+    }
+    return context.json(
+      QuotaSnapshotUploadResponseSchema.parse({
         protocol_version: MANAGED_DATA_PROTOCOL_VERSION,
-      });
-      const outcome = await options.state.recordSnapshot(
-        principal,
-        currentEnvelope,
-        now().toISOString(),
-      );
-      if (outcome === "sequence_conflict") {
-        return relayError(
-          context,
-          409,
-          "sequence_conflict",
-          "The snapshot sequence was not accepted.",
-        );
-      }
-      if (outcome === "stale_device") {
-        return relayError(context, 409, "stale_generation", "The device generation is stale.");
-      }
-      const control = await options.state.getDeviceSyncControl(
-        principal.device_id,
-        principal.generation,
-      );
-      if (!control) {
-        return unauthorized(context);
-      }
-      return context.json(
-        route.responseSchema.parse({
-          protocol_version: route.version,
-          outcome,
-          device_id: principal.device_id,
-          device_generation: principal.generation,
-          accepted_sequence: envelope.sequence,
-          next_snapshot_sequence: control.next_snapshot_sequence,
-        }),
-      );
-    });
-
-  for (const route of [
-    {
-      path: "/api/v2/device/usage",
-      version: PROTOCOL_VERSION,
-      requestSchema: UsageSubmissionSchema,
-      responseSchema: UsageUploadResponseSchema,
-    },
-    {
-      path: "/api/v3/device/usage",
-      version: MANAGED_DATA_PROTOCOL_VERSION,
-      requestSchema: UsageSubmissionV3Schema,
-      responseSchema: UsageUploadResponseV3Schema,
-    },
-  ] as const)
-    app.put(route.path, async (context) => {
-      const principal = await deviceWriter(context, options, "usage:write:self", now());
-      if (principal instanceof Response) {
-        return principal;
-      }
-      const submission =
-        route.version === PROTOCOL_VERSION
-          ? await parseJSON(context, UsageSubmissionSchema)
-          : await parseJSON(context, UsageSubmissionV3Schema);
-      if (submission instanceof Response) {
-        return submission;
-      }
-      if (submission.device_id !== principal.device_id) {
-        return forbidden(context);
-      }
-      const currentSubmission = UsageSubmissionV3Schema.parse({
-        ...submission,
-        protocol_version: MANAGED_DATA_PROTOCOL_VERSION,
-      });
-      const outcome = await options.usageState.recordUsage(
-        principal,
-        currentSubmission,
-        now().toISOString(),
-      );
-      const control = await options.state.getDeviceSyncControl(
-        principal.device_id,
-        principal.generation,
-      );
-      if (!control) {
-        return unauthorized(context);
-      }
-      const wireOutcome =
-        outcome.outcome === "stale_device"
-          ? "stale_generation"
-          : outcome.outcome === "deleted_range"
-            ? "deleted"
-            : outcome.outcome;
-      const body = route.responseSchema.parse({
-        protocol_version: route.version,
-        outcome: wireOutcome,
+        outcome,
         device_id: principal.device_id,
         device_generation: principal.generation,
-        accepted_sequence:
-          outcome.outcome === "accepted" || outcome.outcome === "duplicate"
-            ? submission.sequence
-            : null,
-        next_sequence:
-          "next_sequence" in outcome ? outcome.next_sequence : control.next_usage_sequence,
-        usage_sync_revision:
-          "usage_sync_revision" in outcome
-            ? outcome.usage_sync_revision
-            : control.usage_sync_revision,
-        deleted_before: outcome.outcome === "deleted_range" ? control.usage_deleted_before : null,
-        ...(outcome.outcome === "rejected" ? { rejection_reason: outcome.rejection_reason } : {}),
-      });
-      const status =
-        outcome.outcome === "sequence_conflict" ||
-        outcome.outcome === "stale_device" ||
-        outcome.outcome === "deleted_range"
-          ? 409
-          : 200;
-      return context.json(body, status);
+        accepted_sequence: envelope.sequence,
+        next_snapshot_sequence: control.next_snapshot_sequence,
+      }),
+    );
+  });
+
+  app.put("/api/v4/device/usage", async (context) => {
+    const principal = await deviceWriter(context, options, "usage:write:self", now());
+    if (principal instanceof Response) {
+      return principal;
+    }
+    const submission = await parseJSON(context, UsageSubmissionSchema);
+    if (submission instanceof Response) {
+      return submission;
+    }
+    if (submission.device_id !== principal.device_id) {
+      return forbidden(context);
+    }
+    const outcome = await options.usageState.recordUsage(
+      principal,
+      submission,
+      now().toISOString(),
+    );
+    const control = await options.state.getDeviceSyncControl(
+      principal.device_id,
+      principal.generation,
+    );
+    if (!control) {
+      return unauthorized(context);
+    }
+    const wireOutcome =
+      outcome.outcome === "stale_device"
+        ? "stale_generation"
+        : outcome.outcome === "deleted_range"
+          ? "deleted"
+          : outcome.outcome;
+    const body = UsageUploadResponseSchema.parse({
+      protocol_version: MANAGED_DATA_PROTOCOL_VERSION,
+      outcome: wireOutcome,
+      device_id: principal.device_id,
+      device_generation: principal.generation,
+      accepted_sequence:
+        outcome.outcome === "accepted" || outcome.outcome === "duplicate"
+          ? submission.sequence
+          : null,
+      next_sequence:
+        "next_sequence" in outcome ? outcome.next_sequence : control.next_usage_sequence,
+      usage_sync_revision:
+        "usage_sync_revision" in outcome
+          ? outcome.usage_sync_revision
+          : control.usage_sync_revision,
+      deleted_before: outcome.outcome === "deleted_range" ? control.usage_deleted_before : null,
+      ...(outcome.outcome === "rejected" ? { rejection_reason: outcome.rejection_reason } : {}),
     });
+    const status =
+      outcome.outcome === "sequence_conflict" ||
+      outcome.outcome === "stale_device" ||
+      outcome.outcome === "deleted_range"
+        ? 409
+        : 200;
+    return context.json(body, status);
+  });
 
   app.get("/api/v2/pricing/catalog", (context) => {
     if (!hasOnlyQueryKeys(context, ["usage_agents"])) return invalidRequest(context);
@@ -1260,51 +1116,12 @@ async function accountUsageQuery(
   catalog: PricingCatalog,
   modelCatalog: ModelCatalog,
   checkedAt: Date,
-  summaryOptions: {
-    allByDefault: boolean;
-    includeHourlyBreakdowns: boolean;
-    agents: readonly UsageAgent[];
-    allowDeviceHealth?: boolean;
-    allowUsageChannels?: boolean;
-  } = {
-    allByDefault: false,
-    includeHourlyBreakdowns: false,
-    agents: BILLING_AGENTS_V3,
-  },
+  allByDefault: boolean,
 ) {
-  if (
-    !hasOnlyQueryKeys(context, [
-      "from",
-      "to",
-      "device_id",
-      "cost_mode",
-      "usage_agents",
-      "model_catalog",
-      "usage_clients",
-      ...(summaryOptions.allowDeviceHealth ? ["device_health"] : []),
-      ...(summaryOptions.allowUsageChannels ? ["usage_channels"] : []),
-    ])
-  ) {
+  if (!hasOnlyQueryKeys(context, ["from", "to", "device_id", "cost_mode", "usage_agents"])) {
     return invalidRequest(context);
   }
   const requestedAgents = context.req.query("usage_agents");
-  const modelCatalogQuery = context.req.query("model_catalog");
-  const usageClientsQuery = context.req.query("usage_clients");
-  const deviceHealthQuery = context.req.query("device_health");
-  const usageChannelsQuery = context.req.query("usage_channels");
-  if (
-    (modelCatalogQuery !== undefined && modelCatalogQuery !== "1") ||
-    (usageClientsQuery !== undefined && usageClientsQuery !== "1") ||
-    (deviceHealthQuery !== undefined && deviceHealthQuery !== "1") ||
-    (usageChannelsQuery !== undefined && usageChannelsQuery !== "1")
-  ) {
-    return invalidRequest(context);
-  }
-  const modelCatalogOptIn = modelCatalogQuery === "1";
-  const usageClientsOptIn = usageClientsQuery === "1";
-  const deviceHealthOptIn = summaryOptions.allowDeviceHealth === true && deviceHealthQuery === "1";
-  const usageChannelsOptIn =
-    summaryOptions.allowUsageChannels === true && usageChannelsQuery === "1";
   if (requestedAgents !== undefined && requestedAgents !== "all") {
     return invalidRequest(context);
   }
@@ -1314,8 +1131,7 @@ async function accountUsageQuery(
     .slice(0, 10);
   const requestedFrom = context.req.query("from");
   const requestedTo = context.req.query("to");
-  const allDates =
-    summaryOptions.allByDefault && requestedFrom === undefined && requestedTo === undefined;
+  const allDates = allByDefault && requestedFrom === undefined && requestedTo === undefined;
   const range = allDates
     ? null
     : UsageDateRangeSchema.safeParse({
@@ -1332,7 +1148,7 @@ async function accountUsageQuery(
   }
   const result = await options.usageState.queryAccountUsage(principal.account_id, {
     ...(deviceId ? { device_id: deviceId } : {}),
-    agents: summaryOptions.agents,
+    agents: BILLING_AGENTS,
     ...(range?.success
       ? {
           from: range.data.from,
@@ -1340,26 +1156,22 @@ async function accountUsageQuery(
           ...usageDateUtcBounds(range.data),
         }
       : {}),
-    limit: summaryOptions.includeHourlyBreakdowns
-      ? MAXIMUM_USAGE_READ_ROWS
-      : maximumAccountUsageSummaryRows,
+    limit: maximumAccountUsageSummaryRows,
   });
   if (result.truncated) {
     return resultLimit(context);
   }
-  const selected = usageChannelsOptIn ? result : narrowUnreleasedChannels(result);
   try {
     return {
       summary: buildUsageSummary(
-        selected,
-        range?.success ? range.data : retainedUsageRange(selected.rows, defaultTo),
+        result,
+        range?.success ? range.data : retainedUsageRange(result.rows, defaultTo),
         mode.data,
         catalog,
-        summaryOptions.includeHourlyBreakdowns,
-        modelCatalogOptIn ? modelCatalog : undefined,
-        usageClientsOptIn,
+        false,
+        modelCatalog,
+        true,
       ),
-      deviceHealthOptIn,
     };
   } catch (error) {
     if (error instanceof UsageSummaryLimitError) {
@@ -1369,35 +1181,6 @@ async function accountUsageQuery(
   }
 }
 
-/**
- * menubar-v0.0.19 and earlier decode `billing_channel` and the inference
- * provider derived from it with exhaustive Swift enums, so a channel added
- * after that release fails to decode instead of degrading. Narrow those rows to
- * the unknown channel unless the caller states it understands the current set
- * with `usage_channels=1`. Narrowing happens before grouping so a narrowed row
- * folds into the existing unknown provider rather than producing a second one,
- * and `channel_source` moves with it to keep the two fields consistent.
- *
- * Narrowing therefore also reaches pricing: a narrowed row resolves as
- * `unknown_channel` rather than against its real channel. That matches what a
- * released client can represent, but it means the first Moonshot or DeepSeek
- * catalog entry would price only for opted-in callers. Move the rewrite to the
- * emission points if the two views must report the same amount.
- */
-function narrowUnreleasedChannels(result: UsageQueryResult): UsageQueryResult {
-  if (result.rows.every((row) => isReleasedBillingChannel(row.billing_channel))) {
-    return result;
-  }
-  return {
-    ...result,
-    rows: result.rows.map((row) =>
-      isReleasedBillingChannel(row.billing_channel)
-        ? row
-        : { ...row, billing_channel: "unknown", channel_source: "unknown" },
-    ),
-  };
-}
-
 function retainedUsageRange(
   rows: readonly { usage_date: string }[],
   currentDate: string,
@@ -1405,12 +1188,6 @@ function retainedUsageRange(
   if (rows.length === 0) return { from: currentDate, to: currentDate };
   const dates = rows.map((row) => row.usage_date).sort();
   return { from: dates[0] ?? currentDate, to: dates.at(-1) ?? currentDate };
-}
-
-const v2ProviderIDs = new Set<string>(PROVIDER_IDS);
-
-function v2Quota<T extends { snapshot: { provider: string } }>(quota: readonly T[]): T[] {
-  return quota.filter((observation) => v2ProviderIDs.has(observation.snapshot.provider));
 }
 
 function usageDateUtcBounds(range: { from: string; to: string }): {
@@ -1572,6 +1349,15 @@ function publicDevice(
     last_seen_at: device.last_seen_at,
     signed_out_at: device.signed_out_at,
   };
+}
+
+/**
+ * The observation as an Account reads it: which device reported, and what it read. The
+ * sequence, capture, and write instants are how Relay keeps the row, not something a
+ * reader has ever needed.
+ */
+function publicObservation(stored: { device_id: string; snapshot: unknown }) {
+  return { device_id: stored.device_id, snapshot: stored.snapshot };
 }
 
 function publicDeviceHealth(

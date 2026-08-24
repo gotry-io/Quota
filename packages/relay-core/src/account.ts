@@ -1,8 +1,8 @@
 import type {
   AccountDeviceHealth,
   DeviceHealthUploadRequest,
-  QuotaSnapshotV3 as QuotaSnapshot,
-  QuotaSnapshotEnvelopeV3,
+  QuotaSnapshot,
+  QuotaSnapshotEnvelope,
 } from "@gotry-io/quota-protocol";
 
 export const ACCOUNT_SCOPES = ["account:read", "account:manage", "session:revoke:self"] as const;
@@ -223,10 +223,17 @@ export interface AccountMaintenanceInput {
   grant_expired_before: string;
   session_expired_before: string;
   session_revoked_before: string;
+  /**
+   * Observations this old are deleted. A device that stops reporting a provider leaves its
+   * last reading behind, and nothing in an upload says that reading was the last one, so
+   * retention is what bounds it. Readers stop presenting a reading as current long before
+   * this; this is when Relay stops keeping it at all.
+   */
+  snapshot_observed_before: string;
   limit: number;
 }
 
-export type QuotaSnapshotSubmission = QuotaSnapshotEnvelopeV3;
+export type QuotaSnapshotSubmission = QuotaSnapshotEnvelope;
 
 export interface StoredQuotaSnapshot {
   device_id: string;

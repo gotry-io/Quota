@@ -14,29 +14,26 @@ enum WidgetSnapshotProjection {
     return WidgetSnapshot(fetchedAt: fetchedAt, items: items, today: today)
   }
 
-  static func projectItems(from observations: [AccountQuotaObservation]) -> [WidgetQuotaItem] {
-    var newest: [String: WidgetSnapshotCandidate] = [:]
-    for observation in observations {
-      let provider = observation.snapshot.provider
-      let fingerprint = observation.snapshot.account.fingerprint
-      for window in observation.snapshot.windows {
-        let key = "\(provider.rawValue)\u{1f}\(fingerprint)\u{1f}\(window.id)"
-        if let existing = newest[key], existing.observation.updatedAt >= observation.updatedAt {
-          continue
+  static func projectItems(
+    from observations: [AccountQuotaObservation],
+    now: Date = Date()
+  ) -> [WidgetQuotaItem] {
+    // The app and the widget answer for the same subscriptions, so both resolve the
+    // reporting devices with the shared rule instead of ranking them by upload time.
+    let candidates = AccountQuotaSubscriptions.resolve(observations, now: now)
+      .flatMap { subscription in
+        subscription.reading.windows.map { window in
+          WidgetSnapshotCandidate(
+            snapshot: subscription.reading,
+            window: window,
+            providerID: subscription.identity.provider,
+            fingerprint: subscription.identity.fingerprint,
+            sourceID: subscription.identity.sourceID ?? "",
+            windowID: window.id
+          )
         }
-        newest[key] = WidgetSnapshotCandidate(
-          observation: observation,
-          window: window,
-          providerID: provider.rawValue,
-          fingerprint: fingerprint,
-          windowID: window.id
-        )
       }
-    }
 
-    // Sort fully in memory (including fingerprint / window id tie-breaks) before mapping so
-    // Dictionary iteration order cannot leak into the published snapshot.
-    let candidates = Array(newest.values)
     let percentage = candidates.filter { !$0.isBalanceOnly }.sorted(by: percentageSort)
     let balanceOnly = candidates.filter(\.isBalanceOnly).sorted(by: balanceOnlySort)
     return Array((percentage + balanceOnly).prefix(WidgetSnapshot.maximumItemCount)).map(\.item)
@@ -63,6 +60,9 @@ enum WidgetSnapshotProjection {
     if lhs.fingerprint != rhs.fingerprint {
       return lhs.fingerprint < rhs.fingerprint
     }
+    if lhs.sourceID != rhs.sourceID {
+      return lhs.sourceID < rhs.sourceID
+    }
     return lhs.windowID < rhs.windowID
   }
 
@@ -84,6 +84,9 @@ enum WidgetSnapshotProjection {
     if lhs.fingerprint != rhs.fingerprint {
       return lhs.fingerprint < rhs.fingerprint
     }
+    if lhs.sourceID != rhs.sourceID {
+      return lhs.sourceID < rhs.sourceID
+    }
     return lhs.windowID < rhs.windowID
   }
 
@@ -103,13 +106,14 @@ enum WidgetSnapshotProjection {
   }
 }
 
-/// Hidden ranking carrier. Fingerprint and window id exist only for deterministic sort and are never
-/// written into `WidgetQuotaItem` / App Group storage.
+/// Hidden ranking carrier. Fingerprint, source id, and window id exist only for deterministic sort
+/// and are never written into `WidgetQuotaItem` / App Group storage.
 private struct WidgetSnapshotCandidate {
-  var observation: AccountQuotaObservation
+  var snapshot: QuotaSnapshot
   var window: QuotaWindow
   var providerID: String
   var fingerprint: String
+  var sourceID: String
   var windowID: String
 
   var isBalanceOnly: Bool {
@@ -129,7 +133,7 @@ private struct WidgetSnapshotCandidate {
 
   var item: WidgetQuotaItem {
     let hasLimit = window.limitValue != nil
-    let provider = observation.snapshot.provider
+    let provider = snapshot.provider
     return WidgetQuotaItem(
       providerID: provider.rawValue,
       providerDisplayName: provider.displayName,
@@ -139,8 +143,8 @@ private struct WidgetSnapshotCandidate {
       unit: window.valueUnit.map(mapUnit),
       hasLimit: hasLimit,
       resetsAt: window.resetsAt,
-      state: WidgetQuotaState(observation.snapshot.reportedState),
-      validUntil: observation.snapshot.validUntil
+      state: WidgetQuotaState(snapshot.reportedState),
+      validUntil: snapshot.validUntil
     )
   }
 

@@ -21,7 +21,7 @@ pub struct ModelCatalogAlias {
     pub reported_model: String,
     pub provider: InferenceProvider,
     #[serde(default)]
-    pub client: Option<UsageAgent>,
+    pub agent: Option<UsageAgent>,
     #[serde(default)]
     pub effective_from: Option<String>,
     #[serde(default)]
@@ -80,7 +80,7 @@ pub fn validate_model_catalog_value(input: &Value) -> ModelCatalogValidationResu
 
 pub fn validate_model_catalog(catalog: &ModelCatalog) -> ModelCatalogValidationResult {
     let mut issues = Vec::new();
-    if catalog.schema_version != 1 {
+    if catalog.schema_version != 2 {
         issues.push(invalid(
             "schema_version",
             "expected model catalog schema version 1",
@@ -170,7 +170,7 @@ pub fn resolve_model(catalog: &ModelCatalog, row: &UsageHourlyFact) -> Option<St
             model.aliases.iter().any(|alias| {
                 alias.reported_model == row.model
                     && alias.provider == row.billing_channel.into()
-                    && alias.client.is_none_or(|client| client == row.agent)
+                    && alias.agent.is_none_or(|agent| agent == row.agent)
                     && alias
                         .effective_from
                         .as_deref()
@@ -221,8 +221,8 @@ fn aliases_overlap(left: &ModelCatalogAlias, right: &ModelCatalogAlias) -> bool 
     if left.reported_model != right.reported_model
         || left.provider != right.provider
         || left
-            .client
-            .is_some_and(|client| right.client.is_some_and(|other| client != other))
+            .agent
+            .is_some_and(|agent| right.agent.is_some_and(|other| agent != other))
     {
         return false;
     }
@@ -270,14 +270,14 @@ mod tests {
 
     fn catalog() -> ModelCatalog {
         serde_json::from_value(json!({
-            "schema_version": 1,
+            "schema_version": 2,
             "revision": "test-1",
             "models": [{
                 "canonical_id": "gpt-5.5",
                 "aliases": [{
                     "reported_model": "GPT-5.5[1m]",
                     "provider": "openai",
-                    "client": "codex",
+                    "agent": "codex",
                     "effective_from": "2026-04-24"
                 }]
             }]

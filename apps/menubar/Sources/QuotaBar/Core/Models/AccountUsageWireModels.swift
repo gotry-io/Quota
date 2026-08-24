@@ -1,4 +1,5 @@
 import Foundation
+import QuotaPresentation
 import QuotaWire
 
 enum ChannelSource: String, Codable, Sendable {
@@ -188,7 +189,7 @@ extension UsageHourlyFact {
   }
 }
 
-struct UsageSubmissionV3: Decodable, Equatable, Sendable {
+struct UsageSubmission: Decodable, Equatable, Sendable {
   let protocolVersion: Int
   let submissionID: String
   let deviceID: String
@@ -241,7 +242,7 @@ struct UsageSubmissionV3: Decodable, Equatable, Sendable {
 
     let start = UsageCoverage.utcHour(coverage.startAt)
     let end = UsageCoverage.utcHour(coverage.endAt)
-    guard protocolVersion == 3,
+    guard protocolVersion == WireCodec.managedDataProtocolVersion,
       WireValidation.isOpaqueID(submissionID), WireValidation.isOpaqueID(deviceID), WireValidation.isOpaqueID(parserRevision),
       (1...WireCodec.jsonSafeIntegerMaximum).contains(generation),
       (0...WireCodec.jsonSafeIntegerMaximum).contains(sequence),
@@ -314,55 +315,55 @@ enum LocalUsageReportStatus: String, Codable, Sendable {
 struct LocalUsagePeriodSummary: Codable, Equatable, Sendable {
   let totals: UsageSummaryTotals
   let cost: UsageCostOutcome
-  let clients: [LocalUsageClientSummary]
+  let agents: [LocalUsageAgentSummary]
   let modelsTruncated: Bool?
 
   private enum CodingKeys: String, CodingKey {
     case totals
     case cost
-    case clients
+    case agents
     case modelsTruncated
   }
 
   var isValid: Bool {
-    totals.isValid && cost.isValid && clients.count <= 6 && clients.allSatisfy(\.isValid)
+    totals.isValid && cost.isValid && agents.count <= 6 && agents.allSatisfy(\.isValid)
       && modelsTruncated != false
   }
 
   init(
     totals: UsageSummaryTotals,
     cost: UsageCostOutcome,
-    clients: [LocalUsageClientSummary],
+    agents: [LocalUsageAgentSummary],
     modelsTruncated: Bool? = nil
   ) {
     self.totals = totals
     self.cost = cost
-    self.clients = clients
+    self.agents = agents
     self.modelsTruncated = modelsTruncated
   }
 
   init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys(["totals", "cost", "clients", "modelsTruncated"])
+    try decoder.rejectUnknownWireKeys(["totals", "cost", "agents", "modelsTruncated"])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     totals = try container.decode(UsageSummaryTotals.self, forKey: .totals)
     cost = try container.decode(UsageCostOutcome.self, forKey: .cost)
-    clients = try container.decode([LocalUsageClientSummary].self, forKey: .clients)
+    agents = try container.decode([LocalUsageAgentSummary].self, forKey: .agents)
     modelsTruncated = try decodeTrueMarker(.modelsTruncated, from: container)
     guard isValid else {
       throw DecodingError.dataCorruptedError(
-        forKey: .clients, in: container, debugDescription: "Invalid local Usage period summary.")
+        forKey: .agents, in: container, debugDescription: "Invalid local Usage period summary.")
     }
   }
 }
 
 struct LocalUsageCoverage: Codable, Equatable, Sendable {
-  let client: BillingAgent
+  let agent: BillingAgent
   let startAt: String
   let endAt: String
   let status: CoverageStatus
 
   private enum CodingKeys: String, CodingKey {
-    case client
+    case agent
     case startAt
     case endAt
     case status
@@ -376,21 +377,21 @@ struct LocalUsageCoverage: Codable, Equatable, Sendable {
   }
 
   init(
-    client: BillingAgent,
+    agent: BillingAgent,
     startAt: String,
     endAt: String,
     status: CoverageStatus
   ) {
-    self.client = client
+    self.agent = agent
     self.startAt = startAt
     self.endAt = endAt
     self.status = status
   }
 
   init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys(["client", "startAt", "endAt", "status"])
+    try decoder.rejectUnknownWireKeys(["agent", "startAt", "endAt", "status"])
     let container = try decoder.container(keyedBy: CodingKeys.self)
-    client = try container.decode(BillingAgent.self, forKey: .client)
+    agent = try container.decode(BillingAgent.self, forKey: .agent)
     startAt = try container.decode(String.self, forKey: .startAt)
     endAt = try container.decode(String.self, forKey: .endAt)
     status = try container.decode(CoverageStatus.self, forKey: .status)
@@ -459,7 +460,7 @@ struct LocalUsageReport: Codable, Equatable, Sendable {
       && aggregationTimezone == nil
       && modelCatalogRevision == nil
       && coverage.isEmpty
-    guard protocolVersion == 3,
+    guard protocolVersion == QuotaProtocol.localUsage,
       range.isValid,
       coverage.count <= 2_048,
       coverage.allSatisfy(\.isOrdered),
@@ -506,7 +507,7 @@ struct AccountUsageResponse: Decodable, Equatable, Sendable {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     protocolVersion = try container.decode(Int.self, forKey: .protocolVersion)
     usage = try container.decode(AccountUsageSummary.self, forKey: .usage)
-    guard protocolVersion == 3, usage.isValid else {
+    guard protocolVersion == WireCodec.managedDataProtocolVersion, usage.isValid else {
       throw DecodingError.dataCorruptedError(
         forKey: .protocolVersion,
         in: container,
@@ -530,7 +531,7 @@ struct AccountQuotaResponse: Decodable, Equatable, Sendable {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     protocolVersion = try container.decode(Int.self, forKey: .protocolVersion)
     quota = try container.decode([AccountQuotaObservation].self, forKey: .quota)
-    guard protocolVersion == 3, quota.count <= 8_192, quota.allSatisfy(\.isValid) else {
+    guard protocolVersion == WireCodec.managedDataProtocolVersion, quota.count <= 8_192, quota.allSatisfy(\.isValid) else {
       throw DecodingError.dataCorruptedError(
         forKey: .protocolVersion,
         in: container,
@@ -619,7 +620,7 @@ struct AccountUsageHourlyResponse: Decodable, Equatable, Sendable {
     let decodedStart = UsageCoverage.utcHour(startAt)
     let decodedEnd = UsageCoverage.utcHour(endAt)
     let costRows = WireValidation.safeSum([cost.calculatedRows, cost.reportedRows, cost.unpricedRows])
-    guard protocolVersion == 3,
+    guard protocolVersion == WireCodec.managedDataProtocolVersion,
       let start = decodedStart, let end = decodedEnd,
       end > start, end.timeIntervalSince(start) <= 744 * 3_600,
       facts.count <= 1_000,
@@ -685,7 +686,7 @@ struct QuotaSnapshotUploadResponse: Codable, Equatable, Sendable {
     deviceGeneration = try container.decode(Int.self, forKey: .deviceGeneration)
     acceptedSequence = try container.decode(Int.self, forKey: .acceptedSequence)
     nextSnapshotSequence = try container.decode(Int.self, forKey: .nextSnapshotSequence)
-    guard protocolVersion == 3,
+    guard protocolVersion == WireCodec.managedDataProtocolVersion,
       WireValidation.isOpaqueID(deviceID),
       (1...WireCodec.jsonSafeIntegerMaximum).contains(deviceGeneration),
       (0...WireCodec.jsonSafeIntegerMaximum).contains(acceptedSequence),
@@ -735,7 +736,7 @@ struct DeviceSyncResponse: Codable, Equatable, Sendable {
     nextUsageSequence = try container.decode(Int.self, forKey: .nextUsageSequence)
     usageDeletedBefore = try container.decode(Date?.self, forKey: .usageDeletedBefore)
     usageSyncRevision = try container.decode(Int.self, forKey: .usageSyncRevision)
-    guard protocolVersion == 2,
+    guard protocolVersion == QuotaProtocol.control,
       WireValidation.isOpaqueID(accountID), WireValidation.isOpaqueID(deviceID),
       (1...WireCodec.jsonSafeIntegerMaximum).contains(deviceGeneration),
       (0...WireCodec.jsonSafeIntegerMaximum).contains(nextSnapshotSequence),
@@ -918,7 +919,7 @@ struct PricingCatalog: Decodable, Equatable, Sendable {
     revision = try container.decode(String.self, forKey: .revision)
     publishedAt = try container.decode(Date.self, forKey: .publishedAt)
     entries = try container.decode([PricingCatalogEntry].self, forKey: .entries)
-    guard protocolVersion == 2,
+    guard protocolVersion == QuotaProtocol.control,
       WireValidation.isOpaqueID(revision),
       entries.count <= 4_096,
       entries.allSatisfy(\.isValid),

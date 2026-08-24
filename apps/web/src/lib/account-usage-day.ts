@@ -1,7 +1,4 @@
-import {
-  type AccountUsageSummaryV3 as AccountUsageSummary,
-  AccountUsageResponseV3Schema as AccountUsageResponseSchema,
-} from "@gotry-io/quota-protocol";
+import { type AccountUsageSummary, AccountUsageResponseSchema } from "@gotry-io/quota-protocol";
 
 export type AccountUsageDayResult =
   | { status: "ok"; usage: AccountUsageSummary }
@@ -13,12 +10,10 @@ export function accountUsageDayPath(date: string): string {
   const params = new URLSearchParams({
     usage_agents: "all",
     cost_mode: "auto",
-    model_catalog: "1",
-    usage_channels: "1",
     from: date,
     to: date,
   });
-  return `/api/v3/account/usage/summary?${params.toString()}`;
+  return `/api/v4/account/usage/summary?${params.toString()}`;
 }
 
 export function parseAccountUsageDayResponse(

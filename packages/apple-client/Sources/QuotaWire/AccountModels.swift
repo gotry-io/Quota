@@ -328,77 +328,48 @@ public struct AccountDevice: Codable, Equatable, Identifiable, Sendable {
 
 public struct AccountQuotaObservation: Codable, Equatable, Sendable {
   public let deviceID: String
-  public let sequence: Int
-  public let capturedAt: Date
   public let snapshot: QuotaSnapshot
-  public let updatedAt: Date
 
-  public init(
-    deviceID: String,
-    sequence: Int,
-    capturedAt: Date,
-    snapshot: QuotaSnapshot,
-    updatedAt: Date
-  ) {
+  public init(deviceID: String, snapshot: QuotaSnapshot) {
     self.deviceID = deviceID
-    self.sequence = sequence
-    self.capturedAt = capturedAt
     self.snapshot = snapshot
-    self.updatedAt = updatedAt
   }
 
   public init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys([
-      "deviceId", "sequence", "capturedAt", "snapshot", "updatedAt",
-    ])
+    try decoder.rejectUnknownWireKeys(["deviceId", "snapshot"])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     deviceID = try container.decode(String.self, forKey: .deviceID)
-    sequence = try container.decode(Int.self, forKey: .sequence)
-    capturedAt = try container.decode(Date.self, forKey: .capturedAt)
     snapshot = try container.decode(QuotaSnapshot.self, forKey: .snapshot)
-    updatedAt = try container.decode(Date.self, forKey: .updatedAt)
     guard isValid else {
       throw DecodingError.dataCorruptedError(
-        forKey: .deviceID,
-        in: container,
-        debugDescription: "Invalid quota observation."
-      )
+        forKey: .deviceID, in: container, debugDescription: "Invalid quota observation.")
     }
   }
 
-  /// A managed observation names a device, a monotonic sequence, and a provider this
-  /// protocol version accepts. Composed so a reader validating a summary can reuse it.
-  public var isValid: Bool {
-    WireValidation.isOpaqueID(deviceID) && WireValidation.isSafeNonnegative(sequence)
-      && snapshot.provider.syncsToAccount(protocolVersion: WireCodec.managedDataProtocolVersion)
-  }
+  /// A managed observation names a device. The provider is carried by `ProviderID`, whose
+  /// cases are exactly the providers this Account accepts.
+  public var isValid: Bool { WireValidation.isOpaqueID(deviceID) }
 
   private enum CodingKeys: String, CodingKey {
     case deviceID = "deviceId"
-    case sequence
-    case capturedAt
     case snapshot
-    case updatedAt
   }
 }
 
 public struct AccountSummary: Codable, Equatable, Sendable {
   public let protocolVersion: Int
-  public let generatedAt: Date
   public let account: QuotaUserAccount
   public let devices: [AccountDevice]
   public let quota: [AccountQuotaObservation]
   public let usage: AccountUsageSummary
 
   public init(
-    generatedAt: Date,
     account: QuotaUserAccount,
     devices: [AccountDevice],
     quota: [AccountQuotaObservation],
     usage: AccountUsageSummary
   ) {
     protocolVersion = WireCodec.managedDataProtocolVersion
-    self.generatedAt = generatedAt
     self.account = account
     self.devices = devices
     self.quota = quota
@@ -407,11 +378,10 @@ public struct AccountSummary: Codable, Equatable, Sendable {
 
   public init(from decoder: Decoder) throws {
     try decoder.rejectUnknownWireKeys([
-      "protocolVersion", "generatedAt", "account", "devices", "quota", "usage",
+      "protocolVersion", "account", "devices", "quota", "usage",
     ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     protocolVersion = try container.decode(Int.self, forKey: .protocolVersion)
-    generatedAt = try container.decode(Date.self, forKey: .generatedAt)
     account = try container.decode(QuotaUserAccount.self, forKey: .account)
     devices = try container.decode([AccountDevice].self, forKey: .devices)
     quota = try container.decode([AccountQuotaObservation].self, forKey: .quota)
@@ -433,7 +403,6 @@ public struct AccountSummary: Codable, Equatable, Sendable {
 
   private enum CodingKeys: String, CodingKey {
     case protocolVersion
-    case generatedAt
     case account
     case devices
     case quota

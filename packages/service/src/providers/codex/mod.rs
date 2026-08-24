@@ -217,7 +217,6 @@ fn collect_pat(token: &str, context: &CollectionContext) -> Result<QuotaSnapshot
         return Err(ProviderError::new(ErrorCategory::Unavailable, SOURCE_PAT));
     }
     Ok(snapshot(
-        SOURCE_PAT,
         &mapped.windows,
         mapped.plan.as_deref().or(plan.as_deref()),
         mapped.email.as_deref().or(email.as_deref()),
@@ -318,7 +317,6 @@ pub(super) fn collect_api(
             .or_else(|| identity.account_id.clone())
             .or_else(|| credentials.account_id.clone());
         return Ok(Some(snapshot(
-            source,
             &mapped.windows,
             plan.as_deref(),
             email.as_deref(),
@@ -646,7 +644,6 @@ fn collect_rpc(
         return Err(ProviderError::new(ErrorCategory::Unavailable, SOURCE_RPC));
     }
     Ok(snapshot(
-        SOURCE_RPC,
         &mapped.windows,
         account_plan.as_deref(),
         account_email.as_deref(),
@@ -688,7 +685,6 @@ fn resolve_executable(context: &CollectionContext) -> Option<String> {
 }
 
 pub(super) fn snapshot(
-    source: &'static str,
     windows: &[QuotaWindow],
     plan: Option<&str>,
     email: Option<&str>,
@@ -705,7 +701,6 @@ pub(super) fn snapshot(
             plan: plan.map(str::to_owned),
         },
         windows: windows.to_vec(),
-        source,
         status: "available",
         observed_at: observed_at.to_owned(),
     }
@@ -1180,7 +1175,6 @@ mod tests {
         assert_eq!(identity.plan.as_deref(), Some("pro"));
         assert_eq!(identity.account_id.as_deref(), Some("acct-owner"));
         let snapshot = snapshot(
-            SOURCE_API,
             &[],
             identity.plan.as_deref(),
             identity.email.as_deref(),

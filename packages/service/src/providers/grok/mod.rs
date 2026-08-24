@@ -431,16 +431,13 @@ fn collect_with_credentials(
     let headers = proxy_headers(credentials, &bearer, &user_agent);
     let proxy = fetch_proxy_billing(&headers);
     let proxy_reachable = proxy.is_ok();
-    let (window, source) = match proxy {
-        Ok(window) => (window, SOURCE),
+    let window = match proxy {
+        Ok(window) => window,
         // Rejected or malformed proxy answers are final. When the proxy is merely
         // unreachable, grok.com's own billing RPC accepts the same OAuth token.
         Err(error) if error.category != ErrorCategory::Unavailable => return Err(error),
-        Err(proxy_error) => (
-            web::bearer_billing_window(&credentials.access_token, context)
-                .map_err(|_| proxy_error)?,
-            web::WEB_SOURCE,
-        ),
+        Err(proxy_error) => web::bearer_billing_window(&credentials.access_token, context)
+            .map_err(|_| proxy_error)?,
     };
     // The tier lives behind the same host as billing, so an unreachable proxy
     // would only spend the refresh's remaining budget re-learning that.
@@ -476,7 +473,6 @@ fn collect_with_credentials(
             plan,
         },
         windows: vec![window],
-        source,
         status: "available",
         observed_at: context.observed_at(),
     })

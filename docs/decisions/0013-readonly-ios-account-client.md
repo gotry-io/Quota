@@ -44,7 +44,8 @@ collection Device and never receives upload authority.
 - Account data reads use the current managed-data v3 routes, including the explicit
   `GET /api/v3/account/summary?device_health=1` shape defined by
   [ADR 0015](0015-diagnostic-attempts-and-device-health.md). OAuth, refresh, and revoke remain on
-  released v2. The client does not call released v2 data routes or change those shipped contracts.
+  released v2. [ADR 0018](0018-single-managed-data-contract.md) has since retired the v2 data routes
+  and advanced the managed data contract to v4; the routes named here are the v3 ones that shipped.
 - `quotacli` loopback PKCE and device-code behavior stay the released collection-client contract.
   This change is additive. It is not a compatibility shim and does not dual-write Device rows.
 
