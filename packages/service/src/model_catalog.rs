@@ -83,7 +83,7 @@ pub fn validate_model_catalog(catalog: &ModelCatalog) -> ModelCatalogValidationR
     if catalog.schema_version != 2 {
         issues.push(invalid(
             "schema_version",
-            "expected model catalog schema version 1",
+            "expected model catalog schema version 2",
         ));
     }
     if !opaque_id(&catalog.revision) {
