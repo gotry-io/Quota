@@ -1,6 +1,6 @@
 [package]
 name = "quotacli"
-version = "0.0.12"
+version = "0.0.13"
 edition = "2024"
 publish = false
 description = "Linux-native Quota command-line client"
