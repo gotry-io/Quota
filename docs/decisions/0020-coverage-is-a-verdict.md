@@ -1,5 +1,9 @@
 # ADR 0020: A read states how completely it was scanned
 
+> Status: Superseded by [ADR 0024](./0024-hour-versioned-usage-and-daily-rollups.md) on 2026-08-26.
+> Coverage windows are gone: an upload replaces whole hours and each hour says whether the scan
+> behind it was complete.
+
 - Status: accepted
 - Date: 2026-08-25
 

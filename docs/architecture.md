@@ -43,8 +43,8 @@ product speaks; those stay out of both Apple packages.
 GitHub is the only account identity provider. The managed origin is fixed at
 `https://quota.gotry.io`. There is no anonymous owner, pairing group, arbitrary Relay URL, discovery
 document, self-hosted process, SQLite Relay adapter, or protocol v1 route. The durable managed
-boundary is [ADR 0006](decisions/0006-managed-account-device-usage.md); managed-data v3 is
-[ADR 0012](decisions/0012-managed-data-v3.md); the read-only iOS account client is
+boundary is [ADR 0006](decisions/0006-managed-account-device-usage.md); managed-data v6 is
+[ADR 0024](decisions/0024-hour-versioned-usage-and-daily-rollups.md); the read-only iOS account client is
 [ADR 0013](decisions/0013-readonly-ios-account-client.md); the non-secret iOS widget
 snapshot is [ADR 0014](decisions/0014-nonsecret-ios-widget-snapshot.md); the local runtime decision is
 [ADR 0007](decisions/0007-rust-native-local-service.md); the diagnostic report and the attempt
@@ -129,19 +129,19 @@ version expires on the same terms. `packages/quota-model` owns the TypeScript ru
 rather than by restating, and `packages/service`'s `observation` module owns the Rust one. A snapshot
 carrying the retired `valid_until` stamp is refused at the wire boundary rather than ignored.
 
-Relay keeps one observation per reporting device and never deduplicates, so resolving them into the
-subscriptions a person reads is every reader's job, stated once in
-[ADR 0003](decisions/0003-observation-preserving-subscription-merge.md) and answered the same way by
-QuotaBar's service, the website, and Quota iOS with its widgets. Global fingerprints merge across
-observation sources; source-scoped fingerprints remain separate per source. Selection favors a valid
+Relay keeps one observation per reporting device and resolves them on the read: an Account summary
+answers `subscriptions[]`, one entry per subscription key carrying the chosen reading and every
+`{device_id, observed_at}` behind it. The rule is stated once in
+[ADR 0003](decisions/0003-observation-preserving-subscription-merge.md), implemented once in
+`packages/quota-model`, and no client restates it. Global fingerprints merge across observation
+sources; source-scoped fingerprints remain separate per source. Selection favors a valid
 non-expired observation, then newest observation time, then local source, then stable source ID —
 never when Relay last wrote the row, which a device re-uploading a reading it already knows moves
-without making that reading newer. QuotaBar additionally merges its local collection, and drops the
-account observations this device uploaded before the merge, because local collection is the only
-authority for this device: reading its own upload back would keep a rejected or removed local source
-on screen as another device's report. Rust returns that merged Overview directly and Swift never
-reimplements the policy. `packages/protocol/fixtures/quota-observation-conformance.json` states both
-rules as cases, and the Rust, TypeScript, and Swift implementations each answer that file.
+without making that reading newer. QuotaBar merges twice, not five ways: the resolved row against
+its own local collection, because local collection is the only authority for this device. Rust
+returns that merged Overview directly and Swift never reimplements the policy.
+`packages/protocol/fixtures/quota-observation-conformance.json` states both rules as cases, and the
+Relay and Rust implementations each answer that file.
 `wire-conformance.json` does the same for the contracts themselves, so a payload one runtime
 starts accepting cannot pass unnoticed by the others; see
 [ADR 0019](decisions/0019-one-statement-per-contract.md). A device
@@ -188,18 +188,18 @@ rebuilt by the first refresh.
 
 Usage indexing is the final file-level invalidation design. Each refresh performs bounded source
 discovery, records parser revision plus file identity, size, and modification time, skips unchanged
-files, and transactionally replaces the normalized rows for changed files. Collectors return typed
-complete/partial coverage. Complete coverage is partitioned losslessly at upload row/byte boundaries;
-partial coverage is visible locally and never replaces remote facts. Invalid records are isolated at
-record scope and unreadable files at file scope, so valid files and agents continue to upload. The
-SQLite file index is the sole invalidation mechanism: no watcher or byte-checkpoint dependency is part
-of the product. Model identifiers remain opaque bounded provider text, including punctuation, and
-missing pricing never discards a valid fact.
-A managed read states how completely its range was scanned as one verdict — none, complete, or
-partial — decided over every window the range spans, rather than returning the windows themselves;
-see [ADR 0020](decisions/0020-coverage-is-a-verdict.md).
-Bounded Usage detail responses may still explicitly mark truncated breakdown or unpriced-model
-detail; exact totals remain usable and clients surface that degradation.
+files, and transactionally replaces the normalized rows for changed files. Invalid records are
+isolated at record scope and unreadable files at file scope, so valid files and agents continue to
+upload. The SQLite file index is the sole invalidation mechanism: no watcher or byte-checkpoint
+dependency is part of the product. Model identifiers remain opaque bounded provider text, including
+punctuation, and missing pricing never discards a valid fact.
+An upload names whole UTC hours and each one carries the version of the scan behind it, so a scan
+that came up short is marked `partial` on the hour it describes rather than on a window beside it;
+see [ADR 0024](decisions/0024-hour-versioned-usage-and-daily-rollups.md). A managed read reports
+`partial` for a period when any hour behind it was scanned incompletely.
+Bounded Usage responses may still explicitly mark truncated unpriced-model detail, and a period's
+agent tree folds its smallest model leaves into `other` past 200 of them; exact totals remain
+usable and clients surface that degradation.
 
 The local Usage report is a private presentation contract carried inside the IPC state, so it names
 no version of its own and moves with `ipc_version`. It carries collection status, coverage,
@@ -290,7 +290,7 @@ PKCE route with the exact redirect `io.gotry.quota:/oauth/callback`. Its token e
 installation identity and Device fields and returns only an account session. It is not a collection
 Device, is absent from `PlatformSchema`, and never receives snapshot or Usage write authority. Quota
 iOS consumes that session through `packages/apple-client` and fetches
-`GET /api/v5/account/summary` for Today and the read-only device list. The app process
+`GET /api/v6/account/summary` for Today and the read-only device list. The app process
 alone holds OAuth and network authority.
 After a trusted summary is available it projects a non-secret `WidgetSnapshot` into the App Group
 `group.io.gotry.quota` for the embedded `QuotaWidgets` extension; the extension reads only that
@@ -298,30 +298,31 @@ protected file and never calls Relay. See
 [ADR 0013](decisions/0013-readonly-ios-account-client.md) and
 [ADR 0014](decisions/0014-nonsecret-ios-widget-snapshot.md).
 
-The random installation ID is HMACed with an account-scoped server key before storage. Quota and
-Usage upload sequences are independent and recovered from authoritative Device control before
-upload. Outbox retry reuses submission ID and sequence, making crash-after-commit a duplicate rather
-than double counting. A deletion watermark rebuilds only permitted facts under the new Device
-generation. Disabling Usage upload is a local Device preference: native Usage presentation becomes
-local-only, while already uploaded account history remains subject to the existing Device and Account
-deletion controls.
+The random installation ID is HMACed with an account-scoped server key before storage. Uploads
+carry no sequence: a quota reading is placed by `(provider, fingerprint)` and ordered by the instant
+it was observed, and an hour of Usage is replaced only by a scan whose `scan_version` is strictly
+newer than the stored one. A retry is therefore a comparison rather than a write, and
+crash-after-commit needs nothing remembered. A deletion watermark rebuilds only permitted facts
+under the new Device generation; an hour before it is `ignored`. Disabling Usage upload is a local
+Device preference: native Usage presentation becomes local-only, while already uploaded account
+history remains subject to the existing Device and Account deletion controls.
 
-`GET /api/v5/account/summary` and `GET /api/v5/account/usage/summary` are conditional reads. Each
-carries a strong `ETag` over an account version stamp, the request's full query string, and the
-pricing and model catalog revisions, and is `Cache-Control: private, no-cache` so a caller may hold
-the body as long as it revalidates. The stamp is three aggregates over the devices, quota
-observation rows the response projects; a matching `If-None-Match` returns 304 before any Usage
-query runs. Document and `__data.json` responses stay `private, no-store`.
+`GET /api/v6/account/summary` and `GET /api/v6/account/usage/activity` are conditional reads. Each
+carries a strong `ETag` over an account version stamp, the request's full query string, the pricing
+and model catalog revisions, and — for the summary — the caller's local date, because that is what
+moves `today` with no write behind it. Both are `Cache-Control: private, no-cache` so a caller may
+hold the body as long as it revalidates. The stamp is a handful of aggregates over the devices and
+quota observation rows the response projects; a matching `If-None-Match` returns 304 before any
+Usage query runs. Document and `__data.json` responses stay `private, no-store`.
 
 The Rust service and the Quota iOS client both read conditionally. Each stores the response with
 the ETag it is current at in one transaction, keyed by Account, and treats a 304 as that stored
 response rather than as a failure: the account component keeps the value the previous read
 produced. Signing out drops the stored reads with the session.
 
-An Account-summary Device carries its lifecycle timestamps and nothing it asserted about itself.
-Clients derive how recently it spoke from the newer of `last_seen_at` and the `observed_at` of the
-newest reading that device sent: Active under thirty minutes, Idle up to a day, Not reporting beyond
-that. A quiet device is asleep, closed, or off, which is not a claim that it is broken. See
+An Account-summary Device carries `last_seen_at` and `last_observed_at` and nothing it asserted
+about itself. Clients derive how recently it spoke from the newer of the two: Active under thirty
+minutes, Idle up to a day, Not reporting beyond that. A quiet device is asleep, closed, or off, which is not a claim that it is broken. See
 [ADR 0022](decisions/0022-minimal-diagnostics.md).
 
 Pricing is versioned and effective-dated with ETag caching. Rust calculates local cost; Relay keeps
@@ -404,13 +405,11 @@ protocol + quota-model + relay-core
 
 ## Relay, Web, and deployment
 
-QuotaRelay mounts OAuth and Device control at `/oauth/v2` and `/api/v2`, quota/Usage managed data at
-both compatible `/api/v2` and current `/api/v5` routes, Better Auth at `/api/auth/v2`, and health
-routes including self-owned `/api/v5/device/health`. It authenticates each route with the minimum
-account, device, or browser scope and performs Device/Account deletion, rotation/revocation, and
-Usage replacement in storage transactions. Relay serves the current Usage agents and pricing
-catalog without the ended 0.0.5 response variant; current clients explicitly send
-`usage_agents=all`.
+QuotaRelay mounts OAuth and Device control at `/oauth/v2` and `/api/v2`, the managed quota and
+Usage data contract at `/api/v6`, Better Auth at `/api/auth/v2`, and the health routes. It
+authenticates each route with the minimum account, device, or browser scope and performs
+Device/Account deletion, rotation/revocation, and hour replacement with its daily rollup in storage
+transactions. It serves every stored agent and channel without an opt-in query.
 
 Quota Web is a SvelteKit app. Hashed `/_app/immutable/*` CSS and JS stay asset-first. Document
 navigations run the existing Relay Worker first: `apps/relay/src/cloudflare.ts` stays Wrangler
@@ -420,7 +419,7 @@ cookie through `WebDocumentPort` and writes the signed-in header into the first 
 Session cookies remain HttpOnly. `/` offers the QuotaBar `.dmg` and Homebrew install command.
 GitHub sign-in is in the header; `/my` is a server redirect when unsigned and otherwise a
 streaming dashboard. Its document load starts the existing
-`GET /api/v5/account/summary` handler inside the composed Worker and reuses the
+`GET /api/v6/account/summary` handler inside the composed Worker and reuses the
 request's memoized Better Auth session, so Account data can resolve in parallel with hydration
 without a second browser round trip. The API schema and Relay/Web source boundary remain unchanged.
 Every page requires a session; Quota Web publishes no account data anonymously. `/activate` approves
@@ -433,5 +432,5 @@ D1 is the only durable Relay store and applied migrations are never rewritten. L
 use Wrangler dry-run and local D1 migration verification. Manual remote migration or deployment is
 not a development command.
 
-The shipped compatibility and route split are canonical in
-[ADR 0012](decisions/0012-managed-data-v3.md).
+The managed data contract is canonical in
+[ADR 0024](decisions/0024-hour-versioned-usage-and-daily-rollups.md).

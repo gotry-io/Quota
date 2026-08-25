@@ -2,6 +2,10 @@
 
 > Status: Partially superseded by [ADR 0023](./0023-strict-writes-tolerant-reads.md) on 2026-08-25.
 > A client too old to read a field is no longer a reason to move the contract version.
+>
+> The version this names has moved twice since: to v5 by [ADR 0020](./0020-coverage-is-a-verdict.md)
+> and to **v6** by [ADR 0024](./0024-hour-versioned-usage-and-daily-rollups.md). The decision this
+> ADR records — one managed data contract, refused rather than translated — still stands.
 
 - Status: accepted
 - Date: 2026-08-24
@@ -60,10 +64,10 @@ for a client that cannot speak the current contract is to update, which it does 
 - The exported JSON Schemas lose their version suffixes: `quota-snapshot.json`, `usage.json`,
   `account-http.json`, `local-usage.json`, and `quota-collection-report.json`. Separately versioned
   catalogs keep theirs.
-- `PROTOCOL_VERSION` remains 2 for the control plane, `LOCAL_USAGE_PROTOCOL_VERSION` remains 3 for
-  the private local report, and `MANAGED_DATA_PROTOCOL_VERSION` becomes 4. Each runtime names its
-  contract version once — `packages/protocol`, `WireCodec`, and `packages/service`'s `protocol`
-  module — so a payload cannot carry a magic number that disagrees with the check that reads it.
+- `PROTOCOL_VERSION` remains 2 for the control plane and `MANAGED_DATA_PROTOCOL_VERSION` became 4
+  here, and is 6 today. Each runtime names its contract version once — `packages/protocol`,
+  `WireCodec`, and `packages/service`'s `protocol` module — so a payload cannot carry a magic number
+  that disagrees with the check that reads it.
 - A device that speaks v3 is refused by version rather than by a puzzling field error: the route is
   gone and the version literal no longer matches.
 - Local SQLite migration v9 promotes staged v3 Usage outbox payloads to v4 in place, because v4 kept

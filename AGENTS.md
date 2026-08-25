@@ -17,7 +17,7 @@ Read the relevant source before changing that area:
 | CodexBar external platform capability baseline (quota/usage/fallback) | `docs/codexbar-platform-capabilities.md` |
 | Persistent Relay storage decision and rationale | `docs/decisions/0001-persistent-relay-storage.md` |
 | Managed account, device, authentication, deletion, and Usage boundary | `docs/decisions/0006-managed-account-device-usage.md` |
-| Managed-data v3 and Cursor account-sync protocol | `docs/decisions/0012-managed-data-v3.md` |
+| Managed-data v6: hour-versioned Usage, daily rollups, resolved subscriptions | `docs/decisions/0024-hour-versioned-usage-and-daily-rollups.md` |
 | Read-only iOS account client | `docs/decisions/0013-readonly-ios-account-client.md` |
 | Non-secret iOS widget snapshot | `docs/decisions/0014-nonsecret-ios-widget-snapshot.md` |
 | Website visual tokens and marketing UI | `apps/web/DESIGN.md` |

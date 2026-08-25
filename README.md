@@ -89,9 +89,12 @@ docs/                     Architecture, security, provider, and decision records
 Provider registration starts in `packages/provider/catalog.json`. Run
 `pnpm generate:provider-catalog` after a catalog change to regenerate Rust, Swift, and TypeScript
 provider IDs. Wire JSON uses `snake_case`. OAuth and Device control remain on v2; quota,
-Usage, and Account summary use managed-data v4, the only data contract Relay serves.
+Usage, and Account summary use managed-data v6, the only data contract Relay serves. A Usage upload
+replaces whole UTC hours by the version of the scan behind each one, and Relay folds them into the
+daily rollup every read answers from
+([ADR 0024](docs/decisions/0024-hour-versioned-usage-and-daily-rollups.md)).
 Bundled private IPC v1 changes
-atomically with QuotaBar. Its local Usage v3 report carries scan status and coverage; state snapshots
+atomically with QuotaBar. Its local Usage report carries scan status and coverage; state snapshots
 carry precomputed period totals grouped by agent, then inference provider, then model. Summary totals are total, input,
 output, cache-read input, cache-write input, reasoning, and usage-bearing output messages; sessions
 are not collected.
@@ -165,11 +168,12 @@ The marketing version lives in `apps/menubar/Support/Info.plist`.
 
 ## Current status
 
-The repository implements protocol-v2 account/device authentication, managed-data v4, a registered
+The repository implements protocol-v2 account/device authentication, managed-data v6, a registered
 read-only `quota-ios` account OAuth client, a Quota iOS Connect Account / Today overview slice on
 `packages/apple-client`, shared Apple presentation semantics in `packages/apple-shared`, a
-non-secret App Group widget snapshot with an embedded WidgetKit extension, independent
-quota and Usage upload sequencing, D1 persistence and deletion watermarks, eight Rust quota collectors, six Rust
+non-secret App Group widget snapshot with an embedded WidgetKit extension, hour-versioned Usage
+replacement with server-side daily rollups and resolved subscriptions,
+D1 persistence and deletion watermarks, eight Rust quota collectors, six Rust
 Usage parsers with file-level incremental indexing, effective-dated cost calculation, owner-only
 local SQLite state split into an identity store and a disposable cache, owner-only provider
 configuration, persistent private IPC, QuotaBar account/provider

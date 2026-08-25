@@ -2,7 +2,7 @@
 
 Runtime schemas for QuotaBar's Rust local service, managed QuotaRelay, Swift `Codable` models, and
 the registered `quota-ios` account client. OAuth and Device control remain released v2; quota,
-Usage, and Account summary use managed-data v5. `quota-ios` adds client-specific authorization-code
+Usage, and Account summary use managed-data v6. `quota-ios` adds client-specific authorization-code
 and account-session payloads on the v2 OAuth contract; the released `quotacli` request and response
 shapes are unchanged.
 
@@ -32,3 +32,11 @@ shape of a released contract still moves its version.
 - `fixtures/wire-conformance.json` states each wire contract as accepted and refused payloads, and
   all three runtimes answer it: writes through the schema that guards them, reads through the schema
   a client reads with.
+- `fixtures/quota-observation-conformance.json` states how long a reading describes current quota
+  and how observations resolve into subscriptions. Relay resolves them once for every reader
+  ([ADR 0024](../../docs/decisions/0024-hour-versioned-usage-and-daily-rollups.md)), so the merge
+  cases are answered by `packages/quota-model` and by the Rust two-way merge.
+- A Usage upload names whole UTC hours. `UsageRow` carries what it measures and no instant: the hour
+  that carries it says when, and its `scan_version` says whether this reading of that hour is newer
+  than the stored one. `DatedUsageRow` is the same row projected out of the daily rollup for
+  pricing, which needs a date to resolve an effective-dated entry.

@@ -1,6 +1,10 @@
 # ADR 0012: Managed-data v3
 
-- Status: Accepted
+> Status: Superseded by [ADR 0018](./0018-single-managed-data-contract.md) and
+> [ADR 0024](./0024-hour-versioned-usage-and-daily-rollups.md). Managed data is v6; the routes,
+> sequences, and compatibility window recorded below describe what shipped as v3.
+
+- Status: Superseded
 - Date: 2026-08-14
 
 ## Context

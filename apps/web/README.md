@@ -34,9 +34,13 @@ sign-out, OAuth state/PKCE, account deletion, and standard auth-route origin val
 authorization decision and Device deletion routes additionally require a recent session and an
 exact same-origin request.
 
-The signed-in dashboard shows each Device's platform, when it was last seen, and when its newest
-reading was taken, and labels it Active, Idle, or Not reporting from the newer of the two. It is
-read-only, and a quiet Device is asleep or closed rather than broken.
+The signed-in dashboard renders what Relay resolved: `subscriptions[]` as one card per
+subscription, whichever of Today, the last 7 days, the last 30 days, or all time is selected, and a
+year of daily totals from `GET /api/v6/account/usage/activity`. It sends the browser's IANA
+timezone as `tz`, which decides which calendar days those trailing windows name. Each Device shows
+its platform, when it was last seen, and when its newest reading was taken, labelled Active, Idle,
+or Not reporting from the newer of the two. It is read-only, and a quiet Device is asleep or closed
+rather than broken.
 
 New files under `static/` other than `logo.svg`, `logo-monochrome.svg`, `og.png`, and `schema/`
 need a matching `!/filename` negation in `apps/relay/wrangler.jsonc`.

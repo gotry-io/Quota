@@ -13,9 +13,10 @@ data requirements. Architecture and product behavior are defined in
   credential payloads, prompts, completions, tool payloads, local paths, session/conversation IDs, or
   authorization headers.
 - QuotaRelay accepts only protocol-validated account/device authentication material, normalized
-  quota observations, sparse hourly Usage facts, and coverage/control metadata. It never runs a
-  provider collector or exposes command execution. Opt-in account client/model summaries regroup
-  those retained facts and add no prompt, completion, path, session, credential, or new identifier.
+  quota observations, and sparse hourly Usage rows with the version of the scan behind each hour. It
+  never runs a provider collector or exposes command execution. The daily rollup and the account
+  summaries regroup those retained rows and add no prompt, completion, path, session, credential, or
+  new identifier.
 - Rust local clients' Relay traffic is outbound HTTPS to the fixed origin `https://quota.gotry.io`.
   Only loopback HTTP overrides used by tests are allowed. Redirects are refused.
 - QuotaBar launches only the signed `Contents/Helpers/quota-service` child built from the private
@@ -91,7 +92,7 @@ data requirements. Architecture and product behavior are defined in
 - Account and device sessions are separate credential families. Persist each token with its
   audience, authoritative Account/Device IDs, Device generation, and absolute expiry. A response
   whose principal does not match local state fails closed.
-- SQLite has one process owner for account/logout state, quota and Usage sequences, normalized cache,
+- SQLite has one process owner for account/logout state, upload identity, normalized cache,
   and outbox transactions. Logout first cancels the active refresh and atomically advances the
   session to `logout_pending`; subsequent account operations fail their session-epoch check even if
   token revocation must be retried offline.
@@ -176,11 +177,10 @@ data requirements. Architecture and product behavior are defined in
 - The device profile endpoint accepts only the current Device's authenticated token and generation.
   It can update only that Device's bounded display name and platform; it cannot select a Device ID,
   read Account data, or change authorization state.
-- The service returns authoritative independent `next_snapshot_sequence` and
-  `next_usage_sequence`. Clients never guess or reset a lost sequence to zero. A conflict fails
-  closed because it can indicate a cloned local configuration.
-- A snapshot retry reuses its sequence. A Usage retry reuses the immutable submission ID, sequence,
-  generation, coverage, and rows. D1 receipts make accepted and duplicate outcomes explicit.
+- An upload carries no sequence. A quota reading is placed by `(provider, fingerprint)` and ordered
+  by the instant it was observed; an hour of Usage is replaced only by a scan whose `scan_version`
+  is strictly newer than the stored one. A retry is therefore a comparison, and the response names
+  every hour or provider it accepted and every one it ignored.
 - Relay keeps one quota observation per `(device_id, provider, fingerprint)` and deletes an
   observation once it is seven days older than the moment it describes. Readers stop presenting a
   reading as current a day after it was observed, so retention only bounds what an account keeps
@@ -194,14 +194,13 @@ data requirements. Architecture and product behavior are defined in
 - No device uploads an assertion about its own health. An Account device list is derived from
   lifecycle timestamps Relay already witnessed — when the device last called, and when the newest
   reading it sent was taken — so no local diagnostic detail leaves this device at all.
-- Only a complete collector scan may create authoritative replacement coverage. Permission errors,
+- An uploaded hour states whether the scan behind it was complete. Permission errors,
   unreadable/changed sources, record limits, malformed or unknown usage records, truncated tails,
-  cancellation, or parser uncertainty make coverage partial. Partial coverage never deletes or
-  replaces remote facts. On reads, `complete` describes only that returned half-open coverage
-  interval; absent intervals remain visible gaps and no item claims that the entire query range is
-  complete. The SQLite file index is the sole file-level invalidation mechanism and keeps changed
-  files dirty after a partial parse so later hours cannot be silently accepted across an unresolved
-  gap; no watcher or byte-checkpoint dependency is used.
+  cancellation, or parser uncertainty make that hour `partial`, and a managed read reports a period
+  as partial when any hour behind it was. A partial hour still replaces the hour it names, because
+  it is the newest reading of it; nothing beside it is touched. The SQLite file index is the sole
+  file-level invalidation mechanism and keeps changed files dirty after a partial parse; no watcher
+  or byte-checkpoint dependency is used.
 - Outbox payloads contain allowlisted aggregate fields only. Source file IDs, byte offsets, record
   hashes, paths, raw events, and parser diagnostics remain local. Token/count invariants and payload,
   row, range, model, and dimension resource bounds are enforced by the current managed-data runtime
@@ -217,8 +216,9 @@ data requirements. Architecture and product behavior are defined in
   not trigger source-file reparsing or fact rewrites. Pricing resolves the raw value independently,
   before grouping, so a normalized model may remain unpriced.
 - Delete Device is distinct from logout. It transactionally revokes sessions, advances Device
-  generation, records a precise watermark, deletes quota/Usage/coverage/receipt rows, and retains a
-  minimal hidden tombstone. Old tokens and old-generation outbox entries are terminally rejected.
+  generation, records a precise watermark, deletes quota and Usage rows including the daily rollup,
+  and retains a minimal hidden tombstone. Old tokens and old-generation outbox entries are
+  terminally rejected.
   The new generation may rebuild the watermark's UTC hour only after the local service filters raw event
   instants before the precise watermark. The account-scoped browser session remains signed in.
 - Delete Account deletes its Devices and business data transactionally. Better Auth removes every
@@ -284,17 +284,15 @@ data requirements. Architecture and product behavior are defined in
   rate-limit subjects only as keyed hashes where equality is required. Better Auth session values
   are encrypted at rest. Persist plaintext native tokens only in the one successful issuance
   response, never in D1.
-- Retained business data is limited to Account/Device lifecycle metadata, each Device's latest
-  bounded health snapshot, normalized quota observations, sparse hourly Usage facts, complete
-  coverage, idempotency receipts, and bounded rate limits. A Usage receipt is retained for seven
-  days, long enough to recognize a retry a client could still be holding; past that the Device's own
-  upload sequence is the check and a stale submission fails closed. Device/Account deletion cascades health;
-  Relay retains no health history. Calculated cost is derived from the canonical catalog; it is not
-  persisted as an invoice.
+- Retained business data is limited to Account/Device lifecycle metadata, normalized quota
+  observations, sparse hourly Usage rows, the daily rollup derived from them, and bounded rate
+  limits. Nothing is kept to recognize a retry: an hour's `scan_version` is the check, and a
+  re-sent hour is ignored rather than written twice. Calculated cost is derived from the canonical
+  catalog; it is not persisted as an invoice.
 - Rate limits use fixed-window counters keyed by hashes of action and subject. Managed anonymous
   network subjects may use only Cloudflare's trusted connecting-IP metadata. Readiness probes and
-  the hourly Worker schedule delete at most 100 expired rows from each credential, receipt, and
-  observation table per run; consuming a limit collects at most 100 expired counters inline. Every
+  the hourly Worker schedule delete at most 100 expired rows from each credential and observation
+  table per run; consuming a limit collects at most 100 expired counters inline. Every
   such delete addresses whole rows, so expiring one fixed window never resets a subject's live one.
   Expired login grants, Better Auth encrypted sessions, and rate-limit counters are eligible
   immediately. Expired or revoked native account/device sessions remain for seven days so logout
@@ -309,8 +307,8 @@ data requirements. Architecture and product behavior are defined in
 ## Failure behavior
 
 - A provider failure never fabricates a quota or Usage value.
-- Authentication, unavailable, unsupported, stale generation, deleted range, sequence conflict,
-  partial coverage, malformed data, and unpriced cost remain distinct outcomes.
+- Authentication, unavailable, unsupported, stale generation, an ignored hour, an incompletely
+  scanned hour, malformed data, and unpriced cost remain distinct outcomes.
 - Preserve last-known-good local display data on transient collection/network failures and mark its
   age or coverage; do not silently replace it with empty data.
 - Unknown price, channel, model, tier, region, speed, or context is unpriced/partial, never `$0` and

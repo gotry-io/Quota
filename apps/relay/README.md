@@ -2,18 +2,36 @@
 
 QuotaRelay is the managed Cloudflare Worker + D1 account and usage service for
 `https://quota.gotry.io`. It serves v2 GitHub account, native-client OAuth, Device control, and
-public catalog APIs alongside the managed-data v5 quota/Usage data APIs. It renders Quota Web documents through SvelteKit
+public catalog APIs alongside the managed-data v6 quota/Usage data APIs. It renders Quota Web documents through SvelteKit
 `Server.respond` as described in [ADR 0011](../../docs/decisions/0011-sveltekit-document-worker.md).
 There is no self-hosted or SQLite runtime.
 
-QuotaBar and Quota Web speak managed-data v5, the only data contract this Worker serves. A client
+QuotaBar and Quota Web speak managed-data v6, the only data contract this Worker serves. A client
 that speaks an older shape is refused rather than translated; see
 [ADR 0018](../../docs/decisions/0018-single-managed-data-contract.md).
 
-A Device on `GET /api/v5/account/summary` carries its lifecycle timestamps and nothing it asserted
-about itself. How recently it spoke is derived by the reader from the newer of `last_seen_at` and
-the `observed_at` of the newest reading that Device sent. Relay stores no device-reported health.
-See [ADR 0022](../../docs/decisions/0022-minimal-diagnostics.md).
+The v6 data contract is four routes
+([ADR 0024](../../docs/decisions/0024-hour-versioned-usage-and-daily-rollups.md)):
+
+- `PUT /api/v6/device/snapshots` stores this device's readings by `(provider, fingerprint)`, keeps
+  the newer of the stored and uploaded `observed_at`, and drops the fingerprints the envelope no
+  longer names for a provider it does name. It answers `{accepted, ignored}` by provider.
+- `PUT /api/v6/device/usage` replaces whole UTC hours. An hour whose `scan_version` is strictly
+  newer than the stored one replaces every row of that hour; anything else is `ignored`, including
+  an hour before this device's deletion watermark. At most 256 hours, 512 rows in an hour, 1 MiB of
+  body. The same D1 batch rewrites `usage_daily` for the UTC dates it touched.
+- `GET /api/v6/account/summary?tz=` answers the account, its devices, `subscriptions[]` resolved
+  once here rather than by every client, `usage` as Today / last 7 days / last 30 days / all time,
+  and the pricing and model-catalog revisions. A day is a UTC day; `tz` decides which calendar days
+  the trailing windows name.
+- `GET /api/v6/account/usage/activity?from&to` answers up to 400 daily totals.
+
+Both reads fold days from `usage_daily` and never open `usage_hourly`.
+
+A Device on `GET /api/v6/account/summary` carries `last_seen_at` and `last_observed_at` and nothing
+it asserted about itself. How recently it spoke is derived by the reader from the newer of the two.
+Relay stores no device-reported health. See
+[ADR 0022](../../docs/decisions/0022-minimal-diagnostics.md).
 
 Apply local D1 migrations before starting Wrangler:
 
@@ -40,7 +58,7 @@ checked-in Worker enables Cloudflare `nodejs_compat`, which Better Auth's runtim
 
 Each keyed secret is independent and must contain at least 32 random characters. OAuth and session
 routes return `Cache-Control: no-store`; only the versioned pricing and model catalogs are publicly
-cacheable. `GET /api/v5/account/summary` and `GET /api/v5/account/usage/summary` are
+cacheable. `GET /api/v6/account/summary` and `GET /api/v6/account/usage/activity` are
 `private, no-cache` with a strong `ETag`, and answer a matching `If-None-Match` with 304 before
 running any Usage query.
 Production migration and deployment remain workflow-owned and must not be run manually without
@@ -53,7 +71,6 @@ date intervals preserve known historical changes. Unknown models and missing com
 unpriced; wildcard dimension matches and the inferred-cache approximation remain explicit in the
 calculation assumptions.
 
-Readiness probes and the hourly Worker schedule run the bounded credential, Usage-receipt, and
-quota-observation cleanup defined in [`docs/security.md`](../../docs/security.md). An unhandled
-request failure writes one `relay_request_failed` line carrying only the path, the status, and the
-error's class name.
+Readiness probes and the hourly Worker schedule run the bounded credential and quota-observation
+cleanup defined in [`docs/security.md`](../../docs/security.md). An unhandled request failure writes
+one `relay_request_failed` line carrying only the path, the status, and the error's class name.
