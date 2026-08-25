@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use crate::state::StateError;
 
-const CURRENT_SCHEMA: i64 = 11;
+const CURRENT_SCHEMA: i64 = 12;
 
 pub fn apply(conn: &mut Connection) -> Result<(), StateError> {
     conn.execute_batch(
@@ -37,6 +37,7 @@ pub fn apply(conn: &mut Connection) -> Result<(), StateError> {
             9 => migration_v9(&tx)?,
             10 => migration_v10(&tx)?,
             11 => migration_v11(&tx)?,
+            12 => migration_v12(&tx)?,
             _ => return Err(StateError::InvalidState),
         }
         tx.execute(
@@ -571,6 +572,23 @@ fn migration_v10(tx: &Transaction<'_>) -> Result<(), StateError> {
 /// long something has been failing — but only as far as it can be: a row an image should never
 /// have held would otherwise fail the whole copy, and a device that cannot open its state is a
 /// worse outcome than a device missing a line of history it could not read anyway.
+fn migration_v12(tx: &Transaction<'_>) -> Result<(), StateError> {
+    // The response an Account read is currently at, with the validator that says so. Keyed by
+    // account as well as query: two Accounts with nothing in them produce the same server-side
+    // stamp, and a stored body must never answer for the wrong one.
+    tx.execute_batch(
+        "CREATE TABLE account_read_cache (
+            account_id TEXT NOT NULL,
+            query TEXT NOT NULL,
+            etag TEXT NOT NULL,
+            body_json TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY(account_id, query)
+        );",
+    )?;
+    Ok(())
+}
+
 fn migration_v11(tx: &Transaction<'_>) -> Result<(), StateError> {
     // The old indexes stay where they are: they belong to the renamed table and go with it.
     // Dropping a table whose parent reference points at itself performs an implicit delete that
@@ -776,7 +794,7 @@ mod tests {
             .expect("v1 rows")
             .collect::<Result<Vec<_>, _>>()
             .expect("v1 values");
-        assert_eq!(fresh_versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+        assert_eq!(fresh_versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
         assert_eq!(fresh_versions, v1_versions);
         assert_eq!(
             columns(&fresh, "usage_period_cache"),
@@ -836,6 +854,8 @@ mod tests {
         .expect("quota component");
         conn.execute("DELETE FROM schema_migrations WHERE version >= 4", [])
             .expect("rewind migration marker");
+        conn.execute("DROP TABLE account_read_cache", [])
+            .expect("rewind account read cache");
         conn.execute("DROP TABLE model_catalog_cache", [])
             .expect("rewind catalog cache");
         conn.execute("DROP TABLE usage_period_cache", [])
@@ -915,6 +935,8 @@ mod tests {
         .expect("period fixtures");
         conn.execute("DELETE FROM schema_migrations WHERE version >= 6", [])
             .expect("rewind migration marker");
+        conn.execute("DROP TABLE account_read_cache", [])
+            .expect("rewind account read cache");
         conn.execute("DROP TABLE diagnostic_snapshot", [])
             .expect("rewind diagnostics");
         conn.execute("DROP TABLE diagnostic_attempts", [])
@@ -1034,6 +1056,8 @@ mod tests {
         .expect("overview fixture");
         conn.execute("DELETE FROM schema_migrations WHERE version >= 9", [])
             .expect("rewind migration marker");
+        conn.execute("DROP TABLE account_read_cache", [])
+            .expect("rewind account read cache");
 
         apply(&mut conn).expect("re-apply");
 
@@ -1101,6 +1125,8 @@ mod tests {
         .expect("period fixtures");
         conn.execute("DELETE FROM schema_migrations WHERE version >= 8", [])
             .expect("rewind migration marker");
+        conn.execute("DROP TABLE account_read_cache", [])
+            .expect("rewind account read cache");
         conn.execute("DROP TABLE diagnostic_attempts", [])
             .expect("rewind attempt journal");
         conn.execute(
@@ -1261,7 +1287,7 @@ mod tests {
             .expect("rows")
             .collect::<Result<Vec<_>, _>>()
             .expect("values");
-        assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+        assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
     }
 
     fn columns_after_fresh_apply(table: &str) -> Vec<String> {
@@ -1279,6 +1305,8 @@ mod tests {
         apply(&mut conn).expect("fresh");
         conn.execute("DELETE FROM schema_migrations WHERE version >= 10", [])
             .expect("rewind");
+        conn.execute("DROP TABLE account_read_cache", [])
+            .expect("rewind account read cache");
 
         let mut stranded = usage_submission(4, "stranded", "codex");
         stranded["coverage"]["start_at"] = serde_json::json!("1970-01-01T00:00:00Z");
@@ -1370,8 +1398,10 @@ mod tests {
             .expect("history kept");
         assert_eq!(kept, 1);
         // Rewinding and re-running the rebuild keeps every row it found.
-        conn.execute("DELETE FROM schema_migrations WHERE version = 11", [])
+        conn.execute("DELETE FROM schema_migrations WHERE version >= 11", [])
             .expect("rewind");
+        conn.execute("DROP TABLE account_read_cache", [])
+            .expect("rewind account read cache");
         apply(&mut conn).expect("v11");
         let total: i64 = conn
             .query_row("SELECT COUNT(*) FROM diagnostic_attempts", [], |row| {
@@ -1388,8 +1418,10 @@ mod tests {
     fn a_row_the_table_should_never_have_held_does_not_strand_the_ladder() {
         let mut conn = Connection::open_in_memory().expect("memory");
         apply(&mut conn).expect("fresh");
-        conn.execute("DELETE FROM schema_migrations WHERE version = 11", [])
+        conn.execute("DELETE FROM schema_migrations WHERE version >= 11", [])
             .expect("rewind");
+        conn.execute("DROP TABLE account_read_cache", [])
+            .expect("rewind account read cache");
         conn.execute_batch("PRAGMA ignore_check_constraints = ON")
             .expect("simulate an image that already holds one");
         conn.execute(
@@ -1455,8 +1487,10 @@ mod tests {
         ] {
             let mut conn = Connection::open_in_memory().expect("memory");
             apply(&mut conn).expect("fresh");
-            conn.execute("DELETE FROM schema_migrations WHERE version = 11", [])
+            conn.execute("DELETE FROM schema_migrations WHERE version >= 11", [])
                 .expect("rewind");
+            conn.execute("DROP TABLE account_read_cache", [])
+                .expect("rewind account read cache");
             conn.execute(
                 "INSERT INTO components(name, status, value_json) VALUES ('quota', 'ready', ?1)
                  ON CONFLICT(name) DO UPDATE SET value_json = excluded.value_json",
@@ -1494,8 +1528,10 @@ mod tests {
     fn the_ladder_stays_inside_a_launch() {
         let mut conn = Connection::open_in_memory().expect("memory");
         apply(&mut conn).expect("fresh");
-        conn.execute("DELETE FROM schema_migrations WHERE version = 11", [])
+        conn.execute("DELETE FROM schema_migrations WHERE version >= 11", [])
             .expect("rewind");
+        conn.execute("DROP TABLE account_read_cache", [])
+            .expect("rewind account read cache");
         {
             let tx = conn.transaction().expect("transaction");
             for index in 0..30_000 {

@@ -308,6 +308,11 @@ the body as long as it revalidates. The stamp is three aggregates over the devic
 observation, and Device Health rows the response projects; a matching `If-None-Match` returns 304
 before any Usage query runs. Document and `__data.json` responses stay `private, no-store`.
 
+The Rust service and the Quota iOS client both read conditionally. Each stores the response with
+the ETag it is current at in one transaction, keyed by Account, and treats a 304 as that stored
+response rather than as a failure: the account component keeps the value the previous read
+produced. Signing out drops the stored reads with the session.
+
 After an authenticated Device completes a refresh, the service uploads a sanitized health snapshot
 on change or a bounded heartbeat. The Device token determines the row; D1 stores only the latest
 monotonic revision and uses server receipt time for freshness. Every Account-summary Device carries `health`,

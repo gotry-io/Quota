@@ -542,6 +542,74 @@ impl StateStore {
         })
     }
 
+    /// The stored answer to one Account read, if this installation already holds one.
+    pub fn account_read_cache(
+        &self,
+        account_id: &str,
+        query: &str,
+    ) -> Result<Option<(String, Value)>, StateError> {
+        self.with_conn_try(|conn| {
+            let row: Option<(String, String)> = conn
+                .query_row(
+                    "SELECT etag, body_json FROM account_read_cache
+                     WHERE account_id = ?1 AND query = ?2",
+                    params![account_id, query],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?;
+            row.map(|(etag, raw)| Ok((etag, serde_json::from_str(&raw)?)))
+                .transpose()
+        })
+    }
+
+    /// Records the response and the validator it is current at together.
+    ///
+    /// One row, one statement: a stored validator that does not describe the stored body would
+    /// make the next 304 answer with the wrong summary, which is worse than not caching at all.
+    /// A response the server did not tag drops any row we held, so the next read is
+    /// unconditional rather than validated against something stale.
+    pub fn commit_account_read(
+        &self,
+        account_id: &str,
+        query: &str,
+        etag: Option<&str>,
+        body: &Value,
+    ) -> Result<(), StateError> {
+        if account_id.is_empty() || account_id.len() > 128 || query.len() > 512 {
+            return Err(StateError::InvalidState);
+        }
+        let Some(etag) = etag else {
+            return self.forget_account_read(account_id, query);
+        };
+        if etag.len() > 256 || etag.trim() != etag {
+            return Err(StateError::InvalidState);
+        }
+        let raw = serde_json::to_string(body)?;
+        if raw.len() > crate::protocol::MAXIMUM_LINE_BYTES {
+            return Err(StateError::InvalidState);
+        }
+        self.with_conn_mut(|conn| {
+            conn.execute(
+                "INSERT INTO account_read_cache(account_id, query, etag, body_json, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(account_id, query) DO UPDATE SET etag = excluded.etag,
+                 body_json = excluded.body_json, updated_at = excluded.updated_at",
+                params![account_id, query, etag, raw, now_rfc3339()],
+            )?;
+            Ok(())
+        })
+    }
+
+    fn forget_account_read(&self, account_id: &str, query: &str) -> Result<(), StateError> {
+        self.with_conn_mut(|conn| {
+            conn.execute(
+                "DELETE FROM account_read_cache WHERE account_id = ?1 AND query = ?2",
+                params![account_id, query],
+            )?;
+            Ok(())
+        })
+    }
+
     pub fn write_usage_scan_diagnostics(
         &self,
         agent: UsageAgent,
@@ -1495,6 +1563,7 @@ impl StateStore {
                 tx.rollback()?;
                 return Ok(false);
             }
+            tx.execute("DELETE FROM account_read_cache", [])?;
             let _ = bump_revision(&tx)?;
             tx.commit()?;
             Ok(true)
@@ -1505,6 +1574,8 @@ impl StateStore {
         self.with_conn_mut(|conn| {
             let tx = conn.transaction()?;
             tx.execute("DELETE FROM session WHERE id = 1", [])?;
+            // Stored Account responses end with the session that was allowed to read them.
+            tx.execute("DELETE FROM account_read_cache", [])?;
             let revision = bump_revision(&tx)?;
             tx.commit()?;
             Ok(revision)

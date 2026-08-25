@@ -1050,7 +1050,10 @@ async function answerConditionally(
   const entity = await canonicalRequestDigest({
     // Two routes answer the same query string with different bodies, so the path is part of
     // the identity. A range the caller did not pin rolls over at UTC midnight with no write
-    // behind it, so the day it was computed for is too.
+    // behind it, so the day it was computed for is too. The Account is in the digest because
+    // two empty Accounts have the same stamp, and a client that switched between them must
+    // not be told its held body still applies.
+    account: principal.account_id,
     path: url.pathname,
     query: url.search,
     stamp,

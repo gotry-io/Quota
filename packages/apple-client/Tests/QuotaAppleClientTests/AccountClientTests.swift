@@ -44,6 +44,37 @@ struct AccountClientTests {
     #expect(try cache.load()?.summary.account.displayLabel == "octocat")
   }
 
+  /// One contract: a 304 is an answer. The stored summary stands, the read is not reported as
+  /// coming from a failure, and the second request is the one that offered the validator.
+  @Test
+  func unchangedSummaryIsAnsweredFromTheStoredReadWithoutAnError() async throws {
+    let summary = try Fixtures.accountSummaryJSON()
+    let transport = ScriptedTransport([
+      .init(status: 200, body: summary, headers: ["ETag": "\"stamp-one\""]),
+      .init(status: 304, body: Data(), headers: ["ETag": "\"stamp-one\""]),
+    ])
+    let sessions = MemoryAccountSessionStore(session: Fixtures.session())
+    let cache = MemoryAccountSummaryStore()
+    let client = AccountClient(
+      relay: RelayClient(transport: transport),
+      sessionStore: sessions,
+      summaryStore: cache,
+      calendar: Calendar(identifier: .gregorian),
+      now: { Fixtures.date("2026-08-14T16:00:00Z") }
+    )
+
+    let first = await client.fetchTodaySummary()
+    #expect(first.error == nil)
+    #expect(try cache.load()?.etag == "\"stamp-one\"")
+
+    let second = await client.fetchTodaySummary()
+    #expect(second.error == nil)
+    #expect(second.fromCache == false)
+    #expect(second.summary == first.summary)
+    #expect(try cache.load()?.etag == "\"stamp-one\"")
+    #expect(transport.recordedIfNoneMatch == [nil, "\"stamp-one\""])
+  }
+
   @Test
   func invalidRefreshClearsSessionAndCache() async throws {
     let cached = CachedAccountSummary(

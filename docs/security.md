@@ -122,8 +122,9 @@ data requirements. Architecture and product behavior are defined in
   `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`. UserDefaults may hold UI preferences only. The
   HTTPS client is fixed to `https://quota.gotry.io`, attaches Bearer only to that origin, refuses
   redirects, uses a 20-second timeout and a 1 MiB response limit, and performs one single-flight
-  account refresh after 401. Last-good cache stores only the decoded Account summary and fetched
-  time in protected app storage. Its Account id must match the current Keychain session before the
+  account refresh after 401. Last-good cache stores only the decoded Account summary, its fetched
+  time, and the ETag that read is current at, in protected app storage. That validator is offered
+  back only for the Account the current session belongs to. Its Account id must match the current Keychain session before the
   cache is displayed or used as a fallback; orphaned or mismatched cache is cleared. Logout clears
   the session and the cache.
 - Quota iOS widgets use App Group `group.io.gotry.quota` only. The app target alone performs OAuth,

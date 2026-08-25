@@ -413,22 +413,28 @@ public struct AccountSummary: Codable, Equatable, Sendable {
 public struct CachedAccountSummary: Codable, Equatable, Sendable {
   public let summary: AccountSummary
   public let fetchedAt: Date
+  /// The validator this body is current at, when the read that produced it carried one.
+  /// Offering it back is what lets an unchanged account answer 304 instead of resending.
+  public let etag: String?
 
-  public init(summary: AccountSummary, fetchedAt: Date) {
+  public init(summary: AccountSummary, fetchedAt: Date, etag: String? = nil) {
     self.summary = summary
     self.fetchedAt = fetchedAt
+    self.etag = etag
   }
 
   public init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys(["summary", "fetchedAt"])
+    try decoder.rejectUnknownWireKeys(["summary", "fetchedAt", "etag"])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     summary = try container.decode(AccountSummary.self, forKey: .summary)
     fetchedAt = try container.decode(Date.self, forKey: .fetchedAt)
+    etag = try container.decodeIfPresent(String.self, forKey: .etag)
   }
 
   private enum CodingKeys: String, CodingKey {
     case summary
     case fetchedAt
+    case etag
   }
 }
 
