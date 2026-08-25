@@ -1,5 +1,8 @@
 # ADR 0018: Serve one managed data contract
 
+> Status: Partially superseded by [ADR 0023](./0023-strict-writes-tolerant-reads.md) on 2026-08-25.
+> A client too old to read a field is no longer a reason to move the contract version.
+
 - Status: accepted
 - Date: 2026-08-24
 - Supersedes the compatibility half of [ADR 0012](0012-managed-data-v3.md)

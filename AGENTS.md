@@ -35,7 +35,7 @@ Do not create a second description of a canonical rule. Update its source and li
   `packages/apple-shared` owns Foundation-only presentation semantics. QuotaBar owns its private IPC
   models, its Usage upload and local-report types, and app-only provider behavior, and extends the
   shared types rather than declaring a second copy. Wire validation lives with the type it protects,
-  so both products fail closed on the same input. Do not restate a type one of those packages
+  so both products answer the same input the same way. Do not restate a type one of those packages
   already owns; do not move a QuotaBar-only type into them to make it look shared.
 - Do not recreate legacy top-level `internal/`, `protocol/`, or `cmd/` trees.
 - Follow the dependency graph and runtime restrictions in `docs/architecture.md`.
@@ -47,8 +47,11 @@ Do not create a second description of a canonical rule. Update its source and li
 ## Change requirements
 
 - Protocol changes start in `packages/protocol`. Keep runtime schemas, exported JSON Schemas, tests,
-  Rust production/consumption, and Swift decoding aligned. An already released protocol version remains compatible; breaking
-  released behavior requires a new protocol version.
+  Rust production/consumption, and Swift decoding aligned. A payload crossing into a system is
+  checked against exactly the contract and refused when it does not match. A payload read back out
+  of one takes the fields and enum members it names and ignores the rest, so adding either is not a
+  breaking change; changing the shape of a released data contract still requires a new protocol
+  version. See `docs/decisions/0023-strict-writes-tolerant-reads.md`.
 - Provider changes must update `packages/provider/catalog.json`, the Rust collector, and
   `docs/provider-collection.md`, then run `pnpm generate:provider-catalog` so protocol ids and Swift
   `ProviderID` stay aligned. Follow `docs/security.md` for credentials and redaction.

@@ -38,6 +38,18 @@ states each contract as accepted and refused payloads. The zod schema, the Rust 
 `packages/service`, and the Swift decoders in `packages/apple-client` and QuotaBar each answer
 it.
 
+## Updated 2026-08-25
+
+[ADR 0023](0023-strict-writes-tolerant-reads.md) keeps the restatements and changes what they are
+allowed to refuse: a write is checked against exactly the contract, a read takes the fields and enum
+members it names and ignores the rest. The fixture answers each contract from the side it is on, so
+it still catches drift between the three runtimes.
+
+"Each contract carries its own version" now names two. `LOCAL_USAGE_PROTOCOL_VERSION` and
+`LOCAL_COLLECTION_PROTOCOL_VERSION` are gone: both reports only ever travel nested inside an IPC
+state that already carries `ipc_version`, and both ends of that pipe ship in the same build, so the
+second number was a version nobody could disagree about.
+
 ## Rationale
 
 The wire contract is stated three times by hand: zod defines it, the Rust service checks every

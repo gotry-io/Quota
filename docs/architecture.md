@@ -13,7 +13,7 @@ Quota has five application products and three shared native library boundaries:
   render a non-secret App Group snapshot published by the app; the extension never collects or
   uploads. It is not a collection Device.
 - QuotaBar is the macOS presentation product. Its app bundle contains one private Rust service;
-  Swift owns views, UI preferences, accessibility, Launch at Login, and strict decoding only. The
+  Swift owns views, UI preferences, accessibility, Launch at Login, and wire decoding only. The
   Rust service owns the durable Usage upload setting so it applies before background work begins.
 - QuotaCLI is a Linux-only native Rust command that uses the shared local service library. It is
   released as a static x86_64 binary; Windows is not supported.
