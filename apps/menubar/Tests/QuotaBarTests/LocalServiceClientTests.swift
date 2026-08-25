@@ -5,6 +5,14 @@ import Testing
 
 @Suite(.serialized)
 struct LocalServiceClientTests {
+  /// Fast enough for a test, and in the same proportions the app uses: the helper is declared
+  /// dead after two unanswered pings, and killed if it does not exit within the grace period.
+  private static let testTimings = LocalServiceClientTimings(
+    ready: .seconds(10),
+    ping: .milliseconds(50),
+    termination: .milliseconds(200)
+  )
+
   @Test(.enabled(if: ProcessInfo.processInfo.environment["QUOTA_LIVE_HELPER"] != nil))
   func decodesInstalledServiceStateBeforeAndAfterRefresh() async throws {
     guard
@@ -49,26 +57,7 @@ struct LocalServiceClientTests {
             revision += 1
             operation = request["operation"]
             if operation == "get_state":
-                result = {
-                    "ipc_version": 1,
-                    "revision": revision,
-                    "usage_upload_enabled": True,
-                    "usage_periods": {"local": {}, "account": {}},
-                    "quota": component("unavailable"),
-                    "usage": component("unavailable"),
-                    "account": component("signed_out", {
-                        "auth_status": "signed_out",
-                        "account_id": None,
-                        "device_id": None,
-                        "device_generation": None,
-                        "account_summary": None,
-                    }),
-                    "pricing": component("unavailable"),
-                    "providers": [],
-                    "provider_browser_sessions": [],
-                    "overview": [],
-                    "cache": settled_cache(),
-                }
+                result = state(revision)
             elif operation == "refresh":
                 assert request["payload"] == {}
                 result = {"accepted": True, "pending": False, "revision": revision}
@@ -94,7 +83,7 @@ struct LocalServiceClientTests {
         """#
     )
     defer { service.remove() }
-    let client = try LocalServiceClient(executableURL: service.executableURL)
+    let client = try client(for: service)
     var events = client.events.makeAsyncIterator()
 
     let first = try await client.state()
@@ -146,7 +135,7 @@ struct LocalServiceClientTests {
         """#
     )
     defer { service.remove() }
-    let client = try LocalServiceClient(executableURL: service.executableURL)
+    let client = try client(for: service)
     let report = try await client.diagnose()
     #expect(report.summary.operation == .healthy)
     #expect(report.surfaces.count == 4)
@@ -169,7 +158,7 @@ struct LocalServiceClientTests {
         """#
     )
     defer { service.remove() }
-    let client = try LocalServiceClient(executableURL: service.executableURL)
+    let client = try client(for: service)
 
     await #expect(
       throws: LocalServiceClientError.remote(
@@ -196,7 +185,7 @@ struct LocalServiceClientTests {
         """#
     )
     defer { service.remove() }
-    let client = try LocalServiceClient(executableURL: service.executableURL)
+    let client = try client(for: service)
     let remoteError = LocalServiceRemoteError(code: .deviceDeleted, recoveryAction: .login)
 
     await #expect(throws: LocalServiceClientError.remote(remoteError)) {
@@ -224,7 +213,7 @@ struct LocalServiceClientTests {
         """#
     )
     defer { service.remove() }
-    let client = try LocalServiceClient(executableURL: service.executableURL)
+    let client = try client(for: service)
 
     await #expect(throws: LocalServiceClientError.invalidMessage) {
       _ = try await client.state()
@@ -247,7 +236,7 @@ struct LocalServiceClientTests {
         """#
     )
     defer { service.remove() }
-    let client = try LocalServiceClient(executableURL: service.executableURL)
+    let client = try client(for: service)
 
     await #expect(throws: LocalServiceClientError.invalidMessage) {
       _ = try await client.state()
@@ -264,7 +253,7 @@ struct LocalServiceClientTests {
         """#
     )
     defer { service.remove() }
-    let client = try LocalServiceClient(executableURL: service.executableURL)
+    let client = try client(for: service)
 
     async let first = stateError(from: client)
     async let second = stateError(from: client)
@@ -274,7 +263,7 @@ struct LocalServiceClientTests {
 
   @Test
   func noSigpipeDescriptorsReportEPIPEOnceTheReaderIsGone() throws {
-    // `startIfNeeded` sets this on the helper's stdin so that `request` can catch a broken pipe.
+    // `launch` sets this on the helper's stdin so that `write` can catch a broken pipe.
     var descriptors: [Int32] = [0, 0]
     try #require(pipe(&descriptors) == 0)
     defer { close(descriptors[1]) }
@@ -287,57 +276,156 @@ struct LocalServiceClientTests {
   }
 
   @Test
-  func timesOutAndRestartsAfterAStalledRequest() async throws {
+  func holdsRequestsUntilTheHelperAnnouncesItselfReady() async throws {
     let service = try TemporaryService(
+      announcesReady: false,
       python: #"""
         import json
+        import select
         import sys
         import time
 
-        if int(launch_count_path.read_text()) == 1:
-            time.sleep(2)
+        # Long enough that a client which did not wait would already have written its request.
+        time.sleep(0.4)
+        early = bool(select.select([sys.stdin.fileno()], [], [], 0)[0])
+        ready()
 
         for line in sys.stdin:
             request = json.loads(line)
             print(json.dumps({
                 "type": "response",
                 "request_id": request["request_id"],
-                "result": {
-                    "ipc_version": 1,
-                    "revision": 1,
-                    "usage_upload_enabled": True,
-                    "usage_periods": {"local": {}, "account": {}},
-                    "quota": component("unavailable"),
-                    "usage": component("unavailable"),
-                    "account": component("signed_out", {
-                        "auth_status": "signed_out",
-                        "account_id": None,
-                        "device_id": None,
-                        "device_generation": None,
-                        "account_summary": None,
-                    }),
-                    "pricing": component("unavailable"),
-                    "providers": [],
-                    "provider_browser_sessions": [],
-                    "overview": [],
-                    "cache": settled_cache(),
-                },
+                "result": state(2 if early else 1),
             }), flush=True)
             break
         """#
     )
     defer { service.remove() }
-    let client = try LocalServiceClient(
-      executableURL: service.executableURL,
-      requestTimeoutNanoseconds: 500_000_000
-    )
+    let client = try client(for: service)
 
-    await #expect(throws: LocalServiceClientError.requestTimedOut) {
+    let state = try await client.state()
+    #expect(state.revision == 1, "the request reached the helper before it announced ready")
+  }
+
+  @Test
+  func killsAHelperThatStopsAnsweringPingsAndStartsAFreshOne() async throws {
+    let service = try TemporaryService(
+      python: #"""
+        import json
+        import os
+        import signal
+        import sys
+        import time
+
+        if int(launch_count_path.read_text()) == 1:
+            # Only SIGKILL can end this launch, and it answers nothing after the first request.
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
+            pid_path.write_text(str(os.getpid()))
+            sys.stdin.readline()
+            time.sleep(600)
+
+        for line in sys.stdin:
+            request = json.loads(line)
+            print(json.dumps({
+                "type": "response",
+                "request_id": request["request_id"],
+                "result": state(1),
+            }), flush=True)
+            break
+        """#
+    )
+    defer { service.remove() }
+    let client = try client(for: service)
+
+    // The pending request fails only once the helper has been reaped and its reader has ended,
+    // so reaching this line at all is what proves both happened.
+    await #expect(throws: LocalServiceClientError.connectionClosed) {
       _ = try await client.state()
     }
-    _ = try await client.state()
+    let killed = try service.processIdentifier()
+    #expect(kill(killed, 0) == -1 && errno == ESRCH)
+
+    let state = try await client.state()
+    #expect(state.revision == 1)
     #expect(try service.launchCount() == 2)
     await client.shutdown()
+  }
+
+  @Test
+  func keepsASlowRequestRunningWhileTheHelperAnswersPings() async throws {
+    // Two seconds against a fifty-millisecond ping is forty rounds of liveness, the same
+    // proportion as a request running for more than three minutes in the app.
+    let service = try TemporaryService(
+      python: #"""
+        import json
+        import sys
+        import threading
+
+        lock = threading.Lock()
+
+        def emit(message):
+            with lock:
+                print(json.dumps(message), flush=True)
+
+        def answer_slowly(request_id):
+            threading.Event().wait(2.0)
+            emit({"type": "response", "request_id": request_id, "result": state(1)})
+
+        for line in sys.stdin:
+            request = json.loads(line)
+            if request["operation"] == "ping":
+                emit({
+                    "type": "response",
+                    "request_id": request["request_id"],
+                    "result": {"ok": True},
+                })
+                continue
+            if request["operation"] == "shutdown":
+                emit({"type": "response", "request_id": request["request_id"], "result": {}})
+                break
+            threading.Thread(
+                target=answer_slowly, args=(request["request_id"],), daemon=True
+            ).start()
+        """#
+    )
+    defer { service.remove() }
+    let client = try client(for: service)
+
+    let state = try await client.state()
+    #expect(state.revision == 1)
+    #expect(try service.launchCount() == 1)
+    await client.shutdown()
+  }
+
+  @Test
+  func reportsAHelperThatNeverAnnouncesItselfAsUnavailableAfterOneRetry() async throws {
+    let service = try TemporaryService(
+      announcesReady: false,
+      python: #"""
+        import sys
+        import time
+
+        time.sleep(600)
+        """#
+    )
+    defer { service.remove() }
+    let client = try LocalServiceClient(
+      executableURL: service.executableURL,
+      timings: LocalServiceClientTimings(
+        ready: .seconds(1),
+        ping: .milliseconds(50),
+        termination: .milliseconds(200)
+      )
+    )
+
+    await #expect(throws: LocalServiceClientError.launchFailed) {
+      _ = try await client.state()
+    }
+    #expect(try service.launchCount() == 2, "a silent helper is restarted exactly once")
+  }
+
+  private func client(for service: TemporaryService) throws -> LocalServiceClient {
+    try LocalServiceClient(executableURL: service.executableURL, timings: Self.testTimings)
   }
 }
 
@@ -356,19 +444,25 @@ private struct TemporaryService {
   let directoryURL: URL
   let executableURL: URL
   let launchCountURL: URL
+  let processIdentifierURL: URL
 
-  init(python body: String) throws {
+  init(announcesReady: Bool = true, python body: String) throws {
     directoryURL = FileManager.default.temporaryDirectory
       .appending(path: "QuotaBarServiceTests-\(UUID().uuidString)", directoryHint: .isDirectory)
     executableURL = directoryURL.appending(path: "quota-service")
     launchCountURL = directoryURL.appending(path: "launch-count")
+    processIdentifierURL = directoryURL.appending(path: "pid")
     try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
     let script = """
       #!/usr/bin/env python3
+      import json as _json
       from pathlib import Path
       launch_count_path = Path(\(String(reflecting: launchCountURL.path)))
+      pid_path = Path(\(String(reflecting: processIdentifierURL.path)))
       count = int(launch_count_path.read_text()) if launch_count_path.exists() else 0
       launch_count_path.write_text(str(count + 1))
+      def ready():
+          print(_json.dumps({"type": "event", "event": "ready", "ipc_version": 1}), flush=True)
       def component(status, value=None):
           return {
               "status": status,
@@ -379,6 +473,28 @@ private struct TemporaryService {
           }
       def settled_cache():
           return {"rebuilding": False, "reset_at": None}
+      def state(revision):
+          return {
+              "ipc_version": 1,
+              "revision": revision,
+              "usage_upload_enabled": True,
+              "usage_periods": {"local": {}, "account": {}},
+              "quota": component("unavailable"),
+              "usage": component("unavailable"),
+              "account": component("signed_out", {
+                  "auth_status": "signed_out",
+                  "account_id": None,
+                  "device_id": None,
+                  "device_generation": None,
+                  "account_summary": None,
+              }),
+              "pricing": component("unavailable"),
+              "providers": [],
+              "provider_browser_sessions": [],
+              "overview": [],
+              "cache": settled_cache(),
+          }
+      \(announcesReady ? "ready()" : "")
       \(body)
       """
     try Data(script.utf8).write(to: executableURL, options: .atomic)
@@ -390,6 +506,10 @@ private struct TemporaryService {
 
   func launchCount() throws -> Int {
     try Int(String(contentsOf: launchCountURL, encoding: .utf8)) ?? 0
+  }
+
+  func processIdentifier() throws -> pid_t {
+    try pid_t(String(contentsOf: processIdentifierURL, encoding: .utf8)) ?? 0
   }
 
   func remove() {

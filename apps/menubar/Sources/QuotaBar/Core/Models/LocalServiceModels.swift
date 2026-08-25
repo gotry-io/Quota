@@ -400,6 +400,10 @@ extension LocalServiceOverviewItem {
 }
 
 struct LocalServiceState: Decodable, Sendable {
+  /// The one private IPC version this app speaks. The two ship together, so a helper that
+  /// announces anything else is not the one in this bundle.
+  static let supportedIPCVersion = 1
+
   let ipcVersion: Int
   let revision: Int
   let usageUploadEnabled: Bool
@@ -433,7 +437,7 @@ struct LocalServiceState: Decodable, Sendable {
       "\(item.identity.provider.rawValue)|\(item.identity.fingerprint)|"
         + "\(item.identity.scope.rawValue)|\(item.identity.sourceID ?? "")"
     }
-    guard ipcVersion == 1, revision >= 0,
+    guard ipcVersion == Self.supportedIPCVersion, revision >= 0,
       providers.count <= ProviderID.allCases.count,
       Set(providers.map(\.provider)).count == providers.count,
       providers.allSatisfy({ config in
