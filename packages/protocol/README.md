@@ -2,13 +2,13 @@
 
 Runtime schemas for QuotaBar's Rust local service, managed QuotaRelay, Swift `Codable` models, and
 the registered `quota-ios` account client. OAuth and Device control remain released v2; quota,
-Usage, and Account summary use managed-data v4. `quota-ios` adds client-specific authorization-code
+Usage, and Account summary use managed-data v5. `quota-ios` adds client-specific authorization-code
 and account-session payloads on the v2 OAuth contract; the released `quotacli` request and response
 shapes are unchanged.
 
 Managed-data v3's default Account summary Device shape shipped and remains unchanged. Device Health
-uses `PUT /api/v4/device/health` for authenticated self-owned writes and the explicit
-`GET /api/v4/account/summary` read shape, where `health` is required but nullable.
+uses `PUT /api/v5/device/health` for authenticated self-owned writes and the explicit
+`GET /api/v5/account/summary` read shape, where `health` is required but nullable.
 Runtime schemas and exported JSON Schema keep those default/opt-in shapes distinct.
 
 - TypeScript runtime validation lives in `src`.

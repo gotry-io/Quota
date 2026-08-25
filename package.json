@@ -17,7 +17,7 @@
   "scripts": {
     "prepare": "./scripts/install-git-hooks.sh",
     "build": "pnpm --filter @gotry-io/quota-relay build && cargo build --locked --package quota-service --package quota-menubar-helper && swift build --package-path apps/menubar",
-    "check": "pnpm check:provider-catalog && pnpm -r --if-present check && cargo check --locked --package quota-service --package quota-menubar-helper --all-targets",
+    "check": "pnpm check:provider-catalog && pnpm check:schema && pnpm -r --if-present check && cargo check --locked --package quota-service --package quota-menubar-helper --all-targets",
     "check:provider-catalog": "node --experimental-strip-types scripts/generate-provider-catalog.mjs --check",
     "generate:provider-catalog": "node --experimental-strip-types scripts/generate-provider-catalog.mjs",
     "version:bump:cli": "node scripts/bump-version.mjs cli",
@@ -41,7 +41,8 @@
     "build:ios": "./scripts/build-ios.sh",
     "deploy:cloudflare": "pnpm --filter @gotry-io/quota-relay deploy:cloudflare",
     "dev:web": "pnpm --filter @gotry-io/quota-web dev",
-    "dev:relay": "pnpm --filter @gotry-io/quota-relay dev"
+    "dev:relay": "pnpm --filter @gotry-io/quota-relay dev",
+    "check:schema": "node --experimental-strip-types packages/protocol/scripts/generate-json-schemas.ts --check"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.6",

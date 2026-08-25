@@ -59,7 +59,7 @@ describe("quota protocol", () => {
   });
 
   it("carries one managed-data version on quota and Usage", () => {
-    expect(MANAGED_DATA_PROTOCOL_VERSION).toBe(4);
+    expect(MANAGED_DATA_PROTOCOL_VERSION).toBe(5);
     expect(protocol.BILLING_AGENTS).toContain("cursor");
     const cursorEnvelope = { ...quotaEnvelope(), snapshots: [snapshot("cursor")] };
     expect(QuotaSnapshotEnvelopeSchema.safeParse(cursorEnvelope).success).toBe(true);
@@ -126,7 +126,7 @@ describe("quota protocol", () => {
     ).toBe(false);
     expect(
       QuotaSnapshotUploadResponseSchema.safeParse({
-        protocol_version: 4,
+        protocol_version: 5,
         outcome: "accepted",
         device_id: "device_01",
         device_generation: 3,
@@ -138,7 +138,7 @@ describe("quota protocol", () => {
 
   it("requires a reason only for a terminally rejected Usage upload", () => {
     const rejected = {
-      protocol_version: 4,
+      protocol_version: 5,
       outcome: "rejected",
       device_id: "device_01",
       device_generation: 3,
@@ -637,19 +637,19 @@ describe("quota protocol", () => {
     expect(AccountSummarySchema.safeParse(accountSummary()).success).toBe(true);
     expect(
       AccountQuotaResponseSchema.safeParse({
-        protocol_version: 4,
+        protocol_version: 5,
         quota: accountSummary().quota,
       }).success,
     ).toBe(true);
     expect(
       AccountUsageResponseSchema.safeParse({
-        protocol_version: 4,
+        protocol_version: 5,
         usage: accountSummary().usage,
       }).success,
     ).toBe(true);
     expect(
       AccountUsageHourlyResponseSchema.safeParse({
-        protocol_version: 4,
+        protocol_version: 5,
         start_at: "2026-08-02T12:00:00Z",
         end_at: "2026-08-02T13:00:00Z",
         facts: [
@@ -659,15 +659,7 @@ describe("quota protocol", () => {
             aggregation_timezone: "Asia/Singapore",
           },
         ],
-        coverage: [
-          {
-            device_id: "device_01",
-            agent: "codex",
-            start_at: "2026-08-02T12:00:00Z",
-            end_at: "2026-08-02T13:00:00Z",
-            status: "complete",
-          },
-        ],
+        coverage: "complete",
         cost: {
           ...emptyCost(),
           status: "unavailable",
@@ -685,7 +677,7 @@ describe("quota protocol", () => {
     ).toBe(true);
     expect(
       AccountUsageResponseSchema.safeParse({
-        protocol_version: 4,
+        protocol_version: 5,
         usage: {
           ...accountSummary().usage,
           cost: {
@@ -707,7 +699,7 @@ describe("quota protocol", () => {
     ).toBe(true);
     expect(
       AccountUsageResponseSchema.safeParse({
-        protocol_version: 4,
+        protocol_version: 5,
         usage: {
           ...accountSummary().usage,
           cost: { ...emptyCost(), unpriced_truncated: false },
@@ -720,6 +712,40 @@ describe("quota protocol", () => {
         devices: [{ ...accountSummary().devices[0], owner_id: "owner_legacy" }],
       }).success,
     ).toBe(false);
+  });
+
+  it("refuses a coverage window computed from a missing lower bound", () => {
+    const submission = usageSubmission();
+    expect(
+      UsageSubmissionSchema.safeParse({
+        ...submission,
+        coverage: {
+          ...submission.coverage,
+          start_at: "1970-01-01T00:00:00Z",
+          end_at: "1970-02-01T00:00:00Z",
+        },
+        rows: [],
+      }).success,
+    ).toBe(false);
+    // The private local report states whatever range the app asked for and is not bounded here.
+    expect(
+      LocalUsageReportSchema.safeParse({
+        protocol_version: LOCAL_USAGE_PROTOCOL_VERSION,
+        generated_at: "2026-08-02T12:30:00Z",
+        aggregation_timezone: "UTC",
+        range: { from: "1970-01-01", to: "1970-02-01" },
+        status: "partial",
+        model_catalog_revision: null,
+        coverage: [
+          {
+            agent: "codex",
+            start_at: "1970-01-01T00:00:00Z",
+            end_at: "1970-02-01T00:00:00Z",
+            status: "partial",
+          },
+        ],
+      }).success,
+    ).toBe(true);
   });
 
   it("keeps local Usage available independently from an account", () => {
@@ -827,7 +853,7 @@ function snapshot(provider: "codex" | "claude" | "cursor") {
 
 function quotaEnvelope() {
   return {
-    protocol_version: 4 as const,
+    protocol_version: 5 as const,
     device_id: "device_01",
     generation: 3,
     sequence: 42,
@@ -865,7 +891,7 @@ function usageFact() {
 
 function usageSubmission() {
   return {
-    protocol_version: 4 as const,
+    protocol_version: 5 as const,
     submission_id: "submission_01",
     device_id: "device_01",
     generation: 3,
@@ -916,7 +942,7 @@ function emptyCost() {
 
 function accountSummary() {
   return {
-    protocol_version: 4 as const,
+    protocol_version: 5 as const,
     account: {
       account_id: "account_01",
       display_label: "octocat",
@@ -941,7 +967,7 @@ function accountSummary() {
       range: { from: "2026-08-01", to: "2026-08-02" },
       totals: emptyTotals(),
       cost: emptyCost(),
-      coverage: [],
+      coverage: "complete",
       breakdowns: [],
     },
   };

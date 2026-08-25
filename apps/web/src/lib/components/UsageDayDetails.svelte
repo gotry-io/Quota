@@ -55,7 +55,7 @@ function rowKey(item: UsageBreakdown): string {
       </div>
     </div>
     <p class="usage-day-coverage">
-      Coverage · {usageDayCoverageLabel(usage.coverage, usage.coverage_truncated === true)}
+      Coverage · {usageDayCoverageLabel(usage.coverage)}
     </p>
     {#each notices as notice (notice)}
       <p class="usage-day-note">{notice}</p>

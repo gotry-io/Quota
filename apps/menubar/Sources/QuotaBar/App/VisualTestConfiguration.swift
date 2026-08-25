@@ -430,22 +430,21 @@
     at date: Date,
     summary: AccountUsageSummary
   ) -> LocalUsageReport {
-    let coverage = summary.coverage.map {
+    let coverage = [
       LocalUsageCoverage(
-        agent: $0.agent,
-        startAt: $0.startAt,
-        endAt: $0.endAt,
-        status: $0.status
+        agent: .codex,
+        startAt: "2026-08-02T00:00:00Z",
+        endAt: "2026-08-03T00:00:00Z",
+        status: summary.coverage == .partial ? .partial : .complete
       )
-    }
+    ]
     return LocalUsageReport(
       generatedAt: date,
       aggregationTimezone: "UTC",
       range: summary.range,
-      status: coverage.allSatisfy { $0.status == .complete } ? .complete : .partial,
+      status: summary.coverage == .partial ? .partial : .complete,
       modelCatalogRevision: "visual-model-catalog",
-      coverage: coverage,
-      coverageTruncated: nil
+      coverage: coverage
     )
   }
 
@@ -456,8 +455,7 @@
       range: UsageDateRange(from: "2026-07-03", to: "2026-08-01"),
       status: .unavailable,
       modelCatalogRevision: nil,
-      coverage: [],
-      coverageTruncated: nil
+      coverage: []
     )
   }
 
@@ -633,22 +631,7 @@
       range: UsageDateRange(from: from, to: to),
       totals: totals,
       cost: cost,
-      coverage: [
-        UsageCoverageSummaryItem(
-          deviceID: studioID,
-          agent: .codex,
-          startAt: "2026-08-02T00:00:00Z",
-          endAt: "2026-08-03T00:00:00Z",
-          status: .complete
-        ),
-        UsageCoverageSummaryItem(
-          deviceID: travelID,
-          agent: .claudeCode,
-          startAt: "2026-08-02T00:00:00Z",
-          endAt: "2026-08-03T00:00:00Z",
-          status: .partial
-        ),
-      ],
+      coverage: .partial,
       breakdowns: [
         UsageBreakdown(
           dimension: .model,
@@ -742,7 +725,6 @@
           ]
         )
       },
-      coverageTruncated: summary.coverageTruncated,
       breakdownsTruncated: summary.breakdownsTruncated
     )
   }

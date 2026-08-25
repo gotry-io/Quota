@@ -1,10 +1,7 @@
-import {
-  MANAGED_DATA_PROTOCOL_VERSION,
-  MAXIMUM_USAGE_COVERAGE_ITEMS,
-} from "@gotry-io/quota-protocol";
+import { MANAGED_DATA_PROTOCOL_VERSION } from "@gotry-io/quota-protocol";
+import type { UsageCoverageVerdict } from "@gotry-io/quota-protocol";
 import type {
   DevicePrincipal,
-  StoredUsageCoverage,
   StoredUsageHourlyFact,
   UsageHourlyFact,
   UsageQuery,
@@ -276,32 +273,26 @@ export class D1UsageState implements UsageState {
       coverageParameters.push(query.end_at);
       coverageConditions.push(`coverage.start_at < ?${coverageParameters.length}`);
     }
-    const coverageLimit = Math.min(query.limit, MAXIMUM_USAGE_COVERAGE_ITEMS);
-    coverageParameters.push(coverageLimit + 1);
+    // Every reader asks only whether the range was scanned completely, so the answer is
+    // counted in the database over all matching windows rather than paged out as rows.
     const coverage = await this.database
       .prepare(
-        `SELECT coverage.device_id, coverage.agent, coverage.start_at, coverage.end_at,
-                coverage.status,
-                coverage.parser_revision, coverage.accepted_at
+        `SELECT COUNT(*) AS windows,
+                COUNT(CASE WHEN coverage.status = 'partial' THEN 1 END) AS partial
          FROM usage_coverage AS coverage
          INNER JOIN devices ON devices.id = coverage.device_id
-         WHERE ${coverageConditions.join(" AND ")}
-         ORDER BY coverage.start_at ASC, coverage.end_at ASC,
-                  coverage.device_id ASC, coverage.agent ASC
-         LIMIT ?${coverageParameters.length}`,
+         WHERE ${coverageConditions.join(" AND ")}`,
       )
       .bind(...coverageParameters)
-      .all<StoredUsageCoverage>();
+      .first<{ windows: number; partial: number }>();
 
-    const coverageTruncated = coverage.results.length > coverageLimit;
     return {
       rows: rows.results.slice(0, query.limit).map(({ source_cost_microusd, ...row }) => ({
         ...row,
         ...(source_cost_microusd === null ? {} : { source_cost_microusd }),
       })),
-      coverage: coverage.results.slice(0, coverageLimit),
+      coverage: coverageVerdict(coverage),
       truncated: rows.results.length > query.limit,
-      coverage_truncated: coverageTruncated,
     };
   }
 
@@ -1043,6 +1034,13 @@ function receiptMatches(
     receipt.multipart_part_index === (submission.multipart?.part_index ?? null) &&
     receipt.multipart_part_count === (submission.multipart?.part_count ?? null)
   );
+}
+
+function coverageVerdict(
+  counted: { windows: number; partial: number } | null,
+): UsageCoverageVerdict {
+  if (!counted || counted.windows === 0) return "none";
+  return counted.partial > 0 ? "partial" : "complete";
 }
 
 function floorUtcHour(value: string): number {

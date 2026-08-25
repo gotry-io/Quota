@@ -182,7 +182,7 @@ describe("quota-ios read-only account client", () => {
         .first("device_id"),
     ).toBeNull();
 
-    const summary = await harness.app.request("https://quota.gotry.io/api/v4/account/summary", {
+    const summary = await harness.app.request("https://quota.gotry.io/api/v5/account/summary", {
       headers: { Authorization: `Bearer ${tokens.account_session.access_token}` },
     });
     expect(summary.status).toBe(200);
@@ -448,7 +448,7 @@ describe("quota-ios read-only account client", () => {
 
     expect(
       (
-        await harness.app.request("https://quota.gotry.io/api/v4/device/snapshots", {
+        await harness.app.request("https://quota.gotry.io/api/v5/device/snapshots", {
           method: "PUT",
           headers,
           body: JSON.stringify({}),
@@ -457,7 +457,7 @@ describe("quota-ios read-only account client", () => {
     ).toBe(401);
     expect(
       (
-        await harness.app.request("https://quota.gotry.io/api/v4/device/usage", {
+        await harness.app.request("https://quota.gotry.io/api/v5/device/usage", {
           method: "PUT",
           headers,
           body: JSON.stringify({}),
@@ -466,7 +466,7 @@ describe("quota-ios read-only account client", () => {
     ).toBe(401);
     expect(
       (
-        await harness.app.request("https://quota.gotry.io/api/v4/device/health", {
+        await harness.app.request("https://quota.gotry.io/api/v5/device/health", {
           method: "PUT",
           headers,
           body: JSON.stringify({}),
@@ -600,7 +600,7 @@ describe("quota-ios read-only account client", () => {
     const iosAfterCli = await loginIos(harness);
     expect(IosOAuthTokenResponseSchema.parse(iosAfterCli).account_id).toBe(harness.accountId);
     expect(await deviceCount(harness.accountId)).toBe(1);
-    const summary = await harness.app.request("https://quota.gotry.io/api/v4/account/summary", {
+    const summary = await harness.app.request("https://quota.gotry.io/api/v5/account/summary", {
       headers: { Authorization: `Bearer ${iosAfterCli.account_session.access_token}` },
     });
     const body = (await summary.json()) as { devices: { device_id: string; platform: string }[] };
@@ -617,14 +617,14 @@ describe("quota-ios read-only account client", () => {
     const accountHeaders = { Authorization: `Bearer ${ios.account_session.access_token}` };
 
     const optedBefore = (await (
-      await harness.app.request("https://quota.gotry.io/api/v4/account/summary", {
+      await harness.app.request("https://quota.gotry.io/api/v5/account/summary", {
         headers: accountHeaders,
       })
     ).json()) as { devices: Array<{ health: unknown }> };
     expect(optedBefore.devices[0]?.health).toBeNull();
 
     const healthy = {
-      protocol_version: 4,
+      protocol_version: 5,
       schema_version: 1,
       client_product: "quotacli",
       client_version: "0.0.16",
@@ -638,7 +638,7 @@ describe("quota-ios read-only account client", () => {
       consecutive_failures: 0,
       usage_upload_enabled: false,
     };
-    const upload = await harness.app.request("https://quota.gotry.io/api/v4/device/health", {
+    const upload = await harness.app.request("https://quota.gotry.io/api/v5/device/health", {
       method: "PUT",
       headers: {
         Authorization: `Bearer ${device.device_session.access_token}`,
@@ -648,14 +648,14 @@ describe("quota-ios read-only account client", () => {
     });
     expect(upload.status).toBe(200);
     expect(await upload.json()).toEqual({
-      protocol_version: 4,
+      protocol_version: 5,
       status: "updated",
       received_at: harness.checkedAt.toISOString(),
       fresh_until: new Date(harness.checkedAt.getTime() + 20 * 60_000).toISOString(),
     });
 
     const optedAfter = (await (
-      await harness.app.request("https://quota.gotry.io/api/v4/account/summary", {
+      await harness.app.request("https://quota.gotry.io/api/v5/account/summary", {
         headers: accountHeaders,
       })
     ).json()) as {
@@ -674,7 +674,7 @@ describe("quota-ios read-only account client", () => {
     });
 
     harness.checkedAt = new Date(harness.checkedAt.getTime() + 30_000);
-    const heartbeat = await harness.app.request("https://quota.gotry.io/api/v4/device/health", {
+    const heartbeat = await harness.app.request("https://quota.gotry.io/api/v5/device/health", {
       method: "PUT",
       headers: {
         Authorization: `Bearer ${device.device_session.access_token}`,
@@ -688,7 +688,7 @@ describe("quota-ios read-only account client", () => {
     });
     expect(heartbeat.status).toBe(200);
     expect(await heartbeat.json()).toEqual({
-      protocol_version: 4,
+      protocol_version: 5,
       status: "updated",
       received_at: harness.checkedAt.toISOString(),
       fresh_until: new Date(harness.checkedAt.getTime() + 20 * 60_000).toISOString(),
@@ -696,7 +696,7 @@ describe("quota-ios read-only account client", () => {
     const heartbeatAt = harness.checkedAt;
 
     harness.checkedAt = new Date(harness.checkedAt.getTime() + 30_000);
-    const stale = await harness.app.request("https://quota.gotry.io/api/v4/device/health", {
+    const stale = await harness.app.request("https://quota.gotry.io/api/v5/device/health", {
       method: "PUT",
       headers: {
         Authorization: `Bearer ${device.device_session.access_token}`,
@@ -719,7 +719,7 @@ describe("quota-ios read-only account client", () => {
       fresh_until: new Date(heartbeatAt.getTime() + 20 * 60_000).toISOString(),
     });
     const afterStale = (await (
-      await harness.app.request("https://quota.gotry.io/api/v4/account/summary", {
+      await harness.app.request("https://quota.gotry.io/api/v5/account/summary", {
         headers: accountHeaders,
       })
     ).json()) as { devices: Array<{ health: Record<string, unknown> | null }> };
@@ -730,7 +730,7 @@ describe("quota-ios read-only account client", () => {
     });
 
     const selectedDevice = await harness.app.request(
-      "https://quota.gotry.io/api/v4/device/health",
+      "https://quota.gotry.io/api/v5/device/health",
       {
         method: "PUT",
         headers: {

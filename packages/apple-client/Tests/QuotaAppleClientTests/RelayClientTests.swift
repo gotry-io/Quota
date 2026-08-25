@@ -10,7 +10,7 @@ struct RelayClientTests {
       Set(RelayRoute.allCases.map(\.path)) == [
         "/oauth/v2/token",
         "/oauth/v2/revoke",
-        "/api/v4/account/summary",
+        "/api/v5/account/summary",
       ])
     #expect(RelayRoute.allCases.allSatisfy { !$0.path.contains("/device/") })
     #expect(RelayRoute.allCases.allSatisfy { $0.method == "GET" || $0.method == "POST" })
@@ -46,7 +46,7 @@ struct RelayClientTests {
         url.scheme == "https" && url.host == "quota.gotry.io"
           && (url.port == nil || url.port == 443)
       })
-    #expect(transport.recordedURLs.first?.path == "/api/v4/account/summary")
+    #expect(transport.recordedURLs.first?.path == "/api/v5/account/summary")
     let query =
       URLComponents(url: transport.recordedURLs[0], resolvingAgainstBaseURL: false)?
       .queryItems ?? []

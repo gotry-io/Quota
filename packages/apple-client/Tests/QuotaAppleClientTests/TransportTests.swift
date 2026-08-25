@@ -63,7 +63,7 @@ struct TransportTests {
 
   @Test
   func relayClientPreservesTransportTooLargeAndTimeout() async throws {
-    let summary = URL(string: "https://quota.gotry.io/api/v4/account/summary")!
+    let summary = URL(string: "https://quota.gotry.io/api/v5/account/summary")!
     ScriptedURLProtocol.use(
       .init(
         body: Data(repeating: 0x61, count: WireCodec.maximumResponseBytes + 1),

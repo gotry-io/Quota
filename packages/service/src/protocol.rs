@@ -367,7 +367,7 @@ pub struct AccountComponentValue {
 pub const CONTROL_PROTOCOL: i64 = 2;
 
 /// The managed-data protocol this build uploads to and reads from Relay.
-pub const MANAGED_DATA_PROTOCOL: i64 = 4;
+pub const MANAGED_DATA_PROTOCOL: i64 = 5;
 
 /// The private local Usage report contract, versioned independently of managed data.
 pub const LOCAL_USAGE_PROTOCOL: i64 = 3;

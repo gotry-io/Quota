@@ -123,29 +123,22 @@
           "$ref": "#/$defs/__schema1"
         },
         "coverage": {
-          "maxItems": 2048,
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/__schema40"
-          }
+          "type": "string",
+          "enum": ["none", "complete", "partial"]
         },
         "breakdowns": {
           "maxItems": 1000,
           "type": "array",
           "items": {
-            "$ref": "#/$defs/__schema41"
+            "$ref": "#/$defs/__schema40"
           }
         },
         "agents": {
           "maxItems": 6,
           "type": "array",
           "items": {
-            "$ref": "#/$defs/__schema42"
+            "$ref": "#/$defs/__schema41"
           }
-        },
-        "coverage_truncated": {
-          "type": "boolean",
-          "const": true
         },
         "breakdowns_truncated": {
           "type": "boolean",
@@ -159,7 +152,7 @@
   "$defs": {
     "__schema0": {
       "type": "number",
-      "const": 4
+      "const": 5
     },
     "__schema1": {
       "type": "string",
@@ -394,7 +387,7 @@
     },
     "__schema22": {
       "type": "number",
-      "const": 4
+      "const": 5
     },
     "__schema23": {
       "type": "string",
@@ -649,28 +642,6 @@
       "const": true
     },
     "__schema40": {
-      "type": "object",
-      "properties": {
-        "device_id": {
-          "$ref": "#/$defs/__schema1"
-        },
-        "agent": {
-          "$ref": "#/$defs/__schema6"
-        },
-        "start_at": {
-          "$ref": "#/$defs/__schema7"
-        },
-        "end_at": {
-          "$ref": "#/$defs/__schema7"
-        },
-        "status": {
-          "$ref": "#/$defs/__schema8"
-        }
-      },
-      "required": ["device_id", "agent", "start_at", "end_at", "status"],
-      "additionalProperties": false
-    },
-    "__schema41": {
       "oneOf": [
         {
           "type": "object",
@@ -716,14 +687,14 @@
         }
       ]
     },
-    "__schema42": {
+    "__schema41": {
       "type": "object",
       "properties": {
         "agent": {
           "$ref": "#/$defs/__schema6"
         },
         "totals": {
-          "$ref": "#/$defs/__schema43"
+          "$ref": "#/$defs/__schema42"
         },
         "cost": {
           "$ref": "#/$defs/__schema29"
@@ -732,14 +703,14 @@
           "maxItems": 10,
           "type": "array",
           "items": {
-            "$ref": "#/$defs/__schema44"
+            "$ref": "#/$defs/__schema43"
           }
         }
       },
       "required": ["agent", "totals", "cost", "providers"],
       "additionalProperties": false
     },
-    "__schema43": {
+    "__schema42": {
       "type": "object",
       "properties": {
         "total_tokens": {
@@ -775,7 +746,7 @@
       ],
       "additionalProperties": false
     },
-    "__schema44": {
+    "__schema43": {
       "type": "object",
       "properties": {
         "provider": {
@@ -794,7 +765,7 @@
           ]
         },
         "totals": {
-          "$ref": "#/$defs/__schema43"
+          "$ref": "#/$defs/__schema42"
         },
         "cost": {
           "$ref": "#/$defs/__schema29"
@@ -803,21 +774,21 @@
           "maxItems": 1000,
           "type": "array",
           "items": {
-            "$ref": "#/$defs/__schema45"
+            "$ref": "#/$defs/__schema44"
           }
         }
       },
       "required": ["provider", "totals", "cost", "models"],
       "additionalProperties": false
     },
-    "__schema45": {
+    "__schema44": {
       "type": "object",
       "properties": {
         "model": {
           "$ref": "#/$defs/__schema15"
         },
         "totals": {
-          "$ref": "#/$defs/__schema43"
+          "$ref": "#/$defs/__schema42"
         },
         "cost": {
           "$ref": "#/$defs/__schema29"

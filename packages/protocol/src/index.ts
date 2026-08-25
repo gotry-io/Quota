@@ -27,7 +27,7 @@ export {
 /** OAuth, Device authorization and control, Account metadata, and the catalogs. */
 export const PROTOCOL_VERSION = 2 as const;
 /** Quota, Usage, and Account summary between a Device and Relay. */
-export const MANAGED_DATA_PROTOCOL_VERSION = 4 as const;
+export const MANAGED_DATA_PROTOCOL_VERSION = 5 as const;
 /** The private local Usage report the service hands its own app. */
 export const LOCAL_USAGE_PROTOCOL_VERSION = 3 as const;
 /** The private local quota collection report the service hands its own app. */
@@ -39,6 +39,12 @@ export const MAXIMUM_PUBLIC_PROFILE_QUOTA = 32;
 export const MAXIMUM_WINDOWS_PER_SNAPSHOT = 16;
 export const MAXIMUM_USAGE_ROWS_PER_SUBMISSION = 2_048;
 export const MAXIMUM_USAGE_COVERAGE_HOURS = 24 * 31;
+/**
+ * No agent this Account accepts existed before this instant, so a window reaching back past it
+ * was computed from a missing lower bound rather than scanned.  Six such windows, each a
+ * 31-hour-limit chunk marching forward from the Unix epoch, reached production this way.
+ */
+export const EARLIEST_USAGE_INSTANT = "2020-01-01T00:00:00Z";
 export const MAXIMUM_USAGE_BREAKDOWNS = 1_000;
 export const MAXIMUM_USAGE_READ_ROWS = 1_000;
 export const MAXIMUM_USAGE_COVERAGE_ITEMS = 2_048;
@@ -1082,11 +1088,21 @@ export const UsageBreakdownSchema = z.discriminatedUnion("dimension", [
 ]);
 export type UsageBreakdown = z.infer<typeof UsageBreakdownSchema>;
 
-export const UsageCoverageSummaryItemSchema = z
-  .object({ device_id: OpaqueIdSchema, ...coverageFields })
-  .strict()
-  .superRefine(validateCoverageRange);
-export type UsageCoverageSummaryItem = z.infer<typeof UsageCoverageSummaryItemSchema>;
+/**
+ * How completely a read's range was scanned.
+ *
+ * Every reader of a managed read has only ever asked whether anything was missed, so the
+ * answer travels instead of the windows it was derived from: `none` when no window covers
+ * the range at all, `partial` when any window that does was scanned incompletely, `complete`
+ * otherwise.
+ *
+ * The verdict describes the scanning, not the calendar. A stretch of the range no window
+ * touches leaves the verdict alone, because a device that was not running has no usage to
+ * miss; a scan that was attempted and came up short records a `partial` window, and that is
+ * what `partial` reports.
+ */
+export const UsageCoverageVerdictSchema = z.enum(["none", "complete", "partial"]);
+export type UsageCoverageVerdict = z.infer<typeof UsageCoverageVerdictSchema>;
 
 export const UsageDateRangeSchema = z
   .object({
@@ -1109,10 +1125,9 @@ export const AccountUsageSummarySchema = z
     totals: UsageTokenTotalsSchema,
     cost: UsageCostOutcomeSchema,
     model_catalog_revision: OpaqueIdSchema.optional(),
-    coverage: z.array(UsageCoverageSummaryItemSchema).max(MAXIMUM_USAGE_COVERAGE_ITEMS),
+    coverage: UsageCoverageVerdictSchema,
     breakdowns: z.array(UsageBreakdownSchema).max(MAXIMUM_USAGE_BREAKDOWNS),
     agents: z.array(LocalUsageAgentSummarySchema).max(BillingAgentSchema.options.length).optional(),
-    coverage_truncated: z.literal(true).optional(),
     breakdowns_truncated: z.literal(true).optional(),
   })
   .strict();
@@ -1130,7 +1145,6 @@ export const LocalUsageReportSchema = z
     status: LocalUsageReportStatusSchema,
     model_catalog_revision: OpaqueIdSchema.nullable(),
     coverage: z.array(LocalUsageCoverageSchema).max(MAXIMUM_USAGE_COVERAGE_ITEMS),
-    coverage_truncated: z.literal(true).optional(),
   })
   .strict()
   .superRefine((report, context) => {
@@ -1220,13 +1234,11 @@ export const AccountUsageHourlyResponseSchema = z
     start_at: UtcHourSchema,
     end_at: UtcHourSchema,
     facts: z.array(AccountUsageHourlyFactSchema).max(MAXIMUM_USAGE_READ_ROWS),
-    coverage: z.array(UsageCoverageSummaryItemSchema).max(MAXIMUM_USAGE_COVERAGE_ITEMS),
+    coverage: UsageCoverageVerdictSchema,
     cost: UsageCostOutcomeSchema,
-    coverage_truncated: z.literal(true).optional(),
   })
   .strict()
   .superRefine((response, context) => {
-    validateCoverageRange(response, context);
     const start = Date.parse(response.start_at);
     const end = Date.parse(response.end_at);
     for (const [index, fact] of response.facts.entries()) {
@@ -1590,6 +1602,13 @@ function validateCoverageRange(
   validateCoverageOrder(coverage, context);
   const start = Date.parse(coverage.start_at);
   const end = Date.parse(coverage.end_at);
+  if (start < Date.parse(EARLIEST_USAGE_INSTANT)) {
+    context.addIssue({
+      code: "custom",
+      path: ["start_at"],
+      message: `Coverage may not begin before ${EARLIEST_USAGE_INSTANT}.`,
+    });
+  }
   if (end <= start) return;
   if ((end - start) / 3_600_000 > MAXIMUM_USAGE_COVERAGE_HOURS) {
     context.addIssue({

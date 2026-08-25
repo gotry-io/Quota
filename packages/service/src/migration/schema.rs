@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use crate::state::StateError;
 
-const CURRENT_SCHEMA: i64 = 9;
+const CURRENT_SCHEMA: i64 = 10;
 
 pub fn apply(conn: &mut Connection) -> Result<(), StateError> {
     conn.execute_batch(
@@ -35,6 +35,7 @@ pub fn apply(conn: &mut Connection) -> Result<(), StateError> {
             7 => migration_v7(&tx)?,
             8 => migration_v8(&tx)?,
             9 => migration_v9(&tx)?,
+            10 => migration_v10(&tx)?,
             _ => return Err(StateError::InvalidState),
         }
         tx.execute(
@@ -482,6 +483,84 @@ fn migration_v9(tx: &Transaction<'_>) -> Result<(), StateError> {
     Ok(())
 }
 
+/// Managed data v5: a read states how completely its range was scanned instead of listing the
+/// windows the answer was derived from, and the local Usage detail no longer restates display
+/// breakdowns the per-agent summary already carries.
+///
+/// Staged uploads are promoted in place so queued work survives; the presentations built from
+/// the retired shapes are discarded, because both are caches this build rebuilds on its next
+/// refresh and the app decodes the whole IPC state or none of it.
+fn migration_v10(tx: &Transaction<'_>) -> Result<(), StateError> {
+    let mut statement = tx.prepare(
+        "SELECT submission_id, payload_json FROM usage_outbox
+         WHERE json_extract(payload_json, '$.protocol_version') = 4
+         ORDER BY submission_id",
+    )?;
+    let outbox = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(statement);
+
+    for (submission_id, raw) in outbox {
+        let mut payload: Value = serde_json::from_str(&raw)?;
+        payload["protocol_version"] = Value::from(5);
+        tx.execute(
+            "UPDATE usage_outbox SET payload_json = ?1 WHERE submission_id = ?2",
+            params![serde_json::to_string(&payload)?, submission_id],
+        )?;
+    }
+
+    let account = tx
+        .query_row(
+            "SELECT value_json FROM components WHERE name = 'account'",
+            [],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()?
+        .flatten();
+    if let Some(raw) = account {
+        let mut value: Value = serde_json::from_str(&raw)?;
+        let cached_version = value
+            .get("account_summary")
+            .and_then(|summary| summary.get("protocol_version"))
+            .and_then(Value::as_i64);
+        if cached_version.is_some_and(|version| version < 5) {
+            value["account_summary"] = Value::Null;
+            tx.execute(
+                "UPDATE components SET value_json = ?1 WHERE name = 'account'",
+                [serde_json::to_string(&value)?],
+            )?;
+        }
+    }
+    // A submission this build refuses cannot be uploaded and cannot be skipped either: the
+    // drain stops at the first entry it cannot send, and Relay answers a gap in the sequence
+    // with `sequence_conflict`, which is terminal. v5 adds one rule a staged v4 payload can
+    // fail — coverage reaching back before any agent existed — so a device holding one drops
+    // its whole staged set and re-stages against the sequence Relay reports it is expecting.
+    let stranded: Vec<(String, i64, String)> = tx
+        .prepare(
+            "SELECT account_id, generation, device_id FROM usage_outbox
+             WHERE json_extract(payload_json, '$.coverage.start_at') < ?1",
+        )?
+        .query_map([crate::usage::EARLIEST_USAGE_INSTANT], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    for (account_id, generation, device_id) in stranded {
+        tx.execute(
+            "DELETE FROM usage_outbox
+             WHERE account_id = ?1 AND device_id = ?2 AND generation = ?3",
+            params![account_id, device_id, generation],
+        )?;
+    }
+
+    // Every cached period carries the retired `fallback_models` key, local ones included.
+    tx.execute("DELETE FROM usage_period_cache", [])?;
+    Ok(())
+}
+
 /// Removes the stamp and the collector name from every reading in a persisted value.
 ///
 /// A reading is recognised by its own shape rather than by a path, because it appears at
@@ -573,7 +652,7 @@ mod tests {
             .expect("v1 rows")
             .collect::<Result<Vec<_>, _>>()
             .expect("v1 values");
-        assert_eq!(fresh_versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        assert_eq!(fresh_versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
         assert_eq!(fresh_versions, v1_versions);
         assert_eq!(
             columns(&fresh, "usage_period_cache"),
@@ -764,13 +843,10 @@ mod tests {
         assert_eq!(account["account_id"], "account");
         assert!(account["account_summary"].is_null());
         assert_eq!(
-            conn.query_row(
-                "SELECT COUNT(*) FROM usage_period_cache WHERE source = 'local'",
-                [],
-                |row| row.get::<_, i64>(0),
-            )
-            .expect("local periods"),
-            1
+            conn.query_row("SELECT COUNT(*) FROM usage_period_cache", [], |row| row
+                .get::<_, i64>(0),)
+                .expect("periods"),
+            0
         );
         assert_eq!(
             conn.query_row(
@@ -930,17 +1006,13 @@ mod tests {
                 .expect("session epoch"),
             7
         );
-        // Locally derived periods are this device's own work and survive; the Account
-        // presentation is a response and is rebuilt from the first read on the current
-        // managed-data version.
+        // Both presentations are caches of a shape this build no longer speaks, so the ladder
+        // discards them and the next refresh rebuilds them from facts this device still holds.
         assert_eq!(
-            conn.query_row(
-                "SELECT COUNT(*) FROM usage_period_cache WHERE source = 'local'",
-                [],
-                |row| row.get::<_, i64>(0)
-            )
-            .expect("local period count"),
-            1
+            conn.query_row("SELECT COUNT(*) FROM usage_period_cache", [], |row| row
+                .get::<_, i64>(0))
+                .expect("period count"),
+            0
         );
         assert_eq!(
             conn.query_row(
@@ -1065,13 +1137,73 @@ mod tests {
             .expect("rows")
             .collect::<Result<Vec<_>, _>>()
             .expect("values");
-        assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
     }
 
     fn columns_after_fresh_apply(table: &str) -> Vec<String> {
         let mut fresh = Connection::open_in_memory().expect("fresh");
         apply(&mut fresh).expect("fresh apply");
         columns(&fresh, table)
+    }
+
+    /// The drain stops at the first entry it cannot send and a gap in the sequence is terminal,
+    /// so a device holding a submission this build refuses gives up its whole staged set rather
+    /// than stalling behind one payload forever.
+    #[test]
+    fn a_device_holding_an_unsendable_submission_gives_up_its_staged_set() {
+        let mut conn = Connection::open_in_memory().expect("memory");
+        apply(&mut conn).expect("fresh");
+        conn.execute("DELETE FROM schema_migrations WHERE version = 10", [])
+            .expect("rewind");
+
+        let mut stranded = usage_submission(4, "stranded", "codex");
+        stranded["coverage"]["start_at"] = serde_json::json!("1970-01-01T00:00:00Z");
+        stranded["coverage"]["end_at"] = serde_json::json!("1970-02-01T00:00:00Z");
+        let mut behind = usage_submission(4, "behind", "codex");
+        behind["sequence"] = serde_json::json!(1);
+        let mut other_device = usage_submission(4, "other", "codex");
+        other_device["device_id"] = serde_json::json!("device_other");
+        conn.execute(
+            "INSERT INTO usage_outbox(
+                submission_id, account_id, device_id, generation, sequence, payload_json
+             ) VALUES ('stranded', 'account', 'device', 1, 0, ?1),
+                      ('behind', 'account', 'device', 1, 1, ?2),
+                      ('other', 'account', 'device_other', 1, 0, ?3)",
+            params![
+                stranded.to_string(),
+                behind.to_string(),
+                other_device.to_string()
+            ],
+        )
+        .expect("stage");
+
+        apply(&mut conn).expect("v10");
+
+        let remaining: Vec<String> = conn
+            .prepare("SELECT submission_id FROM usage_outbox ORDER BY submission_id")
+            .expect("query")
+            .query_map([], |row| row.get(0))
+            .expect("rows")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("values");
+        // The stranded entry and everything staged behind it on that device are gone; another
+        // device's queue is untouched and is promoted to the version this build uploads.
+        assert_eq!(remaining, vec!["other".to_string()]);
+        let promoted: Value = serde_json::from_str(
+            &conn
+                .query_row(
+                    "SELECT payload_json FROM usage_outbox WHERE submission_id = 'other'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .expect("payload"),
+        )
+        .expect("json");
+        assert_eq!(
+            promoted["protocol_version"].as_i64(),
+            Some(crate::protocol::MANAGED_DATA_PROTOCOL)
+        );
+        assert!(crate::relay::validate_usage_submission(&promoted).is_ok());
     }
 
     fn usage_submission(protocol_version: u64, submission_id: &str, agent: &str) -> Value {

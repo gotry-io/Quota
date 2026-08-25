@@ -172,8 +172,8 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     "/api/v2/account",
     "/api/v2/account/*",
     "/api/v2/device/*",
-    "/api/v4/account/*",
-    "/api/v4/device/*",
+    "/api/v5/account/*",
+    "/api/v5/device/*",
   ]) {
     app.use(path, async (context, next) => {
       context.header("Cache-Control", "no-store");
@@ -184,11 +184,11 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     app.use(path, bodyLimit({ maxSize: maximumCredentialBodyBytes, onError: requestBodyTooLarge }));
   }
   app.use(
-    "/api/v4/device/snapshots",
+    "/api/v5/device/snapshots",
     bodyLimit({ maxSize: maximumSnapshotBodyBytes, onError: requestBodyTooLarge }),
   );
   app.use(
-    "/api/v4/device/usage",
+    "/api/v5/device/usage",
     bodyLimit({ maxSize: MAXIMUM_USAGE_SUBMISSION_BYTES, onError: requestBodyTooLarge }),
   );
   app.use(
@@ -196,7 +196,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     bodyLimit({ maxSize: maximumCredentialBodyBytes, onError: requestBodyTooLarge }),
   );
   app.use(
-    "/api/v4/device/health",
+    "/api/v5/device/health",
     bodyLimit({ maxSize: maximumCredentialBodyBytes, onError: requestBodyTooLarge }),
   );
 
@@ -543,7 +543,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     );
   });
 
-  app.get("/api/v4/account/snapshots", async (context) => {
+  app.get("/api/v5/account/snapshots", async (context) => {
     const principal = await accountReader(context, options, now());
     if (principal instanceof Response) return principal;
     const stored = await options.state.listLatestSnapshots(principal.account_id);
@@ -557,7 +557,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     );
   });
 
-  app.get("/api/v4/account/summary", async (context) => {
+  app.get("/api/v5/account/summary", async (context) => {
     const principal = await accountReader(context, options, now());
     if (principal instanceof Response) return principal;
     const selected = await accountUsageQuery(
@@ -705,7 +705,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     );
   });
 
-  for (const path of ["/api/v4/account/usage", "/api/v4/account/usage/summary"]) {
+  for (const path of ["/api/v5/account/usage", "/api/v5/account/usage/summary"]) {
     app.get(path, async (context) => {
       const principal = await accountReader(context, options, now());
       if (principal instanceof Response) {
@@ -731,7 +731,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     });
   }
 
-  app.get("/api/v4/account/usage/hourly", async (context) => {
+  app.get("/api/v5/account/usage/hourly", async (context) => {
     const principal = await accountReader(context, options, now());
     if (principal instanceof Response) {
       return principal;
@@ -781,15 +781,8 @@ export function createRelayApp(options: RelayAppOptions): Hono {
           start_at: start.data,
           end_at: end.data,
           facts: queried.rows,
-          coverage: queried.coverage.map((item) => ({
-            device_id: item.device_id,
-            agent: item.agent,
-            start_at: item.start_at,
-            end_at: item.end_at,
-            status: item.status,
-          })),
+          coverage: queried.coverage,
           cost: buildUsageCost(queried.rows, mode.data, catalog),
-          ...(queried.coverage_truncated ? { coverage_truncated: true } : {}),
         }),
       );
     } catch (error) {
@@ -899,7 +892,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     );
   });
 
-  app.put("/api/v4/device/health", async (context) => {
+  app.put("/api/v5/device/health", async (context) => {
     // Existing released device sessions carry sync:read:self. Health is a new self-only write
     // attached to that authenticated device principal so installed 0.0.15 sessions keep working.
     const checkedAt = now();
@@ -978,7 +971,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     );
   });
 
-  app.put("/api/v4/device/snapshots", async (context) => {
+  app.put("/api/v5/device/snapshots", async (context) => {
     const principal = await deviceWriter(context, options, "quota:write:self", now());
     if (principal instanceof Response) {
       return principal;
@@ -1021,7 +1014,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     );
   });
 
-  app.put("/api/v4/device/usage", async (context) => {
+  app.put("/api/v5/device/usage", async (context) => {
     const principal = await deviceWriter(context, options, "usage:write:self", now());
     if (principal instanceof Response) {
       return principal;

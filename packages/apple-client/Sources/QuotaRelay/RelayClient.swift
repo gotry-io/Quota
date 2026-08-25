@@ -29,7 +29,7 @@ public enum RelayRoute: String, CaseIterable, Sendable {
     switch self {
     case .token: "/oauth/v2/token"
     case .revoke: "/oauth/v2/revoke"
-    case .accountSummary: "/api/v4/account/summary"
+    case .accountSummary: "/api/v5/account/summary"
     }
   }
 

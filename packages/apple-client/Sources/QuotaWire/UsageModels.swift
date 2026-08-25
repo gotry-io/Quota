@@ -1,6 +1,6 @@
 import Foundation
 
-public enum BillingAgent: String, Codable, Sendable {
+public enum BillingAgent: String, CaseIterable, Codable, Sendable {
   case codex
   case claudeCode = "claude_code"
   case grok
@@ -22,7 +22,7 @@ public enum BillingChannel: String, Codable, Sendable {
   case unknown
 }
 
-public enum InferenceProvider: String, Codable, Sendable {
+public enum InferenceProvider: String, CaseIterable, Codable, Sendable {
   case openai
   case azureOpenAI = "azure_openai"
   case anthropic
@@ -570,7 +570,8 @@ public struct LocalUsageAgentSummary: Codable, Equatable, Sendable {
   }
 
   public var isValid: Bool {
-    totals.isValid && cost.isValid && providers.count <= 8 && providers.allSatisfy(\.isValid)
+    totals.isValid && cost.isValid && providers.count <= InferenceProvider.allCases.count
+      && providers.allSatisfy(\.isValid)
   }
 
   public init(from decoder: Decoder) throws {
@@ -644,62 +645,12 @@ public struct UsageBreakdown: Codable, Equatable, Sendable {
   }
 }
 
-public struct UsageCoverageSummaryItem: Codable, Equatable, Sendable {
-  public let deviceID: String
-  public let agent: BillingAgent
-  public let startAt: String
-  public let endAt: String
-  public let status: CoverageStatus
-
-  public init(
-    deviceID: String,
-    agent: BillingAgent,
-    startAt: String,
-    endAt: String,
-    status: CoverageStatus
-  ) {
-    self.deviceID = deviceID
-    self.agent = agent
-    self.startAt = startAt
-    self.endAt = endAt
-    self.status = status
-  }
-
-  public init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys(["deviceId", "agent", "startAt", "endAt", "status"])
-    let container = try decoder.container(keyedBy: CodingKeys.self)
-    deviceID = try container.decode(String.self, forKey: .deviceID)
-    agent = try container.decode(BillingAgent.self, forKey: .agent)
-    startAt = try container.decode(String.self, forKey: .startAt)
-    endAt = try container.decode(String.self, forKey: .endAt)
-    status = try container.decode(CoverageStatus.self, forKey: .status)
-    guard isValid else {
-      throw DecodingError.dataCorruptedError(
-        forKey: .startAt,
-        in: container,
-        debugDescription: "Invalid usage coverage item."
-      )
-    }
-  }
-
-  public var isValid: Bool {
-    WireValidation.isOpaqueID(deviceID)
-      && WireValidation.isUTCHour(startAt) != nil
-      && WireValidation.isUTCHour(endAt) != nil
-      && (WireValidation.isUTCHour(endAt).flatMap { end in
-        WireValidation.isUTCHour(startAt).map { start in
-          end > start && end.timeIntervalSince(start) <= 744 * 3_600
-        }
-      } ?? false)
-  }
-
-  private enum CodingKeys: String, CodingKey {
-    case deviceID = "deviceId"
-    case agent
-    case startAt
-    case endAt
-    case status
-  }
+/// How completely a read's range was scanned.  Readers have only ever asked whether anything
+/// was missed, so the answer travels instead of the windows it was derived from.
+public enum UsageCoverageVerdict: String, Codable, Equatable, Sendable {
+  case none
+  case complete
+  case partial
 }
 
 public struct UsageDateRange: Codable, Equatable, Sendable {
@@ -740,10 +691,9 @@ public struct AccountUsageSummary: Codable, Equatable, Sendable {
   public let totals: UsageTokenTotals
   public let cost: UsageCostOutcome
   public let modelCatalogRevision: String?
-  public let coverage: [UsageCoverageSummaryItem]
+  public let coverage: UsageCoverageVerdict
   public let breakdowns: [UsageBreakdown]
   public let agents: [LocalUsageAgentSummary]?
-  public let coverageTruncated: Bool?
   public let breakdownsTruncated: Bool?
 
   public init(
@@ -751,10 +701,9 @@ public struct AccountUsageSummary: Codable, Equatable, Sendable {
     totals: UsageTokenTotals,
     cost: UsageCostOutcome,
     modelCatalogRevision: String? = nil,
-    coverage: [UsageCoverageSummaryItem],
+    coverage: UsageCoverageVerdict,
     breakdowns: [UsageBreakdown],
     agents: [LocalUsageAgentSummary]? = nil,
-    coverageTruncated: Bool? = nil,
     breakdownsTruncated: Bool? = nil
   ) {
     self.range = range
@@ -764,24 +713,22 @@ public struct AccountUsageSummary: Codable, Equatable, Sendable {
     self.coverage = coverage
     self.breakdowns = breakdowns
     self.agents = agents
-    self.coverageTruncated = coverageTruncated
     self.breakdownsTruncated = breakdownsTruncated
   }
 
   public init(from decoder: Decoder) throws {
     try decoder.rejectUnknownWireKeys([
       "range", "totals", "cost", "modelCatalogRevision", "coverage", "breakdowns", "agents",
-      "coverageTruncated", "breakdownsTruncated",
+      "breakdownsTruncated",
     ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     range = try container.decode(UsageDateRange.self, forKey: .range)
     totals = try container.decode(UsageTokenTotals.self, forKey: .totals)
     cost = try container.decode(UsageCostOutcome.self, forKey: .cost)
     modelCatalogRevision = try container.decodeIfPresent(String.self, forKey: .modelCatalogRevision)
-    coverage = try container.decode([UsageCoverageSummaryItem].self, forKey: .coverage)
+    coverage = try container.decode(UsageCoverageVerdict.self, forKey: .coverage)
     breakdowns = try container.decode([UsageBreakdown].self, forKey: .breakdowns)
     agents = try container.decodeIfPresent([LocalUsageAgentSummary].self, forKey: .agents)
-    coverageTruncated = try decodeTrueMarker(.coverageTruncated, from: container)
     breakdownsTruncated = try decodeTrueMarker(.breakdownsTruncated, from: container)
     guard isValid else {
       throw DecodingError.dataCorruptedError(
@@ -801,12 +748,11 @@ public struct AccountUsageSummary: Codable, Equatable, Sendable {
     try container.encode(coverage, forKey: .coverage)
     try container.encode(breakdowns, forKey: .breakdowns)
     try container.encodeIfPresent(agents, forKey: .agents)
-    try container.encodeIfPresent(coverageTruncated, forKey: .coverageTruncated)
     try container.encodeIfPresent(breakdownsTruncated, forKey: .breakdownsTruncated)
   }
 
   public var hasTruncatedDetails: Bool {
-    coverageTruncated == true || breakdownsTruncated == true || cost.hasUnpricedTruncatedDetails
+    breakdownsTruncated == true || cost.hasUnpricedTruncatedDetails
   }
 
   public var isValid: Bool {
@@ -814,10 +760,8 @@ public struct AccountUsageSummary: Codable, Equatable, Sendable {
       && totals.isValid
       && cost.isValid
       && modelCatalogRevision.map(WireValidation.isOpaqueID) != false
-      && coverage.count <= 2_048
-      && coverage.allSatisfy(\.isValid)
       && breakdowns.count <= 1_000
-      && agents.map { $0.count <= 6 } != false
+      && agents.map { $0.count <= BillingAgent.allCases.count } != false
   }
 
   private enum CodingKeys: String, CodingKey {
@@ -828,7 +772,6 @@ public struct AccountUsageSummary: Codable, Equatable, Sendable {
     case coverage
     case breakdowns
     case agents
-    case coverageTruncated
     case breakdownsTruncated
   }
 }

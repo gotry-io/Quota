@@ -1,15 +1,14 @@
 import type {
   BillingAgent,
-  CoverageStatus,
   UsageCostMode as ProtocolUsageCostMode,
   UsageCoverage as ProtocolUsageCoverage,
   UsageHourlyFact as ProtocolUsageHourlyFact,
+  UsageCoverageVerdict,
   UsageSubmission as ProtocolUsageSubmission,
 } from "@gotry-io/quota-protocol";
 import type { DevicePrincipal } from "./account.ts";
 
 export type UsageAgent = BillingAgent;
-export type UsageCoverageStatus = CoverageStatus;
 export type UsageCoverage = ProtocolUsageCoverage;
 export type UsageHourlyFact = ProtocolUsageHourlyFact;
 export type UsageSubmission = ProtocolUsageSubmission;
@@ -42,16 +41,6 @@ export interface UsageQuery {
   limit: number;
 }
 
-export interface StoredUsageCoverage {
-  device_id: string;
-  agent: UsageAgent;
-  start_at: string;
-  end_at: string;
-  status: UsageCoverageStatus;
-  parser_revision: string;
-  accepted_at: string;
-}
-
 export interface StoredUsageHourlyFact extends UsageHourlyFact {
   device_id: string;
   aggregation_timezone: string;
@@ -59,9 +48,9 @@ export interface StoredUsageHourlyFact extends UsageHourlyFact {
 
 export interface UsageQueryResult {
   rows: StoredUsageHourlyFact[];
-  coverage: StoredUsageCoverage[];
+  /** How completely the queried range was scanned, decided over every window it spans. */
+  coverage: UsageCoverageVerdict;
   truncated: boolean;
-  coverage_truncated?: boolean;
 }
 
 export interface UsageState {

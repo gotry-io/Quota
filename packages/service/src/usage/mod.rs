@@ -46,6 +46,9 @@ pub const MAX_USAGE_ROWS: usize = 2_048;
 pub const MAX_USAGE_MODELS: usize = 1_000;
 pub const MAX_USAGE_COVERAGE_ITEMS: usize = 2_048;
 pub const MAX_USAGE_COVERAGE_HOURS: i64 = 24 * 31;
+/// No agent this Account accepts existed before this instant, so a coverage window reaching back
+/// past it was computed from a missing lower bound rather than scanned.
+pub const EARLIEST_USAGE_INSTANT: &str = "2020-01-01T00:00:00Z";
 pub const MAX_SAFE_COUNT: u64 = 9_007_199_254_740_991;
 
 /// The local Usage sources supported by the current local Usage schema.
@@ -154,6 +157,19 @@ pub enum InferenceProvider {
 }
 
 impl InferenceProvider {
+    pub const ALL: [Self; 10] = [
+        Self::Openai,
+        Self::AzureOpenai,
+        Self::Anthropic,
+        Self::AwsBedrock,
+        Self::GoogleVertex,
+        Self::Openrouter,
+        Self::Xai,
+        Self::Moonshot,
+        Self::Deepseek,
+        Self::Unknown,
+    ];
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Openai => "openai",

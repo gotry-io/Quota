@@ -310,9 +310,7 @@ struct AccountUsageView: View {
     return PresentedUsage(
       totals: PresentedUsageTotals(usage.totals),
       cost: usage.cost,
-      models: localModels.isEmpty
-        ? detail.fallbackModels.map(PresentedUsageModel.init)
-        : localModels
+      models: localModels
     )
   }
 

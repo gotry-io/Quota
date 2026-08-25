@@ -4186,7 +4186,6 @@ mod tests {
         let detail = serde_json::json!({
             "range": {"from": "2026-08-13", "to": "2026-08-13"},
             "usage": {"totals": {"total_tokens": 1}, "cost": {"status": "unavailable"}, "agents": []},
-            "fallback_models": [],
             "incomplete": false,
             "details_truncated": false
         });

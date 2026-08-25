@@ -36,12 +36,12 @@ function emptyCost() {
 
 function usageResponse(date: string) {
   return {
-    protocol_version: 4,
+    protocol_version: 5,
     usage: {
       range: { from: date, to: date },
       totals: emptyTotals(),
       cost: emptyCost(),
-      coverage: [],
+      coverage: "complete",
       breakdowns: [
         {
           dimension: "usage_date",
@@ -57,7 +57,7 @@ function usageResponse(date: string) {
 test("builds the single-day usage summary URL", () => {
   const path = accountUsageDayPath("2026-08-14");
   const url = new URL(path, "https://quota.gotry.io");
-  assert.equal(url.pathname, "/api/v4/account/usage/summary");
+  assert.equal(url.pathname, "/api/v5/account/usage/summary");
   assert.equal(url.searchParams.get("usage_agents"), "all");
   assert.equal(url.searchParams.get("cost_mode"), "auto");
   assert.equal(url.searchParams.get("from"), "2026-08-14");

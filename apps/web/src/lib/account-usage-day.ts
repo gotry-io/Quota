@@ -13,7 +13,7 @@ export function accountUsageDayPath(date: string): string {
     from: date,
     to: date,
   });
-  return `/api/v4/account/usage/summary?${params.toString()}`;
+  return `/api/v5/account/usage/summary?${params.toString()}`;
 }
 
 export function parseAccountUsageDayResponse(

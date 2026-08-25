@@ -3123,7 +3123,6 @@ fn local_usage_detail(
     Ok(json!({
         "range": {"from": from, "to": to},
         "usage": summary,
-        "fallback_models": [],
         "incomplete": incomplete,
         "details_truncated": details_truncated
     }))
@@ -3146,37 +3145,11 @@ fn account_usage_detail(value: Value) -> Result<Value, BackendError> {
         .get("cost")
         .cloned()
         .ok_or_else(invalid_usage_detail)?;
-    let has_agents = object.contains_key("agents");
-    let agents = object.get("agents").cloned().unwrap_or_else(|| json!([]));
-    let fallback_models = if has_agents {
-        Vec::new()
-    } else {
-        object
-            .get("breakdowns")
-            .and_then(Value::as_array)
-            .ok_or_else(invalid_usage_detail)?
-            .iter()
-            .filter(|item| item.get("dimension").and_then(Value::as_str) == Some("model"))
-            .map(|item| {
-                Ok(json!({
-                    "model": item
-                        .get("key")
-                        .and_then(Value::as_str)
-                        .ok_or_else(invalid_usage_detail)?,
-                    "totals": account_summary_totals(
-                        item.get("totals").ok_or_else(invalid_usage_detail)?
-                    )?,
-                    "cost": item.get("cost").cloned().ok_or_else(invalid_usage_detail)?
-                }))
-            })
-            .collect::<Result<Vec<_>, BackendError>>()?
-    };
-    let coverage = object
-        .get("coverage")
-        .and_then(Value::as_array)
+    let agents = object
+        .get("agents")
+        .cloned()
         .ok_or_else(invalid_usage_detail)?;
-    let coverage_truncated =
-        object.get("coverage_truncated").and_then(Value::as_bool) == Some(true);
+    let incomplete = object.get("coverage").and_then(Value::as_str) == Some("partial");
     let breakdowns_truncated =
         object.get("breakdowns_truncated").and_then(Value::as_bool) == Some(true);
     let unpriced_truncated = cost.get("unpriced_truncated").and_then(Value::as_bool) == Some(true);
@@ -3191,12 +3164,8 @@ fn account_usage_detail(value: Value) -> Result<Value, BackendError> {
     Ok(json!({
         "range": object.get("range").cloned().ok_or_else(invalid_usage_detail)?,
         "usage": usage,
-        "fallback_models": fallback_models,
-        "incomplete": coverage_truncated
-            || coverage.iter().any(|item| {
-                item.get("status").and_then(Value::as_str) == Some("partial")
-            }),
-        "details_truncated": coverage_truncated || breakdowns_truncated || unpriced_truncated
+        "incomplete": incomplete,
+        "details_truncated": breakdowns_truncated || unpriced_truncated
     }))
 }
 
@@ -3829,8 +3798,10 @@ mod tests {
         );
     }
 
+    /// One statement per contract: the account read always carries its per-agent breakdown, so
+    /// a summary without it is refused rather than rebuilt from the display breakdowns.
     #[test]
-    fn account_usage_detail_preserves_models_without_structured_clients() {
+    fn account_usage_detail_requires_the_agent_breakdown() {
         let cost = json!({
             "mode": "calculate",
             "basis": "none",
@@ -3857,22 +3828,21 @@ mod tests {
             "source_cost_microusd": null,
             "source_cost_covered_requests": 0
         });
-        let detail = account_usage_detail(json!({
-            "range": {"from": "2026-08-06", "to": "2026-08-12"},
-            "totals": totals,
-            "cost": cost,
-            "coverage": [],
-            "breakdowns": [{
-                "dimension": "model",
-                "key": "gpt-test",
+        assert!(
+            account_usage_detail(json!({
+                "range": {"from": "2026-08-06", "to": "2026-08-12"},
                 "totals": totals,
-                "cost": cost
-            }]
-        }))
-        .expect("detail");
-        assert_eq!(detail["usage"]["totals"]["total_tokens"], 13);
-        assert_eq!(detail["usage"]["totals"]["messages"], 2);
-        assert_eq!(detail["fallback_models"][0]["model"], "gpt-test");
+                "cost": cost,
+                "coverage": "complete",
+                "breakdowns": [{
+                    "dimension": "model",
+                    "key": "gpt-test",
+                    "totals": totals,
+                    "cost": cost
+                }]
+            }))
+            .is_err()
+        );
     }
 
     #[test]
@@ -3916,7 +3886,7 @@ mod tests {
             "range": {"from": "2026-08-13", "to": "2026-08-13"},
             "totals": relay_totals,
             "cost": cost,
-            "coverage": [],
+            "coverage": "partial",
             "breakdowns": [],
             "agents": [{
                 "agent": "codex",
@@ -3933,7 +3903,7 @@ mod tests {
         .expect("detail");
         assert_eq!(detail["usage"]["agents"][0]["agent"], "codex");
         assert_eq!(detail["usage"]["totals"]["messages"], 2);
-        assert_eq!(detail["fallback_models"], json!([]));
+        assert_eq!(detail["incomplete"], json!(true));
     }
 
     #[test]

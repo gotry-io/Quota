@@ -23,11 +23,7 @@ import {
   UsageTokenTotalsSchema,
   type UsageUnpricedItem,
 } from "@gotry-io/quota-protocol";
-import type {
-  StoredUsageCoverage,
-  StoredUsageHourlyFact,
-  UsageQueryResult,
-} from "@gotry-io/relay-core";
+import type { StoredUsageHourlyFact, UsageQueryResult } from "@gotry-io/relay-core";
 
 const breakdownDimensions = [
   "device",
@@ -83,11 +79,10 @@ export function buildUsageSummary(
       range,
       totals: serializedTotals(totals),
       cost: boundedFoldPreparedUsageCosts(preparedCosts),
-      coverage: result.coverage.map(coverageSummary),
+      coverage: result.coverage,
       breakdowns,
       ...(agentSummary ? { agents: agentSummary.agents } : {}),
       ...(modelCatalog ? { model_catalog_revision: modelCatalog.revision } : {}),
-      ...(result.coverage_truncated ? { coverage_truncated: true } : {}),
       ...(breakdownsTruncated || agentSummary?.modelsTruncated
         ? { breakdowns_truncated: true }
         : {}),
@@ -116,16 +111,6 @@ export class UsageSummaryLimitError extends Error {
 function usageFact(row: StoredUsageHourlyFact) {
   const { device_id: _deviceID, aggregation_timezone: _aggregationTimezone, ...fact } = row;
   return fact;
-}
-
-function coverageSummary(item: StoredUsageCoverage) {
-  return {
-    device_id: item.device_id,
-    agent: item.agent,
-    start_at: item.start_at,
-    end_at: item.end_at,
-    status: item.status,
-  };
 }
 
 function buildUsageAgents(

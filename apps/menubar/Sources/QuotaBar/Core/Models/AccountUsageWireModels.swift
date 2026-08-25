@@ -29,8 +29,12 @@ struct UsageCoverage: Codable, Equatable, Sendable {
     case status
   }
 
+  /// A submission is bounded at both ends: it may not claim more than the wire's span, and it
+  /// may not reach back before any agent this Account accepts existed.
   var isValid: Bool {
-    guard let start = Self.utcHour(startAt), let end = Self.utcHour(endAt), end > start else {
+    guard let start = Self.utcHour(startAt), let end = Self.utcHour(endAt), end > start,
+      let earliest = Self.utcHour(QuotaProtocol.earliestUsageInstant), start >= earliest
+    else {
       return false
     }
     return end.timeIntervalSince(start) <= 744 * 3_600
@@ -267,7 +271,7 @@ struct UsageSubmission: Decodable, Equatable, Sendable {
       throw DecodingError.dataCorruptedError(
         forKey: .rows,
         in: container,
-        debugDescription: "Invalid Usage v3 submission."
+        debugDescription: "Invalid Usage submission."
       )
     }
   }
@@ -326,7 +330,8 @@ struct LocalUsagePeriodSummary: Codable, Equatable, Sendable {
   }
 
   var isValid: Bool {
-    totals.isValid && cost.isValid && agents.count <= 6 && agents.allSatisfy(\.isValid)
+    totals.isValid && cost.isValid && agents.count <= BillingAgent.allCases.count
+      && agents.allSatisfy(\.isValid)
       && modelsTruncated != false
   }
 
@@ -410,7 +415,6 @@ struct LocalUsageReport: Codable, Equatable, Sendable {
   let status: LocalUsageReportStatus
   let modelCatalogRevision: String?
   let coverage: [LocalUsageCoverage]
-  let coverageTruncated: Bool?
 
   init(
     protocolVersion: Int = 3,
@@ -419,8 +423,7 @@ struct LocalUsageReport: Codable, Equatable, Sendable {
     range: UsageDateRange,
     status: LocalUsageReportStatus,
     modelCatalogRevision: String? = nil,
-    coverage: [LocalUsageCoverage],
-    coverageTruncated: Bool? = nil
+    coverage: [LocalUsageCoverage]
   ) {
     self.protocolVersion = protocolVersion
     self.generatedAt = generatedAt
@@ -429,13 +432,12 @@ struct LocalUsageReport: Codable, Equatable, Sendable {
     self.status = status
     self.modelCatalogRevision = modelCatalogRevision
     self.coverage = coverage
-    self.coverageTruncated = coverageTruncated
   }
 
   init(from decoder: Decoder) throws {
     try decoder.rejectUnknownWireKeys([
       "protocolVersion", "generatedAt", "aggregationTimezone", "range", "status",
-      "modelCatalogRevision", "coverage", "coverageTruncated",
+      "modelCatalogRevision", "coverage",
     ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     protocolVersion = try container.decode(Int.self, forKey: .protocolVersion)
@@ -445,7 +447,6 @@ struct LocalUsageReport: Codable, Equatable, Sendable {
     status = try container.decode(LocalUsageReportStatus.self, forKey: .status)
     modelCatalogRevision = try container.decode(String?.self, forKey: .modelCatalogRevision)
     coverage = try container.decode([LocalUsageCoverage].self, forKey: .coverage)
-    coverageTruncated = try decodeTrueMarker(.coverageTruncated, from: container)
 
     let unavailable = status == .unavailable
     let expectedStatus: LocalUsageReportStatus =
@@ -483,7 +484,6 @@ struct LocalUsageReport: Codable, Equatable, Sendable {
     try container.encode(status, forKey: .status)
     try container.encode(modelCatalogRevision, forKey: .modelCatalogRevision)
     try container.encode(coverage, forKey: .coverage)
-    try container.encodeIfPresent(coverageTruncated, forKey: .coverageTruncated)
   }
 
   private enum CodingKeys: String, CodingKey {
@@ -494,7 +494,6 @@ struct LocalUsageReport: Codable, Equatable, Sendable {
     case status
     case modelCatalogRevision
     case coverage
-    case coverageTruncated
   }
 }
 
@@ -601,22 +600,20 @@ struct AccountUsageHourlyResponse: Decodable, Equatable, Sendable {
   let startAt: String
   let endAt: String
   let facts: [AccountUsageHourlyFact]
-  let coverage: [UsageCoverageSummaryItem]
+  let coverage: UsageCoverageVerdict
   let cost: UsageCostOutcome
-  let coverageTruncated: Bool?
 
   init(from decoder: Decoder) throws {
     try decoder.rejectUnknownWireKeys([
-      "protocolVersion", "startAt", "endAt", "facts", "coverage", "cost", "coverageTruncated",
+      "protocolVersion", "startAt", "endAt", "facts", "coverage", "cost",
     ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     protocolVersion = try container.decode(Int.self, forKey: .protocolVersion)
     startAt = try container.decode(String.self, forKey: .startAt)
     endAt = try container.decode(String.self, forKey: .endAt)
     facts = try container.decode([AccountUsageHourlyFact].self, forKey: .facts)
-    coverage = try container.decode([UsageCoverageSummaryItem].self, forKey: .coverage)
+    coverage = try container.decode(UsageCoverageVerdict.self, forKey: .coverage)
     cost = try container.decode(UsageCostOutcome.self, forKey: .cost)
-    coverageTruncated = try decodeTrueMarker(.coverageTruncated, from: container)
     let decodedStart = UsageCoverage.utcHour(startAt)
     let decodedEnd = UsageCoverage.utcHour(endAt)
     let costRows = WireValidation.safeSum([cost.calculatedRows, cost.reportedRows, cost.unpricedRows])
@@ -628,8 +625,6 @@ struct AccountUsageHourlyResponse: Decodable, Equatable, Sendable {
         guard let bucket = UsageCoverage.utcHour(item.fact.bucketStartUTC) else { return false }
         return bucket >= start && bucket < end
       }),
-      coverage.count <= 2_048,
-      coverage.allSatisfy(\.isValid),
       cost.isValid,
       costRows == facts.count
     else {
@@ -648,7 +643,6 @@ struct AccountUsageHourlyResponse: Decodable, Equatable, Sendable {
     case facts
     case coverage
     case cost
-    case coverageTruncated
   }
 }
 

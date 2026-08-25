@@ -84,7 +84,7 @@ export async function fetchAccountSummary(): Promise<
   { status: "ok"; summary: AccountSummary } | { status: "unauthorized" } | { status: "error" }
 > {
   const response = await fetch(
-    "/api/v4/account/summary?cost_mode=auto&usage_agents=all",
+    "/api/v5/account/summary?cost_mode=auto&usage_agents=all",
     jsonRequest,
   );
   if (response.status === 401) return { status: "unauthorized" };
