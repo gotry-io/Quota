@@ -1,5 +1,7 @@
 # ADR 0008: Complete local data and unified diagnostics
 
+> Status: Superseded by [ADR 0022](./0022-minimal-diagnostics.md) on 2026-08-25.
+
 - Status: Accepted
 - Date: 2026-08-11
 - Scope: native local service, QuotaBar private IPC, QuotaCLI diagnostics, and managed Usage writes

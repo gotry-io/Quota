@@ -29,10 +29,11 @@ Three compatibility mechanisms that existed only to keep released clients workin
   `unknown`, and `usage_channels=1` is no longer a query parameter. Every stored channel is reported
   as stored.
 - **Read opt-ins that existed so a released strict client would not meet an unknown field.**
-  `device_health=1`, `model_catalog=1`, and `usage_clients=1` are gone: an Account summary always
-  carries Device Health on every Device, the model-catalog revision, and the agent groups. The
-  native client's retry-without-opt-ins fallback is gone with them, so a Relay that rejects a read
-  is reported as the error it is rather than answered with a quietly smaller summary.
+  The per-device health, `model_catalog=1`, and `usage_clients=1` opt-ins are gone: an Account
+  summary always carries the model-catalog revision and the agent groups, and carried the health
+  shape until [ADR 0022](0022-minimal-diagnostics.md) removed it. The native client's
+  retry-without-opt-ins fallback is gone with them, so a Relay that rejects a read is reported as
+  the error it is rather than answered with a quietly smaller summary.
 
 A client that speaks a retired shape is refused, not translated.
 

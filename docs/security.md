@@ -71,9 +71,12 @@ data requirements. Architecture and product behavior are defined in
   - The shared `providers.json`/`ProviderConfigLock` path and OAuth `client_id=quotacli` remain
     current collection interfaces. The registered `quota-ios` public client is a separate read-only
     Account interface.
-- The cache holds only the typed diagnostic attempt fields and bounded metrics defined by
-  [ADR 0015](decisions/0015-diagnostic-attempts-and-device-health.md). Completed rows are retained for
-  seven days and capped at 50,000; running rows are finalized at the next open rather than pruned.
+- The cache holds only the typed diagnostic attempt fields defined by
+  [ADR 0022](decisions/0022-minimal-diagnostics.md): kind, trigger, catalog-owned subject, start and
+  completion instants, duration, outcome, and one allowlisted code. Completed rows are retained for
+  seven days and capped at 5,000, pruned at open and hourly; running rows are finalized at the next
+  open rather than pruned. A journal write that fails is counted on stderr and never blocks the
+  collection, scan, upload, or sync it was recording.
 - QuotaBar's private service and Linux `quotacli` use the same owner-only configuration and state
   boundary. The Linux command is a foreground native binary; it is built and tested only and has no
   separate published credential or storage format.
@@ -173,11 +176,6 @@ data requirements. Architecture and product behavior are defined in
 - The device profile endpoint accepts only the current Device's authenticated token and generation.
   It can update only that Device's bounded display name and platform; it cannot select a Device ID,
   read Account data, or change authorization state.
-- The Device Health endpoint derives identity from that same authenticated Device principal. The
-  request has no Device ID, must match current generation/platform, and may replace only the latest
-  row at an equal or greater monotonic refresh revision. Server receipt time, not the device clock,
-  determines freshness. Lower delayed revisions cannot refresh old data. The read-only iOS Account
-  token can read opted-in health but cannot write it.
 - The service returns authoritative independent `next_snapshot_sequence` and
   `next_usage_sequence`. Clients never guess or reset a lost sequence to zero. A conflict fails
   closed because it can indicate a cloned local configuration.
@@ -193,9 +191,9 @@ data requirements. Architecture and product behavior are defined in
   outbox work remains local and resumes after re-enabling. Cached Account Usage is omitted from the
   private state response so the native Usage surface remains local-only. The preference does not delete facts that Relay
   already retained; Device or Account deletion remains the explicit removal boundary.
-- Device Health may still upload the disabled preference and generic three-axis device summary, but
-  it must omit Usage attempts, agent subjects, metrics, and local Usage detail from its signal and
-  top-level code selection.
+- No device uploads an assertion about its own health. An Account device list is derived from
+  lifecycle timestamps Relay already witnessed — when the device last called, and when the newest
+  reading it sent was taken — so no local diagnostic detail leaves this device at all.
 - Only a complete collector scan may create authoritative replacement coverage. Permission errors,
   unreadable/changed sources, record limits, malformed or unknown usage records, truncated tails,
   cancellation, or parser uncertainty make coverage partial. Partial coverage never deletes or
@@ -253,21 +251,21 @@ data requirements. Architecture and product behavior are defined in
 - Error output and logs use allowlisted codes and fixed recovery text. Never include raw HTTP bodies,
   subprocess stderr, JWTs, authorization codes, user/device secrets, installation IDs, raw GitHub
   subjects, full email addresses, or local source paths.
-- The service owns one bounded diagnostic v2 report for Quota/Usage surfaces and their source checks.
-  QuotaBar's Settings action and Linux `quotacli doctor` consume that same report; they never inspect
-  local state or source logs or derive policy themselves. The report may contain fixed statuses,
-  bounded counters, timestamps, impact/recovery codes, and catalog-owned `provider:<id>`,
-  `provider:<id>/<source_id>`, or `agent:<id>` subjects. It must distinguish only `this_device`, `account`, and `system`; account or
-  device display names and IDs never become diagnostic identity. Paths, filenames, model names/lists,
-  prompts, completions, session/conversation/installation/device IDs, credentials, tokens, raw
-  provider responses, and parser excerpts are forbidden. JSON and copied text are equally redacted.
-  A single replaceable SQLite snapshot retains only the last completed report; current refresh phase
-  metadata may be overlaid, but intermediate component values must never be serialized. Its Recent
-  Activity is assembled from the typed local journal, not logs, and is independently bounded. The
-  complete-data, partial-merge, and evaluation rules are canonical in
-  [ADR 0008](decisions/0008-data-integrity-and-diagnostics.md); attempt retention, Support Report,
-  and Device Health minimization are canonical in
-  [ADR 0015](decisions/0015-diagnostic-attempts-and-device-health.md).
+- The service owns one bounded diagnostic report for the four Quota/Usage surfaces and the sources
+  behind them. QuotaBar's Support page and Linux `quotacli doctor` consume that same report; they
+  never inspect local state or source logs, and they never map a code to copy of their own. The
+  report may contain fixed statuses, timestamps, recovery codes, catalog-owned `provider:<id>` or
+  `agent:<id>` subjects with an optional catalog-owned `source_id`, the service's own fixed names for
+  its non-provider paths, and the fixed safe sentences the service writes. Account or device display
+  names and IDs never become diagnostic identity. Paths, filenames, model names or lists, prompts,
+  completions, session/conversation/installation/device IDs, credentials, tokens, raw provider
+  responses, and parser excerpts are forbidden. JSON and copied text are equally redacted. A single
+  replaceable SQLite snapshot retains only the last completed report; intermediate component values
+  must never be serialized. The recent work a copied report lists is assembled from the typed local
+  journal, not logs, and is capped at 100 entries. The complete-data and partial-merge rules are
+  canonical in [ADR 0008](decisions/0008-data-integrity-and-diagnostics.md); the report contract,
+  attempt retention, and redaction are canonical in
+  [ADR 0022](decisions/0022-minimal-diagnostics.md).
 - Account/device display values and provider labels are untrusted presentation data: bound, mask
   where required, render as text rather than HTML, and exclude from security logs.
 - Model diagnostics may expose only bounded resolved/unresolved/ambiguous counts and catalog-revision

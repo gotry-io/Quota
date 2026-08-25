@@ -49,12 +49,10 @@ managed data contract advances to v4 on `/api/v4/*` because its shape changed. T
 names recorded above describe what shipped as v3, not the current contract.
 
 Managed-data v3 itself shipped with QuotaBar 0.0.12, including a strict Device shape in Account
-summary. Device Health therefore does not add a field to the default response. A new client requests
-`GET /api/v3/account/summary?device_health=1`; only that opt-in response uses the strict extended
-Device shape where `health` is required but nullable. Without the opt-in the `health` key is absent,
-preserving the released response exactly. QuotaBar, Quota Web, and the read-only iOS Account client
-opt in; write authority remains limited to the authenticated collection Device. The health contract
-is defined by [ADR 0015](0015-diagnostic-attempts-and-device-health.md).
+summary. The per-device health signal that shipped alongside it was carried behind a read opt-in so
+the released response stayed byte-shape compatible.
+[ADR 0022](0022-minimal-diagnostics.md) has since removed that signal, its opt-in, and its route
+entirely; an Account Device now reports only its lifecycle timestamps.
 
 Because a packaged native client can update before Relay, ADR 0015 also defines the narrow released-
 Relay fallback for `400 invalid_request`. The fallback retries the unchanged default v3 response and

@@ -1,5 +1,7 @@
 # ADR 0015: Diagnostic attempts, support reports, and Device Health
 
+> Status: Superseded by [ADR 0022](./0022-minimal-diagnostics.md) on 2026-08-25.
+
 - Status: Accepted
 - Date: 2026-08-15
 

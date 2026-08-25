@@ -39,17 +39,17 @@ printed. Use a browser on another device to open the displayed URL when the CLI 
 `account summary` returns the fresh default calculated-cost view through the shared token-refresh
 and compare-and-swap state path.
 
-`doctor` consumes the shared service diagnostic report. It covers provider discovery and quota,
-Usage parsing and coverage, pricing, account state, and synchronization through the v2
-surface/check/finding contract. Source checks distinguish this device, Account, and system work;
-missing optional setup and waiting for the next scheduler opportunity are normal. Text is intended
-for a terminal; JSON is bounded and safe to attach to a bug report. Both include the same
-service-owned recent attempts: running work, the latest 20 refresh trees, recent failures, and a
-history-truncated marker, capped at 512 entries. `--pretty` only changes JSON
-whitespace. The command exits `0` when operation is healthy, data is current or empty, and attention
-is not required. Degraded/blocked operation, stale/partial/unknown data, or required attention exits
-with `1`. Paths, source filenames, model lists, raw logs/responses, parser excerpts, prompts,
-completions, session or device identifiers, credentials, and tokens are never printed.
+`doctor` renders the shared service report. It lists the four surfaces — Quota Overview, this
+device's Usage, Account Usage, and Account — and the sources behind them: provider discovery and
+quota, Usage parsing, the pricing catalog, account state, and the upload path. Every sentence comes
+from the service; `doctor` prints it rather than mapping a code to copy of its own. Missing optional
+setup is inactive, and waiting for the next scheduler opportunity is normal. Text is intended for a
+terminal; JSON is bounded and safe to attach to a bug report. Both include the same service-owned
+recent work, capped at 100 attempts. `--pretty` only changes JSON whitespace. The command exits `0`
+when operation is healthy, every surface's data is current or empty, and attention is not required.
+Anything else exits `1`. Paths, source filenames, model lists, raw logs or responses, parser
+excerpts, prompts, completions, session or device identifiers, credentials, and tokens are never
+printed.
 
 ## Development
 

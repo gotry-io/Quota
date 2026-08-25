@@ -20,17 +20,17 @@ Claude, Grok, and Kimi.
 Local Usage analytics supports Codex, Claude Code, Grok, OpenCode, Pi, and Cursor logs. Provider credentials,
 prompts, completions, raw events, local paths, and conversation identifiers never upload.
 
-Both collection clients expose the same service-owned diagnostics: Linux `quotacli doctor
-[--format text|json] [--pretty]` and the QuotaBar Settings **Diagnostics** action on macOS. The
-v2 report evaluates user-visible Quota/Usage surfaces and explains them with source-scoped checks and
-root-cause findings. Absent setup is healthy/inactive and Account data may fulfill Overview without a local provider
-login, but a local source this device holds and cannot collect stays actionable on both surfaces;
-pending Usage waits normally until a completed upload attempt fails. The
-report uses the last completed refresh boundary and contains only safe provider/agent identities,
-bounded counters, timestamps, impact, and recovery codes. It never includes credentials, tokens,
-local paths or filenames, model lists, raw logs/responses, parser excerpts, prompts, completions,
-session identifiers, or device identifiers. QuotaCLI exits nonzero for failed operation,
-stale/partial/unknown data, or required attention; healthy empty and automatic waiting states succeed.
+Both collection clients expose the same service-owned report: Linux `quotacli doctor
+[--format text|json] [--pretty]` and the QuotaBar Settings **Support** page on macOS. The report
+lists the four user-visible surfaces — Quota Overview, this Mac's Usage, Account Usage, and Account
+— and the sources behind them, each with one sentence naming what happened and what to do about it.
+The service writes that sentence; the clients render it. Absent setup is inactive, not broken, and
+Account data may fulfill Overview without a local provider login, but a local source this device
+holds and cannot collect stays actionable. The report carries only safe provider and agent
+identities, timestamps, and recovery codes: never credentials, tokens, local paths or filenames,
+model lists, raw logs or responses, parser excerpts, prompts, completions, session identifiers, or
+device identifiers. QuotaCLI exits nonzero when operation is not healthy, any surface's data is
+stale or partial, or attention is required; healthy empty and automatic waiting states succeed.
 
 ## Architecture
 
@@ -59,10 +59,10 @@ remain TypeScript. See the canonical
 [read-only iOS account client](docs/decisions/0013-readonly-ios-account-client.md),
 [non-secret iOS widget snapshot](docs/decisions/0014-nonsecret-ios-widget-snapshot.md), and
 [SvelteKit document Worker composition](docs/decisions/0011-sveltekit-document-worker.md). The data
-integrity and diagnostic contract is [ADR 0008](docs/decisions/0008-data-integrity-and-diagnostics.md),
+integrity contract is [ADR 0008](docs/decisions/0008-data-integrity-and-diagnostics.md),
 report-time model identity is [ADR 0009](docs/decisions/0009-versioned-model-catalog.md),
-structured attempts, Support Report, and Device Health are
-[ADR 0015](docs/decisions/0015-diagnostic-attempts-and-device-health.md), the split between an
+the diagnostic report and the attempt journal behind it are
+[ADR 0022](docs/decisions/0022-minimal-diagnostics.md), the split between an
 identity store and a disposable cache is
 [ADR 0021](docs/decisions/0021-identity-store-and-disposable-cache.md), and provider
 browser-session authentication is
@@ -178,13 +178,13 @@ detail, shareable remaining-quota/usage exports, and the Web account dashboard. 
 identifiers remain opaque bounded provider text; a separately versioned catalog derives stable
 report keys without rewriting facts or changing pricing. Valid facts remain usable when pricing or
 model aliases are unknown. Record/file failures are isolated and complete uploads are partitioned
-losslessly, while partial scans do not replace remote facts. The service-owned diagnostics v2 report
-separates operational health, data state, and attention; source checks explain a coherent
-last-completed refresh without treating absent optional setup as failure. A seven-day bounded local
-attempt journal supplies recent Support activity and canonical latest-attempt/success facts. Signed-in
-collection Devices upload only a sanitized latest health snapshot; QuotaBar, Web, and iOS opt into
-the compatible Account Device Health view with version, platform, and server-authoritative last
-report/refresh/sync state. A cache SQLite cannot read is deleted and rebuilt by the next refresh
+losslessly, while partial scans do not replace remote facts. The service-owned report says how each
+surface is doing and which source explains it, in sentences the service writes, without treating
+absent optional setup as failure. A seven-day bounded local attempt journal supplies the recent work
+in a copied report and the canonical latest-attempt and latest-success facts; it is written
+best-effort and never blocks the work it records. An Account device list reports only how recently
+that device spoke — Active, Idle, or Not reporting — so no device asserts anything about another.
+A cache SQLite cannot read is deleted and rebuilt by the next refresh
 rather than salvaged; an identity it cannot read makes the Mac a new installation that asks to sign
 in again.
 

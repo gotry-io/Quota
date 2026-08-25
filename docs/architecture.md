@@ -47,8 +47,8 @@ boundary is [ADR 0006](decisions/0006-managed-account-device-usage.md); managed-
 [ADR 0012](decisions/0012-managed-data-v3.md); the read-only iOS account client is
 [ADR 0013](decisions/0013-readonly-ios-account-client.md); the non-secret iOS widget
 snapshot is [ADR 0014](decisions/0014-nonsecret-ios-widget-snapshot.md); the local runtime decision is
-[ADR 0007](decisions/0007-rust-native-local-service.md); diagnostic attempts, Support Report, and
-Device Health are [ADR 0015](decisions/0015-diagnostic-attempts-and-device-health.md).
+[ADR 0007](decisions/0007-rust-native-local-service.md); the diagnostic report and the attempt
+journal behind it are [ADR 0022](decisions/0022-minimal-diagnostics.md).
 
 ## Local runtime and IPC
 
@@ -89,24 +89,25 @@ continues after QuotaBar exits. A second installed client may acquire the same o
 the first process releases it; there is no multi-process coordination protocol beyond serialized
 ownership.
 
-The private `diagnose` operation is the single local diagnostic boundary for both products. Its v2
-report evaluates the fixed user-visible Quota Overview, This Device Usage, Account Usage, and Account
-surfaces, then explains them with source checks and root-cause findings. Checks distinguish
-`this_device`, `account`, and `system` work and whether each path is inactive, opportunistic, or
-required. QuotaBar exposes the report from Settings; Linux `quotacli doctor` renders the same service
-result as text or JSON. Neither client reads SQLite or source logs or reimplements policy.
+The private `diagnose` operation is the single local diagnostic boundary for both products. Its
+`schema_version: 3` report evaluates the fixed user-visible Quota Overview, This Device Usage,
+Account Usage, and Account surfaces, then lists the sources behind them — a provider on this device,
+a Usage agent, the account, the upload path, the pricing catalog, local state. Each row carries one
+sentence the service writes naming what happened and what to do. QuotaBar renders it on the Support
+page; Linux `quotacli doctor` renders the same service result as text or JSON. Neither client reads
+SQLite or source logs, and neither maps a code to copy of its own.
 
-Diagnostics never evaluate a refresh in flight. Migration v7 stores one completed report snapshot;
-after every refresh, the service replaces it only after quota, Usage, Account, pricing, Overview, and
-sync state have been applied. While another refresh runs, `diagnose` returns that completed snapshot
-with current `running` phase/start metadata. QuotaBar Recheck starts or joins the real single-flight
-refresh and waits for a newer completed revision, bounded by its UI wait. The service never includes
-paths, filenames, raw provider output, parser excerpts, model lists, prompts, completions, session or
-device identifiers, credentials, or tokens. The evaluator and exact v2 semantics are canonical in
-[ADR 0008](decisions/0008-data-integrity-and-diagnostics.md). Migration v8's structured attempt
-journal supplies full retained latest-attempt/latest-success facts and the bounded recent activity
-projection; its retention and redaction are canonical in
-[ADR 0015](decisions/0015-diagnostic-attempts-and-device-health.md).
+Diagnostics never evaluate a refresh in flight. The cache stores one completed report snapshot; after
+every refresh, the service replaces it only after quota, Usage, Account, pricing, Overview, and sync
+state have been applied. While another refresh runs, `diagnose` returns that completed snapshot
+unchanged, so its `generated_at` is what tells a caller whether a newer evaluation exists. QuotaBar
+Recheck starts or joins the real single-flight refresh and waits for a newer `generated_at`, bounded
+by its UI wait. The service never includes paths, filenames, raw provider output, parser excerpts,
+model lists, prompts, completions, session or device identifiers, credentials, or tokens. The bounded
+attempt journal supplies the latest-attempt and latest-success facts and the recent work a copied
+report lists; it is written best-effort and never blocks the collection it records. The report
+contract, the journal's retention, and its redaction are canonical in
+[ADR 0022](decisions/0022-minimal-diagnostics.md).
 
 Two independent facts decide whether an observation still describes current quota, and a reader
 needs both. A device that fails to collect republishes its own last reading with the status it
@@ -256,7 +257,7 @@ GitHub ── Better Auth web OAuth ──► QuotaRelay ──► browser accou
 browser PKCE authorization                │ account + device token families
 quota-ios PKCE (account session only)     │
                                           ▼
-Rust service ─ quota snapshots + hourly facts + latest Device Health ─► D1
+Rust service ─── quota snapshots + hourly facts ───────────────────► D1
         ▲                                           │
         └──────── account summary / pricing ───────┘
                              │
@@ -289,7 +290,7 @@ PKCE route with the exact redirect `io.gotry.quota:/oauth/callback`. Its token e
 installation identity and Device fields and returns only an account session. It is not a collection
 Device, is absent from `PlatformSchema`, and never receives snapshot or Usage write authority. Quota
 iOS consumes that session through `packages/apple-client` and fetches
-`GET /api/v5/account/summary` for Today and read-only Device Health. The app process
+`GET /api/v5/account/summary` for Today and the read-only device list. The app process
 alone holds OAuth and network authority.
 After a trusted summary is available it projects a non-secret `WidgetSnapshot` into the App Group
 `group.io.gotry.quota` for the embedded `QuotaWidgets` extension; the extension reads only that
@@ -309,22 +310,19 @@ deletion controls.
 carries a strong `ETag` over an account version stamp, the request's full query string, and the
 pricing and model catalog revisions, and is `Cache-Control: private, no-cache` so a caller may hold
 the body as long as it revalidates. The stamp is three aggregates over the devices, quota
-observation, and Device Health rows the response projects; a matching `If-None-Match` returns 304
-before any Usage query runs. Document and `__data.json` responses stay `private, no-store`.
+observation rows the response projects; a matching `If-None-Match` returns 304 before any Usage
+query runs. Document and `__data.json` responses stay `private, no-store`.
 
 The Rust service and the Quota iOS client both read conditionally. Each stores the response with
 the ETag it is current at in one transaction, keyed by Account, and treats a 304 as that stored
 response rather than as a failure: the account component keeps the value the previous read
 produced. Signing out drops the stored reads with the session.
 
-After an authenticated Device completes a refresh, the service uploads a sanitized health snapshot
-on change or a bounded heartbeat. The Device token determines the row; D1 stores only the latest
-monotonic revision and uses server receipt time for freshness. Every Account-summary Device carries `health`,
-required and nullable, so a Device that has never reported says so rather than being absent.
-QuotaBar, Quota Web, and Quota iOS display health, version, platform, and last
-report/refresh/sync. A report older than the freshness window means only not recently active. Upload failure is local diagnostic
-evidence and does not fail collection or synchronization. See
-[ADR 0015](decisions/0015-diagnostic-attempts-and-device-health.md).
+An Account-summary Device carries its lifecycle timestamps and nothing it asserted about itself.
+Clients derive how recently it spoke from the newer of `last_seen_at` and the `observed_at` of the
+newest reading that device sent: Active under thirty minutes, Idle up to a day, Not reporting beyond
+that. A quiet device is asleep, closed, or off, which is not a claim that it is broken. See
+[ADR 0022](decisions/0022-minimal-diagnostics.md).
 
 Pricing is versioned and effective-dated with ETag caching. Rust calculates local cost; Relay keeps
 the equivalent server-side TypeScript calculation for account summaries. Exact
@@ -436,5 +434,4 @@ use Wrangler dry-run and local D1 migration verification. Manual remote migratio
 not a development command.
 
 The shipped compatibility and route split are canonical in
-[ADR 0012](decisions/0012-managed-data-v3.md); latest-only Device Health storage is canonical in
-[ADR 0015](decisions/0015-diagnostic-attempts-and-device-health.md).
+[ADR 0012](decisions/0012-managed-data-v3.md).

@@ -41,11 +41,12 @@ collection Device and never receives upload authority.
   registered for that public client. Logout and `/oauth/v2/revoke` remain the revocation path and
   recognize `qiar_`. These native account sessions cannot call Web-only management or destructive
   routes and cannot write snapshots or Usage.
-- Account data reads use the current managed-data v3 routes, including the explicit
-  `GET /api/v3/account/summary?device_health=1` shape defined by
-  [ADR 0015](0015-diagnostic-attempts-and-device-health.md). OAuth, refresh, and revoke remain on
-  released v2. [ADR 0018](0018-single-managed-data-contract.md) has since retired the v2 data routes
-  and advanced the managed data contract to v4; the routes named here are the v3 ones that shipped.
+- Account data reads use the current managed-data v3 routes, including the explicit per-device
+  health shape defined by [ADR 0015](0015-diagnostic-attempts-and-device-health.md). OAuth, refresh,
+  and revoke remain on released v2. [ADR 0018](0018-single-managed-data-contract.md) has since
+  retired the v2 data routes and advanced the managed data contract to v4, and
+  [ADR 0022](0022-minimal-diagnostics.md) removed the health shape; the routes named here are the v3
+  ones that shipped.
 - `quotacli` loopback PKCE and device-code behavior stay the released collection-client contract.
   This change is additive. It is not a compatibility shim and does not dual-write Device rows.
 

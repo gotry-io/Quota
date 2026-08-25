@@ -10,12 +10,10 @@ QuotaBar and Quota Web speak managed-data v5, the only data contract this Worker
 that speaks an older shape is refused rather than translated; see
 [ADR 0018](../../docs/decisions/0018-single-managed-data-contract.md).
 
-Authenticated collection Devices publish only their own latest sanitized Device Health at
-`PUT /api/v5/device/health`. D1 uses the monotonic diagnostics refresh revision to reject delayed
-older reports and server receipt time for freshness; Device/Account deletion cascades the row.
-Every Device on `GET /api/v5/account/summary` carries a required nullable `health` field; a Device
-that has never reported says so rather than being absent. Relay stores no health history. See
-[ADR 0015](../../docs/decisions/0015-diagnostic-attempts-and-device-health.md).
+A Device on `GET /api/v5/account/summary` carries its lifecycle timestamps and nothing it asserted
+about itself. How recently it spoke is derived by the reader from the newer of `last_seen_at` and
+the `observed_at` of the newest reading that Device sent. Relay stores no device-reported health.
+See [ADR 0022](../../docs/decisions/0022-minimal-diagnostics.md).
 
 Apply local D1 migrations before starting Wrangler:
 

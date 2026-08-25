@@ -48,23 +48,24 @@ Packaged builds embed Sparkle 2. Support's **Check for Updates** action, and Spa
 schedule, read the GitHub Releases appcast. Local `swift run` binaries are not packaged and do not
 check for updates.
 
-Settings includes a **Diagnostics** action backed by the private `diagnose` IPC operation. It copies
-the same bounded, redacted v2 report consumed by Linux `quotacli doctor`. The service evaluates
-Quota/Usage surfaces and supplies source-scoped checks and root-cause findings; Swift strictly
-decodes and renders that policy. **Show in Overview** remains presentation-only and never requests
-local collection. Account provider data remains healthy without a matching local login, while an
-explicitly saved local provider setup is a required source. Recheck requests the real single-flight
-refresh and waits for a newer completed diagnostic revision; if it is still running after the UI
-wait, the last completed report stays visible with that phase. Raw paths, filenames, model lists,
-prompts, completions, session or device identifiers, credentials, tokens, raw responses, and parser
-excerpts are excluded from both text and JSON copies.
+Settings' **Support** page is backed by the private `diagnose` IPC operation and renders the same
+bounded, redacted report Linux `quotacli doctor` prints. The service evaluates the four Quota/Usage
+surfaces and the sources behind them and writes one sentence per row; Swift strictly decodes and
+renders it, and never maps a code to copy of its own. **Show in Overview** remains
+presentation-only and never requests local collection. Account provider data remains healthy without
+a matching local login, while an explicitly saved local provider setup is a required source. Recheck
+requests the real single-flight refresh and waits for a newer evaluation; if the refresh is still
+running after the UI wait, the last completed report stays visible. **Copy report** puts the whole
+report on the pasteboard, including the recent work the page does not list. **Reset local data**
+asks first, then deletes this Mac's cache — collected quota and Usage history — and refreshes; the
+session, the upload queue, and saved browser sessions live in a different file and are untouched.
+Raw paths, filenames, model lists, prompts, completions, session or device identifiers, credentials,
+tokens, raw responses, and parser excerpts never appear in the copied report.
 
-The report's folded Recent Activity comes from the service's seven-day, 50,000-row structured
-attempt journal; the copied support projection is capped independently. After an authenticated
-completed refresh, the service also uploads a sanitized latest Device Health snapshot on change or
-heartbeat. Account Devices opt into that strict managed-data v3 shape and show app version,
-platform, server-authoritative last report/refresh/sync, and honest Healthy/Needs attention/Not
-recently active states. QuotaBar cannot alter another Device or request credentials for it.
+The recent work in that report comes from the service's seven-day, 5,000-row structured attempt
+journal, capped at 100 entries. Account Devices show their platform, when each was last seen, and
+when its newest reading was taken, labelled Active, Idle, or Not reporting. No Device asserts
+anything about another, and QuotaBar cannot alter another Device or request credentials for it.
 
 Provider API keys entered in Settings go directly over child stdin. Swift does not put them in argv,
 UserDefaults, logs, or response models; subsequent state exposes only a masked tip.
@@ -99,7 +100,7 @@ Build the deterministic visual app with `pnpm build:menubar:visual`. It accepts:
 ```text
 --data-source fixture|live
 --fixture loading|content|cached-refresh-error|empty|unavailable|cache-rebuilding
---route overview|settings|agents|provider-codex|provider-openrouter|provider-cursor|devices|usage|support|diagnostics
+--route overview|settings|agents|provider-codex|provider-openrouter|provider-cursor|devices|usage|support
 --appearance system|light|dark
 --text-size standard|extra-large|accessibility
 ```
