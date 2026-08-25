@@ -354,6 +354,20 @@ func overviewTodayLineFollowsTheSourceTheUsagePageWouldActuallyShow() async thro
   #expect(model.todayUsageSummary(source: .local)?.text == "Today · 1.23M tokens")
 }
 
+@Test @MainActor
+func quittingAsksTheLocalServiceToShutDownBeforeTheAppGoes() async {
+  let record = ShutdownRecord()
+  let model = MenuBarViewModel(
+    client: StubLocalService(state: loggingInState(), shutdownRecord: record)
+  )
+  model.start()
+
+  await model.shutdown()
+
+  let shutdowns = await record.count
+  #expect(shutdowns == 1, "the app's termination path sends the service its shutdown")
+}
+
 private func todayOnly(tokens: Int) -> LocalServiceUsagePeriodValues {
   LocalServiceUsagePeriodValues(
     today: LocalServiceUsageDetail(
@@ -463,24 +477,37 @@ private func unavailableUsage(now: Date) -> LocalUsageReport {
   )
 }
 
+/// Counts the shutdowns a stub was asked for, which is all the app's termination path leaves
+/// behind once the service it spoke to is gone.
+private actor ShutdownRecord {
+  private(set) var count = 0
+
+  func record() {
+    count += 1
+  }
+}
+
 private struct StubLocalService: LocalServiceServing {
   let stateValue: LocalServiceState
   let events: AsyncStream<LocalServiceEvent>
   let loginDelayNanoseconds: UInt64
   let cancelDelayNanoseconds: UInt64
   let cancelFails: Bool
+  let shutdownRecord: ShutdownRecord?
 
   init(
     state: LocalServiceState,
     loginDelayNanoseconds: UInt64 = 0,
     cancelDelayNanoseconds: UInt64 = 0,
-    cancelFails: Bool = false
+    cancelFails: Bool = false,
+    shutdownRecord: ShutdownRecord? = nil
   ) {
     stateValue = state
     events = AsyncStream { $0.finish() }
     self.loginDelayNanoseconds = loginDelayNanoseconds
     self.cancelDelayNanoseconds = cancelDelayNanoseconds
     self.cancelFails = cancelFails
+    self.shutdownRecord = shutdownRecord
   }
 
   func state() async throws -> LocalServiceState { stateValue }
@@ -581,5 +608,7 @@ private struct StubLocalService: LocalServiceServing {
   ) async throws -> LocalServiceProviderBrowserSession {
     throw LocalServiceClientError.serviceMissing
   }
-  func shutdown() async {}
+  func shutdown() async {
+    await shutdownRecord?.record()
+  }
 }

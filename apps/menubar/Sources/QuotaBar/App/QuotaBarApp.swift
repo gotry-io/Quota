@@ -49,6 +49,7 @@ struct QuotaBarApp: App {
       .windowStyle(.hiddenTitleBar)
     }
   #else
+    @NSApplicationDelegateAdaptor(QuotaBarAppDelegate.self) private var appDelegate
     @State private var model: MenuBarViewModel
     @AppStorage(MenuBarDisplayPreference.storageKey) private var menuBarDisplay =
       MenuBarDisplayPreference.fallback
@@ -57,6 +58,7 @@ struct QuotaBarApp: App {
       let model = MenuBarViewModel()
       model.start()
       _model = State(initialValue: model)
+      appDelegate.model = model
       Task { @MainActor in
         QuotaBarUpdater.start()
       }

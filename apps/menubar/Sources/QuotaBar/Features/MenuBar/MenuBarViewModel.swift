@@ -307,6 +307,14 @@ final class MenuBarViewModel {
     }
   }
 
+  /// QuotaBar's last word to its local service. The panel stops following it first, then the
+  /// client asks the helper to exit and escalates to terminate and kill if it will not.
+  func shutdown() async {
+    eventTask?.cancel()
+    eventTask = nil
+    await client?.shutdown()
+  }
+
   func refreshIfNeeded() async {
     if revision == 0 { await reloadState() }
   }
