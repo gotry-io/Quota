@@ -159,6 +159,28 @@
   }
 
   @Test @MainActor
+  func overviewFooterAndMenuBarItemReadTheSameFixtures() throws {
+    let referenceDate = Date(timeIntervalSince1970: 1_785_752_430)
+
+    let content = try configuration(fixture: .content, referenceDate: referenceDate).makeModel()
+    let today = try #require(content.todayUsageSummary(source: .account))
+    #expect(today.text.hasPrefix("Today · "))
+    #expect(today.text.hasSuffix("1.7M tokens"))
+
+    // The tightest current window in the fixture is Grok's monthly quota at 73% used.
+    #expect(
+      content.menuBarLabel(preference: .iconAndPercent, now: referenceDate).text == "27%"
+    )
+
+    // Nothing has been read yet, and a signed-out Mac has no Usage to report.
+    for fixture in [VisualTestFixture.loading, .empty] {
+      let model = try configuration(fixture: fixture, referenceDate: referenceDate).makeModel()
+      #expect(model.todayUsageSummary(source: .account) == nil)
+      #expect(model.menuBarLabel(preference: .iconAndPercent, now: referenceDate).text == nil)
+    }
+  }
+
+  @Test @MainActor
   func repairVisualRouteAndFixturesCompile() throws {
     let referenceDate = Date(timeIntervalSince1970: 1_785_752_430)
     let route = try #require(VisualTestConfiguration(arguments: ["QuotaBar", "--route", "repair"]))

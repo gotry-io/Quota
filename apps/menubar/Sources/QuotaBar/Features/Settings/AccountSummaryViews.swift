@@ -247,7 +247,7 @@ struct AccountUsageView: View {
   }
 
   private var effectiveSource: UsageSource {
-    !model.usageUploadEnabled || model.accountSummary == nil ? .local : source
+    model.effectiveUsageSource(source)
   }
 
   private var usagePeriodTabs: some View {

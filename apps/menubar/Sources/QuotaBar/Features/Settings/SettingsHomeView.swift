@@ -10,6 +10,8 @@ struct SettingsHomeView: View {
   let onRequestLogout: () -> Void
 
   @State private var launchAtLoginEnabled = LaunchAtLoginController.isEnabled
+  @AppStorage(MenuBarDisplayPreference.storageKey) private var menuBarDisplay =
+    MenuBarDisplayPreference.fallback
 
   var body: some View {
     ScrollView {
@@ -45,6 +47,7 @@ struct SettingsHomeView: View {
 
         SettingsSection(title: "General") {
           VStack(alignment: .leading, spacing: 0) {
+            menuBarDisplayRow
             settingsToggleRow(
               title: "Launch at Login",
               systemImage: "power",
@@ -155,6 +158,42 @@ struct SettingsHomeView: View {
         }
       }
     }
+  }
+
+  /// The menu-bar item is the product's first sentence, so what it says is a setting rather
+  /// than a fixed choice. The compact menu matches the Usage source control's treatment.
+  private var menuBarDisplayRow: some View {
+    SettingsListRow(title: "Menu Bar Display", systemImage: "menubar.rectangle") {
+      Menu {
+        Picker("Menu Bar Display", selection: $menuBarDisplay) {
+          ForEach(MenuBarDisplayPreference.allCases) { option in
+            Text(option.label).tag(option)
+          }
+        }
+        .pickerStyle(.inline)
+        .labelsHidden()
+      } label: {
+        HStack(spacing: QuotaDesign.Spacing.xxs) {
+          Text(menuBarDisplay.label)
+          Image(systemName: "chevron.down")
+            .font(.system(size: 8, weight: .semibold))
+        }
+        .quotaFont(.meta)
+        .foregroundStyle(QuotaPalette.body)
+        .padding(.horizontal, QuotaDesign.Spacing.xs)
+        .frame(minHeight: QuotaDesign.Layout.minimumInteractiveDimension)
+        .background {
+          RoundedRectangle(cornerRadius: QuotaDesign.Layout.rowCornerRadius, style: .continuous)
+            .fill(QuotaPalette.fieldFill)
+        }
+      }
+      .menuStyle(.borderlessButton)
+      .menuIndicator(.hidden)
+      .fixedSize()
+      .accessibilityLabel("Menu Bar Display")
+      .accessibilityValue(menuBarDisplay.label)
+    }
+    .accessibilityHint("What the QuotaBar menu-bar item shows")
   }
 
   private var logoutRow: some View {

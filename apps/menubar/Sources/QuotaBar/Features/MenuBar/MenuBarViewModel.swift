@@ -371,6 +371,30 @@ final class MenuBarViewModel {
     usagePeriods?.detail(source: source, period: period)
   }
 
+  /// Account answers for Usage only while it can. Everywhere the selection is honored uses
+  /// this, so Overview and the Usage page never disagree about which numbers are on screen.
+  func effectiveUsageSource(_ selected: UsageSource) -> UsageSource {
+    !usageUploadEnabled || accountSummary == nil ? .local : selected
+  }
+
+  /// The Overview footer's one line of today's spend, or `nil` when there is nothing to say.
+  func todayUsageSummary(source: UsageSource) -> UsageTodaySummary? {
+    guard let detail = usageDetail(source: effectiveUsageSource(source), period: .today) else {
+      return nil
+    }
+    return UsageValueFormatter.todaySummary(
+      tokens: detail.usage.totals.totalTokens,
+      cost: detail.usage.cost
+    )
+  }
+
+  func menuBarLabel(
+    preference: MenuBarDisplayPreference,
+    now: Date = Date()
+  ) -> MenuBarLabelModel {
+    MenuBarLabelModel.make(overview: overview, preference: preference, now: now)
+  }
+
   func isPreparingUsage(source: UsageSource) -> Bool {
     source == .local ? usageRefreshing : accountRefreshing
   }

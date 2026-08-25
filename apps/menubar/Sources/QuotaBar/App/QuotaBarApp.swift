@@ -72,6 +72,8 @@ struct QuotaBarApp: App {
   #else
     @NSApplicationDelegateAdaptor(QuotaBarAppDelegate.self) private var appDelegate
     @State private var model: MenuBarViewModel
+    @AppStorage(MenuBarDisplayPreference.storageKey) private var menuBarDisplay =
+      MenuBarDisplayPreference.fallback
 
     init() {
       let model = MenuBarViewModel()
@@ -87,7 +89,7 @@ struct QuotaBarApp: App {
         MenuBarContentView(model: model)
           .onAppear { appDelegate.model = model }
       } label: {
-        QuotaMenuBarIcon()
+        QuotaMenuBarLabel(label: model.menuBarLabel(preference: menuBarDisplay))
       }
       .menuBarExtraStyle(.window)
     }
