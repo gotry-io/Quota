@@ -133,18 +133,16 @@ fn migration_v1(tx: &rusqlite::Transaction<'_>, revision_floor: u64) -> Result<(
             parent_refresh_id INTEGER REFERENCES diagnostic_attempts(id) ON DELETE SET NULL,
             kind TEXT NOT NULL CHECK (kind IN (
                 'refresh', 'quota_collection', 'usage_scan', 'usage_upload',
-                'account_sync', 'pricing_refresh', 'device_health_upload'
+                'account_sync', 'pricing_refresh'
             )),
             trigger TEXT NOT NULL CHECK (trigger IN (
                 'manual', 'scheduled', 'startup', 'recheck', 'settings_change', 'account_change'
             )),
-            source TEXT NOT NULL CHECK (source IN ('this_device', 'account', 'system')),
             subject TEXT CHECK (subject IS NULL OR (
                 length(subject) BETWEEN 7 AND 96
                 AND (subject LIKE 'provider:%' OR subject LIKE 'agent:%')
                 AND subject NOT GLOB '*[^a-z0-9_:]*'
             )),
-            mode TEXT NOT NULL CHECK (mode IN ('inactive', 'opportunistic', 'required')),
             started_at TEXT NOT NULL,
             completed_at TEXT,
             duration_ms INTEGER CHECK (duration_ms IS NULL OR duration_ms BETWEEN 0 AND 86400000),
@@ -158,20 +156,14 @@ fn migration_v1(tx: &rusqlite::Transaction<'_>, revision_floor: u64) -> Result<(
                 'partial_source', 'malformed_data',
                 'truncated_active_source', 'invalid_usage_batch', 'unrepresentable_hour',
                 'device_deleted', 'upload_disabled', 'signed_out'
-            )),
-            recovery TEXT NOT NULL CHECK (recovery IN (
-                'none', 'automatic', 'login', 'configure_provider', 'retry',
-                'update_source', 'check_access', 'upgrade', 'reinstall', 'feedback'
-            )),
-            metrics_json TEXT NOT NULL DEFAULT '{}',
-            start_revision INTEGER NOT NULL CHECK (start_revision >= 0),
-            end_revision INTEGER CHECK (end_revision IS NULL OR end_revision >= 0)
+            ))
          );
          CREATE INDEX diagnostic_attempts_recent_idx
             ON diagnostic_attempts(started_at DESC, id DESC);
          CREATE INDEX diagnostic_attempts_parent_idx
             ON diagnostic_attempts(parent_refresh_id, id);
-         INSERT INTO metadata(key, value) VALUES ('attempt_history_truncated', '0');",
+         CREATE INDEX diagnostic_attempts_kind_idx
+            ON diagnostic_attempts(kind, subject, id DESC);",
     )?;
     tx.execute(
         "INSERT INTO metadata(key, value) VALUES ('revision', ?1)",

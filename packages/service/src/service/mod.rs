@@ -100,9 +100,6 @@ pub trait LocalBackend: Send + Sync {
     fn complete_diagnostics(&self) -> Result<DiagnosticReport, BackendError> {
         self.diagnose()
     }
-    fn publish_device_health(&self, _: &DiagnosticReport) -> Result<(), BackendError> {
-        Ok(())
-    }
     fn login(
         &self,
         installation_id: &str,
@@ -171,7 +168,6 @@ fn coalesce_refresh_trigger(
 
 struct ActiveRefresh {
     cancel: Arc<AtomicBool>,
-    started_at: String,
 }
 
 struct LoginState {
@@ -275,6 +271,7 @@ impl LocalService {
             Operation::Diagnose => self.diagnose(&request).map(as_json),
             Operation::RecheckDiagnostics => self.recheck_diagnostics(&request).map(as_json),
             Operation::Refresh => self.refresh(&request).map(as_json),
+            Operation::ResetCache => self.reset_cache(&request).map(as_json),
             Operation::Login => self.login(&request).map(as_json),
             Operation::CancelLogin => self.cancel_login(&request).map(as_json),
             Operation::Logout => self.logout(&request).map(as_json),
@@ -341,15 +338,18 @@ impl LocalService {
 
     fn diagnose(&self, request: &IpcRequest) -> Result<DiagnosticReport, IpcError> {
         request.decode_payload::<EmptyPayload>()?;
-        let mut report = self.inner.backend.diagnose().map_err(|error| error.error)?;
-        if let Ok(refresh) = self.inner.refresh.lock()
-            && let Some(active) = &refresh.active
-        {
-            report.refresh.phase = DiagnosticRefreshPhase::Running;
-            report.refresh.started_at = Some(active.started_at.clone());
-            report.refresh.next_due_at = None;
-        }
-        Ok(report)
+        self.inner.backend.diagnose().map_err(|error| error.error)
+    }
+
+    /// Throws this device's cache away and starts filling it in again.
+    ///
+    /// Identity — the session, the upload queue, saved browser sessions — is a different file and
+    /// is untouched.
+    fn reset_cache(&self, request: &IpcRequest) -> Result<EmptyResult, IpcError> {
+        request.decode_payload::<EmptyPayload>()?;
+        self.inner.state.reset_cache();
+        let _ = self.request_refresh_with_trigger(DiagnosticAttemptTrigger::Manual);
+        Ok(EmptyResult {})
     }
 
     fn recheck_diagnostics(&self, request: &IpcRequest) -> Result<RefreshResult, IpcError> {
@@ -692,10 +692,9 @@ impl LocalService {
             };
         }
         let cancel = Arc::new(AtomicBool::new(false));
-        let attempt = self.begin_refresh_attempt(trigger).ok();
+        let attempt = self.begin_refresh_attempt(trigger);
         refresh.active = Some(ActiveRefresh {
             cancel: cancel.clone(),
-            started_at: now_rfc3339(),
         });
         drop(refresh);
 
@@ -737,31 +736,24 @@ impl LocalService {
                         ] {
                             service.apply_component_result(component, error);
                         }
-                        if let Some(attempt) = attempt {
-                            let _ = service
-                                .inner
-                                .state
-                                .finish_diagnostic_attempt_with_interrupted_children(
-                                    attempt,
-                                    &DiagnosticAttemptCompletion {
-                                        outcome: DiagnosticAttemptOutcome::Failed,
-                                        code: Some(DiagnosticAttemptCode::Unavailable),
-                                        recovery: DiagnosticRecovery::Retry,
-                                        metrics: [("failed_components".to_owned(), 4)].into(),
-                                    },
-                                );
-                        }
+                        service
+                            .inner
+                            .state
+                            .finish_diagnostic_attempt_with_interrupted_children(
+                                attempt,
+                                &DiagnosticAttemptCompletion::new(
+                                    DiagnosticAttemptOutcome::Failed,
+                                    Some(DiagnosticAttemptCode::Unavailable),
+                                ),
+                            );
                     }
-                    // Building a report and publishing device health is outbound work, which a
-                    // service that is tearing down skips. Folding the cache's log back in is
-                    // local, so it runs either way, and after the report so it covers it.
-                    let report = (!service.is_shutdown())
-                        .then(|| service.inner.backend.complete_diagnostics().ok())
-                        .flatten();
+                    // Building a report is work a service that is tearing down skips. Folding
+                    // the cache's log back in is local, so it runs either way, and after the
+                    // report so it covers it.
+                    if !service.is_shutdown() {
+                        let _ = service.inner.backend.complete_diagnostics();
+                    }
                     service.inner.state.checkpoint_cache();
-                    if let Some(report) = report {
-                        let _ = service.inner.backend.publish_device_health(&report);
-                    }
                     let rerun = service
                         .inner
                         .refresh
@@ -792,17 +784,13 @@ impl LocalService {
                 })
                 .is_ok();
         if !spawned {
-            if let Some(attempt) = attempt {
-                let _ = self.inner.state.finish_diagnostic_attempt(
-                    attempt,
-                    &DiagnosticAttemptCompletion {
-                        outcome: DiagnosticAttemptOutcome::Failed,
-                        code: Some(DiagnosticAttemptCode::Unavailable),
-                        recovery: DiagnosticRecovery::Retry,
-                        metrics: Default::default(),
-                    },
-                );
-            }
+            self.inner.state.finish_diagnostic_attempt(
+                attempt,
+                &DiagnosticAttemptCompletion::new(
+                    DiagnosticAttemptOutcome::Failed,
+                    Some(DiagnosticAttemptCode::Unavailable),
+                ),
+            );
             if let Ok(mut refresh) = self.inner.refresh.lock() {
                 refresh.active = None;
             }
@@ -825,13 +813,11 @@ impl LocalService {
     fn begin_refresh_attempt(
         &self,
         trigger: DiagnosticAttemptTrigger,
-    ) -> Result<DiagnosticAttemptHandle, StateError> {
+    ) -> Option<DiagnosticAttemptHandle> {
         self.inner.state.begin_diagnostic_attempt(
             DiagnosticAttemptKind::Refresh,
             trigger,
-            DiagnosticSource::System,
             None,
-            DiagnosticMode::Required,
             None,
         )
     }
@@ -874,12 +860,9 @@ impl LocalService {
         if let Some(overview) = outcome.overview {
             let _ = self.inner.state.set_overview(&overview);
         }
-        if let Some(attempt) = attempt {
-            let _ = self
-                .inner
-                .state
-                .finish_diagnostic_attempt_with_interrupted_children(attempt, &completion);
-        }
+        self.inner
+            .state
+            .finish_diagnostic_attempt_with_interrupted_children(attempt, &completion);
     }
 
     fn apply_component_result(
@@ -1289,31 +1272,20 @@ fn refresh_attempt_completion(
         || errors
             .iter()
             .any(|error| error.error.code == ErrorCode::Cancelled);
-    let (outcome, code, recovery) = if cancelled {
+    let (outcome, code) = if cancelled {
         (
             DiagnosticAttemptOutcome::Cancelled,
             Some(DiagnosticAttemptCode::Cancelled),
-            DiagnosticRecovery::None,
         )
     } else if let Some(error) = errors.first() {
         (
             DiagnosticAttemptOutcome::Failed,
             Some(diagnostic_attempt_code(error.error.code)),
-            diagnostic_recovery(error.error.recovery_action),
         )
     } else {
-        (
-            DiagnosticAttemptOutcome::Success,
-            None,
-            DiagnosticRecovery::None,
-        )
+        (DiagnosticAttemptOutcome::Success, None)
     };
-    DiagnosticAttemptCompletion {
-        outcome,
-        code,
-        recovery,
-        metrics: [("failed_components".to_owned(), errors.len() as i64)].into(),
-    }
+    DiagnosticAttemptCompletion::new(outcome, code)
 }
 
 fn diagnostic_attempt_code(code: ErrorCode) -> DiagnosticAttemptCode {
@@ -1334,17 +1306,6 @@ fn diagnostic_attempt_code(code: ErrorCode) -> DiagnosticAttemptCode {
         | ErrorCode::Busy
         | ErrorCode::Unavailable
         | ErrorCode::Internal => DiagnosticAttemptCode::Unavailable,
-    }
-}
-
-fn diagnostic_recovery(recovery: RecoveryAction) -> DiagnosticRecovery {
-    match recovery {
-        RecoveryAction::None => DiagnosticRecovery::None,
-        RecoveryAction::Retry => DiagnosticRecovery::Retry,
-        RecoveryAction::Login => DiagnosticRecovery::Login,
-        RecoveryAction::ConfigureProvider => DiagnosticRecovery::ConfigureProvider,
-        RecoveryAction::Upgrade => DiagnosticRecovery::Upgrade,
-        RecoveryAction::Reinstall => DiagnosticRecovery::Reinstall,
     }
 }
 
@@ -1608,9 +1569,7 @@ mod tests {
                 .begin_diagnostic_attempt(
                     DiagnosticAttemptKind::UsageScan,
                     DiagnosticAttemptTrigger::Recheck,
-                    DiagnosticSource::ThisDevice,
                     Some("agent:codex"),
-                    DiagnosticMode::Required,
                     Some(parent),
                 )
                 .expect("child attempt");
@@ -1796,18 +1755,21 @@ mod tests {
                 .is_none()
         );
         let facts = state
-            .diagnostic_attempt_facts(
-                DiagnosticAttemptKind::Refresh,
-                DiagnosticSource::System,
-                None,
-            )
+            .diagnostic_attempt_facts(DiagnosticAttemptKind::Refresh, None)
             .expect("refresh attempt facts");
-        let attempt = facts.latest_completed.expect("completed attempt");
-        assert_eq!(attempt.trigger, DiagnosticAttemptTrigger::Recheck);
-        assert_eq!(attempt.outcome, DiagnosticAttemptOutcome::Failed);
-        assert_eq!(attempt.code, Some(DiagnosticAttemptCode::Unavailable));
-        assert_eq!(attempt.recovery, DiagnosticRecovery::Retry);
-        assert!(facts.latest_success.is_none());
+        assert_eq!(facts.last_outcome, Some(DiagnosticAttemptOutcome::Failed));
+        assert_eq!(
+            facts.unresolved_code,
+            Some(DiagnosticAttemptCode::Unavailable)
+        );
+        assert!(facts.last_success_at.is_none());
+        assert!(
+            state
+                .diagnostic_recent_attempts()
+                .expect("recent")
+                .iter()
+                .any(|attempt| attempt.kind == DiagnosticAttemptKind::Refresh)
+        );
 
         service.shutdown();
         drop(service);
@@ -1854,17 +1816,16 @@ mod tests {
         );
 
         let child = state
-            .diagnostic_attempt_facts(
-                DiagnosticAttemptKind::UsageScan,
-                DiagnosticSource::ThisDevice,
-                Some("agent:codex"),
-            )
-            .expect("child facts")
-            .latest_completed
-            .expect("completed child");
-        assert_eq!(child.outcome, DiagnosticAttemptOutcome::Interrupted);
-        assert_eq!(child.code, Some(DiagnosticAttemptCode::ProcessInterrupted));
-        assert_eq!(child.recovery, DiagnosticRecovery::Retry);
+            .diagnostic_attempt_facts(DiagnosticAttemptKind::UsageScan, Some("agent:codex"))
+            .expect("child facts");
+        assert_eq!(
+            child.last_outcome,
+            Some(DiagnosticAttemptOutcome::Interrupted)
+        );
+        assert_eq!(
+            child.unresolved_code,
+            Some(DiagnosticAttemptCode::ProcessInterrupted)
+        );
 
         service.shutdown();
         drop(service);
@@ -1911,27 +1872,23 @@ mod tests {
         );
 
         let refresh = state
-            .diagnostic_attempt_facts(
-                DiagnosticAttemptKind::Refresh,
-                DiagnosticSource::System,
-                None,
-            )
-            .expect("refresh facts")
-            .latest_completed
-            .expect("completed refresh");
-        assert_eq!(refresh.outcome, DiagnosticAttemptOutcome::Success);
+            .diagnostic_attempt_facts(DiagnosticAttemptKind::Refresh, None)
+            .expect("refresh facts");
+        assert_eq!(
+            refresh.last_outcome,
+            Some(DiagnosticAttemptOutcome::Success)
+        );
         let child = state
-            .diagnostic_attempt_facts(
-                DiagnosticAttemptKind::UsageScan,
-                DiagnosticSource::ThisDevice,
-                Some("agent:codex"),
-            )
-            .expect("child facts")
-            .latest_completed
-            .expect("completed child");
-        assert_eq!(child.outcome, DiagnosticAttemptOutcome::Interrupted);
-        assert_eq!(child.code, Some(DiagnosticAttemptCode::ProcessInterrupted));
-        assert_eq!(child.recovery, DiagnosticRecovery::Retry);
+            .diagnostic_attempt_facts(DiagnosticAttemptKind::UsageScan, Some("agent:codex"))
+            .expect("child facts");
+        assert_eq!(
+            child.last_outcome,
+            Some(DiagnosticAttemptOutcome::Interrupted)
+        );
+        assert_eq!(
+            child.unresolved_code,
+            Some(DiagnosticAttemptCode::ProcessInterrupted)
+        );
 
         service.shutdown();
         drop(service);
@@ -1939,6 +1896,8 @@ mod tests {
         fs::remove_dir_all(root).expect("cleanup");
     }
 
+    /// A recheck asks for a newer report; a running refresh has none to give yet, so it hands
+    /// back the last completed one unchanged rather than an intermediate state.
     #[test]
     fn diagnose_during_refresh_uses_the_last_completed_snapshot() {
         let root = std::env::temp_dir().join(format!("quota-service-{}", Uuid::new_v4()));
@@ -1966,7 +1925,6 @@ mod tests {
         let service = LocalService::new(state.clone(), Arc::new(RecordingSink::default()), backend);
         service.inner.refresh.lock().expect("refresh").active = Some(ActiveRefresh {
             cancel: Arc::new(AtomicBool::new(false)),
-            started_at: "2026-08-15T08:00:00Z".into(),
         });
         let request: IpcRequest = serde_json::from_value(serde_json::json!({
             "type": "request",
@@ -1980,9 +1938,16 @@ mod tests {
         let report: DiagnosticReport =
             serde_json::from_value(response.result.expect("result")).expect("report");
 
-        assert_eq!(report.refresh.phase, DiagnosticRefreshPhase::Running);
-        assert_eq!(report.refresh.revision, baseline.refresh.revision);
+        assert_eq!(report.generated_at, baseline.generated_at);
         assert_eq!(report.summary.operation, baseline.summary.operation);
+        assert_eq!(
+            report
+                .surfaces
+                .iter()
+                .find(|surface| surface.id == "usage_this_device")
+                .map(|surface| surface.status),
+            Some(DiagnosticStatus::Ok)
+        );
         service.shutdown();
         drop(service);
         drop(state);
@@ -2164,7 +2129,6 @@ mod tests {
         let cancel = Arc::new(AtomicBool::new(false));
         service.inner.refresh.lock().expect("refresh").active = Some(ActiveRefresh {
             cancel: cancel.clone(),
-            started_at: now_rfc3339(),
         });
         let request: IpcRequest = serde_json::from_value(serde_json::json!({
             "type": "request",
@@ -2203,7 +2167,6 @@ mod tests {
     /// that is provably still in flight.
     struct GatedBackend {
         complete_calls: Arc<std::sync::atomic::AtomicUsize>,
-        publish_calls: Arc<std::sync::atomic::AtomicUsize>,
         started: Arc<(Mutex<bool>, std::sync::Condvar)>,
         gate: Arc<(Mutex<bool>, std::sync::Condvar)>,
     }
@@ -2212,7 +2175,6 @@ mod tests {
         fn new() -> Self {
             Self {
                 complete_calls: Arc::new(AtomicUsize::new(0)),
-                publish_calls: Arc::new(AtomicUsize::new(0)),
                 started: Arc::new((Mutex::new(false), std::sync::Condvar::new())),
                 gate: Arc::new((Mutex::new(false), std::sync::Condvar::new())),
             }
@@ -2270,11 +2232,6 @@ mod tests {
         fn complete_diagnostics(&self) -> Result<DiagnosticReport, BackendError> {
             self.complete_calls.fetch_add(1, Ordering::SeqCst);
             Err(BackendError::unavailable())
-        }
-
-        fn publish_device_health(&self, _: &DiagnosticReport) -> Result<(), BackendError> {
-            self.publish_calls.fetch_add(1, Ordering::SeqCst);
-            Ok(())
         }
 
         fn login(&self, _: &str, _: Arc<AtomicBool>) -> Result<LoginOutcome, BackendError> {
@@ -2345,7 +2302,6 @@ mod tests {
         wait_refresh_idle(&service);
 
         assert_eq!(backend.complete_calls.load(Ordering::SeqCst), 0);
-        assert_eq!(backend.publish_calls.load(Ordering::SeqCst), 0);
 
         drop(service);
         drop(backend);
