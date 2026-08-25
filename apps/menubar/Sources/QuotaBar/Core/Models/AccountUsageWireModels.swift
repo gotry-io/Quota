@@ -267,7 +267,7 @@ struct UsageSubmission: Decodable, Equatable, Sendable {
       throw DecodingError.dataCorruptedError(
         forKey: .rows,
         in: container,
-        debugDescription: "Invalid Usage v3 submission."
+        debugDescription: "Invalid Usage submission."
       )
     }
   }
@@ -601,22 +601,20 @@ struct AccountUsageHourlyResponse: Decodable, Equatable, Sendable {
   let startAt: String
   let endAt: String
   let facts: [AccountUsageHourlyFact]
-  let coverage: [UsageCoverageSummaryItem]
+  let coverage: UsageCoverageVerdict
   let cost: UsageCostOutcome
-  let coverageTruncated: Bool?
 
   init(from decoder: Decoder) throws {
     try decoder.rejectUnknownWireKeys([
-      "protocolVersion", "startAt", "endAt", "facts", "coverage", "cost", "coverageTruncated",
+      "protocolVersion", "startAt", "endAt", "facts", "coverage", "cost",
     ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     protocolVersion = try container.decode(Int.self, forKey: .protocolVersion)
     startAt = try container.decode(String.self, forKey: .startAt)
     endAt = try container.decode(String.self, forKey: .endAt)
     facts = try container.decode([AccountUsageHourlyFact].self, forKey: .facts)
-    coverage = try container.decode([UsageCoverageSummaryItem].self, forKey: .coverage)
+    coverage = try container.decode(UsageCoverageVerdict.self, forKey: .coverage)
     cost = try container.decode(UsageCostOutcome.self, forKey: .cost)
-    coverageTruncated = try decodeTrueMarker(.coverageTruncated, from: container)
     let decodedStart = UsageCoverage.utcHour(startAt)
     let decodedEnd = UsageCoverage.utcHour(endAt)
     let costRows = WireValidation.safeSum([cost.calculatedRows, cost.reportedRows, cost.unpricedRows])
@@ -628,8 +626,6 @@ struct AccountUsageHourlyResponse: Decodable, Equatable, Sendable {
         guard let bucket = UsageCoverage.utcHour(item.fact.bucketStartUTC) else { return false }
         return bucket >= start && bucket < end
       }),
-      coverage.count <= 2_048,
-      coverage.allSatisfy(\.isValid),
       cost.isValid,
       costRows == facts.count
     else {
@@ -648,7 +644,6 @@ struct AccountUsageHourlyResponse: Decodable, Equatable, Sendable {
     case facts
     case coverage
     case cost
-    case coverageTruncated
   }
 }
 

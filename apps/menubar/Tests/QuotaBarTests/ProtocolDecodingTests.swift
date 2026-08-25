@@ -35,7 +35,7 @@ func decodesAccountSummaryWithUsageCost() throws {
   let data = Data(
     #"""
     {
-      "protocol_version": 4,
+      "protocol_version": 5,
       "account": {
         "account_id": "account_01",
         "display_label": "octocat",
@@ -82,7 +82,7 @@ func decodesAccountSummaryWithUsageCost() throws {
           "assumptions": ["agent_default_channel"],
           "unpriced": []
         },
-        "coverage": [],
+        "coverage": "complete",
         "breakdowns": []
       }
     }
@@ -102,7 +102,6 @@ func decodesAccountSummaryWithUsageCost() throws {
   expandedCost["unpriced_rows"] = 1
   expandedCost["unpriced_truncated"] = true
   expandedUsage["cost"] = expandedCost
-  expandedUsage["coverage_truncated"] = true
   expandedUsage["breakdowns_truncated"] = true
   let structuredTotals: [String: Any] = [
     "total_tokens": 1200,
@@ -144,7 +143,7 @@ func decodesAccountSummaryWithUsageCost() throws {
 
   var falseMarkerObject = expandedObject
   var falseMarkerUsage = try #require(falseMarkerObject["usage"] as? [String: Any])
-  falseMarkerUsage["coverage_truncated"] = false
+  falseMarkerUsage["breakdowns_truncated"] = false
   falseMarkerObject["usage"] = falseMarkerUsage
   let falseMarkerData = try JSONSerialization.data(withJSONObject: falseMarkerObject)
   #expect(throws: DecodingError.self) {
@@ -608,7 +607,7 @@ func decodesAccountHourlyUsageResponse() throws {
   let data = Data(
     #"""
     {
-      "protocol_version": 4,
+      "protocol_version": 5,
       "start_at": "2026-08-02T12:00:00Z",
       "end_at": "2026-08-02T13:00:00Z",
       "facts": [{
@@ -637,14 +636,7 @@ func decodesAccountHourlyUsageResponse() throws {
         "web_fetch_requests": 0,
         "source_cost_covered_requests": 0
       }],
-      "coverage": [{
-        "device_id": "device_01",
-        "agent": "grok",
-        "start_at": "2026-08-02T12:00:00Z",
-        "end_at": "2026-08-02T13:00:00Z",
-        "status": "complete"
-      }],
-      "coverage_truncated": true,
+      "coverage": "partial",
       "cost": {
         "mode": "calculate",
         "basis": "calculated",
@@ -671,7 +663,7 @@ func decodesAccountHourlyUsageResponse() throws {
   #expect(response.facts.first?.fact.billingChannel == .xaiDirect)
   #expect(response.facts.first?.aggregationTimezone == "Asia/Singapore")
   #expect(response.cost.calculatedRows == response.facts.count)
-  #expect(response.coverageTruncated == true)
+  #expect(response.coverage == .partial)
 }
 
 @Test
@@ -902,7 +894,7 @@ func decodesUsageSubmissionAndConservesTokenSubsets() throws {
   let data = Data(
     #"""
     {
-      "protocol_version": 4,
+      "protocol_version": 5,
       "submission_id": "submission_01",
       "device_id": "device_01",
       "generation": 3,

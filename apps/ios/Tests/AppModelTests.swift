@@ -407,7 +407,7 @@ private enum Fixtures {
   static func accountSummaryJSON(accountID: String = "account_01") throws -> Data {
     try JSONSerialization.data(
       withJSONObject: [
-        "protocol_version": 4,
+        "protocol_version": 5,
         "account": [
           "account_id": accountID,
           "display_label": "octocat",
@@ -443,7 +443,7 @@ private enum Fixtures {
             "assumptions": ["agent_default_channel"],
             "unpriced": [],
           ],
-          "coverage": [],
+          "coverage": "complete",
           "breakdowns": [],
         ],
       ]

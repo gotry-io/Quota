@@ -375,7 +375,7 @@ struct WidgetSnapshotProjectionTests {
   ) throws -> Data {
     try JSONSerialization.data(
       withJSONObject: [
-        "protocol_version": 4,
+        "protocol_version": 5,
         "account": [
           "account_id": accountID,
           "display_label": "octocat",
@@ -411,7 +411,7 @@ struct WidgetSnapshotProjectionTests {
             "assumptions": ["agent_default_channel"],
             "unpriced": [],
           ],
-          "coverage": [],
+          "coverage": "complete",
           "breakdowns": [],
         ],
       ]

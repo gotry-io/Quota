@@ -78,7 +78,7 @@
     #expect(model.accountDisplayLabel == "octocat")
     #expect(model.accountSummary?.devices.map(\.displayName) == ["Studio Mac", "Travel Mac"])
     #expect(model.accountSummary?.usage.cost.status == .partial)
-    #expect(model.accountSummary?.usage.coverage.count == 2)
+    #expect(model.accountSummary?.usage.coverage == .partial)
     #expect(
       model.accountSummary?.usage.breakdowns.filter { $0.dimension == .model }.map(\.key)
         == ["gpt-5", "claude-sonnet-4"]

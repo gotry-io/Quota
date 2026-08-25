@@ -217,7 +217,7 @@ enum VisualFixture: String, CaseIterable, Sendable {
           assumptions: [.agentDefaultChannel],
           unpriced: []
         ),
-        coverage: [],
+        coverage: .complete,
         breakdowns: []
       )
     }
@@ -252,7 +252,7 @@ enum VisualFixture: String, CaseIterable, Sendable {
           assumptions: [],
           unpriced: []
         ),
-        coverage: [],
+        coverage: .complete,
         breakdowns: []
       )
     }
