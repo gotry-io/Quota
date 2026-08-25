@@ -534,6 +534,28 @@ fn migration_v10(tx: &Transaction<'_>) -> Result<(), StateError> {
             )?;
         }
     }
+    // A submission this build refuses cannot be uploaded and cannot be skipped either: the
+    // drain stops at the first entry it cannot send, and Relay answers a gap in the sequence
+    // with `sequence_conflict`, which is terminal. v5 adds one rule a staged v4 payload can
+    // fail — coverage reaching back before any agent existed — so a device holding one drops
+    // its whole staged set and re-stages against the sequence Relay reports it is expecting.
+    let stranded: Vec<(String, i64, String)> = tx
+        .prepare(
+            "SELECT account_id, generation, device_id FROM usage_outbox
+             WHERE json_extract(payload_json, '$.coverage.start_at') < ?1",
+        )?
+        .query_map([crate::usage::EARLIEST_USAGE_INSTANT], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    for (account_id, generation, device_id) in stranded {
+        tx.execute(
+            "DELETE FROM usage_outbox
+             WHERE account_id = ?1 AND device_id = ?2 AND generation = ?3",
+            params![account_id, device_id, generation],
+        )?;
+    }
+
     // Every cached period carries the retired `fallback_models` key, local ones included.
     tx.execute("DELETE FROM usage_period_cache", [])?;
     Ok(())
@@ -1122,6 +1144,66 @@ mod tests {
         let mut fresh = Connection::open_in_memory().expect("fresh");
         apply(&mut fresh).expect("fresh apply");
         columns(&fresh, table)
+    }
+
+    /// The drain stops at the first entry it cannot send and a gap in the sequence is terminal,
+    /// so a device holding a submission this build refuses gives up its whole staged set rather
+    /// than stalling behind one payload forever.
+    #[test]
+    fn a_device_holding_an_unsendable_submission_gives_up_its_staged_set() {
+        let mut conn = Connection::open_in_memory().expect("memory");
+        apply(&mut conn).expect("fresh");
+        conn.execute("DELETE FROM schema_migrations WHERE version = 10", [])
+            .expect("rewind");
+
+        let mut stranded = usage_submission(4, "stranded", "codex");
+        stranded["coverage"]["start_at"] = serde_json::json!("1970-01-01T00:00:00Z");
+        stranded["coverage"]["end_at"] = serde_json::json!("1970-02-01T00:00:00Z");
+        let mut behind = usage_submission(4, "behind", "codex");
+        behind["sequence"] = serde_json::json!(1);
+        let mut other_device = usage_submission(4, "other", "codex");
+        other_device["device_id"] = serde_json::json!("device_other");
+        conn.execute(
+            "INSERT INTO usage_outbox(
+                submission_id, account_id, device_id, generation, sequence, payload_json
+             ) VALUES ('stranded', 'account', 'device', 1, 0, ?1),
+                      ('behind', 'account', 'device', 1, 1, ?2),
+                      ('other', 'account', 'device_other', 1, 0, ?3)",
+            params![
+                stranded.to_string(),
+                behind.to_string(),
+                other_device.to_string()
+            ],
+        )
+        .expect("stage");
+
+        apply(&mut conn).expect("v10");
+
+        let remaining: Vec<String> = conn
+            .prepare("SELECT submission_id FROM usage_outbox ORDER BY submission_id")
+            .expect("query")
+            .query_map([], |row| row.get(0))
+            .expect("rows")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("values");
+        // The stranded entry and everything staged behind it on that device are gone; another
+        // device's queue is untouched and is promoted to the version this build uploads.
+        assert_eq!(remaining, vec!["other".to_string()]);
+        let promoted: Value = serde_json::from_str(
+            &conn
+                .query_row(
+                    "SELECT payload_json FROM usage_outbox WHERE submission_id = 'other'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .expect("payload"),
+        )
+        .expect("json");
+        assert_eq!(
+            promoted["protocol_version"].as_i64(),
+            Some(crate::protocol::MANAGED_DATA_PROTOCOL)
+        );
+        assert!(crate::relay::validate_usage_submission(&promoted).is_ok());
     }
 
     fn usage_submission(protocol_version: u64, submission_id: &str, agent: &str) -> Value {
