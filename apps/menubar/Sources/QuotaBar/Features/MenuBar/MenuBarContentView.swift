@@ -169,6 +169,7 @@ struct MenuBarContentView: View {
       QuotaOverviewView(
         model: model,
         enabledProviders: ProviderDisplayOrder.enabledProviders(),
+        usageSource: usageSource,
         now: now,
         onOpenSettings: openSettings
       )

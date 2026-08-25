@@ -54,6 +54,30 @@ struct UsageValueFormatterTests {
     )
   }
 
+  @Test
+  func todaySummaryLeadsWithCostAndNamesTheTokens() {
+    let summary = UsageValueFormatter.todaySummary(tokens: 1_234_567, cost: cost("12340000"))
+
+    #expect(summary?.text.hasPrefix("Today · ") == true)
+    #expect(summary?.text.contains("12.34") == true)
+    #expect(summary?.text.hasSuffix(" · 1.23M tokens") == true)
+    #expect(summary?.accessibilityLabel.contains("1,234,567 tokens") == true)
+  }
+
+  @Test
+  func todaySummaryKeepsTokensWhenTheDayIsUnpriced() {
+    let summary = UsageValueFormatter.todaySummary(tokens: 1_234_567, cost: cost(nil))
+
+    #expect(summary?.text == "Today · 1.23M tokens")
+    #expect(summary?.text.contains("unpriced") == false)
+  }
+
+  @Test
+  func todaySummaryDisappearsWhenThereAreNoTokens() {
+    #expect(UsageValueFormatter.todaySummary(tokens: 0, cost: cost("12340000")) == nil)
+    #expect(UsageValueFormatter.todaySummary(tokens: 0, cost: cost(nil)) == nil)
+  }
+
   private func cost(_ amountMicrousd: String?) -> UsageCostOutcome {
     UsageCostOutcome(
       mode: .calculate,

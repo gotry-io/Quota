@@ -335,6 +335,73 @@ func anotherDeviceReadingDoesNotHideThisMacsOwnCollectionFailure() async throws 
   #expect(neverConfigured?.status == nil)
 }
 
+@Test @MainActor
+func overviewTodayLineFollowsTheSourceTheUsagePageWouldActuallyShow() async throws {
+  let now = Date(timeIntervalSince1970: 1_786_300_000)
+  let state = LocalServiceState(
+    ipcVersion: 1,
+    revision: 2,
+    usageUploadEnabled: true,
+    usagePeriods: LocalServiceUsagePeriodCache(
+      local: todayOnly(tokens: 1_234_567),
+      account: todayOnly(tokens: 9_876_543)
+    ),
+    quota: emptyComponent(),
+    usage: emptyComponent(),
+    // No account summary, so Account cannot answer and This Mac's numbers are the honest ones.
+    account: emptyComponent(),
+    pricing: emptyComponent(),
+    providers: [],
+    providerBrowserSessions: [],
+    overview: [],
+    repair: .idle
+  )
+  let model = MenuBarViewModel(client: StubLocalService(state: state))
+
+  await model.refreshIfNeeded()
+
+  #expect(model.effectiveUsageSource(.account) == .local)
+  #expect(model.todayUsageSummary(source: .account)?.text == "Today · 1.23M tokens")
+  #expect(model.todayUsageSummary(source: .local)?.text == "Today · 1.23M tokens")
+}
+
+private func todayOnly(tokens: Int) -> LocalServiceUsagePeriodValues {
+  LocalServiceUsagePeriodValues(
+    today: LocalServiceUsageDetail(
+      range: UsageDateRange(from: "2026-08-10", to: "2026-08-10"),
+      usage: LocalUsagePeriodSummary(
+        totals: UsageSummaryTotals(
+          totalTokens: tokens,
+          inputTokens: tokens,
+          outputTokens: 0,
+          cacheReadInputTokens: 0,
+          cacheWriteInputTokens: 0,
+          reasoningTokens: 0,
+          messages: 1
+        ),
+        cost: UsageCostOutcome(
+          mode: .calculate,
+          basis: .none,
+          status: .unavailable,
+          amountMicrousd: nil,
+          catalogRevision: nil,
+          calculatedRows: 0,
+          reportedRows: 0,
+          unpricedRows: 1,
+          assumptions: [],
+          unpriced: []
+        ),
+        agents: []
+      ),
+      incomplete: false,
+      detailsTruncated: false
+    ),
+    last7Days: nil,
+    last30Days: nil,
+    all: nil
+  )
+}
+
 private func loggingInState() -> LocalServiceState {
   LocalServiceState(
     ipcVersion: 1,
