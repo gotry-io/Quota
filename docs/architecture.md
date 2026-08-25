@@ -149,8 +149,9 @@ and leaves an hour whose facts came out the same untouched. Each recomputed hour
 scan revision and an upload names whole hours carrying it, so Relay replaces an hour only for a
 strictly newer scan and a retry is a comparison rather than a sequence. A scan that came up short
 marks that hour `partial`, and a read reports a period `partial` when any hour behind it was. An hour
-past 512 distinct rows folds its smallest into `other`, and a period's agent tree folds its smallest
-model leaves into `other` past 200; exact totals stay usable and clients surface the degradation.
+past 512 distinct rows folds its smallest into `other`, a period's agent tree folds its smallest model
+leaves into `other` past 200, and a bounded read marks truncated unpriced-model detail with
+`unpriced_truncated`. Exact totals stay usable, and clients surface the degradation.
 
 The local Usage report is a private presentation contract carried inside the IPC state, so it names
 no version of its own and moves with `ipc_version`. State snapshots separately carry the Today,
@@ -265,9 +266,9 @@ or a report.
 - `packages/protocol` defines the managed-network contracts and exported JSON Schemas, including the
   language-neutral pricing and model-catalog fixtures both Rust and `quota-model` tests answer.
 - `packages/quota-model` and `packages/relay-core` are runtime-neutral TypeScript for Relay and Web;
-  the local Rust service does not import them. `apps/relay` is the only Cloudflare/D1 adapter and
-  must not import filesystem, subprocess, TCP, or native-addon APIs. `apps/web` stays a separate
-  SvelteKit source boundary that meets Relay only through `WebDocumentPort`.
+  the local Rust service does not import them. `apps/relay` is the only Cloudflare/D1 adapter and may
+  not import filesystem, subprocess, TCP, or native-addon APIs, and `apps/web` stays a separate
+  SvelteKit boundary meeting Relay only through `WebDocumentPort`.
 
 ## Relay, Web, and deployment
 
@@ -296,5 +297,4 @@ sessions ([ADR 0025](decisions/0025-one-session-system.md)); the composition dec
 
 D1 is the only durable Relay store and applied migrations are never rewritten. Local Worker builds
 use Wrangler dry-run and local D1 migration verification; production Web and Worker deploy together
-only through `.github/workflows/deploy-cloudflare.yml`, and manual remote migration or deployment is
-not a development command.
+only through `.github/workflows/deploy-cloudflare.yml`.
