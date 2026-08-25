@@ -399,7 +399,7 @@ pub const CONTROL_PROTOCOL: i64 = 2;
 /// The private local Usage and quota collection reports name no version of their own: they only
 /// ever travel nested inside a `StateSnapshot` that carries `ipc_version`, and both ends of that
 /// pipe ship in the same build.
-pub const MANAGED_DATA_PROTOCOL: i64 = 5;
+pub const MANAGED_DATA_PROTOCOL: i64 = 6;
 
 #[derive(Debug, Clone, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(deny_unknown_fields)]

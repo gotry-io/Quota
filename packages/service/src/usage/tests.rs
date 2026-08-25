@@ -1,10 +1,10 @@
 use super::{
     BillingChannel, ChannelSource, ContextBucket, CoverageReasonCode, CoverageStatus,
-    DEFAULT_PARSER_REVISION, InferenceProvider, MAX_JSONL_LINE_BYTES, MAX_USAGE_MODELS,
-    MAX_USAGE_ROWS, NormalizedUsageEvent, UsageAgent, UsageFileIndex, UsageHourlyFact,
-    UsageScanOptions, aggregate_usage_events, build_local_usage_summary, fold_usage_facts,
-    scan_claude_usage, scan_codex_usage, scan_cursor_usage, scan_grok_usage, scan_local_usage,
-    scan_opencode_usage, scan_pi_usage,
+    DEFAULT_PARSER_REVISION, DatedUsageRow, InferenceProvider, MAX_JSONL_LINE_BYTES,
+    MAX_USAGE_MODELS, MAX_USAGE_ROWS_PER_HOUR, NormalizedUsageEvent, UsageAgent, UsageFileIndex,
+    UsageRow, UsageScanOptions, aggregate_hour_rows, build_local_usage_summary,
+    fold_rows_into_other, fold_usage_rows, scan_claude_usage, scan_codex_usage, scan_cursor_usage,
+    scan_grok_usage, scan_local_usage, scan_opencode_usage, scan_pi_usage,
 };
 use crate::pricing::{
     CalculatedUsageRowCost, PricingCatalog, PricingCatalogEntry, PricingRates, UsageCostAssumption,
@@ -474,6 +474,8 @@ fn file_index_skips_replaces_cleans_deleted_and_invalidates_by_revision() {
             size: source.size,
             modified_ns: source.modified_ns,
             parser_revision: first.sources[0].index.parser_revision.clone(),
+            parsed_offset: first.sources[0].index.parsed_offset,
+            tail_hash: first.sources[0].index.tail_hash.clone(),
         },
     )]
     .into_iter()
@@ -537,17 +539,19 @@ fn opencode_legacy_and_pricing_are_protocol_safe() {
         result.records[0].event.billing_channel,
         BillingChannel::OpenaiDirect
     );
-    let rows = aggregate_usage_events(
-        &result
-            .records
-            .iter()
-            .map(|record| record.event.clone())
-            .collect::<Vec<_>>(),
-        "UTC",
-    )
-    .expect("aggregate Usage");
+    let rows = dated(
+        &aggregate_hour_rows(
+            &result
+                .records
+                .iter()
+                .map(|record| record.event.clone())
+                .collect::<Vec<_>>(),
+        )
+        .expect("aggregate Usage"),
+        &result.records[0].event.occurred_at[..10],
+    );
     assert_eq!(
-        fold_usage_facts(&rows).expect("fold totals").input_tokens,
+        fold_usage_rows(&rows).expect("fold totals").input_tokens,
         160
     );
     let catalog_value: Value = serde_json::from_str(fixture("pricing")).expect("pricing JSON");
@@ -1037,59 +1041,6 @@ fn pi_unknown_provider_is_explicit_and_outer_timestamp_is_supported() {
 }
 
 #[test]
-fn aggregation_preserves_fractional_offsets_and_dst_fallback_hours() {
-    let fractional = aggregate_usage_events(
-        &[
-            test_event("2026-08-02T00:10:00Z", "gpt-5", 100),
-            test_event("2026-08-02T00:20:00Z", "gpt-5", 200),
-        ],
-        "Asia/Kathmandu",
-    )
-    .expect("fractional-offset aggregation");
-    assert_eq!(fractional.len(), 2);
-    assert!(
-        fractional
-            .iter()
-            .all(|row| row.bucket_start_utc == "2026-08-02T00:00:00Z")
-    );
-    assert_eq!(
-        fractional
-            .iter()
-            .map(|row| row.usage_hour)
-            .collect::<Vec<_>>(),
-        vec![5, 6]
-    );
-    assert_eq!(
-        fold_usage_facts(&fractional)
-            .expect("fractional totals")
-            .input_tokens,
-        300
-    );
-
-    let fallback = aggregate_usage_events(
-        &[
-            test_event("2026-11-01T08:30:00Z", "gpt-5", 100),
-            test_event("2026-11-01T09:30:00Z", "gpt-5", 200),
-        ],
-        "America/Los_Angeles",
-    )
-    .expect("DST fallback aggregation");
-    assert_eq!(fallback.len(), 2);
-    assert!(
-        fallback
-            .iter()
-            .all(|row| row.usage_date == "2026-11-01" && row.usage_hour == 1)
-    );
-    assert_eq!(
-        fallback
-            .iter()
-            .map(|row| row.bucket_start_utc.as_str())
-            .collect::<Vec<_>>(),
-        vec!["2026-11-01T08:00:00Z", "2026-11-01T09:00:00Z"]
-    );
-}
-
-#[test]
 fn aggregation_merges_dimensions_and_conserves_source_cost_subsets() {
     let mut first = test_event("2026-08-02T00:01:00Z", "gpt-5", 1_000);
     first.cache_read_tokens = 100;
@@ -1104,7 +1055,7 @@ fn aggregation_merges_dimensions_and_conserves_source_cost_subsets() {
     second.source_cost_microusd = Some("456".into());
     second.source_cost_covered_requests = 1;
 
-    let rows = aggregate_usage_events(&[first, second], "UTC").expect("merged aggregation");
+    let rows = aggregate_hour_rows(&[first, second]).expect("merged aggregation");
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].input_tokens, 3_000);
     assert_eq!(rows[0].cache_read_tokens, 100);
@@ -1114,30 +1065,22 @@ fn aggregation_merges_dimensions_and_conserves_source_cost_subsets() {
     assert_eq!(rows[0].requests, 2);
     assert_eq!(rows[0].source_cost_microusd.as_deref(), Some("579"));
     assert_eq!(rows[0].source_cost_covered_requests, 2);
-    let totals = fold_usage_facts(&rows).expect("merged totals");
+    let totals = fold_usage_rows(&dated(&rows, "2026-08-02")).expect("merged totals");
     assert_eq!(totals.input_tokens, 3_000);
     assert_eq!(totals.output_tokens, 500);
     assert_eq!(totals.source_cost_microusd.as_deref(), Some("579"));
 }
 
 #[test]
-fn aggregation_rejects_invalid_ranges_subsets_timezones_and_safe_integer_overflow() {
-    assert!(aggregate_usage_events(&[test_event("2026-08-02", "gpt-5", 0)], "UTC").is_err());
-    assert!(
-        aggregate_usage_events(
-            &[test_event("2026-08-02T00:01:00Z", "gpt-5", 0)],
-            "Mars/Olympus_Mons"
-        )
-        .is_err()
-    );
+fn aggregation_rejects_invalid_subsets_and_safe_integer_overflow() {
     let mut invalid_subset = test_event("2026-08-02T00:01:00Z", "gpt-5", 1);
     invalid_subset.cache_read_tokens = 2;
-    assert!(aggregate_usage_events(&[invalid_subset], "UTC").is_err());
+    assert!(aggregate_hour_rows(&[invalid_subset]).is_err());
 
     let mut first = test_event("2026-08-02T00:01:00Z", "gpt-5", super::MAX_SAFE_COUNT);
     let second = test_event("2026-08-02T00:02:00Z", "gpt-5", 1);
     first.requests = 1;
-    assert!(aggregate_usage_events(&[first, second], "UTC").is_err());
+    assert!(aggregate_hour_rows(&[first, second]).is_err());
 }
 
 #[test]
@@ -1145,26 +1088,42 @@ fn usage_internal_rows_and_models_preserve_limits_semantics() {
     let models = (0..=64)
         .map(|index| test_event("2026-08-02T00:01:00Z", &format!("gpt-{index}"), 0))
         .collect::<Vec<_>>();
-    let model_rows = aggregate_usage_events(&models, "UTC").expect("internal model aggregation");
+    let model_rows = aggregate_hour_rows(&models).expect("internal model aggregation");
     assert_eq!(model_rows.len(), 65);
     assert_eq!(
-        fold_usage_facts(&model_rows)
+        fold_usage_rows(&dated(&model_rows, "2026-08-02"))
             .expect("internal model totals")
             .requests,
         65
     );
+}
 
-    let rows = (0..=MAX_USAGE_ROWS)
+/// An hour carries a bounded number of rows, and the overflow keeps its measurement rather
+/// than being dropped: it is attributed to one model instead of many.
+#[test]
+fn an_hour_past_its_row_bound_folds_the_overflow_into_one_model() {
+    let events = (0..=MAX_USAGE_ROWS_PER_HOUR)
         .map(|index| {
             let mut event = test_event("2026-08-02T00:01:00Z", "gpt-5", 0);
             event.speed = format!("speed{index}");
             event
         })
         .collect::<Vec<_>>();
-    let internal_rows = aggregate_usage_events(&rows, "UTC").expect("internal row aggregation");
-    assert_eq!(internal_rows.len(), MAX_USAGE_ROWS + 1);
-    let internal_totals = fold_usage_facts(&internal_rows).expect("internal row totals");
-    assert_eq!(internal_totals.requests, (MAX_USAGE_ROWS + 1) as u64);
+    let rows = aggregate_hour_rows(&events).expect("internal row aggregation");
+    assert_eq!(rows.len(), MAX_USAGE_ROWS_PER_HOUR + 1);
+    let requests = fold_usage_rows(&dated(&rows, "2026-08-02"))
+        .expect("internal row totals")
+        .requests;
+
+    let folded = fold_rows_into_other(rows, MAX_USAGE_ROWS_PER_HOUR).expect("folded");
+    assert_eq!(folded.len(), MAX_USAGE_ROWS_PER_HOUR);
+    assert_eq!(folded.iter().filter(|row| row.model == "other").count(), 1);
+    assert_eq!(
+        fold_usage_rows(&dated(&folded, "2026-08-02"))
+            .expect("folded totals")
+            .requests,
+        requests
+    );
 }
 
 #[test]
@@ -1460,13 +1419,11 @@ fn a_model_priced_from_both_sources_says_so_at_the_model_level() {
     let catalog = pricing_catalog(vec![pricing_entry("gpt-5-standard")]);
     assert!(validate_pricing_catalog_value(&catalog));
     let calculated = test_fact_with_input("2026-08-02T12:00:00Z", "gpt-5", 1_000_000);
-    let reported = UsageHourlyFact {
-        // The same model, at a speed the catalog has no entry for.
-        speed: "fast".into(),
-        source_cost_microusd: Some("4200".into()),
-        source_cost_covered_requests: 1,
-        ..test_fact("2026-08-02T13:00:00Z", "gpt-5")
-    };
+    let mut reported = test_fact("2026-08-02T13:00:00Z", "gpt-5");
+    // The same model, at a speed the catalog has no entry for.
+    reported.speed = "fast".into();
+    reported.source_cost_microusd = Some("4200".into());
+    reported.source_cost_covered_requests = 1;
     let summary =
         build_local_usage_summary(&[calculated, reported], Some(&catalog), None).expect("summary");
     let model = &summary.agents[0].providers[0].models[0];
@@ -1631,7 +1588,7 @@ fn protocol_amount_and_source_cost_bounds_fail_explicitly_instead_of_truncating(
     cost_fact.source_cost_covered_requests = 1;
     let cost_wire = serde_json::to_value(cost_fact).expect("serialize reported-cost fact");
     assert_eq!(cost_wire["source_cost_microusd"], "123");
-    let totals_wire = serde_json::to_value(fold_usage_facts(&[]).expect("empty totals"))
+    let totals_wire = serde_json::to_value(fold_usage_rows(&[]).expect("empty totals"))
         .expect("serialize nullable totals");
     assert!(
         totals_wire
@@ -1664,7 +1621,7 @@ fn protocol_amount_and_source_cost_bounds_fail_explicitly_instead_of_truncating(
     let mut noncanonical = test_fact("2026-08-02T12:00:00Z", "gpt-5");
     noncanonical.source_cost_microusd = Some("00".into());
     noncanonical.source_cost_covered_requests = 1;
-    assert!(fold_usage_facts(&[noncanonical]).is_err());
+    assert!(fold_usage_rows(&[noncanonical]).is_err());
 
     let mut source_left = test_fact("2026-08-02T12:00:00Z", "gpt-5");
     source_left.source_cost_microusd = Some("9".repeat(32));
@@ -1672,7 +1629,7 @@ fn protocol_amount_and_source_cost_bounds_fail_explicitly_instead_of_truncating(
     let mut source_right = test_fact("2026-08-02T13:00:00Z", "gpt-5");
     source_right.source_cost_microusd = Some("9".repeat(32));
     source_right.source_cost_covered_requests = 1;
-    let source_error = fold_usage_facts(&[source_left, source_right])
+    let source_error = fold_usage_rows(&[source_left, source_right])
         .expect_err("source cost total protocol bound");
     assert!(source_error.0.contains("source cost total"));
 
@@ -1872,13 +1829,26 @@ fn test_event(occurred_at: &str, model: &str, input_tokens: u64) -> NormalizedUs
     }
 }
 
-fn test_fact(bucket_start_utc: &str, model: &str) -> UsageHourlyFact {
-    UsageHourlyFact {
-        bucket_start_utc: bucket_start_utc.into(),
-        usage_date: bucket_start_utc[..10].into(),
-        usage_hour: bucket_start_utc[11..13]
-            .parse()
-            .expect("valid test UTC hour"),
+/// A row projected onto the day it is priced in, from an instant a test names for readability.
+fn test_fact(bucket_start_utc: &str, model: &str) -> DatedUsageRow {
+    DatedUsageRow {
+        date: bucket_start_utc[..10].into(),
+        row: test_row(model),
+    }
+}
+
+/// The same rows, projected onto one day.
+fn dated(rows: &[UsageRow], date: &str) -> Vec<DatedUsageRow> {
+    rows.iter()
+        .map(|row| DatedUsageRow {
+            date: date.to_owned(),
+            row: row.clone(),
+        })
+        .collect()
+}
+
+fn test_row(model: &str) -> UsageRow {
+    UsageRow {
         agent: UsageAgent::Codex,
         billing_channel: BillingChannel::OpenaiDirect,
         channel_source: super::ChannelSource::AgentDefault,
@@ -1902,7 +1872,7 @@ fn test_fact(bucket_start_utc: &str, model: &str) -> UsageHourlyFact {
     }
 }
 
-fn test_fact_with_input(bucket_start_utc: &str, model: &str, input_tokens: u64) -> UsageHourlyFact {
+fn test_fact_with_input(bucket_start_utc: &str, model: &str, input_tokens: u64) -> DatedUsageRow {
     let mut fact = test_fact(bucket_start_utc, model);
     fact.input_tokens = input_tokens;
     fact

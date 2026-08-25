@@ -20,6 +20,8 @@ pub fn scan_claude_usage(
 struct ClaudeParser;
 
 impl UsageParser for ClaudeParser {
+    const CONTEXT_FREE: bool = true;
+
     fn parse(&mut self, value: &Map<String, Value>, source_file_id: &str) -> ParsedLine {
         let Some(message) = object(value.get("message")) else {
             return if value.get("type").is_none() {

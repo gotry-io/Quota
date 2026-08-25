@@ -170,6 +170,7 @@ fn scan_databases(
             size: current.size,
             modified_ns: current.modified_ns,
             parser_revision: options.parser_revision.clone(),
+            ..UsageFileIndex::default()
         };
         if options
             .file_index
@@ -971,6 +972,7 @@ fn database_source(
         .map(|record| record.record_key.clone())
         .collect();
     UsageSourceScan {
+        append: false,
         index: file_index(&source, &options.parser_revision),
         source,
         records: records.into_iter().map(|record| record.event).collect(),

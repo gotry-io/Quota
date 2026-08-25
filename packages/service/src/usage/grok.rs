@@ -17,6 +17,8 @@ pub fn scan_grok_usage(
 struct GrokParser;
 
 impl UsageParser for GrokParser {
+    const CONTEXT_FREE: bool = true;
+
     fn parse(&mut self, value: &Map<String, Value>, source_file_id: &str) -> ParsedLine {
         if value.get("method").and_then(Value::as_str) != Some("_x.ai/session/update") {
             return ParsedLine::empty();

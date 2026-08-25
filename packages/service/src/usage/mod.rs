@@ -24,30 +24,32 @@ pub use pi::scan_pi_usage;
 pub use scan::{DEFAULT_PARSER_REVISION, UsageScanOptions, discover_usage_files, scan_local_usage};
 
 use chrono::{DateTime, SecondsFormat, Utc};
-use chrono_tz::Tz;
 use num_bigint::BigUint;
 use num_traits::Zero;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::path::PathBuf;
-use std::str::FromStr;
 
 pub const MAX_DISCOVERY_DEPTH: usize = 8;
 pub const MAX_DISCOVERY_ENTRIES: usize = 100_000;
 pub const MAX_USAGE_FILES: usize = 20_000;
 pub const MAX_JSONL_RECORDS: usize = 2_000_000;
 pub const MAX_JSONL_LINE_BYTES: usize = 16 * 1024 * 1024;
+/// How much of an already-parsed prefix is digested to decide that it is still the same log.
+pub const TAIL_HASH_BYTES: u64 = 4 * 1024;
 pub const MAX_COVERAGE_REASONS: usize = 128;
-/// Protocol v2 `UsageSubmission.rows` bound. Internal retained-history aggregation is unbounded
-/// by this submission limit; service_core chunks complete UTC hours before upload.
-pub const MAX_USAGE_ROWS: usize = 2_048;
+/// One upload replaces whole hours, so what bounds it is hours and the rows inside an hour.
+pub const MAX_USAGE_HOURS_PER_UPLOAD: usize = 256;
+/// Rows past this in one hour are folded into [`USAGE_OTHER_MODEL`] before the hour is uploaded.
+pub const MAX_USAGE_ROWS_PER_HOUR: usize = 512;
+/// The model every row folded past [`MAX_USAGE_ROWS_PER_HOUR`] is attributed to.
+pub const USAGE_OTHER_MODEL: &str = "other";
 /// Local v3 report model-detail bound. Exact totals remain available when detail is truncated.
 pub const MAX_USAGE_MODELS: usize = 1_000;
 pub const MAX_USAGE_COVERAGE_ITEMS: usize = 2_048;
-pub const MAX_USAGE_COVERAGE_HOURS: i64 = 24 * 31;
-/// No agent this Account accepts existed before this instant, so a coverage window reaching back
-/// past it was computed from a missing lower bound rather than scanned.
+/// No agent this Account accepts existed before this instant, so an hour reaching back past it
+/// was computed from a missing lower bound rather than scanned.
 pub const EARLIEST_USAGE_INSTANT: &str = "2020-01-01T00:00:00Z";
 pub const MAX_SAFE_COUNT: u64 = 9_007_199_254_740_991;
 
@@ -288,15 +290,21 @@ pub struct ScanCoverage {
     pub reasons: Vec<CoverageReason>,
 }
 
-/// Stable identity used by the SQLite file index.  It intentionally has no
-/// byte checkpoint or per-record hash: changed files are replaced atomically.
-#[derive(Clone, Debug, Eq, PartialEq)]
+/// Stable identity used by the SQLite file index, and where the last parse of it stopped.
+///
+/// A log this device already read is usually the same log with more appended to it.
+/// `parsed_offset` is the byte after the last complete line that was parsed, and `tail_hash`
+/// digests the [`TAIL_HASH_BYTES`] before it: when the file has only grown and that digest
+/// still matches, the appended bytes are parsed on their own instead of the whole file.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct UsageFileIndex {
     pub source_file_id: String,
     pub identity: String,
     pub size: u64,
     pub modified_ns: u128,
     pub parser_revision: String,
+    pub parsed_offset: u64,
+    pub tail_hash: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -395,6 +403,9 @@ impl UsageScanResult {
 /// `source` contains a local-only path and is never serialized.
 #[derive(Clone, Debug)]
 pub struct UsageSourceScan {
+    /// When true, `records` are the appended tail of a source whose earlier bytes are still
+    /// indexed, so the stored records are kept and these are added to them.
+    pub append: bool,
     /// Persistence-only identity and metadata; no path is included.
     pub index: UsageFileIndex,
     /// Local-only source path and stat snapshot. This type is intentionally
@@ -457,11 +468,13 @@ impl From<std::io::Error> for UsageError {
     }
 }
 
+/// One row of Usage, identified by what it measures rather than by when.
+///
+/// The hour is carried by the upload that replaces it and the date by the projection that
+/// prices it, so a row names no instant, no local date, and no aggregation timezone: those
+/// made the same measurement look like two rows whenever a device moved.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct UsageHourlyFact {
-    pub bucket_start_utc: String,
-    pub usage_date: String,
-    pub usage_hour: u8,
+pub struct UsageRow {
     pub agent: UsageAgent,
     pub billing_channel: BillingChannel,
     pub channel_source: ChannelSource,
@@ -483,6 +496,66 @@ pub struct UsageHourlyFact {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_cost_microusd: Option<String>,
     pub source_cost_covered_requests: u64,
+}
+
+impl UsageRow {
+    /// What makes two measurements the same row inside one hour.
+    pub fn identity(
+        &self,
+    ) -> (
+        UsageAgent,
+        BillingChannel,
+        ChannelSource,
+        &str,
+        ContextBucket,
+        &str,
+        &str,
+        &str,
+    ) {
+        (
+            self.agent,
+            self.billing_channel,
+            self.channel_source,
+            self.model.as_str(),
+            self.context_bucket,
+            self.service_tier.as_str(),
+            self.speed.as_str(),
+            self.inference_geo.as_str(),
+        )
+    }
+}
+
+/// A stored row projected for costing: the same measurement plus the UTC date it fell in.
+///
+/// Pricing entries and model aliases carry effective dates, so a price cannot be resolved
+/// without one, and the day is where a stored row keeps its date.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct DatedUsageRow {
+    pub date: String,
+    #[serde(flatten)]
+    pub row: UsageRow,
+}
+
+impl std::ops::Deref for DatedUsageRow {
+    type Target = UsageRow;
+
+    fn deref(&self) -> &Self::Target {
+        &self.row
+    }
+}
+
+impl std::ops::DerefMut for DatedUsageRow {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.row
+    }
+}
+
+/// One scanned UTC hour and every row the scan found in it.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct UsageHour {
+    pub bucket_start_utc: String,
+    pub partial: bool,
+    pub rows: Vec<UsageRow>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -544,24 +617,15 @@ pub struct LocalUsagePeriodSummary {
     pub models_truncated: bool,
 }
 
-/// Aggregate normalized request facts into deterministic sparse UTC-hour rows.
-pub fn aggregate_usage_events(
-    events: &[NormalizedUsageEvent],
-    aggregation_timezone: &str,
-) -> Result<Vec<UsageHourlyFact>, UsageError> {
-    let timezone = Tz::from_str(aggregation_timezone)
-        .map_err(|_| UsageError("invalid IANA aggregation timezone".into()))?;
-    let mut rows: BTreeMap<Vec<String>, UsageHourlyFact> = BTreeMap::new();
+/// Aggregate normalized request facts into the deterministic rows of one UTC hour.
+///
+/// The events handed in are the ones this device has retained for that hour, so the answer
+/// is the whole hour rather than a delta: an hour is replaced by version, never merged.
+pub fn aggregate_hour_rows(events: &[NormalizedUsageEvent]) -> Result<Vec<UsageRow>, UsageError> {
+    let mut rows: BTreeMap<Vec<String>, UsageRow> = BTreeMap::new();
     for event in events {
         validate_event(event)?;
-        let instant = parse_instant(&event.occurred_at)
-            .ok_or_else(|| UsageError("Usage event has an invalid timestamp".into()))?;
-        let bucket_start = floor_utc_hour(instant);
-        let local = instant.with_timezone(&timezone);
-        let row = UsageHourlyFact {
-            bucket_start_utc: format_utc_hour(bucket_start),
-            usage_date: local.format("%Y-%m-%d").to_string(),
-            usage_hour: local.hour() as u8,
+        let row = UsageRow {
             agent: event.agent,
             billing_channel: event.billing_channel,
             channel_source: event.channel_source,
@@ -583,9 +647,9 @@ pub fn aggregate_usage_events(
             source_cost_microusd: event.source_cost_microusd.clone(),
             source_cost_covered_requests: event.source_cost_covered_requests,
         };
-        let key = fact_key(&row);
+        let key = row_key(&row);
         if let Some(existing) = rows.get_mut(&key) {
-            add_fact(existing, &row)?;
+            add_row(existing, &row)?;
         } else {
             rows.insert(key, row);
         }
@@ -593,12 +657,48 @@ pub fn aggregate_usage_events(
     Ok(rows.into_values().collect())
 }
 
+/// Folds an hour down to `limit` rows, keeping the ones that carry the most requests.
+///
+/// An hour carries a bounded number of rows on the wire. Dropping the overflow would lose the
+/// measurement, so it is added into one [`USAGE_OTHER_MODEL`] row instead: the hour's totals
+/// stay exact and the row says where the detail went.
+pub fn fold_rows_into_other(
+    mut rows: Vec<UsageRow>,
+    limit: usize,
+) -> Result<Vec<UsageRow>, UsageError> {
+    if rows.len() <= limit || limit == 0 {
+        return Ok(rows);
+    }
+    rows.sort_by_cached_key(|row| (std::cmp::Reverse(row.requests), row_key(row)));
+    let overflow = rows.split_off(limit - 1);
+    let mut folded: Option<UsageRow> = None;
+    for row in overflow {
+        match folded.as_mut() {
+            Some(target) => add_row(target, &row)?,
+            None => {
+                let mut first = row;
+                first.model = USAGE_OTHER_MODEL.to_owned();
+                folded = Some(first);
+            }
+        }
+    }
+    if let Some(folded) = folded {
+        let key = row_key(&folded);
+        match rows.iter_mut().find(|row| row_key(row) == key) {
+            Some(existing) => add_row(existing, &folded)?,
+            None => rows.push(folded),
+        }
+    }
+    rows.sort_by_cached_key(row_key);
+    Ok(rows)
+}
+
 /// Add validated rows while preserving source-cost coverage.
-pub fn fold_usage_facts(rows: &[UsageHourlyFact]) -> Result<UsageTokenTotals, UsageError> {
+pub fn fold_usage_rows(rows: &[DatedUsageRow]) -> Result<UsageTokenTotals, UsageError> {
     let mut totals = UsageTokenTotals::default();
     let mut source_cost = BigUint::zero();
     for row in rows {
-        validate_fact(row)?;
+        validate_dated_row(row)?;
         add_totals(&mut totals, row)?;
         if let Some(value) = &row.source_cost_microusd {
             source_cost += parse_nonnegative_decimal_integer(value)
@@ -620,12 +720,12 @@ pub fn fold_usage_facts(rows: &[UsageHourlyFact]) -> Result<UsageTokenTotals, Us
 }
 
 pub fn build_local_usage_summary(
-    rows: &[UsageHourlyFact],
+    rows: &[DatedUsageRow],
     pricing_catalog: Option<&crate::pricing::PricingCatalog>,
     model_catalog: Option<&crate::model_catalog::ModelCatalog>,
 ) -> Result<LocalUsagePeriodSummary, UsageError> {
     for row in rows {
-        validate_fact(row)?;
+        validate_dated_row(row)?;
     }
     let totals = summary_totals(rows)?;
     let cost = crate::pricing::calculate_usage_cost(
@@ -658,10 +758,13 @@ pub fn build_local_usage_summary(
             for index in provider_indexes {
                 let row = &rows[index];
                 let (identity, model) = match model_catalog {
-                    Some(catalog) => crate::model_catalog::resolve_model(catalog, row).map_or_else(
-                        || (format!("raw:{}", row.model), row.model.clone()),
-                        |canonical_id| (format!("canonical:{canonical_id}"), canonical_id),
-                    ),
+                    Some(catalog) => {
+                        crate::model_catalog::resolve_model(catalog, &row.row, &row.date)
+                            .map_or_else(
+                                || (format!("raw:{}", row.model), row.model.clone()),
+                                |canonical_id| (format!("canonical:{canonical_id}"), canonical_id),
+                            )
+                    }
                     None => (format!("raw:{}", row.model), row.model.clone()),
                 };
                 model_groups
@@ -719,8 +822,8 @@ pub fn build_local_usage_summary(
     })
 }
 
-fn summary_totals(rows: &[UsageHourlyFact]) -> Result<UsageSummaryTotals, UsageError> {
-    let totals = fold_usage_facts(rows)?;
+fn summary_totals(rows: &[DatedUsageRow]) -> Result<UsageSummaryTotals, UsageError> {
+    let totals = fold_usage_rows(rows)?;
     let total_tokens = totals
         .input_tokens
         .checked_add(totals.output_tokens)
@@ -747,7 +850,31 @@ fn summary_totals(rows: &[UsageHourlyFact]) -> Result<UsageSummaryTotals, UsageE
     })
 }
 
-fn rows_for_indexes(rows: &[UsageHourlyFact], indexes: &[usize]) -> Vec<UsageHourlyFact> {
+/// Adds two folded period totals, which is how a managed tree gets a total above its leaves.
+pub fn add_summary_totals(
+    left: &UsageSummaryTotals,
+    right: &UsageSummaryTotals,
+) -> Result<UsageSummaryTotals, UsageError> {
+    let add = |left: u64, right: u64| {
+        left.checked_add(right)
+            .filter(|value| *value <= MAX_SAFE_COUNT)
+            .ok_or_else(|| UsageError("Usage total exceeds JSON safe integer range".into()))
+    };
+    Ok(UsageSummaryTotals {
+        total_tokens: add(left.total_tokens, right.total_tokens)?,
+        input_tokens: add(left.input_tokens, right.input_tokens)?,
+        output_tokens: add(left.output_tokens, right.output_tokens)?,
+        cache_read_input_tokens: add(left.cache_read_input_tokens, right.cache_read_input_tokens)?,
+        cache_write_input_tokens: add(
+            left.cache_write_input_tokens,
+            right.cache_write_input_tokens,
+        )?,
+        reasoning_tokens: add(left.reasoning_tokens, right.reasoning_tokens)?,
+        messages: add(left.messages, right.messages)?,
+    })
+}
+
+fn rows_for_indexes(rows: &[DatedUsageRow], indexes: &[usize]) -> Vec<DatedUsageRow> {
     indexes.iter().map(|index| rows[*index].clone()).collect()
 }
 
@@ -784,14 +911,6 @@ pub(crate) fn parse_utc_hour(value: &str) -> Option<DateTime<Utc>> {
 
 pub(crate) fn format_utc_hour(instant: DateTime<Utc>) -> String {
     instant.to_rfc3339_opts(SecondsFormat::Secs, true)
-}
-
-pub(crate) fn floor_utc_hour(instant: DateTime<Utc>) -> DateTime<Utc> {
-    instant
-        .with_minute(0)
-        .and_then(|value| value.with_second(0))
-        .and_then(|value| value.with_nanosecond(0))
-        .expect("UTC instant always has a valid hour boundary")
 }
 
 pub(crate) fn context_bucket(input_tokens: u64) -> ContextBucket {
@@ -947,13 +1066,17 @@ fn validate_event(event: &NormalizedUsageEvent) -> Result<(), UsageError> {
     Ok(())
 }
 
-pub(crate) fn validate_fact(row: &UsageHourlyFact) -> Result<(), UsageError> {
-    if parse_utc_hour(&row.bucket_start_utc).is_none()
-        || !calendar_date(&row.usage_date)
-        || row.usage_hour > 23
-        || bounded_model_text(Some(&row.model)).is_none()
-    {
-        return Err(UsageError("invalid Usage hourly fact".into()));
+/// A row projected onto the day it is priced in.
+pub(crate) fn validate_dated_row(row: &DatedUsageRow) -> Result<(), UsageError> {
+    if !calendar_date(&row.date) {
+        return Err(UsageError("invalid Usage row date".into()));
+    }
+    validate_row(&row.row)
+}
+
+pub(crate) fn validate_row(row: &UsageRow) -> Result<(), UsageError> {
+    if bounded_model_text(Some(&row.model)).is_none() {
+        return Err(UsageError("invalid Usage row".into()));
     }
     if row.requests == 0 {
         return Err(UsageError(
@@ -1029,7 +1152,7 @@ fn calendar_date(value: &str) -> bool {
         && chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d").is_ok()
 }
 
-fn add_fact(target: &mut UsageHourlyFact, source: &UsageHourlyFact) -> Result<(), UsageError> {
+fn add_row(target: &mut UsageRow, source: &UsageRow) -> Result<(), UsageError> {
     add_row_counts(target, source)?;
     let left = parse_optional_source_cost(target.source_cost_microusd.as_deref())?;
     let right = parse_optional_source_cost(source.source_cost_microusd.as_deref())?;
@@ -1038,13 +1161,10 @@ fn add_fact(target: &mut UsageHourlyFact, source: &UsageHourlyFact) -> Result<()
     } else {
         Some((left + right).to_string())
     };
-    validate_fact(target)
+    validate_row(target)
 }
 
-fn add_row_counts(
-    target: &mut UsageHourlyFact,
-    source: &UsageHourlyFact,
-) -> Result<(), UsageError> {
+fn add_row_counts(target: &mut UsageRow, source: &UsageRow) -> Result<(), UsageError> {
     for pair in [
         (&mut target.input_tokens, source.input_tokens),
         (&mut target.cache_read_tokens, source.cache_read_tokens),
@@ -1083,7 +1203,7 @@ fn add_row_counts(
     Ok(())
 }
 
-fn add_totals(target: &mut UsageTokenTotals, source: &UsageHourlyFact) -> Result<(), UsageError> {
+fn add_totals(target: &mut UsageTokenTotals, source: &UsageRow) -> Result<(), UsageError> {
     for pair in [
         (&mut target.input_tokens, source.input_tokens),
         (&mut target.cache_read_tokens, source.cache_read_tokens),
@@ -1122,11 +1242,8 @@ fn add_totals(target: &mut UsageTokenTotals, source: &UsageHourlyFact) -> Result
     Ok(())
 }
 
-fn fact_key(row: &UsageHourlyFact) -> Vec<String> {
+fn row_key(row: &UsageRow) -> Vec<String> {
     vec![
-        row.bucket_start_utc.clone(),
-        row.usage_date.clone(),
-        row.usage_hour.to_string(),
         row.agent.to_string(),
         row.billing_channel.as_str().to_string(),
         serde_json::to_string(&row.channel_source).unwrap_or_default(),

@@ -67,23 +67,53 @@ fn migration_v1(tx: &rusqlite::Transaction<'_>, revision_floor: u64) -> Result<(
             size INTEGER NOT NULL,
             modified_ns TEXT NOT NULL,
             parser_revision TEXT NOT NULL,
+            parsed_offset INTEGER NOT NULL DEFAULT 0,
+            tail_hash TEXT NOT NULL DEFAULT '',
             PRIMARY KEY(agent, source_file_id)
          );
          CREATE TABLE usage_file_records (
             agent TEXT NOT NULL,
             source_file_id TEXT NOT NULL,
-            record_index INTEGER NOT NULL,
+            record_key TEXT NOT NULL,
             occurred_at TEXT NOT NULL,
             event_json TEXT NOT NULL,
-            record_key TEXT NOT NULL DEFAULT '',
-            PRIMARY KEY(agent, source_file_id, record_index)
+            PRIMARY KEY(agent, source_file_id, record_key)
          );
          CREATE INDEX usage_file_records_time ON usage_file_records(agent, occurred_at);
-         CREATE TABLE usage_dirty_ranges (
+         CREATE TABLE usage_hourly_facts (
             agent TEXT NOT NULL,
-            start_at TEXT NOT NULL,
-            end_at TEXT NOT NULL,
-            PRIMARY KEY(agent, start_at, end_at)
+            bucket_start_utc TEXT NOT NULL,
+            billing_channel TEXT NOT NULL,
+            channel_source TEXT NOT NULL,
+            model TEXT NOT NULL,
+            context_bucket TEXT NOT NULL,
+            service_tier TEXT NOT NULL,
+            speed TEXT NOT NULL,
+            inference_geo TEXT NOT NULL,
+            input_tokens INTEGER NOT NULL,
+            cache_read_tokens INTEGER NOT NULL,
+            cache_write_5m_tokens INTEGER NOT NULL,
+            cache_write_1h_tokens INTEGER NOT NULL,
+            cache_write_inferred_tokens INTEGER NOT NULL,
+            output_tokens INTEGER NOT NULL,
+            reasoning_tokens INTEGER NOT NULL,
+            requests INTEGER NOT NULL,
+            web_search_requests INTEGER NOT NULL,
+            web_fetch_requests INTEGER NOT NULL,
+            source_cost_microusd INTEGER,
+            source_cost_covered_requests INTEGER NOT NULL,
+            partial INTEGER NOT NULL CHECK (partial IN (0, 1)),
+            scan_version INTEGER NOT NULL,
+            PRIMARY KEY(agent, bucket_start_utc, billing_channel, channel_source, model,
+                        context_bucket, service_tier, speed, inference_geo)
+         );
+         CREATE INDEX usage_hourly_facts_day ON usage_hourly_facts(bucket_start_utc);
+         CREATE TABLE usage_dirty_hours (
+            agent TEXT NOT NULL,
+            bucket_start_utc TEXT NOT NULL,
+            scan_version INTEGER NOT NULL,
+            partial INTEGER NOT NULL CHECK (partial IN (0, 1)),
+            PRIMARY KEY(agent, bucket_start_utc)
          );
          CREATE TABLE usage_partial_sources (
             agent TEXT NOT NULL,

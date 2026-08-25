@@ -6,7 +6,7 @@
 //! summed.
 
 use crate::usage::{
-    BillingChannel, ChannelSource, ContextBucket, MAX_SAFE_COUNT, UsageError, UsageHourlyFact,
+    BillingChannel, ChannelSource, ContextBucket, DatedUsageRow, MAX_SAFE_COUNT, UsageError,
 };
 use num_bigint::BigUint;
 use num_traits::{One, Zero};
@@ -252,7 +252,7 @@ pub enum PricingResolution {
     Unpriced(UsageUnpricedReason),
 }
 
-pub fn resolve_pricing_entry(catalog: &PricingCatalog, row: &UsageHourlyFact) -> PricingResolution {
+pub fn resolve_pricing_entry(catalog: &PricingCatalog, row: &DatedUsageRow) -> PricingResolution {
     if row.billing_channel == BillingChannel::Unknown {
         return PricingResolution::Unpriced(UsageUnpricedReason::UnknownChannel);
     }
@@ -268,7 +268,7 @@ pub fn resolve_pricing_entry(catalog: &PricingCatalog, row: &UsageHourlyFact) ->
     if by_model.is_empty() {
         return PricingResolution::Unpriced(UsageUnpricedReason::UnknownModel);
     }
-    let date = row.bucket_start_utc.get(..10).unwrap_or_default();
+    let date = row.date.as_str();
     let by_date: Vec<&PricingCatalogEntry> = by_model
         .into_iter()
         .filter(|entry| {
@@ -346,7 +346,7 @@ pub struct PreparedUsageCosts {
 }
 
 pub fn calculate_usage_cost(
-    rows: &[UsageHourlyFact],
+    rows: &[DatedUsageRow],
     catalog: Option<&PricingCatalog>,
     mode: UsageCostMode,
 ) -> Result<UsageCostOutcome, UsageError> {
@@ -356,7 +356,7 @@ pub fn calculate_usage_cost(
 
 /// Resolve and round each row once.  An empty index list means all rows.
 pub fn prepare_usage_costs(
-    rows: &[UsageHourlyFact],
+    rows: &[DatedUsageRow],
     catalog: Option<&PricingCatalog>,
     mode: UsageCostMode,
 ) -> Result<PreparedUsageCosts, UsageError> {
@@ -368,7 +368,7 @@ pub fn prepare_usage_costs(
     let catalog_revision = catalog_valid.map(|catalog| catalog.revision.clone());
     let mut prepared = Vec::with_capacity(rows.len());
     for row in rows {
-        super::usage::validate_fact(row)?;
+        super::usage::validate_dated_row(row)?;
         let calculated = match mode {
             UsageCostMode::Reported => None,
             UsageCostMode::Calculate | UsageCostMode::Auto => Some(match catalog_valid {
@@ -562,6 +562,115 @@ pub fn fold_prepared_usage_costs(
     })
 }
 
+/// Adds the cost outcomes of a tree's leaves into the outcome of the branch above them.
+///
+/// A managed read states cost only at the leaf, because that is the only place its rollup has
+/// to keep it. Every derived field — the basis, the status, the amount — follows from the row
+/// counts, so folding is addition and then the same verdict the leaf reached.
+pub fn fold_usage_cost_outcomes(
+    outcomes: &[UsageCostOutcome],
+) -> Result<UsageCostOutcome, UsageError> {
+    let mut amount = BigUint::zero();
+    let mut priced_any = false;
+    let mut calculated_rows = 0u64;
+    let mut reported_rows = 0u64;
+    let mut unpriced_rows = 0u64;
+    let mut mode = UsageCostMode::Auto;
+    let mut catalog_revision = None;
+    let mut assumptions = BTreeSet::new();
+    let mut unpriced = BTreeMap::<(BillingChannel, String, UsageUnpricedReason), u64>::new();
+    let mut truncated = false;
+    for (index, outcome) in outcomes.iter().enumerate() {
+        if index == 0 {
+            mode = outcome.mode;
+            catalog_revision = outcome.catalog_revision.clone();
+        } else if catalog_revision != outcome.catalog_revision {
+            catalog_revision = None;
+        }
+        if let Some(value) = &outcome.amount_microusd {
+            amount += parse_biguint(value)?;
+            priced_any = true;
+        }
+        calculated_rows = checked_add(calculated_rows, outcome.calculated_rows)?;
+        reported_rows = checked_add(reported_rows, outcome.reported_rows)?;
+        unpriced_rows = checked_add(unpriced_rows, outcome.unpriced_rows)?;
+        assumptions.extend(outcome.assumptions.iter().copied());
+        truncated = truncated || outcome.unpriced_truncated;
+        for item in &outcome.unpriced {
+            let key = (item.billing_channel, item.model.clone(), item.reason);
+            let count = unpriced.entry(key).or_default();
+            *count = checked_add(*count, item.rows)?;
+        }
+    }
+    let priced_rows = checked_add(calculated_rows, reported_rows)?;
+    let basis = if calculated_rows > 0 && reported_rows > 0 {
+        UsageCostBasis::Mixed
+    } else if calculated_rows > 0 {
+        UsageCostBasis::Calculated
+    } else if reported_rows > 0 {
+        UsageCostBasis::Reported
+    } else {
+        UsageCostBasis::None
+    };
+    let status = if unpriced_rows == 0 {
+        UsageCostStatus::Complete
+    } else if priced_rows > 0 {
+        UsageCostStatus::Partial
+    } else {
+        UsageCostStatus::Unavailable
+    };
+    let unpriced_truncated = truncated || unpriced.len() > MAX_UNPRICED_ITEMS;
+    let mut assumptions = assumptions.into_iter().collect::<Vec<_>>();
+    assumptions.sort_by_key(|value| assumption_key(*value));
+    let mut unpriced = unpriced
+        .into_iter()
+        .map(
+            |((billing_channel, model, reason), rows)| UsageUnpricedItem {
+                billing_channel,
+                model,
+                reason,
+                rows,
+            },
+        )
+        .collect::<Vec<_>>();
+    unpriced.sort_by(|left, right| {
+        (
+            left.billing_channel.as_str(),
+            left.model.as_str(),
+            reason_key(left.reason),
+        )
+            .cmp(&(
+                right.billing_channel.as_str(),
+                right.model.as_str(),
+                reason_key(right.reason),
+            ))
+    });
+    let amount_microusd = if priced_any && priced_rows > 0 {
+        let value = amount.to_string();
+        if value.len() > 32 {
+            return Err(UsageError(
+                "Usage cost amount exceeds protocol bound".into(),
+            ));
+        }
+        Some(value)
+    } else {
+        None
+    };
+    Ok(UsageCostOutcome {
+        mode,
+        basis,
+        status,
+        amount_microusd,
+        catalog_revision,
+        calculated_rows,
+        reported_rows,
+        unpriced_rows,
+        assumptions,
+        unpriced: unpriced.into_iter().take(MAX_UNPRICED_ITEMS).collect(),
+        unpriced_truncated,
+    })
+}
+
 #[derive(Clone, Debug)]
 pub enum CalculatedUsageRowCost {
     Priced {
@@ -574,15 +683,15 @@ pub enum CalculatedUsageRowCost {
 
 pub fn calculate_usage_row_cost(
     catalog: &PricingCatalog,
-    row: &UsageHourlyFact,
+    row: &DatedUsageRow,
 ) -> Result<CalculatedUsageRowCost, UsageError> {
-    super::usage::validate_fact(row)?;
+    super::usage::validate_dated_row(row)?;
     Ok(calculate_row_from_catalog(catalog, row))
 }
 
 fn calculate_row_from_catalog(
     catalog: &PricingCatalog,
-    row: &UsageHourlyFact,
+    row: &DatedUsageRow,
 ) -> CalculatedUsageRowCost {
     let resolution = resolve_pricing_entry(catalog, row);
     let (entry, mut assumptions) = match resolution {
@@ -930,7 +1039,7 @@ mod tests {
         .expect("pricing catalog")
     }
 
-    fn row(root: &Value, name: &str) -> UsageHourlyFact {
+    fn row(root: &Value, name: &str) -> DatedUsageRow {
         serde_json::from_value(
             root.get("rows")
                 .and_then(Value::as_object)

@@ -9,7 +9,7 @@ use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::usage::{InferenceProvider, UsageAgent, UsageHourlyFact};
+use crate::usage::{InferenceProvider, UsageAgent, UsageRow};
 
 pub const MAX_MODEL_CATALOG_MODELS: usize = 512;
 pub const MAX_MODEL_CATALOG_ALIASES_PER_MODEL: usize = 32;
@@ -151,7 +151,11 @@ pub fn validate_model_catalog(catalog: &ModelCatalog) -> ModelCatalogValidationR
     }
 }
 
-pub fn resolve_model(catalog: &ModelCatalog, row: &UsageHourlyFact) -> Option<String> {
+/// The canonical model this row reports, as of the day it was measured.
+///
+/// An alias carries an effective range, so the day the row fell in is what decides which
+/// alias speaks for it.
+pub fn resolve_model(catalog: &ModelCatalog, row: &UsageRow, date: &str) -> Option<String> {
     if let Some(model) = catalog
         .models
         .iter()
@@ -159,7 +163,6 @@ pub fn resolve_model(catalog: &ModelCatalog, row: &UsageHourlyFact) -> Option<St
     {
         return Some(model.canonical_id.clone());
     }
-    let date = row.bucket_start_utc.get(..10).unwrap_or_default();
     let matches = catalog
         .models
         .iter()
@@ -284,13 +287,20 @@ mod tests {
 
     #[test]
     fn resolves_exact_canonical_and_scoped_alias_without_touching_raw_text() {
+        const DATE: &str = "2026-08-10";
         let catalog = catalog();
         let mut alias = row("GPT-5.5[1m]");
-        assert_eq!(resolve_model(&catalog, &alias).as_deref(), Some("gpt-5.5"));
+        assert_eq!(
+            resolve_model(&catalog, &alias, DATE).as_deref(),
+            Some("gpt-5.5")
+        );
         alias.billing_channel = crate::usage::BillingChannel::Openrouter;
-        assert_eq!(resolve_model(&catalog, &alias), None);
+        assert_eq!(resolve_model(&catalog, &alias, DATE), None);
         alias.model = "gpt-5.5".into();
-        assert_eq!(resolve_model(&catalog, &alias).as_deref(), Some("gpt-5.5"));
+        assert_eq!(
+            resolve_model(&catalog, &alias, DATE).as_deref(),
+            Some("gpt-5.5")
+        );
         assert_eq!(alias.model, "gpt-5.5");
     }
 
@@ -324,11 +334,8 @@ mod tests {
         );
     }
 
-    fn row(model: &str) -> UsageHourlyFact {
-        UsageHourlyFact {
-            bucket_start_utc: "2026-08-10T00:00:00Z".into(),
-            usage_date: "2026-08-10".into(),
-            usage_hour: 0,
+    fn row(model: &str) -> UsageRow {
+        UsageRow {
             agent: UsageAgent::Codex,
             billing_channel: crate::usage::BillingChannel::OpenaiDirect,
             channel_source: crate::usage::ChannelSource::Explicit,

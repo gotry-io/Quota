@@ -63,19 +63,19 @@ fn migration_v1(tx: &rusqlite::Transaction<'_>) -> Result<(), StateError> {
             account_id TEXT NOT NULL,
             device_id TEXT NOT NULL,
             generation INTEGER NOT NULL,
-            aggregation_timezone TEXT NOT NULL,
             lower_bound TEXT NOT NULL
          );
          CREATE TABLE usage_outbox (
-            submission_id TEXT PRIMARY KEY NOT NULL,
+            agent TEXT NOT NULL,
+            bucket_start_utc TEXT NOT NULL,
             account_id TEXT NOT NULL,
             device_id TEXT NOT NULL,
             generation INTEGER NOT NULL,
-            sequence INTEGER NOT NULL,
-            payload_json TEXT NOT NULL
+            scan_version INTEGER NOT NULL,
+            partial INTEGER NOT NULL CHECK (partial IN (0, 1)),
+            rows_json TEXT NOT NULL,
+            PRIMARY KEY(agent, bucket_start_utc)
          );
-         CREATE INDEX usage_outbox_order
-            ON usage_outbox(account_id, device_id, generation, sequence);
          CREATE TABLE provider_browser_sessions (
             provider TEXT PRIMARY KEY NOT NULL,
             cookie_header TEXT NOT NULL,

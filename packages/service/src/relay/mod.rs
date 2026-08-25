@@ -216,82 +216,46 @@ impl RelayClient {
 
     pub fn upload_snapshot(&self, token: &str, envelope: &Value) -> Result<Value, RelayError> {
         validate_snapshot_envelope(envelope)?;
-        let response = self.put_json("/api/v5/device/snapshots", envelope, token, 200)?;
-        validate_snapshot_response(&response)?;
+        let named = envelope
+            .get("snapshots")
+            .and_then(Value::as_array)
+            .ok_or(RelayError::InvalidResponse)?
+            .iter()
+            .filter_map(|snapshot| snapshot.get("provider")?.as_str().map(str::to_owned))
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let response = self.put_json("/api/v6/device/snapshots", envelope, token, 200)?;
+        validate_upload_response(&response, &named)?;
         Ok(response)
     }
 
     pub fn upload_usage(&self, token: &str, submission: &Value) -> Result<Value, RelayError> {
         validate_usage_submission(submission)?;
-        let response = self.request(
-            self.client
-                .put(self.url("/api/v5/device/usage"))
-                .header(CONTENT_TYPE, "application/json")
-                .header(ACCEPT, "application/json")
-                .header(AUTHORIZATION, bearer(token)),
-            Some(submission),
-            Some(token),
-        )?;
-        let status = response.status().as_u16();
-        let response = if status != 200 && status != 409 {
-            check_status(response, 200)?
-        } else {
-            response
-        };
-        let response = read_json(response)?;
-        validate_usage_response(&response)?;
+        let named = submission
+            .get("hours")
+            .and_then(Value::as_array)
+            .ok_or(RelayError::InvalidResponse)?
+            .iter()
+            .filter_map(|hour| hour.get("bucket_start_utc")?.as_str().map(str::to_owned))
+            .collect::<Vec<_>>();
+        let response = self.put_json("/api/v6/device/usage", submission, token, 200)?;
+        validate_upload_response(&response, &named)?;
         Ok(response)
     }
 
-    /// Reads the Account summary, offering the validator the caller already holds.
+    /// Reads the Account, offering the validator the caller already holds.
     ///
-    /// Returns the ETag this read is now current at, and the body only when the server sent
-    /// one. `None` means 304: the caller's stored summary is still the answer, and nothing on
-    /// the account changed enough to be worth aggregating Usage for.
+    /// One read answers the whole account: the devices, the resolved subscriptions, and the
+    /// four periods. Returns the ETag this read is now current at, and the body only when the
+    /// server sent one. `None` means 304: the caller's stored summary is still the answer.
     pub fn account_summary(
         &self,
         token: &str,
         query: &str,
         etag: Option<&str>,
     ) -> Result<(Option<String>, Option<Value>), RelayError> {
-        self.account_usage_query("/api/v5/account/summary", token, query, etag)
-    }
-
-    pub fn account_usage_summary(
-        &self,
-        token: &str,
-        query: &str,
-        etag: Option<&str>,
-    ) -> Result<(Option<String>, Option<Value>), RelayError> {
-        let (next_etag, response) =
-            self.account_usage_query("/api/v5/account/usage/summary", token, query, etag)?;
-        let Some(response) = response else {
-            return Ok((next_etag, None));
-        };
-        validate_account_usage_response(&response)?;
-        let usage = response
-            .get("usage")
-            .cloned()
-            .ok_or(RelayError::InvalidResponse)?;
-        Ok((next_etag, Some(usage)))
-    }
-
-    fn account_usage_query(
-        &self,
-        path: &str,
-        token: &str,
-        query: &str,
-        etag: Option<&str>,
-    ) -> Result<(Option<String>, Option<Value>), RelayError> {
-        let mut parts = query
-            .split('&')
-            .filter(|part| !part.is_empty())
-            .map(str::to_owned)
-            .collect::<Vec<_>>();
-        if !parts.iter().any(|part| part.starts_with("usage_agents=")) {
-            parts.push("usage_agents=all".to_owned());
-        }
-        self.conditional_get_json(&format!("{path}?{}", parts.join("&")), token, etag)
+        self.conditional_get_json(&format!("/api/v6/account/summary?{query}"), token, etag)
     }
 
     pub fn pricing_catalog(
@@ -307,7 +271,7 @@ impl RelayClient {
         }
         let response = self.request(
             self.client
-                .get(self.url("/api/v2/pricing/catalog?usage_agents=all"))
+                .get(self.url("/api/v2/pricing/catalog"))
                 .headers(headers),
             None,
             None,
@@ -705,34 +669,15 @@ fn validate_bounded_json(value: &Value) -> Result<(), RelayError> {
 fn validate_snapshot_envelope(value: &Value) -> Result<(), RelayError> {
     validate_bounded_json(value)?;
     let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
-    let keys = [
-        "protocol_version",
-        "device_id",
-        "generation",
-        "sequence",
-        "captured_at",
-        "snapshots",
-    ];
-    if object.len() != keys.len()
-        || keys.iter().any(|key| !object.contains_key(*key))
-        || object.keys().any(|key| !keys.contains(&key.as_str()))
-    {
+    let keys = ["protocol_version", "generation", "snapshots"];
+    if object.len() != keys.len() || keys.iter().any(|key| !object.contains_key(*key)) {
         return Err(RelayError::InvalidResponse);
     }
     if object.get("protocol_version").and_then(Value::as_i64) != Some(MANAGED_DATA_PROTOCOL)
-        || !object
-            .get("device_id")
-            .and_then(Value::as_str)
-            .is_some_and(is_opaque)
         || object
             .get("generation")
             .and_then(safe_positive_u64)
             .is_none()
-        || object.get("sequence").and_then(safe_u64).is_none()
-        || object
-            .get("captured_at")
-            .and_then(Value::as_str)
-            .is_none_or(|value| !valid_rfc3339(value))
         || object
             .get("snapshots")
             .and_then(Value::as_array)
@@ -750,128 +695,67 @@ fn validate_snapshot_envelope(value: &Value) -> Result<(), RelayError> {
     Ok(())
 }
 
+/// One agent's rescanned hours, as Relay accepts them.
+///
+/// A payload Relay refuses blocks the outbox behind it, so the bound is checked here as well
+/// as at Relay rather than left for the rejection to teach us.
 pub(crate) fn validate_usage_submission(value: &Value) -> Result<(), RelayError> {
     validate_bounded_json(value)?;
     let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
-    let keys = [
-        "protocol_version",
-        "submission_id",
-        "device_id",
-        "generation",
-        "sequence",
-        "parser_revision",
-        "aggregation_timezone",
-        "coverage",
-        "rows",
-    ];
-    if object.len() < keys.len()
-        || keys.iter().any(|key| !object.contains_key(*key))
-        || object
-            .keys()
-            .any(|key| !keys.contains(&key.as_str()) && key != "write_mode" && key != "multipart")
-    {
+    let keys = ["protocol_version", "generation", "agent", "hours"];
+    if object.len() != keys.len() || keys.iter().any(|key| !object.contains_key(*key)) {
         return Err(RelayError::InvalidResponse);
     }
-    if object.get("protocol_version").and_then(Value::as_i64) != Some(MANAGED_DATA_PROTOCOL) {
-        return Err(RelayError::InvalidResponse);
-    }
-    for key in ["submission_id", "device_id", "parser_revision"] {
-        if !object
-            .get(key)
-            .and_then(Value::as_str)
-            .is_some_and(is_opaque)
-        {
-            return Err(RelayError::InvalidResponse);
-        }
-    }
-    if !object
-        .get("device_id")
-        .and_then(Value::as_str)
-        .is_some_and(is_opaque)
+    if object.get("protocol_version").and_then(Value::as_i64) != Some(MANAGED_DATA_PROTOCOL)
         || object
             .get("generation")
             .and_then(safe_positive_u64)
             .is_none()
-        || object.get("sequence").and_then(safe_u64).is_none()
     {
         return Err(RelayError::InvalidResponse);
     }
-    let timezone = object
-        .get("aggregation_timezone")
-        .and_then(Value::as_str)
-        .filter(|value| value.parse::<chrono_tz::Tz>().is_ok())
-        .ok_or(RelayError::InvalidResponse)?;
-    let coverage = object
-        .get("coverage")
-        .and_then(Value::as_object)
-        .ok_or(RelayError::InvalidResponse)?;
-    if coverage.len() != 4
-        || !["agent", "start_at", "end_at", "status"]
-            .iter()
-            .all(|key| coverage.contains_key(*key))
-        || !matches!(
-            coverage.get("status").and_then(Value::as_str),
-            Some("complete") | Some("partial")
-        )
-    {
-        return Err(RelayError::InvalidResponse);
-    }
-    let partial = coverage.get("status").and_then(Value::as_str) == Some("partial");
-    if partial {
-        if object.get("write_mode").and_then(Value::as_str) != Some("merge_partial") {
-            return Err(RelayError::InvalidResponse);
-        }
-    } else if object.contains_key("write_mode") {
-        return Err(RelayError::InvalidResponse);
-    }
-    if let Some(multipart) = object.get("multipart").and_then(Value::as_object) {
-        if multipart.len() != 3
-            || !["batch_id", "part_index", "part_count"]
-                .iter()
-                .all(|key| multipart.contains_key(*key))
-            || !multipart
-                .get("batch_id")
-                .and_then(Value::as_str)
-                .is_some_and(is_opaque)
-            || multipart
-                .get("part_count")
-                .and_then(safe_positive_u64)
-                .is_none_or(|count| !(2..=64).contains(&count))
-            || multipart
-                .get("part_index")
-                .and_then(safe_u64)
-                .zip(multipart.get("part_count").and_then(safe_positive_u64))
-                .is_none_or(|(index, count)| index >= count)
-        {
-            return Err(RelayError::InvalidResponse);
-        }
-    } else if object.contains_key("multipart") {
-        return Err(RelayError::InvalidResponse);
-    }
-    let agent = coverage
+    let agent = object
         .get("agent")
         .and_then(Value::as_str)
         .filter(|value| valid_billing_agent(Some(value)))
         .ok_or(RelayError::InvalidResponse)?;
-    let start = parse_utc_hour(coverage.get("start_at"))?;
-    let end = parse_utc_hour(coverage.get("end_at"))?;
-    if start < earliest_usage_instant()
-        || end <= start
-        || end - start > chrono::Duration::hours(crate::usage::MAX_USAGE_COVERAGE_HOURS)
+    let hours = object
+        .get("hours")
+        .and_then(Value::as_array)
+        .filter(|hours| hours.len() <= crate::usage::MAX_USAGE_HOURS_PER_UPLOAD)
+        .ok_or(RelayError::InvalidResponse)?;
+    let mut buckets = std::collections::BTreeSet::new();
+    for hour in hours {
+        let bucket = validate_usage_hour(hour, agent)?;
+        if !buckets.insert(bucket) {
+            return Err(RelayError::InvalidResponse);
+        }
+    }
+    Ok(())
+}
+
+/// One hour and every row the scan behind it found, returning the hour it names.
+fn validate_usage_hour(value: &Value, agent: &str) -> Result<String, RelayError> {
+    let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
+    let keys = ["bucket_start_utc", "scan_version", "partial", "rows"];
+    if object.len() != keys.len() || keys.iter().any(|key| !object.contains_key(*key)) {
+        return Err(RelayError::InvalidResponse);
+    }
+    if object.get("scan_version").and_then(safe_u64).is_none()
+        || !object.get("partial").is_some_and(Value::is_boolean)
     {
+        return Err(RelayError::InvalidResponse);
+    }
+    let bucket = parse_utc_hour(object.get("bucket_start_utc"))?;
+    if bucket < earliest_usage_instant() {
         return Err(RelayError::InvalidResponse);
     }
     let rows = object
         .get("rows")
         .and_then(Value::as_array)
+        .filter(|rows| rows.len() <= crate::usage::MAX_USAGE_ROWS_PER_HOUR)
         .ok_or(RelayError::InvalidResponse)?;
-    if rows.len() > crate::usage::MAX_USAGE_ROWS {
-        return Err(RelayError::InvalidResponse);
-    }
     let row_keys = [
-        "bucket_start_utc",
-        "usage_date",
-        "usage_hour",
         "agent",
         "billing_channel",
         "channel_source",
@@ -895,7 +779,11 @@ pub(crate) fn validate_usage_submission(value: &Value) -> Result<(), RelayError>
     let mut identities = std::collections::BTreeSet::new();
     for row in rows {
         let row_object = row.as_object().ok_or(RelayError::InvalidResponse)?;
-        if (row_object.len() != row_keys.len() && row_object.len() != row_keys.len() + 1)
+        // The one key beyond the contract's own is the optional source cost, and nothing else.
+        let extra = row_object.len().saturating_sub(row_keys.len());
+        if row_object.len() < row_keys.len()
+            || extra > 1
+            || (extra == 1 && !row_object.contains_key("source_cost_microusd"))
             || row_keys.iter().any(|key| !row_object.contains_key(*key))
             || row_object
                 .get("source_cost_microusd")
@@ -903,47 +791,19 @@ pub(crate) fn validate_usage_submission(value: &Value) -> Result<(), RelayError>
         {
             return Err(RelayError::InvalidResponse);
         }
-        let row: crate::usage::UsageHourlyFact =
+        let row: crate::usage::UsageRow =
             serde_json::from_value(row.clone()).map_err(|_| RelayError::InvalidResponse)?;
-        crate::usage::validate_fact(&row).map_err(|_| RelayError::InvalidResponse)?;
+        crate::usage::validate_row(&row).map_err(|_| RelayError::InvalidResponse)?;
         if row.agent.as_str() != agent {
             return Err(RelayError::InvalidResponse);
         }
-        let bucket = parse_utc_hour_value(&row.bucket_start_utc)?;
-        if bucket < start || bucket >= end {
-            return Err(RelayError::InvalidResponse);
-        }
-        let local = bucket.with_timezone(
-            &timezone
-                .parse::<chrono_tz::Tz>()
-                .map_err(|_| RelayError::InvalidResponse)?,
-        );
-        if row.usage_date != local.format("%Y-%m-%d").to_string()
-            || row.usage_hour != local.hour() as u8
-            || row.usage_hour > 23
-        {
-            return Err(RelayError::InvalidResponse);
-        }
-        let identity = serde_json::to_string(&(
-            &row.bucket_start_utc,
-            &row.usage_date,
-            row.usage_hour,
-            row.agent,
-            row.billing_channel,
-            row.channel_source,
-            &row.model,
-            row.context_bucket,
-            &row.service_tier,
-            &row.speed,
-            &row.inference_geo,
-        ))
-        .map_err(|_| RelayError::InvalidResponse)?;
+        let identity =
+            serde_json::to_string(&row.identity()).map_err(|_| RelayError::InvalidResponse)?;
         if !identities.insert(identity) {
             return Err(RelayError::InvalidResponse);
         }
     }
-    let _ = timezone;
-    Ok(())
+    Ok(bucket.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
 }
 
 /// The contract's lower bound on a coverage window, as the parser returns instants.
@@ -981,24 +841,20 @@ fn parse_utc_hour_value(value: &str) -> Result<chrono::DateTime<chrono::FixedOff
     Ok(parsed)
 }
 
-fn validate_snapshot_response(value: &Value) -> Result<(), RelayError> {
+/// What Relay answers an upload with: every name it was given, in exactly one of two lists.
+fn validate_upload_response(value: &Value, named: &[String]) -> Result<(), RelayError> {
     require_response_fields(
         value,
         &[
             "protocol_version",
-            "outcome",
             "device_id",
             "device_generation",
-            "accepted_sequence",
-            "next_snapshot_sequence",
+            "accepted",
+            "ignored",
         ],
     )?;
     let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
     if object.get("protocol_version").and_then(Value::as_i64) != Some(MANAGED_DATA_PROTOCOL)
-        || !matches!(
-            object.get("outcome").and_then(Value::as_str),
-            Some("accepted" | "duplicate")
-        )
         || !object
             .get("device_id")
             .and_then(Value::as_str)
@@ -1007,83 +863,23 @@ fn validate_snapshot_response(value: &Value) -> Result<(), RelayError> {
             .get("device_generation")
             .and_then(safe_positive_u64)
             .is_none()
-        || object.get("accepted_sequence").and_then(safe_u64).is_none()
-        || object
-            .get("next_snapshot_sequence")
-            .and_then(safe_u64)
-            .is_none()
     {
         return Err(RelayError::InvalidResponse);
     }
-    Ok(())
-}
-
-fn validate_usage_response(value: &Value) -> Result<(), RelayError> {
-    let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
-    let outcome = object.get("outcome").and_then(Value::as_str);
-    let base_keys = [
-        "protocol_version",
-        "outcome",
-        "device_id",
-        "device_generation",
-        "accepted_sequence",
-        "next_sequence",
-        "usage_sync_revision",
-        "deleted_before",
-    ];
-    if outcome == Some("rejected") {
-        let mut keys = base_keys.to_vec();
-        keys.push("rejection_reason");
-        require_response_fields(value, &keys)?;
-    } else {
-        require_response_fields(value, &base_keys)?;
+    let mut answered = std::collections::BTreeSet::new();
+    for key in ["accepted", "ignored"] {
+        let list = object
+            .get(key)
+            .and_then(Value::as_array)
+            .ok_or(RelayError::InvalidResponse)?;
+        for item in list {
+            let item = item.as_str().ok_or(RelayError::InvalidResponse)?;
+            if !answered.insert(item.to_owned()) {
+                return Err(RelayError::InvalidResponse);
+            }
+        }
     }
-    if object.get("protocol_version").and_then(Value::as_i64) != Some(MANAGED_DATA_PROTOCOL)
-        || !matches!(
-            outcome,
-            Some(
-                "accepted"
-                    | "duplicate"
-                    | "rejected"
-                    | "partial"
-                    | "sequence_conflict"
-                    | "stale_generation"
-                    | "deleted"
-            )
-        )
-        || !object
-            .get("device_id")
-            .and_then(Value::as_str)
-            .is_some_and(is_opaque)
-        || object
-            .get("device_generation")
-            .and_then(safe_positive_u64)
-            .is_none()
-        || object.get("next_sequence").and_then(safe_u64).is_none()
-        || object
-            .get("usage_sync_revision")
-            .and_then(safe_u64)
-            .is_none()
-        || !object
-            .get("deleted_before")
-            .is_some_and(|value| value.is_null() || value.as_str().is_some_and(valid_rfc3339))
-    {
-        return Err(RelayError::InvalidResponse);
-    }
-    if (outcome == Some("rejected"))
-        != (object.get("rejection_reason").and_then(Value::as_str)
-            == Some("duplicate_fact_identity"))
-    {
-        return Err(RelayError::InvalidResponse);
-    }
-    let accepted = matches!(outcome, Some("accepted" | "duplicate"));
-    if accepted
-        != object.get("accepted_sequence").is_some_and(|value| {
-            value
-                .as_u64()
-                .is_some_and(|number| number <= MAXIMUM_SAFE_INTEGER)
-        })
-    {
+    if answered.len() != named.len() || named.iter().any(|name| !answered.contains(name)) {
         return Err(RelayError::InvalidResponse);
     }
     Ok(())
@@ -1132,8 +928,6 @@ fn validate_control_response(value: &Value) -> Result<(), RelayError> {
             "account_id",
             "device_id",
             "device_generation",
-            "next_snapshot_sequence",
-            "next_usage_sequence",
             "usage_deleted_before",
             "usage_sync_revision",
         ],
@@ -1153,14 +947,6 @@ fn validate_control_response(value: &Value) -> Result<(), RelayError> {
             .and_then(safe_positive_u64)
             .is_none()
         || object
-            .get("next_snapshot_sequence")
-            .and_then(safe_u64)
-            .is_none()
-        || object
-            .get("next_usage_sequence")
-            .and_then(safe_u64)
-            .is_none()
-        || object
             .get("usage_sync_revision")
             .and_then(safe_u64)
             .is_none()
@@ -1176,10 +962,27 @@ fn validate_control_response(value: &Value) -> Result<(), RelayError> {
 fn validate_account_summary(value: &Value) -> Result<(), RelayError> {
     require_response_fields(
         value,
-        &["protocol_version", "account", "devices", "quota", "usage"],
+        &[
+            "protocol_version",
+            "account",
+            "devices",
+            "subscriptions",
+            "usage",
+            "pricing_revision",
+            "model_catalog_revision",
+        ],
     )?;
     let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
-    if object.get("protocol_version").and_then(Value::as_i64) != Some(MANAGED_DATA_PROTOCOL) {
+    if object.get("protocol_version").and_then(Value::as_i64) != Some(MANAGED_DATA_PROTOCOL)
+        || ["pricing_revision", "model_catalog_revision"]
+            .iter()
+            .any(|key| {
+                !object
+                    .get(*key)
+                    .and_then(Value::as_str)
+                    .is_some_and(is_opaque)
+            })
+    {
         return Err(RelayError::InvalidResponse);
     }
     validate_account_record(object.get("account").ok_or(RelayError::InvalidResponse)?)?;
@@ -1191,25 +994,16 @@ fn validate_account_summary(value: &Value) -> Result<(), RelayError> {
     for device in devices {
         validate_account_device(device)?;
     }
-    let quota = object
-        .get("quota")
+    let subscriptions = object
+        .get("subscriptions")
         .and_then(Value::as_array)
-        .filter(|quota| quota.len() <= 8_192)
+        .filter(|subscriptions| subscriptions.len() <= 1_024)
         .ok_or(RelayError::InvalidResponse)?;
-    for observation in quota {
-        validate_quota_observation(observation)?;
+    for subscription in subscriptions {
+        validate_quota_subscription(subscription)?;
     }
-    validate_usage_summary(object.get("usage").ok_or(RelayError::InvalidResponse)?)?;
+    validate_account_usage(object.get("usage").ok_or(RelayError::InvalidResponse)?)?;
     Ok(())
-}
-
-fn validate_account_usage_response(value: &Value) -> Result<(), RelayError> {
-    require_response_fields(value, &["protocol_version", "usage"])?;
-    let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
-    if object.get("protocol_version").and_then(Value::as_i64) != Some(MANAGED_DATA_PROTOCOL) {
-        return Err(RelayError::InvalidResponse);
-    }
-    validate_usage_summary(object.get("usage").ok_or(RelayError::InvalidResponse)?)
 }
 
 fn validate_account_record(value: &Value) -> Result<(), RelayError> {
@@ -1235,28 +1029,21 @@ fn validate_account_record(value: &Value) -> Result<(), RelayError> {
     Ok(())
 }
 
+/// A device as an Account reads it: the two instants Relay witnessed.
 fn validate_account_device(value: &Value) -> Result<(), RelayError> {
     require_response_fields(
         value,
         &[
-            "device_id",
+            "id",
             "display_name",
             "platform",
-            "device_generation",
-            "status",
-            "created_at",
-            "last_login_at",
             "last_seen_at",
-            "signed_out_at",
+            "last_observed_at",
         ],
     )?;
     let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
-    let status = object.get("status").and_then(Value::as_str);
-    let signed_out = object
-        .get("signed_out_at")
-        .is_some_and(|value| value.is_null() || value.as_str().is_some_and(valid_rfc3339));
     if !object
-        .get("device_id")
+        .get("id")
         .and_then(Value::as_str)
         .is_some_and(is_opaque)
         || !object
@@ -1264,42 +1051,48 @@ fn validate_account_device(value: &Value) -> Result<(), RelayError> {
             .and_then(Value::as_str)
             .is_some_and(|value| valid_display(value, 128))
         || !valid_read_enum(object.get("platform").and_then(Value::as_str))
-        || object
-            .get("device_generation")
-            .and_then(safe_positive_u64)
-            .is_none()
-        || !valid_read_enum(status)
-        || !object
-            .get("created_at")
-            .and_then(Value::as_str)
-            .is_some_and(valid_rfc3339)
-        || !object
-            .get("last_login_at")
-            .and_then(Value::as_str)
-            .is_some_and(valid_rfc3339)
-        || !object
-            .get("last_seen_at")
-            .is_some_and(|value| value.is_null() || value.as_str().is_some_and(valid_rfc3339))
-        || !signed_out
-        || (status == Some("signed_out"))
-            != object
-                .get("signed_out_at")
-                .is_some_and(|value| !value.is_null())
+        || ["last_seen_at", "last_observed_at"].iter().any(|key| {
+            !object
+                .get(*key)
+                .is_some_and(|value| value.is_null() || value.as_str().is_some_and(valid_rfc3339))
+        })
     {
         return Err(RelayError::InvalidResponse);
     }
     Ok(())
 }
 
-fn validate_quota_observation(value: &Value) -> Result<(), RelayError> {
-    require_response_fields(value, &["device_id", "snapshot"])?;
+/// One subscription, already resolved, and every device whose reading stands behind it.
+fn validate_quota_subscription(value: &Value) -> Result<(), RelayError> {
+    require_response_fields(value, &["key", "provider", "snapshot", "sources"])?;
     let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
     if !object
-        .get("device_id")
+        .get("key")
         .and_then(Value::as_str)
-        .is_some_and(is_opaque)
+        .is_some_and(|value| !value.is_empty() && value.len() <= 512)
+        || !valid_read_enum(object.get("provider").and_then(Value::as_str))
     {
         return Err(RelayError::InvalidResponse);
+    }
+    let sources = object
+        .get("sources")
+        .and_then(Value::as_array)
+        .filter(|sources| sources.len() <= 256)
+        .ok_or(RelayError::InvalidResponse)?;
+    for source in sources {
+        require_response_fields(source, &["device_id", "observed_at"])?;
+        let source = source.as_object().ok_or(RelayError::InvalidResponse)?;
+        if !source
+            .get("device_id")
+            .and_then(Value::as_str)
+            .is_some_and(is_opaque)
+            || !source
+                .get("observed_at")
+                .and_then(Value::as_str)
+                .is_some_and(valid_rfc3339)
+        {
+            return Err(RelayError::InvalidResponse);
+        }
     }
     validate_quota_snapshot(
         object.get("snapshot").ok_or(RelayError::InvalidResponse)?,
@@ -1444,51 +1237,28 @@ fn validate_quota_window(value: &Value, wire: Wire) -> Result<(), RelayError> {
     Ok(())
 }
 
-fn validate_usage_summary(value: &Value) -> Result<(), RelayError> {
+/// The four periods an Account read answers.
+fn validate_account_usage(value: &Value) -> Result<(), RelayError> {
+    let keys = ["today", "last_7_days", "last_30_days", "all"];
+    require_response_fields(value, &keys)?;
     let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
-    let required = ["range", "totals", "cost", "coverage", "breakdowns"];
-    if required.iter().any(|key| !object.contains_key(*key))
-        || !valid_read_enum(object.get("coverage").and_then(Value::as_str))
-        || object
-            .get("breakdowns_truncated")
-            .is_some_and(|value| value != &Value::Bool(true))
-        || object
-            .get("model_catalog_revision")
-            .is_some_and(|value| !value.as_str().is_some_and(is_opaque))
-    {
-        return Err(RelayError::InvalidResponse);
-    }
-    validate_usage_date_range(object.get("range").ok_or(RelayError::InvalidResponse)?)?;
-    validate_usage_totals(object.get("totals").ok_or(RelayError::InvalidResponse)?)?;
-    validate_usage_cost(object.get("cost").ok_or(RelayError::InvalidResponse)?)?;
-    let breakdowns = object
-        .get("breakdowns")
-        .and_then(Value::as_array)
-        .filter(|breakdowns| breakdowns.len() <= 1_000)
-        .ok_or(RelayError::InvalidResponse)?;
-    for breakdown in breakdowns {
-        require_response_fields(breakdown, &["dimension", "key", "totals", "cost"])?;
-        let object = breakdown.as_object().ok_or(RelayError::InvalidResponse)?;
-        let dimension = object.get("dimension").and_then(Value::as_str);
-        let key = object.get("key").and_then(Value::as_str);
-        if !valid_read_enum(dimension)
-            || !key.is_some_and(|value| {
-                if dimension == Some("model") {
-                    valid_model_text(value)
-                } else {
-                    valid_display(value, 128)
-                }
-            })
-        {
-            return Err(RelayError::InvalidResponse);
-        }
-        validate_usage_totals(object.get("totals").ok_or(RelayError::InvalidResponse)?)?;
-        validate_usage_cost(object.get("cost").ok_or(RelayError::InvalidResponse)?)?;
-    }
-    if let Some(agents) = object.get("agents") {
-        validate_usage_agents(agents)?;
+    for key in keys {
+        validate_usage_period(object.get(key).ok_or(RelayError::InvalidResponse)?)?;
     }
     Ok(())
+}
+
+/// One period: its totals, its cost, whether an hour behind it was scanned incompletely, and
+/// the agent tree that makes up the difference.
+fn validate_usage_period(value: &Value) -> Result<(), RelayError> {
+    require_response_fields(value, &["totals", "cost", "partial", "agents"])?;
+    let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
+    if !object.get("partial").is_some_and(Value::is_boolean) {
+        return Err(RelayError::InvalidResponse);
+    }
+    validate_usage_summary_totals(object.get("totals").ok_or(RelayError::InvalidResponse)?)?;
+    validate_usage_cost(object.get("cost").ok_or(RelayError::InvalidResponse)?)?;
+    validate_usage_agents(object.get("agents").ok_or(RelayError::InvalidResponse)?)
 }
 
 fn validate_usage_agents(value: &Value) -> Result<(), RelayError> {
@@ -1497,28 +1267,22 @@ fn validate_usage_agents(value: &Value) -> Result<(), RelayError> {
         .filter(|agents| agents.len() <= crate::usage::UsageAgent::ALL.len())
         .ok_or(RelayError::InvalidResponse)?;
     for agent in agents {
-        require_response_fields(agent, &["agent", "totals", "cost", "providers"])?;
+        require_response_fields(agent, &["agent", "providers"])?;
         let object = agent.as_object().ok_or(RelayError::InvalidResponse)?;
         if !valid_read_enum(object.get("agent").and_then(Value::as_str)) {
             return Err(RelayError::InvalidResponse);
         }
-        validate_usage_summary_totals(object.get("totals").ok_or(RelayError::InvalidResponse)?)?;
-        validate_usage_cost(object.get("cost").ok_or(RelayError::InvalidResponse)?)?;
         let providers = object
             .get("providers")
             .and_then(Value::as_array)
             .filter(|providers| providers.len() <= crate::usage::InferenceProvider::ALL.len())
             .ok_or(RelayError::InvalidResponse)?;
         for provider in providers {
-            require_response_fields(provider, &["provider", "totals", "cost", "models"])?;
+            require_response_fields(provider, &["provider", "models"])?;
             let object = provider.as_object().ok_or(RelayError::InvalidResponse)?;
             if !valid_read_enum(object.get("provider").and_then(Value::as_str)) {
                 return Err(RelayError::InvalidResponse);
             }
-            validate_usage_summary_totals(
-                object.get("totals").ok_or(RelayError::InvalidResponse)?,
-            )?;
-            validate_usage_cost(object.get("cost").ok_or(RelayError::InvalidResponse)?)?;
             let models = object
                 .get("models")
                 .and_then(Value::as_array)
@@ -1568,106 +1332,6 @@ fn validate_usage_summary_totals(value: &Value) -> Result<(), RelayError> {
         || count("reasoning_tokens").is_none_or(|reasoning| reasoning > output)
         || count("messages").is_none()
     {
-        return Err(RelayError::InvalidResponse);
-    }
-    Ok(())
-}
-
-fn validate_usage_date_range(value: &Value) -> Result<(), RelayError> {
-    require_response_fields(value, &["from", "to"])?;
-    let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
-    let from = object
-        .get("from")
-        .and_then(Value::as_str)
-        .ok_or(RelayError::InvalidResponse)?;
-    let to = object
-        .get("to")
-        .and_then(Value::as_str)
-        .ok_or(RelayError::InvalidResponse)?;
-    let from_date = chrono::NaiveDate::parse_from_str(from, "%Y-%m-%d")
-        .map_err(|_| RelayError::InvalidResponse)?;
-    let to_date = chrono::NaiveDate::parse_from_str(to, "%Y-%m-%d")
-        .map_err(|_| RelayError::InvalidResponse)?;
-    if from.len() != 10 || to.len() != 10 || from_date > to_date {
-        return Err(RelayError::InvalidResponse);
-    }
-    Ok(())
-}
-
-fn validate_usage_totals(value: &Value) -> Result<(), RelayError> {
-    let keys = [
-        "input_tokens",
-        "cache_read_tokens",
-        "cache_write_5m_tokens",
-        "cache_write_1h_tokens",
-        "cache_write_inferred_tokens",
-        "output_tokens",
-        "reasoning_tokens",
-        "requests",
-        "web_search_requests",
-        "web_fetch_requests",
-        "source_cost_microusd",
-        "source_cost_covered_requests",
-    ];
-    require_response_fields(value, &keys)?;
-    let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
-    if keys[..keys.len() - 1]
-        .iter()
-        .any(|key| *key != "source_cost_microusd" && object.get(*key).and_then(safe_u64).is_none())
-        || object.get("source_cost_microusd").is_some_and(|value| {
-            !value.is_null() && !value.as_str().is_some_and(valid_decimal_integer)
-        })
-        || object
-            .get("source_cost_covered_requests")
-            .and_then(safe_u64)
-            .is_none()
-    {
-        return Err(RelayError::InvalidResponse);
-    }
-
-    let input_tokens = object["input_tokens"]
-        .as_u64()
-        .ok_or(RelayError::InvalidResponse)?;
-    let classified_input = [
-        "cache_read_tokens",
-        "cache_write_5m_tokens",
-        "cache_write_1h_tokens",
-        "cache_write_inferred_tokens",
-    ]
-    .into_iter()
-    .try_fold(0u64, |total, key| total.checked_add(object[key].as_u64()?))
-    .filter(|total| *total <= MAXIMUM_SAFE_INTEGER)
-    .ok_or(RelayError::InvalidResponse)?;
-    if classified_input > input_tokens {
-        return Err(RelayError::InvalidResponse);
-    }
-
-    let output_tokens = object["output_tokens"]
-        .as_u64()
-        .ok_or(RelayError::InvalidResponse)?;
-    if object["reasoning_tokens"]
-        .as_u64()
-        .ok_or(RelayError::InvalidResponse)?
-        > output_tokens
-    {
-        return Err(RelayError::InvalidResponse);
-    }
-
-    let requests = object["requests"]
-        .as_u64()
-        .ok_or(RelayError::InvalidResponse)?;
-    let source_cost_covered_requests = object["source_cost_covered_requests"]
-        .as_u64()
-        .ok_or(RelayError::InvalidResponse)?;
-    if source_cost_covered_requests > requests
-        || (requests == 0
-            && (object["web_search_requests"].as_u64() != Some(0)
-                || object["web_fetch_requests"].as_u64() != Some(0)))
-    {
-        return Err(RelayError::InvalidResponse);
-    }
-    let has_source_cost = object["source_cost_microusd"].as_str().is_some();
-    if has_source_cost != (source_cost_covered_requests > 0) {
         return Err(RelayError::InvalidResponse);
     }
     Ok(())
@@ -2058,8 +1722,17 @@ impl AccountManager {
     /// Refreshes both token families before an account read.  The server performs compare-and-swap
     /// rotation; this process is the sole local writer, so writing the response is atomic at the
     /// SQLite row boundary.
-    pub fn refresh_account_state(&self, cancel: &AtomicBool) -> Result<Value, BackendError> {
-        let (summary, session) = self.read_account_summary("cost_mode=auto", cancel)?;
+    /// Reads the whole Account once, in the calendar this device keeps.
+    ///
+    /// `timezone` decides which UTC days the four periods name; a day itself is a UTC day,
+    /// because that is the grain the rollup behind them keeps.
+    pub fn refresh_account_state(
+        &self,
+        timezone: &str,
+        cancel: &AtomicBool,
+    ) -> Result<Value, BackendError> {
+        let query = format!("tz={timezone}");
+        let (summary, session) = self.read_account_summary(&query, cancel)?;
         let account_id = session
             .get("account_id")
             .and_then(Value::as_str)
@@ -2077,16 +1750,6 @@ impl AccountManager {
             account_summary: Some(summary),
         })
         .unwrap_or(Value::Null))
-    }
-
-    pub fn account_usage(&self, query: &str, cancel: &AtomicBool) -> Result<Value, BackendError> {
-        // /api/v5/account/usage/summary still materializes hourly facts with a 1_000-row
-        // cap and returns 413 for a 30-day window. Account summary uses the 100_000-row path.
-        let (summary, _) = self.read_account_summary(query, cancel)?;
-        summary
-            .get("usage")
-            .cloned()
-            .ok_or_else(BackendError::unavailable)
     }
 
     fn read_account_summary(
@@ -2267,8 +1930,6 @@ impl AccountManager {
         }
         for (source, target) in [
             ("device_generation", "device_generation"),
-            ("next_snapshot_sequence", "next_snapshot_sequence"),
-            ("next_usage_sequence", "next_usage_sequence"),
             ("usage_sync_revision", "usage_sync_revision"),
             ("usage_deleted_before", "usage_deleted_before"),
         ] {
@@ -2315,8 +1976,7 @@ impl AccountManager {
             return Err(session_changed_error());
         }
         let token = session_access_token_from(&session, "device")?;
-        let (report_captured_at, snapshots) =
-            snapshot_payload_from_quota_report(report, republished)?;
+        let (_, snapshots) = snapshot_payload_from_quota_report(report, republished)?;
         let expected_device_id = session
             .get("device_id")
             .and_then(Value::as_str)
@@ -2325,16 +1985,9 @@ impl AccountManager {
             .get("device_generation")
             .and_then(Value::as_u64)
             .ok_or_else(BackendError::unavailable)?;
-        let expected_sequence = session
-            .get("next_snapshot_sequence")
-            .and_then(Value::as_u64)
-            .ok_or_else(BackendError::unavailable)?;
         let envelope = serde_json::json!({
             "protocol_version": MANAGED_DATA_PROTOCOL,
-            "device_id": expected_device_id,
             "generation": expected_generation,
-            "sequence": expected_sequence,
-            "captured_at": report_captured_at,
             "snapshots": snapshots
         });
         if !self
@@ -2360,7 +2013,6 @@ impl AccountManager {
         if response.get("device_id").and_then(Value::as_str) != Some(expected_device_id)
             || response.get("device_generation").and_then(Value::as_u64)
                 != Some(expected_generation)
-            || response.get("accepted_sequence").and_then(Value::as_u64) != Some(expected_sequence)
         {
             return Err(BackendError {
                 error: crate::protocol::IpcError::new(
@@ -2368,18 +2020,6 @@ impl AccountManager {
                     crate::protocol::RecoveryAction::Retry,
                 ),
             });
-        }
-        if let Some(next) = response.get("next_snapshot_sequence") {
-            let mut session = session;
-            session["next_snapshot_sequence"] = next.clone();
-            if self
-                .state
-                .write_session_json_if_epoch(&session, session_epoch)
-                .map_err(|_| BackendError::unavailable())?
-                .is_none()
-            {
-                return Err(session_changed_error());
-            }
         }
         Ok(response)
     }
@@ -2421,44 +2061,6 @@ impl AccountManager {
             return Err(session_changed_error());
         }
         Ok(response)
-    }
-
-    pub fn record_usage_response(&self, response: &Value) -> Result<(), BackendError> {
-        let outcome = response
-            .get("outcome")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        if !matches!(outcome, "accepted" | "duplicate" | "rejected") {
-            return Ok(());
-        }
-        let (mut session, epoch) = self
-            .state
-            .session_snapshot()
-            .map_err(|_| BackendError::unavailable())?
-            .ok_or_else(BackendError::unavailable)?;
-        if !is_active_session(&session)
-            || !self
-                .state
-                .active_session_at_epoch(epoch)
-                .map_err(|_| BackendError::unavailable())?
-        {
-            return Err(session_changed_error());
-        }
-        if let Some(value) = response.get("next_sequence") {
-            session["next_usage_sequence"] = value.clone();
-        }
-        if let Some(value) = response.get("usage_sync_revision") {
-            session["usage_sync_revision"] = value.clone();
-        }
-        if self
-            .state
-            .write_session_json_if_epoch(&session, epoch)
-            .map_err(|_| BackendError::unavailable())?
-            .is_none()
-        {
-            return Err(session_changed_error());
-        }
-        Ok(())
     }
 
     fn ensure_fresh_session(
@@ -2639,14 +2241,14 @@ fn snapshot_payload_from_quota_report<'a>(
 /// Relay outcome behind it, which is how a queue could sit wedged for a week
 /// reporting `attempted: 0`. An ordering the Relay will not take costs one
 /// rejected request; it can never be stored, because the Relay checks it too.
+/// The upload names the generation it was staged for. A device token names the device, so a
+/// generation that has moved on since means this payload belongs to a session that is gone.
 fn validate_usage_submission_session(
     session: &Value,
     submission: &Value,
 ) -> Result<(), BackendError> {
-    if session.get("device_id").and_then(Value::as_str)
-        != submission.get("device_id").and_then(Value::as_str)
-        || session.get("device_generation").and_then(Value::as_u64)
-            != submission.get("generation").and_then(Value::as_u64)
+    if session.get("device_generation").and_then(Value::as_u64)
+        != submission.get("generation").and_then(Value::as_u64)
     {
         return Err(session_changed_error());
     }
@@ -2733,8 +2335,6 @@ fn session_from_token_response(response: &Value) -> Result<Value, RelayError> {
             "account_id",
             "device_id",
             "device_generation",
-            "next_snapshot_sequence",
-            "next_usage_sequence",
             "usage_deleted_before",
             "usage_sync_revision",
             "account_session",
@@ -2760,14 +2360,6 @@ fn session_from_token_response(response: &Value) -> Result<Value, RelayError> {
         .get("device_generation")
         .and_then(safe_positive_u64)
         .ok_or(RelayError::InvalidResponse)?;
-    let next_snapshot_sequence = object
-        .get("next_snapshot_sequence")
-        .and_then(safe_u64)
-        .ok_or(RelayError::InvalidResponse)?;
-    let next_usage_sequence = object
-        .get("next_usage_sequence")
-        .and_then(safe_u64)
-        .ok_or(RelayError::InvalidResponse)?;
     let usage_sync_revision = object
         .get("usage_sync_revision")
         .and_then(safe_u64)
@@ -2791,8 +2383,6 @@ fn session_from_token_response(response: &Value) -> Result<Value, RelayError> {
         "account_id": account_id,
         "device_id": device_id,
         "device_generation": generation,
-        "next_snapshot_sequence": next_snapshot_sequence,
-        "next_usage_sequence": next_usage_sequence,
         "usage_sync_revision": usage_sync_revision,
         "usage_deleted_before": usage_deleted_before,
         "upload_not_before": "1970-01-01T00:00:00Z",
@@ -3222,108 +2812,94 @@ mod tests {
         assert!(
             validate_usage_submission(&serde_json::json!({
                 "protocol_version": MANAGED_DATA_PROTOCOL,
-                "submission_id": "x",
-                "device_id": "d",
                 "generation": 1,
-                "sequence": 0,
-                "parser_revision": "rust-v1",
-                "aggregation_timezone": "UTC",
-                "coverage": {
-                    "agent": "codex",
-                    "start_at": "2026-08-10T00:00:00Z",
-                    "end_at": "2026-08-10T01:00:00Z",
-                    "status": "complete"
-                },
-                "rows": []
+                "agent": "codex",
+                "hours": []
             }))
             .is_ok()
         );
         assert!(validate_usage_submission(&serde_json::json!({"protocol_version": 1})).is_err());
 
-        let opaque_model = serde_json::json!({
+        let hour = |bucket_start_utc: &str| {
+            serde_json::json!({
+                "bucket_start_utc": bucket_start_utc,
+                "scan_version": 1,
+                "partial": false,
+                "rows": [{
+                    "agent": "codex",
+                    "billing_channel": "openai_direct",
+                    "channel_source": "agent_default",
+                    "model": "unknown",
+                    "context_bucket": "le_128k",
+                    "service_tier": "unknown",
+                    "speed": "unknown",
+                    "inference_geo": "unknown",
+                    "input_tokens": 10,
+                    "cache_read_tokens": 0,
+                    "cache_write_5m_tokens": 0,
+                    "cache_write_1h_tokens": 0,
+                    "cache_write_inferred_tokens": 0,
+                    "output_tokens": 2,
+                    "reasoning_tokens": 0,
+                    "requests": 1,
+                    "web_search_requests": 0,
+                    "web_fetch_requests": 0,
+                    "source_cost_covered_requests": 0
+                }]
+            })
+        };
+        // A model is provider-owned opaque text, and the literal "unknown" is a valid one.
+        let mut upload = serde_json::json!({
             "protocol_version": MANAGED_DATA_PROTOCOL,
-            "submission_id": "legacy",
-            "device_id": "device",
             "generation": 1,
-            "sequence": 0,
-            "parser_revision": "rust-v1",
-            "aggregation_timezone": "UTC",
-            "coverage": {
-                "agent": "codex",
-                "start_at": "2026-08-10T00:00:00Z",
-                "end_at": "2026-08-10T01:00:00Z",
-                "status": "complete"
-            },
-            "rows": [{
-                "bucket_start_utc": "2026-08-10T00:00:00Z",
-                "usage_date": "2026-08-10",
-                "usage_hour": 0,
-                "agent": "codex",
-                "billing_channel": "openai_direct",
-                "channel_source": "agent_default",
-                "model": "unknown",
-                "context_bucket": "le_128k",
-                "service_tier": "unknown",
-                "speed": "unknown",
-                "inference_geo": "unknown",
-                "input_tokens": 10,
-                "cache_read_tokens": 0,
-                "cache_write_5m_tokens": 0,
-                "cache_write_1h_tokens": 0,
-                "cache_write_inferred_tokens": 0,
-                "output_tokens": 2,
-                "reasoning_tokens": 0,
-                "requests": 1,
-                "web_search_requests": 0,
-                "web_fetch_requests": 0,
-                "source_cost_covered_requests": 0
-            }]
+            "agent": "codex",
+            "hours": [hour("2026-08-10T00:00:00Z")]
         });
-        assert!(validate_usage_submission(&opaque_model).is_ok());
+        assert!(validate_usage_submission(&upload).is_ok());
+
+        upload["hours"] = serde_json::json!(
+            (0..=crate::usage::MAX_USAGE_HOURS_PER_UPLOAD)
+                .map(|index| hour(
+                    &chrono::DateTime::parse_from_rfc3339("2026-08-10T00:00:00Z")
+                        .expect("base hour")
+                        .checked_add_signed(chrono::Duration::hours(index as i64))
+                        .expect("hour")
+                        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+                ))
+                .collect::<Vec<_>>()
+        );
+        assert!(validate_usage_submission(&upload).is_err());
     }
 
+    /// Every hour an upload names comes back in exactly one list, and the two lists together
+    /// are exactly what was sent.
     #[test]
-    fn multipart_and_report_truncation_markers_are_strict() {
-        let mut submission = serde_json::json!({
-            "protocol_version": MANAGED_DATA_PROTOCOL,
-            "submission_id": "x",
-            "device_id": "d",
-            "generation": 1,
-            "sequence": 0,
-            "parser_revision": "rust-v1",
-            "aggregation_timezone": "UTC",
-            "coverage": {
-                "agent": "codex",
-                "start_at": "2026-08-10T00:00:00Z",
-                "end_at": "2026-08-10T01:00:00Z",
-                "status": "complete"
-            },
-            "rows": [],
-            "multipart": {"batch_id": "batch", "part_index": 63, "part_count": 64}
-        });
-        assert!(validate_usage_submission(&submission).is_ok());
-        submission["multipart"]["part_count"] = serde_json::json!(65);
-        assert!(validate_usage_submission(&submission).is_err());
-
-        let mut snapshot = valid_snapshot();
-        let mut envelope = serde_json::json!({
+    fn an_upload_response_answers_for_every_name_it_was_given() {
+        let named = vec![
+            "2026-08-10T00:00:00Z".to_owned(),
+            "2026-08-10T01:00:00Z".to_owned(),
+        ];
+        let mut response = serde_json::json!({
             "protocol_version": MANAGED_DATA_PROTOCOL,
             "device_id": "device_1",
-            "generation": 1,
-            "sequence": 0,
-            "captured_at": "2026-08-10T00:00:00Z",
-            "snapshots": [snapshot.clone()]
+            "device_generation": 1,
+            "accepted": ["2026-08-10T00:00:00Z"],
+            "ignored": ["2026-08-10T01:00:00Z"]
         });
-        envelope["multipart"] = serde_json::json!({"batch_id": "batch", "part_index": 0});
-        assert!(validate_snapshot_envelope(&envelope).is_err());
-        snapshot["status"] = serde_json::json!("available");
+        assert!(validate_upload_response(&response, &named).is_ok());
 
-        let item = serde_json::json!({
-            "billing_channel": "openai_direct",
-            "model": "model",
-            "reason": "missing_rate",
-            "rows": 1
-        });
+        // An hour in both lists, or one nobody asked about, is not an answer.
+        response["ignored"] = serde_json::json!(["2026-08-10T00:00:00Z"]);
+        assert!(validate_upload_response(&response, &named).is_err());
+        response["ignored"] = serde_json::json!([]);
+        assert!(validate_upload_response(&response, &named).is_err());
+        response["ignored"] = serde_json::json!(["2026-08-10T02:00:00Z"]);
+        assert!(validate_upload_response(&response, &named).is_err());
+    }
+
+    /// A truncation marker means one thing, so a payload that says otherwise is refused.
+    #[test]
+    fn report_truncation_markers_are_strict() {
         let mut cost = serde_json::json!({
             "mode": "reported",
             "basis": "reported",
@@ -3334,13 +2910,17 @@ mod tests {
             "reported_rows": 1,
             "unpriced_rows": 2,
             "assumptions": [],
-            "unpriced": [item.clone()],
+            "unpriced": [{
+                "billing_channel": "openai_direct",
+                "model": "model",
+                "reason": "missing_rate",
+                "rows": 1
+            }],
             "unpriced_truncated": true
         });
         assert!(validate_usage_cost(&cost).is_ok());
+        // A model is provider-owned opaque text.
         cost["unpriced"][0]["model"] = serde_json::json!("GPT-5.5[1m]");
-        assert!(validate_usage_cost(&cost).is_ok());
-        cost["unpriced"][0]["model"] = serde_json::json!("😀".repeat(128));
         assert!(validate_usage_cost(&cost).is_ok());
         cost["unpriced"][0]["model"] = serde_json::json!("model\u{0001}");
         assert!(validate_usage_cost(&cost).is_err());
@@ -3350,110 +2930,6 @@ mod tests {
         cost["unpriced"][0]["rows"] = serde_json::json!(1);
         cost["unpriced_truncated"] = serde_json::json!(false);
         assert!(validate_usage_cost(&cost).is_err());
-
-        let totals = serde_json::json!({
-            "input_tokens": 0,
-            "cache_read_tokens": 0,
-            "cache_write_5m_tokens": 0,
-            "cache_write_1h_tokens": 0,
-            "cache_write_inferred_tokens": 0,
-            "output_tokens": 0,
-            "reasoning_tokens": 0,
-            "requests": 0,
-            "web_search_requests": 0,
-            "web_fetch_requests": 0,
-            "source_cost_microusd": null,
-            "source_cost_covered_requests": 0
-        });
-        let mut summary = serde_json::json!({
-            "range": {"from": "2026-08-10", "to": "2026-08-10"},
-            "totals": totals,
-            "cost": cost,
-            "coverage": "complete",
-            "breakdowns": [],
-            "breakdowns_truncated": true
-        });
-        summary["cost"]["unpriced_rows"] = serde_json::json!(1);
-        summary["cost"]["unpriced_truncated"] = serde_json::json!(true);
-        summary["breakdowns"] = serde_json::json!([{
-            "dimension": "model",
-            "key": "GPT-5.5[1m]",
-            "totals": summary["totals"].clone(),
-            "cost": summary["cost"].clone()
-        }]);
-        assert!(validate_usage_summary(&summary).is_ok());
-        summary["breakdowns_truncated"] = serde_json::json!(false);
-        assert!(validate_usage_summary(&summary).is_err());
-        summary["breakdowns_truncated"] = serde_json::json!(true);
-        // A verdict is one of three words; the windows it was derived from are not an answer.
-        summary["coverage"] = serde_json::json!([]);
-        assert!(validate_usage_summary(&summary).is_err());
-    }
-
-    #[test]
-    fn rejected_usage_response_is_terminal_and_keeps_normal_response_shape() {
-        let normal = serde_json::json!({
-            "protocol_version": MANAGED_DATA_PROTOCOL,
-            "outcome": "accepted",
-            "device_id": "device_1",
-            "device_generation": 1,
-            "accepted_sequence": 4,
-            "next_sequence": 5,
-            "usage_sync_revision": 2,
-            "deleted_before": null
-        });
-        assert!(validate_usage_response(&normal).is_ok());
-
-        let mut rejected = serde_json::json!({
-            "protocol_version": MANAGED_DATA_PROTOCOL,
-            "outcome": "rejected",
-            "device_id": "device_1",
-            "device_generation": 1,
-            "accepted_sequence": null,
-            "next_sequence": 5,
-            "usage_sync_revision": 2,
-            "deleted_before": null,
-            "rejection_reason": "duplicate_fact_identity"
-        });
-        assert!(validate_usage_response(&rejected).is_ok());
-        rejected
-            .as_object_mut()
-            .expect("response")
-            .remove("rejection_reason");
-        assert!(validate_usage_response(&rejected).is_err());
-    }
-
-    #[test]
-    fn usage_totals_reject_inconsistent_subsets_and_source_cost() {
-        let mut totals = serde_json::json!({
-            "input_tokens": 1,
-            "cache_read_tokens": 1,
-            "cache_write_5m_tokens": 0,
-            "cache_write_1h_tokens": 0,
-            "cache_write_inferred_tokens": 0,
-            "output_tokens": 1,
-            "reasoning_tokens": 1,
-            "requests": 1,
-            "web_search_requests": 0,
-            "web_fetch_requests": 0,
-            "source_cost_microusd": null,
-            "source_cost_covered_requests": 0
-        });
-        assert!(validate_usage_totals(&totals).is_ok());
-
-        totals["input_tokens"] = serde_json::json!(0);
-        assert!(validate_usage_totals(&totals).is_err());
-        totals["input_tokens"] = serde_json::json!(1);
-        totals["reasoning_tokens"] = serde_json::json!(2);
-        assert!(validate_usage_totals(&totals).is_err());
-        totals["reasoning_tokens"] = serde_json::json!(1);
-        totals["source_cost_covered_requests"] = serde_json::json!(2);
-        assert!(validate_usage_totals(&totals).is_err());
-        totals["source_cost_covered_requests"] = serde_json::json!(1);
-        totals["source_cost_microusd"] = serde_json::json!("2");
-        assert!(validate_usage_totals(&totals).is_ok());
-        totals["source_cost_microusd"] = serde_json::Value::Null;
-        assert!(validate_usage_totals(&totals).is_err());
     }
 
     #[test]
@@ -3488,58 +2964,18 @@ mod tests {
 
     #[test]
     fn usage_submission_must_match_the_current_device_session() {
-        let session = serde_json::json!({
-            "device_id": "device_1",
-            "device_generation": 2,
-            "next_usage_sequence": 4
-        });
+        let session = serde_json::json!({"device_id": "device_1", "device_generation": 2});
         assert!(
-            validate_usage_submission_session(
-                &session,
-                &serde_json::json!({"device_id": "device_1", "generation": 2, "sequence": 4})
-            )
-            .is_ok()
-        );
-        assert_eq!(
-            validate_usage_submission_session(
-                &session,
-                &serde_json::json!({"device_id": "device_2", "generation": 2, "sequence": 4})
-            )
-            .expect_err("device mismatch")
-            .error
-            .code,
-            crate::protocol::ErrorCode::AuthenticationRequired
-        );
-        assert_eq!(
-            validate_usage_submission_session(
-                &session,
-                &serde_json::json!({"device_id": "device_1", "generation": 3, "sequence": 4})
-            )
-            .expect_err("generation mismatch")
-            .error
-            .code,
-            crate::protocol::ErrorCode::AuthenticationRequired
-        );
-        // Ordering is the Relay's answer, so every sequence leaves here: a replay
-        // below the session's next releases a lost acknowledgement, and one above it
-        // is refused by the Relay with an outcome attached rather than silently here.
-        for sequence in [
-            serde_json::json!(3),
-            serde_json::json!(4),
-            serde_json::json!(5),
-        ] {
-            assert!(
-                validate_usage_submission_session(
-                    &session,
-                    &serde_json::json!({
-                        "device_id": "device_1",
-                        "generation": 2,
-                        "sequence": sequence
-                    })
-                )
+            validate_usage_submission_session(&session, &serde_json::json!({"generation": 2}))
                 .is_ok()
-            );
-        }
+        );
+        assert_eq!(
+            validate_usage_submission_session(&session, &serde_json::json!({"generation": 3}))
+                .expect_err("generation mismatch")
+                .error
+                .code,
+            crate::protocol::ErrorCode::AuthenticationRequired
+        );
     }
 
     #[test]
@@ -3547,23 +2983,21 @@ mod tests {
         let snapshot = valid_snapshot();
         let mut envelope = serde_json::json!({
             "protocol_version": MANAGED_DATA_PROTOCOL,
-            "device_id": "device_1",
             "generation": 1,
-            "sequence": 0,
-            "captured_at": "2026-08-10T00:00:00Z",
             "snapshots": [snapshot.clone()]
         });
         assert!(validate_snapshot_envelope(&envelope).is_ok());
         envelope["generation"] = serde_json::json!(0);
         assert!(validate_snapshot_envelope(&envelope).is_err());
         envelope["generation"] = serde_json::json!(1);
-        envelope["device_id"] = serde_json::json!("_not_opaque");
-        assert!(validate_snapshot_envelope(&envelope).is_err());
+        // The device token names the device, so an envelope that names one is not the contract.
         envelope["device_id"] = serde_json::json!("device_1");
-        envelope["snapshots"] = serde_json::json!(vec![snapshot; 33]);
         assert!(validate_snapshot_envelope(&envelope).is_err());
-        envelope["snapshots"] = serde_json::json!([]);
-        envelope["sequence"] = serde_json::json!(9_007_199_254_740_992u64);
+        envelope
+            .as_object_mut()
+            .expect("envelope")
+            .remove("device_id");
+        envelope["snapshots"] = serde_json::json!(vec![snapshot; 33]);
         assert!(validate_snapshot_envelope(&envelope).is_err());
     }
 
@@ -3575,8 +3009,6 @@ mod tests {
             "account_id": "account_1",
             "device_id": "device_1",
             "device_generation": 1,
-            "next_snapshot_sequence": 0,
-            "next_usage_sequence": 0,
             "usage_deleted_before": null,
             "usage_sync_revision": 0,
             "account_session": valid_token(),
@@ -3584,7 +3016,7 @@ mod tests {
         });
         assert!(session_from_token_response(&response).is_ok());
         let mut unsafe_response = response.clone();
-        unsafe_response["next_usage_sequence"] = serde_json::json!(9_007_199_254_740_992u64);
+        unsafe_response["usage_sync_revision"] = serde_json::json!(9_007_199_254_740_992u64);
         assert!(session_from_token_response(&unsafe_response).is_err());
         let mut invalid_expiry = response;
         invalid_expiry["account_session"]["access_expires_at"] = serde_json::json!("tomorrow");
@@ -3708,27 +3140,31 @@ mod tests {
 
     #[test]
     fn account_summary_nested_shape_is_checked() {
-        let value = serde_json::json!({
-            "protocol_version": MANAGED_DATA_PROTOCOL,
-            "account": {
-                "account_id": "account_1",
-                "display_label": null,
-                "created_at": "2026-08-09T00:00:00Z"
-            },
-            "devices": [],
-            "quota": [],
-            "usage": {
-                "range": {"from": "2026-08-09", "to": "2026-08-10"},
-                "totals": valid_totals(),
-                "cost": valid_cost(),
-                "coverage": "complete",
-                "breakdowns": []
-            }
-        });
-        assert!(validate_account_summary(&value).is_ok());
+        let value = valid_summary(serde_json::json!([]));
+        assert!(validate_account_summary(&value).is_ok(), "{value}");
+
+        // A resolved subscription names its key, its reading, and every device behind it.
+        let mut resolved = value.clone();
+        resolved["subscriptions"] = serde_json::json!([{
+            "key": "codex|fingerprint_1|global|",
+            "provider": "codex",
+            "snapshot": valid_snapshot(),
+            "sources": [{"device_id": "device_1", "observed_at": "2026-08-10T00:00:00Z"}]
+        }]);
+        resolved["devices"] = serde_json::json!([{
+            "id": "device_1",
+            "display_name": "Studio",
+            "platform": "macos",
+            "last_seen_at": "2026-08-10T00:01:00Z",
+            "last_observed_at": "2026-08-10T00:00:00Z"
+        }]);
+        assert!(validate_account_summary(&resolved).is_ok());
+        resolved["subscriptions"][0]["sources"][0]["observed_at"] = serde_json::json!("tomorrow");
+        assert!(validate_account_summary(&resolved).is_err());
+
         let mut structured = value.clone();
-        structured["usage"]["agents"] = serde_json::json!([{
-            "agent": "codex",
+        let model = serde_json::json!({
+            "model": "gpt-5.6-sol",
             "totals": {
                 "total_tokens": 12,
                 "input_tokens": 10,
@@ -3738,37 +3174,25 @@ mod tests {
                 "reasoning_tokens": 0,
                 "messages": 1
             },
-            "cost": valid_cost(),
-            "providers": [{
-                "provider": "openai",
-                "totals": {
-                    "total_tokens": 12,
-                    "input_tokens": 10,
-                    "output_tokens": 2,
-                    "cache_read_input_tokens": 0,
-                    "cache_write_input_tokens": 0,
-                    "reasoning_tokens": 0,
-                    "messages": 1
-                },
-                "cost": valid_cost(),
-                "models": [{
-                    "model": "gpt-5.6-sol",
-                    "totals": {
-                        "total_tokens": 12,
-                        "input_tokens": 10,
-                        "output_tokens": 2,
-                        "cache_read_input_tokens": 0,
-                        "cache_write_input_tokens": 0,
-                        "reasoning_tokens": 0,
-                        "messages": 1
-                    },
-                    "cost": valid_cost()
-                }]
-            }]
+            "cost": valid_cost()
+        });
+        structured["usage"]["today"]["agents"] = serde_json::json!([{
+            "agent": "codex",
+            "providers": [{"provider": "openai", "models": [model]}]
         }]);
         assert!(validate_account_summary(&structured).is_ok());
-        structured["usage"]["agents"][0]["totals"]["total_tokens"] = serde_json::json!(13);
+        structured["usage"]["today"]["agents"][0]["providers"][0]["models"][0]["totals"]["total_tokens"] =
+            serde_json::json!(13);
         assert!(validate_account_summary(&structured).is_err());
+
+        // A summary that still sends the observations Relay resolves is the retired contract.
+        let mut retired = value.clone();
+        retired
+            .as_object_mut()
+            .expect("summary")
+            .remove("subscriptions");
+        retired["quota"] = serde_json::json!([]);
+        assert!(validate_account_summary(&retired).is_err());
 
         // A Relay newer than this build can name a field it does not read; the read stands.
         let mut extra = value;
@@ -3795,42 +3219,15 @@ mod tests {
             .map(|provider| {
                 serde_json::json!({
                     "provider": provider.as_str(),
-                    "totals": totals,
-                    "cost": valid_cost(),
                     "models": [{"model": "gpt-5.6-sol", "totals": totals, "cost": valid_cost()}]
                 })
             })
             .collect::<Vec<_>>();
         let agents = crate::usage::UsageAgent::ALL
             .iter()
-            .map(|agent| {
-                serde_json::json!({
-                    "agent": agent.as_str(),
-                    "totals": totals,
-                    "cost": valid_cost(),
-                    "providers": providers
-                })
-            })
+            .map(|agent| serde_json::json!({"agent": agent.as_str(), "providers": providers}))
             .collect::<Vec<_>>();
-        let summary = serde_json::json!({
-            "protocol_version": MANAGED_DATA_PROTOCOL,
-            "account": {
-                "account_id": "account_1",
-                "display_label": null,
-                "created_at": "2026-08-09T00:00:00Z"
-            },
-            "devices": [],
-            "quota": [],
-            "usage": {
-                "range": {"from": "2026-08-09", "to": "2026-08-10"},
-                "totals": valid_totals(),
-                "cost": valid_cost(),
-                "coverage": "complete",
-                "breakdowns": [],
-                "agents": agents
-            }
-        });
-
+        let summary = valid_summary(serde_json::json!(agents));
         assert!(
             validate_account_summary(&summary).is_ok(),
             "{:?}",
@@ -3838,14 +3235,14 @@ mod tests {
         );
 
         let mut unknown = summary;
-        unknown["usage"]["agents"][0]["providers"][0]["provider"] =
+        unknown["usage"]["today"]["agents"][0]["providers"][0]["provider"] =
             serde_json::json!("not_a_provider");
-        unknown["usage"]["agents"][0]["agent"] = serde_json::json!("an_agent_from_2027");
+        unknown["usage"]["today"]["agents"][0]["agent"] = serde_json::json!("an_agent_from_2027");
         assert!(validate_account_summary(&unknown).is_ok());
 
         // Shape is still shape: a member that is not bounded text is not a member.
         let mut malformed = unknown;
-        malformed["usage"]["agents"][0]["agent"] = serde_json::json!(7);
+        malformed["usage"]["today"]["agents"][0]["agent"] = serde_json::json!(7);
         assert!(validate_account_summary(&malformed).is_err());
     }
 
@@ -3860,7 +3257,7 @@ mod tests {
         )]);
         let client = RelayClient::for_test(&origin).expect("test client");
 
-        let result = client.account_summary("account-token", "cost_mode=calculate", None);
+        let result = client.account_summary("account-token", "tz=UTC", None);
 
         assert!(matches!(
             result,
@@ -3868,9 +3265,20 @@ mod tests {
         ));
         let sent = server.join().expect("mock server");
         assert_eq!(sent.len(), 1, "{sent:?}");
-        // One contract: the request carries what it asks for and no negotiation keys.
-        assert!(sent[0].contains("usage_agents=all"), "{}", sent[0]);
-        for retired in ["usage_channels=", "model_catalog=", "usage_clients="] {
+        // One read, one contract: the calendar this device keeps and nothing to negotiate.
+        assert!(
+            sent[0].contains("/api/v6/account/summary?tz=UTC"),
+            "{}",
+            sent[0]
+        );
+        for retired in [
+            "usage_agents=",
+            "cost_mode=",
+            "usage_channels=",
+            "model_catalog=",
+            "usage_clients=",
+            "from=",
+        ] {
             assert!(!sent[0].contains(retired), "{}", sent[0]);
         }
     }
@@ -4030,23 +3438,8 @@ mod tests {
     /// value the previous read produced, and the second request is the one that says so.
     #[test]
     fn an_unchanged_account_read_keeps_the_previous_summary() {
-        let summary = serde_json::json!({
-            "protocol_version": MANAGED_DATA_PROTOCOL,
-            "account": {
-                "account_id": "account_1",
-                "display_label": "octocat",
-                "created_at": "2026-08-09T00:00:00Z"
-            },
-            "devices": [],
-            "quota": [],
-            "usage": {
-                "range": {"from": "2026-08-09", "to": "2026-08-10"},
-                "totals": valid_totals(),
-                "cost": valid_cost(),
-                "coverage": "complete",
-                "breakdowns": []
-            }
-        });
+        let mut summary = valid_summary(serde_json::json!([]));
+        summary["account"]["display_label"] = serde_json::json!("octocat");
         let (origin, server) = spawn_mock_server(vec![
             http_json_with_etag(200, "\"stamp-one\"", &summary),
             http_not_modified("\"stamp-one\""),
@@ -4088,10 +3481,10 @@ mod tests {
 
         let cancel = AtomicBool::new(false);
         let first = manager
-            .refresh_account_state(&cancel)
+            .refresh_account_state("UTC", &cancel)
             .expect("first account read");
         let second = manager
-            .refresh_account_state(&cancel)
+            .refresh_account_state("UTC", &cancel)
             .expect("conditional account read");
         assert_eq!(first, second);
         assert_eq!(second["account_summary"], summary);
@@ -4185,18 +3578,47 @@ mod tests {
 
     fn valid_totals() -> Value {
         serde_json::json!({
+            "total_tokens": 0,
             "input_tokens": 0,
-            "cache_read_tokens": 0,
-            "cache_write_5m_tokens": 0,
-            "cache_write_1h_tokens": 0,
-            "cache_write_inferred_tokens": 0,
             "output_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_write_input_tokens": 0,
             "reasoning_tokens": 0,
-            "requests": 0,
-            "web_search_requests": 0,
-            "web_fetch_requests": 0,
-            "source_cost_microusd": null,
-            "source_cost_covered_requests": 0
+            "messages": 0
+        })
+    }
+
+    fn valid_period(agents: Value) -> Value {
+        serde_json::json!({
+            "totals": valid_totals(),
+            "cost": valid_cost(),
+            "partial": false,
+            "agents": agents
+        })
+    }
+
+    fn valid_usage(agents: Value) -> Value {
+        serde_json::json!({
+            "today": valid_period(agents.clone()),
+            "last_7_days": valid_period(agents.clone()),
+            "last_30_days": valid_period(agents.clone()),
+            "all": valid_period(agents)
+        })
+    }
+
+    fn valid_summary(agents: Value) -> Value {
+        serde_json::json!({
+            "protocol_version": MANAGED_DATA_PROTOCOL,
+            "account": {
+                "account_id": "account_1",
+                "display_label": null,
+                "created_at": "2026-08-09T00:00:00Z"
+            },
+            "devices": [],
+            "subscriptions": [],
+            "usage": valid_usage(agents),
+            "pricing_revision": "2026-08-01",
+            "model_catalog_revision": "2026-08-01"
         })
     }
 

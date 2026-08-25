@@ -771,7 +771,10 @@ fn run_account_summary(options: SummaryOptions, output: &mut dyn CliOutput) -> i
         context.state.clone(),
         local_device_display_name("QuotaCLI"),
     );
-    let component = match manager.refresh_account_state(&AtomicBool::new(false)) {
+    let timezone = quota_service::providers::common::resolve_timezone(&std::env::vars().collect())
+        .name()
+        .to_owned();
+    let component = match manager.refresh_account_state(&timezone, &AtomicBool::new(false)) {
         Ok(component) => component,
         Err(_) => {
             return report_failure(

@@ -1,14 +1,14 @@
 use super::{
     CoverageReason, CoverageReasonCode, CoverageStatus, LocalUsageFile, MAX_COVERAGE_REASONS,
     MAX_DISCOVERY_DEPTH, MAX_DISCOVERY_ENTRIES, MAX_JSONL_LINE_BYTES, MAX_JSONL_RECORDS,
-    MAX_USAGE_FILES, NormalizedUsageRecord, ParsedLine, ScanCoverage, UsageAgent, UsageError,
-    UsageFileDiscoveryResult, UsageFileIndex, UsageScanResult, UsageSourceScan,
+    MAX_USAGE_FILES, NormalizedUsageRecord, ParsedLine, ScanCoverage, TAIL_HASH_BYTES, UsageAgent,
+    UsageError, UsageFileDiscoveryResult, UsageFileIndex, UsageScanResult, UsageSourceScan,
 };
 use sha2::{Digest, Sha256};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, Metadata};
-use std::io::{self, BufRead, BufReader};
+use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::{
     Arc,
@@ -86,6 +86,13 @@ pub(crate) struct ScanParts {
 }
 
 pub(crate) trait UsageParser {
+    /// Whether one line can be read without the lines before it.
+    ///
+    /// Only a context-free parser can read an appended tail on its own. A parser that carries
+    /// a session's model or a running token total across lines would answer differently for
+    /// the same bytes, so its source is always re-read whole.
+    const CONTEXT_FREE: bool = false;
+
     fn parse(
         &mut self,
         value: &serde_json::Map<String, serde_json::Value>,
@@ -343,6 +350,7 @@ where
                     count: 1,
                 }];
                 sources.push(UsageSourceScan {
+                    append: false,
                     index: file_index(&file, &options.parser_revision),
                     source: file.clone(),
                     records: Vec::new(),
@@ -358,6 +366,7 @@ where
             size: current.size,
             modified_ns: current.modified_ns,
             parser_revision: options.parser_revision.clone(),
+            ..UsageFileIndex::default()
         };
         if options
             .file_index
@@ -374,16 +383,42 @@ where
             continue;
         }
         scanned_source_count += 1;
+        // The same log with more appended to it is read from where the last parse stopped, as
+        // long as the bytes behind that point are still the ones that were read. A rewritten
+        // or truncated file fails that check and is read whole.
+        let resume_at = options
+            .file_index
+            .get(&current.source_file_id)
+            .filter(|_| P::CONTEXT_FREE)
+            .filter(|old| {
+                old.parser_revision == current_index.parser_revision
+                    && old.identity == current_index.identity
+                    && old.parsed_offset > 0
+                    && current.size >= old.parsed_offset
+            })
+            .filter(|old| {
+                tail_hash(&file.path, old.parsed_offset).as_deref() == Some(&old.tail_hash)
+            })
+            .map(|old| old.parsed_offset)
+            .unwrap_or(0);
         let mut parser = parser_factory();
         let mut source_records = Vec::new();
         let source_reasons = RefCell::new(Vec::new());
-        let mut source_line_ordinal = 0u64;
+        let mut parsed_offset = resume_at;
         match File::open(&file.path) {
             Ok(input) => {
                 let mut reader = BufReader::new(input);
-                if let Err(_error) = read_jsonl(
+                let seeked = resume_at == 0 || reader.seek(SeekFrom::Start(resume_at)).is_ok();
+                if !seeked {
+                    push_reason(
+                        &mut source_reasons.borrow_mut(),
+                        CoverageReasonCode::SourceUnreadable,
+                    );
+                }
+                match read_jsonl(
                     &mut reader,
-                    |line, unterminated| {
+                    resume_at,
+                    |line, unterminated, line_start| {
                         if is_cancelled(options) {
                             push_reason(
                                 &mut source_reasons.borrow_mut(),
@@ -392,8 +427,7 @@ where
                             stopped = true;
                             return false;
                         }
-                        let record_ordinal = source_line_ordinal;
-                        source_line_ordinal = source_line_ordinal.saturating_add(1);
+                        let record_ordinal = line_start;
                         records_seen += 1;
                         if records_seen > MAX_JSONL_RECORDS {
                             push_reason(
@@ -441,10 +475,11 @@ where
                     },
                     |reason| push_reason(&mut source_reasons.borrow_mut(), reason),
                 ) {
-                    push_reason(
+                    Ok(offset) => parsed_offset = offset,
+                    Err(_error) => push_reason(
                         &mut source_reasons.borrow_mut(),
                         CoverageReasonCode::SourceUnreadable,
-                    );
+                    ),
                 }
                 if !stopped && !is_cancelled(options) {
                     let mut reasons = source_reasons.borrow_mut();
@@ -481,8 +516,14 @@ where
             .iter()
             .map(|record| record.record_key.clone())
             .collect();
+        let mut index = file_index(&source, &options.parser_revision);
+        if P::CONTEXT_FREE {
+            index.parsed_offset = parsed_offset;
+            index.tail_hash = tail_hash(&file.path, parsed_offset).unwrap_or_default();
+        }
         sources.push(UsageSourceScan {
-            index: file_index(&source, &options.parser_revision),
+            append: resume_at > 0,
+            index,
             source,
             records: source_records
                 .iter()
@@ -524,9 +565,11 @@ pub(crate) fn collect_parsed(
     records: &mut Vec<NormalizedUsageRecord>,
     reasons: &mut Vec<CoverageReason>,
     range: &ScanRange,
-    line_ordinal: u64,
+    line_offset: u64,
 ) -> u64 {
-    let prefix = format!("line:{line_ordinal}");
+    // A line is named by the byte it starts at, so an appended tail names its records the same
+    // way a whole-file read of the same bytes would.
+    let prefix = format!("line:{line_offset}");
     collect_parsed_with_prefix(parsed, records, reasons, range, &prefix)
 }
 
@@ -613,6 +656,8 @@ pub(crate) fn file_index(file: &LocalUsageFile, parser_revision: &str) -> UsageF
         size: file.size,
         modified_ns: file.modified_ns,
         parser_revision: parser_revision.to_owned(),
+        parsed_offset: 0,
+        tail_hash: String::new(),
     }
 }
 
@@ -665,28 +710,36 @@ pub(crate) fn matching_file_info(
     })
 }
 
+/// Reads newline-delimited records, naming each line by the byte it starts at.
+///
+/// The answer is the offset after the last complete line it consumed. An unterminated tail is
+/// still handed to the caller — the file is being written to — but it is not part of that
+/// offset, so the next scan reads it again once it is finished.
 fn read_jsonl<R, L, O>(
     reader: &mut R,
+    start_offset: u64,
     mut on_line: L,
     mut on_oversized: O,
-) -> Result<(), UsageError>
+) -> Result<u64, UsageError>
 where
     R: BufRead,
-    L: FnMut(&[u8], bool) -> bool,
+    L: FnMut(&[u8], bool, u64) -> bool,
     O: FnMut(CoverageReasonCode),
 {
     let mut pending = Vec::new();
     let mut discarding = false;
+    let mut position = start_offset;
+    let mut line_start = start_offset;
     loop {
         let buffer = reader.fill_buf()?;
         if buffer.is_empty() {
             if !discarding && !pending.is_empty() {
                 let line = trim_cr(&pending);
                 if !line.is_empty() {
-                    on_line(line, true);
+                    on_line(line, true, line_start);
                 }
             }
-            return Ok(());
+            return Ok(position.saturating_sub(pending.len() as u64));
         }
         let newline = buffer.iter().position(|byte| *byte == b'\n');
         let consumed = newline.map_or(buffer.len(), |index| index + 1);
@@ -702,17 +755,33 @@ where
             }
         }
         reader.consume(consumed);
+        position = position.saturating_add(consumed as u64);
         if newline.is_some() {
             if !discarding && !pending.is_empty() {
                 let line = trim_cr(&pending);
-                if !line.is_empty() && !on_line(line, false) {
-                    return Ok(());
+                if !line.is_empty() && !on_line(line, false, line_start) {
+                    return Ok(position);
                 }
             }
             pending.clear();
             discarding = false;
+            line_start = position;
         }
     }
+}
+
+/// Digests the [`TAIL_HASH_BYTES`] a parse ended on, so a later scan can tell the same log
+/// from a file that was rewritten to the same length.
+fn tail_hash(path: &Path, end: u64) -> Option<String> {
+    if end == 0 {
+        return Some(String::new());
+    }
+    let mut file = File::open(path).ok()?;
+    let start = end.saturating_sub(TAIL_HASH_BYTES);
+    file.seek(SeekFrom::Start(start)).ok()?;
+    let mut buffer = vec![0u8; (end - start) as usize];
+    file.read_exact(&mut buffer).ok()?;
+    Some(sha256_bytes(&buffer))
 }
 
 fn trim_cr(value: &[u8]) -> &[u8] {

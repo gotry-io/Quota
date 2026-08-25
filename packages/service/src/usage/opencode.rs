@@ -177,6 +177,7 @@ fn scan_databases(
                     count: 1,
                 }];
                 sources.push(UsageSourceScan {
+                    append: false,
                     index: file_index(&file, &options.parser_revision),
                     source: file.clone(),
                     records: Vec::new(),
@@ -192,6 +193,7 @@ fn scan_databases(
             size: current.size,
             modified_ns: current.modified_ns,
             parser_revision: options.parser_revision.clone(),
+            ..UsageFileIndex::default()
         };
         if options
             .file_index
@@ -220,6 +222,7 @@ fn scan_databases(
                         super::scan::push_reason_count(&mut reasons, reason.code, reason.count);
                     }
                     sources.push(UsageSourceScan {
+                        append: false,
                         index: file_index(&source, &options.parser_revision),
                         source,
                         records: Vec::new(),
@@ -237,6 +240,7 @@ fn scan_databases(
                     super::scan::push_reason_count(&mut reasons, reason.code, reason.count);
                 }
                 sources.push(UsageSourceScan {
+                    append: false,
                     index: file_index(&current, &options.parser_revision),
                     source: current.clone(),
                     records: Vec::new(),
@@ -312,6 +316,7 @@ fn scan_databases(
             .map(|record| record.record_key.clone())
             .collect();
         sources.push(UsageSourceScan {
+            append: false,
             index: file_index(&source, &options.parser_revision),
             source,
             records: source_records

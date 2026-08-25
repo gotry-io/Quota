@@ -15,6 +15,8 @@ pub fn scan_pi_usage(
 struct PiParser;
 
 impl UsageParser for PiParser {
+    const CONTEXT_FREE: bool = true;
+
     fn parse(&mut self, value: &Map<String, Value>, source_file_id: &str) -> ParsedLine {
         if value.get("type").and_then(Value::as_str) != Some("message") {
             return ParsedLine::empty();

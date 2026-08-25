@@ -11,7 +11,6 @@ use std::thread;
 use chrono::{DateTime, Days, Duration, SecondsFormat, Timelike, Utc};
 use chrono_tz::Tz;
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 
 use crate::catalog::ProviderId;
 use crate::observation::snapshot_is_current;
@@ -29,15 +28,11 @@ use crate::providers::{self, CollectionContext};
 use crate::relay::{AccountManager, RelayClient};
 use crate::service::{BackendError, LocalBackend, LoginOutcome, RefreshOutcome};
 use crate::state::{
-    DiagnosticAttemptCompletion, DiagnosticAttemptHandle, StateStore, UsageDirtyRange, now_rfc3339,
+    DiagnosticAttemptCompletion, DiagnosticAttemptHandle, StateStore, UsageOutboxEntry, now_rfc3339,
 };
 use crate::usage::{
-    self, CoverageReasonCode, CoverageStatus, UsageAgent, UsageHourlyFact, UsageScanOptions,
+    self, CoverageReasonCode, CoverageStatus, DatedUsageRow, UsageAgent, UsageScanOptions,
 };
-
-const PARSER_REVISION: &str = "quota-usage-rust-4";
-const MAX_USAGE_OUTBOX_ENTRIES: usize = 64;
-const MAX_USAGE_MULTIPART_PARTS: usize = 64;
 
 fn plural(value: i64, singular: &str) -> String {
     format!("{value} {singular}{}", if value == 1 { "" } else { "s" })
@@ -111,14 +106,16 @@ fn array_len(value: Option<&Value>, key: &str) -> i64 {
         .unwrap_or(0)
 }
 
-fn uploadable_dirty_range_count(ranges: &[UsageDirtyRange], now: DateTime<Utc>) -> i64 {
+/// How many recomputed hours are ready to leave. The hour in progress is still being written
+/// to, so it is not waiting on anything.
+fn uploadable_dirty_hour_count(hours: &[crate::state::DirtyUsageHour], now: DateTime<Utc>) -> i64 {
     let Ok(complete_until) = DateTime::parse_from_rfc3339(&floor_utc_hour(&now)) else {
-        return ranges.len().min(i64::MAX as usize) as i64;
+        return hours.len().min(i64::MAX as usize) as i64;
     };
-    ranges
+    hours
         .iter()
-        .filter(|range| {
-            DateTime::parse_from_rfc3339(&range.start_at)
+        .filter(|hour| {
+            DateTime::parse_from_rfc3339(&hour.bucket_start_utc)
                 .map(|start| start < complete_until)
                 .unwrap_or(true)
         })
@@ -691,16 +688,16 @@ impl NativeBackend {
         }
 
         // Usage upload.
-        let dirty_ranges = self
+        let dirty_hours = self
             .state
-            .dirty_usage_ranges()
+            .dirty_usage_hours()
             .map_err(|_| BackendError::unavailable())?;
         let outbox_count = self
             .state
             .outbox_entries()
             .map_err(|_| BackendError::unavailable())?
             .len() as i64;
-        let uploadable_dirty_count = uploadable_dirty_range_count(&dirty_ranges, Utc::now());
+        let uploadable_dirty_count = uploadable_dirty_hour_count(&dirty_hours, Utc::now());
         let upload_facts = self
             .state
             .diagnostic_attempt_facts(DiagnosticAttemptKind::UsageUpload, None)
@@ -1173,6 +1170,12 @@ impl NativeBackend {
             })
             .unwrap_or(completed_hour);
         let mut agents = Vec::new();
+        // One revision for the whole pass: every hour this scan recomputes is stamped with it,
+        // and Relay replaces a stored hour only for a strictly newer one.
+        let scan_version = self
+            .state
+            .next_usage_scan_version()
+            .map_err(|_| BackendError::unavailable())?;
         for agent in UsageAgent::ALL {
             if cancel.load(Ordering::Acquire) {
                 return Err(BackendError::cancelled());
@@ -1219,7 +1222,11 @@ impl NativeBackend {
             // Apply complete source files even when another file for the same agent is partial.
             // The state layer keeps the last-good rows for partial sources, so one malformed or
             // unreadable file cannot roll back unrelated complete sources.
-            if self.state.apply_usage_scan(agent, &scan).is_err() {
+            if self
+                .state
+                .apply_usage_scan(agent, &scan, scan_version)
+                .is_err()
+            {
                 let _ = self.state.write_usage_scan_diagnostics(
                     agent,
                     &json!({"status": "blocked", "reason_counts": {"state_apply_failed": 1}}),
@@ -1274,18 +1281,10 @@ impl NativeBackend {
                 coverage: scan.coverage.clone(),
             });
         }
-        let events = self
-            .state
-            .usage_events()
-            .map_err(|_| BackendError::unavailable())?;
-        let rows = usage::aggregate_usage_events(&events, &timezone).map_err(|_| BackendError {
-            error: IpcError::new(ErrorCode::InvalidState, RecoveryAction::Retry),
-        })?;
         Ok(UsageCollection {
             timezone,
             generated_at: now_rfc3339(),
             agents,
-            rows,
         })
     }
 
@@ -1295,7 +1294,6 @@ impl NativeBackend {
         catalog: Option<&pricing::PricingCatalog>,
         model_catalog: Option<&crate::model_catalog::ModelCatalog>,
     ) -> Result<Value, BackendError> {
-        let rows = &usage.rows;
         let coverage: Vec<Value> = usage
             .agents
             .iter()
@@ -1334,9 +1332,8 @@ impl NativeBackend {
         .map(|period| {
             Ok((
                 period,
-                local_usage_detail(
+                self.local_usage_detail(
                     period,
-                    rows,
                     &usage.timezone,
                     generated_at,
                     catalog,
@@ -1350,7 +1347,16 @@ impl NativeBackend {
             .replace_usage_periods(UsageSource::Local, &periods)
             .map_err(|_| BackendError::unavailable())?;
         let today = usage_period_range(UsagePeriod::Today, &usage.timezone, generated_at)?.0;
-        let (from, to) = usage_date_range(rows, &today);
+        let (from, to) = periods
+            .last()
+            .and_then(|(_, detail)| detail.get("range"))
+            .and_then(|range| {
+                Some((
+                    range.get("from")?.as_str()?.to_owned(),
+                    range.get("to")?.as_str()?.to_owned(),
+                ))
+            })
+            .unwrap_or_else(|| (today.clone(), today.clone()));
         Ok(json!({
             "generated_at": usage.generated_at,
             "aggregation_timezone": usage.timezone,
@@ -1358,6 +1364,41 @@ impl NativeBackend {
             "status": status,
             "model_catalog_revision": model_catalog.map(|value| value.revision.clone()),
             "coverage": coverage
+        }))
+    }
+
+    /// One period, folded from the hours this device has stored.
+    ///
+    /// A day is a UTC day, because that is the grain an hour rolls into. The device's own
+    /// calendar decides which days a period names, not where a day begins — the same rule the
+    /// Account read follows, so the two sides of the panel agree.
+    fn local_usage_detail(
+        &self,
+        period: UsagePeriod,
+        timezone: &str,
+        generated_at: DateTime<Utc>,
+        pricing_catalog: Option<&pricing::PricingCatalog>,
+        model_catalog: Option<&crate::model_catalog::ModelCatalog>,
+        incomplete: bool,
+    ) -> Result<Value, BackendError> {
+        let (today, range) = usage_period_range(period, timezone, generated_at)?;
+        let (rows, partial) = self
+            .state
+            .usage_period_rows(
+                range
+                    .as_ref()
+                    .map(|(from, to)| (from.as_str(), to.as_str())),
+            )
+            .map_err(|_| BackendError::unavailable())?;
+        let summary = usage::build_local_usage_summary(&rows, pricing_catalog, model_catalog)
+            .map_err(|_| BackendError::unavailable())?;
+        let details_truncated = summary.models_truncated || summary.cost.unpriced_truncated;
+        let (from, to) = range.unwrap_or_else(|| usage_date_range(&rows, &today));
+        Ok(json!({
+            "range": {"from": from, "to": to},
+            "usage": summary,
+            "incomplete": incomplete || partial,
+            "details_truncated": details_truncated
         }))
     }
 
@@ -1452,7 +1493,12 @@ impl NativeBackend {
         }
     }
 
-    fn stage_outbox(&self, timezone: &str) -> Result<bool, BackendError> {
+    /// Hands every hour this device has recomputed to the outbox, newest scan wins.
+    ///
+    /// An hour is the unit and its version decides, so staging is a copy rather than a
+    /// reservation: there is no sequence to allocate, no submission id to remember, and a
+    /// re-staged hour replaces the entry that was already there.
+    fn stage_outbox(&self) -> Result<bool, BackendError> {
         if !self
             .state
             .usage_upload_enabled()
@@ -1484,218 +1530,45 @@ impl NativeBackend {
             .ok_or_else(BackendError::unavailable)?;
         let lower_bound = DateTime::parse_from_rfc3339(&effective_usage_lower_bound(&session)?)
             .map_err(|_| invalid_local_state())?;
-        let existing = self
-            .state
-            .outbox_entries_for(account_id, device_id, generation)
-            .map_err(|_| BackendError::unavailable())?;
-        let mut stage_slots = usage_stage_slots(existing.len());
-        if stage_slots == 0 {
-            return Ok(false);
-        }
-        let mut blocked_unrepresentable = false;
-        let mut sequence = session
-            .get("next_usage_sequence")
-            .and_then(Value::as_u64)
-            .unwrap_or(0);
-        for entry in &existing {
-            if let Some(value) = entry.get("sequence").and_then(Value::as_u64) {
-                sequence = sequence.max(value.saturating_add(1));
-            }
-        }
-        let dirty_ranges = self
-            .state
-            .dirty_usage_ranges()
-            .map_err(|_| BackendError::unavailable())?;
-        let partial_hours = self
-            .state
-            .partial_usage_hours()
-            .map_err(|_| BackendError::unavailable())?;
-        let events = self
-            .state
-            .usage_events()
-            .map_err(|_| BackendError::unavailable())?;
-        // Aggregate the retained event history once. Re-scanning and re-parsing every event for
-        // each candidate hour made a long history quadratic during staging.
-        let aggregate_events = events
-            .iter()
-            .filter(|event| {
-                DateTime::parse_from_rfc3339(&event.occurred_at)
-                    .ok()
-                    .is_some_and(|occurred| occurred >= lower_bound)
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        let aggregated_rows = usage::aggregate_usage_events(&aggregate_events, timezone)
-            .map_err(|_| BackendError::unavailable())?;
-        let mut rows_by_hour = HashMap::<(UsageAgent, String), Vec<UsageHourlyFact>>::new();
-        for row in aggregated_rows {
-            rows_by_hour
-                .entry((row.agent, row.bucket_start_utc.clone()))
-                .or_default()
-                .push(row);
-        }
+        // The hour in progress is still being written to, so it is left for the next refresh.
         let complete_until = DateTime::parse_from_rfc3339(&floor_utc_hour(&Utc::now()))
             .map_err(|_| BackendError::unavailable())?;
-        for range in &dirty_ranges {
-            if !self
+        let dirty = self
+            .state
+            .dirty_usage_hours()
+            .map_err(|_| BackendError::unavailable())?;
+        let mut entries = Vec::new();
+        for hour in dirty {
+            let Ok(start) = DateTime::parse_from_rfc3339(&hour.bucket_start_utc) else {
+                continue;
+            };
+            if start < lower_bound || start >= complete_until {
+                continue;
+            }
+            let rows = self
                 .state
-                .usage_upload_enabled()
-                .map_err(|_| BackendError::unavailable())?
-            {
-                return Ok(false);
-            }
-            if !self
-                .state
-                .active_session_at_epoch(session_epoch)
-                .map_err(|_| BackendError::unavailable())?
-            {
-                return Err(BackendError {
-                    error: IpcError::new(ErrorCode::AuthenticationRequired, RecoveryAction::Login),
-                });
-            }
-            let mut start = DateTime::parse_from_rfc3339(&range.start_at)
+                .usage_hour_rows(hour.agent, &hour.bucket_start_utc)
                 .map_err(|_| BackendError::unavailable())?;
-            let end = DateTime::parse_from_rfc3339(&range.end_at)
-                .map_err(|_| BackendError::unavailable())?;
-            let eligible_end = end.min(complete_until);
-            while start < eligible_end {
-                // Usage is immutable at UTC-hour granularity. Grow the largest deterministic
-                // contiguous chunk that fits every released boundary; never truncate rows.
-                let first_end = (start + chrono::Duration::hours(1)).min(eligible_end);
-                let first_partial = partial_hours.contains(&(
-                    range.agent,
-                    start.to_rfc3339_opts(SecondsFormat::Secs, true),
-                ));
-                let mut chunk_rows =
-                    usage_rows_for_range(&rows_by_hour, range.agent, &start, &first_end);
-                let first_context = UsageSubmissionContext {
-                    agent: range.agent,
-                    start: &start,
-                    end: &first_end,
-                    timezone,
-                    account_id,
-                    device_id,
-                    generation,
-                    partial: first_partial,
-                };
-                if !usage_submission_fits(&first_context, sequence, &chunk_rows) {
-                    let consumed = UsageDirtyRange {
-                        agent: range.agent,
-                        start_at: start.to_rfc3339_opts(SecondsFormat::Secs, true),
-                        end_at: first_end.to_rfc3339_opts(SecondsFormat::Secs, true),
-                    };
-                    if let Some((batch_id, submissions)) =
-                        usage_multipart_submissions(&first_context, sequence, &chunk_rows)
-                    {
-                        if !self
-                            .state
-                            .usage_upload_enabled()
-                            .map_err(|_| BackendError::unavailable())?
-                        {
-                            return Ok(false);
-                        }
-                        if submissions.len() > stage_slots {
-                            // Durable outbox capacity is separate from this refresh's drain
-                            // budget. Wait for enough capacity to stage the complete batch.
-                            return Ok(blocked_unrepresentable);
-                        }
-                        if self
-                            .state
-                            .stage_multipart_outbox_entries(
-                                account_id,
-                                device_id,
-                                generation,
-                                &batch_id,
-                                &consumed,
-                                &submissions,
-                            )
-                            .map_err(|_| BackendError::unavailable())?
-                        {
-                            sequence = sequence.saturating_add(submissions.len() as u64);
-                            stage_slots -= submissions.len();
-                            if stage_slots == 0 {
-                                return Ok(blocked_unrepresentable);
-                            }
-                        }
-                        start = first_end;
-                        continue;
-                    }
-                    blocked_unrepresentable = true;
-                    start = first_end;
-                    continue;
-                }
-                let mut chunk_end = first_end;
-                while chunk_end < eligible_end
-                    && chunk_end - start < chrono::Duration::hours(usage::MAX_USAGE_COVERAGE_HOURS)
-                {
-                    let next_end = (chunk_end + chrono::Duration::hours(1)).min(eligible_end);
-                    let next_partial = partial_hours.contains(&(
-                        range.agent,
-                        chunk_end.to_rfc3339_opts(SecondsFormat::Secs, true),
-                    ));
-                    if next_partial != first_partial {
-                        break;
-                    }
-                    let next_rows =
-                        usage_rows_for_range(&rows_by_hour, range.agent, &start, &next_end);
-                    let next_context = UsageSubmissionContext {
-                        agent: range.agent,
-                        start: &start,
-                        end: &next_end,
-                        timezone,
-                        account_id,
-                        device_id,
-                        generation,
-                        partial: first_partial,
-                    };
-                    if !usage_submission_fits(&next_context, sequence, &next_rows) {
-                        break;
-                    }
-                    chunk_end = next_end;
-                    chunk_rows = next_rows;
-                }
-                let context = UsageSubmissionContext {
-                    agent: range.agent,
-                    start: &start,
-                    end: &chunk_end,
-                    timezone,
-                    account_id,
-                    device_id,
-                    generation,
-                    partial: first_partial,
-                };
-                let submission = usage_submission(&context, sequence, &chunk_rows)
-                    .ok_or_else(BackendError::unavailable)?;
-                let consumed = UsageDirtyRange {
-                    agent: range.agent,
-                    start_at: start.to_rfc3339_opts(SecondsFormat::Secs, true),
-                    end_at: chunk_end.to_rfc3339_opts(SecondsFormat::Secs, true),
-                };
-                if !self
-                    .state
-                    .usage_upload_enabled()
-                    .map_err(|_| BackendError::unavailable())?
-                {
-                    return Ok(false);
-                }
-                if self
-                    .state
-                    .stage_outbox_entry(account_id, &submission, &consumed)
-                    .map_err(|_| BackendError::unavailable())?
-                {
-                    sequence = sequence.saturating_add(1);
-                    stage_slots -= 1;
-                    if stage_slots == 0 {
-                        return Ok(blocked_unrepresentable);
-                    }
-                }
-                start = chunk_end;
-            }
+            entries.push(UsageOutboxEntry {
+                agent: hour.agent,
+                bucket_start_utc: hour.bucket_start_utc,
+                scan_version: hour.scan_version,
+                partial: hour.partial,
+                rows,
+            });
         }
-        Ok(blocked_unrepresentable)
-    }
-
-    fn drain_outbox(&self) -> Result<bool, BackendError> {
+        if entries.is_empty() {
+            return Ok(false);
+        }
+        if !self
+            .state
+            .active_session_at_epoch(session_epoch)
+            .map_err(|_| BackendError::unavailable())?
+        {
+            return Err(BackendError {
+                error: IpcError::new(ErrorCode::AuthenticationRequired, RecoveryAction::Login),
+            });
+        }
         if !self
             .state
             .usage_upload_enabled()
@@ -1703,12 +1576,26 @@ impl NativeBackend {
         {
             return Ok(false);
         }
+        self.state
+            .stage_outbox_entries(account_id, device_id, generation, &entries)
+            .map_err(|_| BackendError::unavailable())
+    }
+
+    /// Sends the staged hours, at most one agent and one request's worth at a time.
+    fn drain_outbox(&self) -> Result<(), BackendError> {
+        if !self
+            .state
+            .usage_upload_enabled()
+            .map_err(|_| BackendError::unavailable())?
+        {
+            return Ok(());
+        }
         let Some((session, session_epoch)) = self
             .state
             .session_snapshot()
             .map_err(|_| BackendError::unavailable())?
         else {
-            return Ok(false);
+            return Ok(());
         };
         if session.get("status").and_then(Value::as_str) != Some("active")
             || !self
@@ -1716,7 +1603,7 @@ impl NativeBackend {
                 .active_session_at_epoch(session_epoch)
                 .map_err(|_| BackendError::unavailable())?
         {
-            return Ok(false);
+            return Ok(());
         }
         let account_id = session
             .get("account_id")
@@ -1734,86 +1621,57 @@ impl NativeBackend {
             .state
             .outbox_entries_for(account_id, device_id, generation)
             .map_err(|_| BackendError::unavailable())?;
-        let mut rejected = false;
-        for entry in entries.into_iter().take(MAX_USAGE_OUTBOX_ENTRIES) {
-            if !self
-                .state
-                .usage_upload_enabled()
-                .map_err(|_| BackendError::unavailable())?
-            {
-                return Ok(rejected);
-            }
-            let submission_id = entry
-                .get("submission_id")
-                .and_then(Value::as_str)
-                .ok_or_else(BackendError::unavailable)?;
-            let sequence = entry
-                .get("sequence")
-                .and_then(Value::as_u64)
-                .ok_or_else(BackendError::unavailable)?;
-            let response = self.account.upload_usage(&entry)?;
-            if response.get("device_id").and_then(Value::as_str) != Some(device_id)
-                || response.get("device_generation").and_then(Value::as_u64) != Some(generation)
-            {
-                return Err(BackendError {
-                    error: IpcError::new(ErrorCode::InvalidResponse, RecoveryAction::Retry),
-                });
-            }
-            let outcome = response
-                .get("outcome")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            match outcome {
-                "accepted" | "duplicate" => {
-                    if response.get("accepted_sequence").and_then(Value::as_u64) != Some(sequence) {
-                        return Err(BackendError {
-                            error: IpcError::new(ErrorCode::InvalidResponse, RecoveryAction::Retry),
-                        });
-                    }
-                    self.account.record_usage_response(&response)?;
+        let mut by_agent: BTreeMap<UsageAgent, Vec<UsageOutboxEntry>> = BTreeMap::new();
+        for entry in entries {
+            by_agent.entry(entry.agent).or_default().push(entry);
+        }
+        for (agent, entries) in by_agent {
+            let mut remaining = entries.as_slice();
+            while !remaining.is_empty() {
+                if !self
+                    .state
+                    .usage_upload_enabled()
+                    .map_err(|_| BackendError::unavailable())?
+                {
+                    return Ok(());
+                }
+                let taken = usage_upload_batch_size(agent, generation, remaining);
+                if taken == 0 {
+                    // One hour that cannot be represented at all would block every hour behind
+                    // it, so it is dropped from the queue and the drain carries on.
                     self.state
-                        .acknowledge_outbox_entry(submission_id)
+                        .forget_outbox_hours(agent, &[remaining[0].bucket_start_utc.clone()])
                         .map_err(|_| BackendError::unavailable())?;
+                    remaining = &remaining[1..];
+                    continue;
                 }
-                "rejected" => {
-                    if response
-                        .get("accepted_sequence")
-                        .is_none_or(|value| !value.is_null())
-                        || response.get("next_sequence").and_then(Value::as_u64)
-                            != Some(sequence.saturating_add(1))
-                        || response.get("rejection_reason").and_then(Value::as_str)
-                            != Some("duplicate_fact_identity")
-                    {
-                        return Err(BackendError {
-                            error: IpcError::new(ErrorCode::InvalidResponse, RecoveryAction::Retry),
-                        });
-                    }
-                    self.account.record_usage_response(&response)?;
-                    self.state
-                        .acknowledge_outbox_entry(submission_id)
-                        .map_err(|_| BackendError::unavailable())?;
-                    rejected = true;
-                }
-                "partial" => break,
-                "stale_generation" => {
+                let batch = &remaining[..taken];
+                let upload =
+                    usage_upload(agent, generation, batch).ok_or_else(BackendError::unavailable)?;
+                let response = self.account.upload_usage(&upload)?;
+                if response.get("device_id").and_then(Value::as_str) != Some(device_id)
+                    || response.get("device_generation").and_then(Value::as_u64) != Some(generation)
+                {
                     return Err(BackendError {
-                        error: IpcError::new(ErrorCode::StaleGeneration, RecoveryAction::Login),
+                        error: IpcError::new(ErrorCode::InvalidResponse, RecoveryAction::Retry),
                     });
                 }
-                "deleted" => {
-                    return Err(BackendError {
-                        error: IpcError::new(ErrorCode::DeviceDeleted, RecoveryAction::Login),
-                    });
-                }
-                "sequence_conflict" => {
-                    return Err(BackendError {
-                        error: IpcError::new(ErrorCode::InvalidState, RecoveryAction::Reinstall),
-                    });
-                }
-                _ => return Err(BackendError::unavailable()),
+                // Accepted and ignored are the same move for this device: an ignored hour is one
+                // a newer scan already replaced or one before this device's deletion watermark,
+                // and either way it never needs sending again.
+                let answered = ["accepted", "ignored"]
+                    .into_iter()
+                    .filter_map(|key| response.get(key)?.as_array())
+                    .flatten()
+                    .filter_map(|value| value.as_str().map(str::to_owned))
+                    .collect::<Vec<_>>();
+                self.state
+                    .forget_outbox_hours(agent, &answered)
+                    .map_err(|_| BackendError::unavailable())?;
+                remaining = &remaining[taken..];
             }
         }
-        Ok(rejected)
+        Ok(())
     }
 
     fn timezone(&self) -> String {
@@ -1822,32 +1680,32 @@ impl NativeBackend {
             .to_owned()
     }
 
-    fn refresh_account_usage_periods(
-        &self,
-        account_value: &Value,
-        cancel: &AtomicBool,
-    ) -> Result<(), BackendError> {
-        let mut periods = Vec::new();
-        if let Some(all) = account_value
+    /// Files the four periods the Account read already answered.
+    ///
+    /// A managed read folds days once, on the server, so there is nothing left for this device
+    /// to ask for period by period.
+    fn refresh_account_usage_periods(&self, account_value: &Value) -> Result<(), BackendError> {
+        let usage = account_value
             .get("account_summary")
             .and_then(|summary| summary.get("usage"))
-            .cloned()
-        {
-            push_account_usage_period(&mut periods, UsagePeriod::All, all);
-        }
+            .and_then(Value::as_object)
+            .ok_or_else(BackendError::unavailable)?;
         let timezone = self.timezone();
-        for period in [
-            UsagePeriod::Today,
-            UsagePeriod::Last7Days,
-            UsagePeriod::Last30Days,
+        let now = Utc::now();
+        let mut periods = Vec::new();
+        for (period, key) in [
+            (UsagePeriod::Today, "today"),
+            (UsagePeriod::Last7Days, "last_7_days"),
+            (UsagePeriod::Last30Days, "last_30_days"),
+            (UsagePeriod::All, "all"),
         ] {
-            let (_, range) = usage_period_range(period, &timezone, Utc::now())?;
-            let (from, to) = range.ok_or_else(BackendError::unavailable)?;
-            let query = format!("cost_mode=auto&from={from}&to={to}");
-            match self.account.account_usage(&query, cancel) {
-                Ok(usage) => push_account_usage_period(&mut periods, period, usage),
-                Err(error) if error.error.code.requires_login() => return Err(error),
-                Err(_) => {}
+            let Some(value) = usage.get(key) else {
+                continue;
+            };
+            let (today, range) = usage_period_range(period, &timezone, now)?;
+            let range = range.unwrap_or_else(|| (today.clone(), today.clone()));
+            if let Ok(detail) = account_usage_detail(value, &range) {
+                periods.push((period, detail));
             }
         }
         if periods.is_empty() {
@@ -1859,84 +1717,111 @@ impl NativeBackend {
         Ok(())
     }
 
+    /// Two readings of one subscription: this device's, and the one Relay resolved.
+    ///
+    /// Relay resolves the account's observations once, on the read, so there is no N-way merge
+    /// left here. What stays is the one comparison Relay cannot make: local collection is the
+    /// only authority for the machine in front of you, so the newer of the two wins and a tie
+    /// goes to the local reading.
     fn build_overview(&self, quota: &Value, account: Option<&Value>) -> Vec<QuotaOverviewItem> {
-        let mut items = Vec::new();
-        let now = Utc::now();
-        if let Some(results) = quota.get("results").and_then(Value::as_array) {
-            for result in results {
-                for snapshot in result
-                    .get("snapshots")
-                    .and_then(Value::as_array)
-                    .into_iter()
-                    .flatten()
-                {
-                    if let Some(item) = overview_item(snapshot, "local", "Local", None, now) {
-                        merge_overview_item(&mut items, item);
-                    }
-                }
-            }
-        }
-        if let Some(summary) = account
-            .and_then(|value| value.get("account_summary"))
-            .and_then(Value::as_object)
-        {
-            // The account summary replays what this device uploaded. Local collection is
-            // the only authority for this device, so reading its own upload back would keep
-            // a rejected or removed local source on screen as another device's report.
-            let this_device = account
-                .and_then(|value| value.get("device_id"))
-                .and_then(Value::as_str);
-            let display_names = summary
-                .get("devices")
+        overview_items(quota, account, Utc::now())
+    }
+}
+
+/// See [`NativeBackend::build_overview`]; the instant is an argument so the rule can be tested
+/// against the shared cases at the instant they name.
+fn overview_items(
+    quota: &Value,
+    account: Option<&Value>,
+    now: DateTime<Utc>,
+) -> Vec<QuotaOverviewItem> {
+    let mut items = Vec::new();
+    if let Some(results) = quota.get("results").and_then(Value::as_array) {
+        for result in results {
+            for snapshot in result
+                .get("snapshots")
                 .and_then(Value::as_array)
                 .into_iter()
                 .flatten()
-                .filter_map(|device| {
-                    Some((
-                        device.get("device_id")?.as_str()?.to_owned(),
-                        device.get("display_name")?.as_str()?.to_owned(),
-                    ))
-                })
-                .collect::<HashMap<_, _>>();
-            if let Some(observations) = summary.get("quota").and_then(Value::as_array) {
-                for observation in observations {
-                    let Some(device_id) = observation.get("device_id").and_then(Value::as_str)
-                    else {
-                        continue;
-                    };
-                    if Some(device_id) == this_device {
-                        continue;
-                    }
-                    let Some(snapshot) = observation.get("snapshot") else {
-                        continue;
-                    };
-                    if !snapshot
-                        .get("provider")
-                        .and_then(Value::as_str)
-                        .and_then(ProviderId::parse)
-                        .is_some_and(ProviderId::syncs_to_account)
-                    {
-                        continue;
-                    }
-                    let display_name = display_names
-                        .get(device_id)
-                        .map(String::as_str)
-                        .unwrap_or("Other device");
-                    if let Some(item) = overview_item(
-                        snapshot,
-                        &format!("device:{device_id}"),
-                        display_name,
-                        Some(device_id),
-                        now,
-                    ) {
-                        merge_overview_item(&mut items, item);
-                    }
+            {
+                if let Some(item) = overview_item(snapshot, "local", "Local", None, now) {
+                    merge_overview_item(&mut items, item);
                 }
             }
         }
-        sort_overview_items(&mut items);
-        items
     }
+    if let Some(summary) = account
+        .and_then(|value| value.get("account_summary"))
+        .and_then(Value::as_object)
+    {
+        let display_names = summary
+            .get("devices")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|device| {
+                Some((
+                    device.get("id")?.as_str()?.to_owned(),
+                    device.get("display_name")?.as_str()?.to_owned(),
+                ))
+            })
+            .collect::<HashMap<_, _>>();
+        for subscription in summary
+            .get("subscriptions")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let Some(snapshot) = subscription.get("snapshot") else {
+                continue;
+            };
+            if !snapshot
+                .get("provider")
+                .and_then(Value::as_str)
+                .and_then(ProviderId::parse)
+                .is_some_and(ProviderId::syncs_to_account)
+            {
+                continue;
+            }
+            // The device whose reading Relay chose is the one to name, and the account
+            // says when each of its sources last read. Nothing else about the other
+            // devices is shown.
+            let device_id = subscription
+                .get("sources")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|source| {
+                    Some((
+                        source.get("device_id")?.as_str()?,
+                        source.get("observed_at")?.as_str()?,
+                    ))
+                })
+                .filter(|(_, observed_at)| {
+                    Some(*observed_at) == snapshot.get("observed_at").and_then(Value::as_str)
+                })
+                .map(|(device_id, _)| device_id)
+                .min();
+            let Some(device_id) = device_id else {
+                continue;
+            };
+            let display_name = display_names
+                .get(device_id)
+                .map(String::as_str)
+                .unwrap_or("Other device");
+            if let Some(item) = overview_item(
+                snapshot,
+                &format!("device:{device_id}"),
+                display_name,
+                Some(device_id),
+                now,
+            ) {
+                merge_overview_item(&mut items, item);
+            }
+        }
+    }
+    sort_overview_items(&mut items);
+    items
 }
 
 /// This device's own readings, restated with the status its latest collection found.
@@ -1948,16 +1833,14 @@ impl NativeBackend {
 /// other devices have to wait out. The reading itself is untouched, `observed_at`
 /// included: the numbers really are as old as they were.
 ///
-/// Only a reading that is still current is worth restating, and that is also what makes
-/// this terminate. A reading that already aged out says nothing new: every reader reached
-/// that verdict from the reading itself. A reading that is current is restated once,
-/// because the restatement is no longer `available` and so is no longer current. Whether
-/// the account this compares against was fetched a moment or an hour ago cannot turn that
-/// into a row rewritten on every refresh.
+/// What is restated is what this device last collected, not what it reads back from the
+/// account: an account read answers one resolved row per subscription, which may belong to
+/// another Mac. That is also what makes this terminate — the previous report is overwritten
+/// by this one, which carries no snapshot for the source that failed, so there is nothing
+/// left to restate on the next refresh.
 fn failure_status_snapshots(
     report: &Value,
-    account: Option<&Value>,
-    device_id: &str,
+    previous: Option<&Value>,
     now: DateTime<Utc>,
 ) -> Vec<Value> {
     let failed = report
@@ -1979,17 +1862,14 @@ fn failure_status_snapshots(
     if failed.is_empty() {
         return Vec::new();
     }
-    account
-        .and_then(|value| value.get("account_summary"))
-        .and_then(|value| value.get("quota"))
+    previous
+        .and_then(|value| value.get("results"))
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
-        .filter(|observation| {
-            observation.get("device_id").and_then(Value::as_str) == Some(device_id)
-        })
-        .filter_map(|observation| {
-            let snapshot = observation.get("snapshot")?;
+        .filter_map(|result| result.get("snapshots")?.as_array())
+        .flatten()
+        .filter_map(|snapshot| {
             let provider = snapshot.get("provider")?.as_str()?;
             let (_, status) = failed.iter().find(|(failed, _)| *failed == provider)?;
             (snapshot_is_current(snapshot, now)
@@ -2209,13 +2089,23 @@ impl LocalBackend for NativeBackend {
             None => Err(BackendError::unavailable()),
         };
         let quota_value = quota;
-        // One read for the two things that need last refresh's account: restating this
-        // device's failed readings before the upload, and filling the Overview after it.
+        // Last refresh's account fills the Overview when this one cannot be read, and last
+        // refresh's own collection is what a failed source is restated from.
         let stored_account = quota_value
             .is_ok()
             .then(|| {
                 self.state
                     .component(crate::protocol::ComponentName::Account)
+                    .ok()
+                    .flatten()
+                    .and_then(|component| component.value)
+            })
+            .flatten();
+        let previous_quota = quota_value
+            .is_ok()
+            .then(|| {
+                self.state
+                    .component(crate::protocol::ComponentName::Quota)
                     .ok()
                     .flatten()
                     .and_then(|component| component.value)
@@ -2241,16 +2131,10 @@ impl LocalBackend for NativeBackend {
                         let current_session =
                             self.state.session_json().ok().flatten().unwrap_or(session);
                         let mut account_sync_error = None;
-                        let mut stage_blocked = false;
                         if let Ok(quota_payload) = &quota_value {
-                            let device_id = current_session
-                                .get("device_id")
-                                .and_then(Value::as_str)
-                                .unwrap_or_default();
                             let restated = failure_status_snapshots(
                                 quota_payload,
-                                stored_account.as_ref(),
-                                device_id,
+                                previous_quota.as_ref(),
                                 Utc::now(),
                             );
                             if let Err(error) =
@@ -2269,9 +2153,7 @@ impl LocalBackend for NativeBackend {
                                 false
                             }
                         };
-                        if usage_upload_enabled
-                            && let Some(usage_collection) = usage_collection.as_ref()
-                        {
+                        if usage_upload_enabled && usage_collection.is_some() {
                             let context_result = effective_usage_lower_bound(&current_session)
                                 .and_then(|lower_bound| {
                                     self.state
@@ -2288,20 +2170,14 @@ impl LocalBackend for NativeBackend {
                                                 .get("device_generation")
                                                 .and_then(Value::as_u64)
                                                 .unwrap_or_default(),
-                                            &usage_collection.timezone,
                                             &lower_bound,
                                         )
                                         .map_err(|_| BackendError::unavailable())
                                 });
                             if let Err(error) = context_result {
                                 record_account_sync_error(&mut account_sync_error, error);
-                            } else {
-                                match self.stage_outbox(&usage_collection.timezone) {
-                                    Ok(blocked) => stage_blocked = blocked,
-                                    Err(error) => {
-                                        record_account_sync_error(&mut account_sync_error, error)
-                                    }
-                                }
+                            } else if let Err(error) = self.stage_outbox() {
+                                record_account_sync_error(&mut account_sync_error, error);
                             }
                         }
                         if usage_upload_enabled && account_sync_error.is_none() {
@@ -2314,31 +2190,25 @@ impl LocalBackend for NativeBackend {
                             let upload_attempt =
                                 self.begin_attempt(DiagnosticAttemptKind::UsageUpload, None);
                             match self.drain_outbox() {
-                                Ok(rejected) => {
+                                Ok(()) => {
                                     let pending = self
                                         .state
                                         .outbox_entries()
                                         .ok()
                                         .map(|entries| entries.len() as i64)
                                         .unwrap_or(0);
-                                    let attempted = before.saturating_sub(pending);
-                                    let (outcome, code) = match (stage_blocked, rejected, attempted)
-                                    {
-                                        (true, _, _) => (
-                                            DiagnosticAttemptOutcome::Failed,
-                                            Some(DiagnosticAttemptCode::UnrepresentableHour),
-                                        ),
-                                        (false, true, _) => (
-                                            DiagnosticAttemptOutcome::Failed,
-                                            Some(DiagnosticAttemptCode::InvalidUsageBatch),
-                                        ),
-                                        (false, false, 0) => (
+                                    let (outcome, code) = if before == 0 {
+                                        (
                                             DiagnosticAttemptOutcome::NoWork,
                                             Some(DiagnosticAttemptCode::NoWork),
-                                        ),
-                                        (false, false, _) => {
-                                            (DiagnosticAttemptOutcome::Success, None)
-                                        }
+                                        )
+                                    } else if pending > 0 {
+                                        (
+                                            DiagnosticAttemptOutcome::Partial,
+                                            Some(DiagnosticAttemptCode::Unavailable),
+                                        )
+                                    } else {
+                                        (DiagnosticAttemptOutcome::Success, None)
                                     };
                                     self.finish_attempt(upload_attempt, outcome, code);
                                 }
@@ -2352,12 +2222,14 @@ impl LocalBackend for NativeBackend {
                         account_value = account_read_after_sync(
                             account_sync_error,
                             cancel.load(Ordering::Acquire),
-                            || self.account.refresh_account_state(cancel.as_ref()),
+                            || {
+                                self.account
+                                    .refresh_account_state(&self.timezone(), cancel.as_ref())
+                            },
                         );
                         if usage_upload_enabled
                             && let Ok(value) = &account_value
-                            && let Err(error) =
-                                self.refresh_account_usage_periods(value, cancel.as_ref())
+                            && let Err(error) = self.refresh_account_usage_periods(value)
                             && error.error.code.requires_login()
                         {
                             account_value = Err(error);
@@ -2449,7 +2321,6 @@ struct UsageCollection {
     timezone: String,
     generated_at: String,
     agents: Vec<AgentUsage>,
-    rows: Vec<UsageHourlyFact>,
 }
 
 struct AgentUsage {
@@ -2481,103 +2352,110 @@ fn usage_period_range(
     Ok((today_text.clone(), Some((from, today_text))))
 }
 
-fn local_usage_detail(
-    period: UsagePeriod,
-    rows: &[UsageHourlyFact],
-    timezone: &str,
-    generated_at: DateTime<Utc>,
-    pricing_catalog: Option<&pricing::PricingCatalog>,
-    model_catalog: Option<&crate::model_catalog::ModelCatalog>,
-    incomplete: bool,
-) -> Result<Value, BackendError> {
-    let (today, range) = usage_period_range(period, timezone, generated_at)?;
-    let selected_rows = match &range {
-        Some((from, to)) => rows
-            .iter()
-            .filter(|row| {
-                row.usage_date.as_str() >= from.as_str() && row.usage_date.as_str() <= to.as_str()
-            })
-            .cloned()
-            .collect::<Vec<_>>(),
-        None => rows.to_vec(),
-    };
-    let summary = usage::build_local_usage_summary(&selected_rows, pricing_catalog, model_catalog)
-        .map_err(|_| BackendError::unavailable())?;
-    let details_truncated = summary.models_truncated || summary.cost.unpriced_truncated;
-    let (from, to) = range.unwrap_or_else(|| usage_date_range(&selected_rows, &today));
-    Ok(json!({
-        "range": {"from": from, "to": to},
-        "usage": summary,
-        "incomplete": incomplete,
-        "details_truncated": details_truncated
-    }))
-}
-
-fn push_account_usage_period(
-    periods: &mut Vec<(UsagePeriod, Value)>,
-    period: UsagePeriod,
-    value: Value,
-) {
-    if let Ok(detail) = account_usage_detail(value) {
-        periods.push((period, detail));
-    }
-}
-
-fn account_usage_detail(value: Value) -> Result<Value, BackendError> {
+/// One managed period as the panel reads it.
+///
+/// The managed tree carries totals and cost only at the model leaf, because that is the only
+/// place the rollup has to keep them. The panel shows a total per agent and per provider, so
+/// those are folded here rather than asked for on the wire.
+fn account_usage_detail(value: &Value, range: &(String, String)) -> Result<Value, BackendError> {
     let object = value.as_object().ok_or_else(invalid_usage_detail)?;
-    let totals = account_summary_totals(object.get("totals").ok_or_else(invalid_usage_detail)?)?;
+    let totals = object
+        .get("totals")
+        .cloned()
+        .ok_or_else(invalid_usage_detail)?;
     let cost = object
         .get("cost")
         .cloned()
         .ok_or_else(invalid_usage_detail)?;
+    let incomplete = object.get("partial").and_then(Value::as_bool) == Some(true);
+    let unpriced_truncated = cost.get("unpriced_truncated").and_then(Value::as_bool) == Some(true);
     let agents = object
         .get("agents")
-        .cloned()
-        .ok_or_else(invalid_usage_detail)?;
-    let incomplete = object.get("coverage").and_then(Value::as_str) == Some("partial");
-    let breakdowns_truncated =
-        object.get("breakdowns_truncated").and_then(Value::as_bool) == Some(true);
-    let unpriced_truncated = cost.get("unpriced_truncated").and_then(Value::as_bool) == Some(true);
-    let mut usage = json!({
-        "totals": totals,
-        "cost": cost,
-        "agents": agents
-    });
-    if breakdowns_truncated {
-        usage["models_truncated"] = Value::Bool(true);
-    }
+        .and_then(Value::as_array)
+        .ok_or_else(invalid_usage_detail)?
+        .iter()
+        .map(account_usage_agent)
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(json!({
-        "range": object.get("range").cloned().ok_or_else(invalid_usage_detail)?,
-        "usage": usage,
+        "range": {"from": range.0, "to": range.1},
+        "usage": {
+            "totals": totals,
+            "cost": cost,
+            "agents": agents
+        },
         "incomplete": incomplete,
-        "details_truncated": breakdowns_truncated || unpriced_truncated
+        "details_truncated": unpriced_truncated
     }))
 }
 
-fn account_summary_totals(value: &Value) -> Result<Value, BackendError> {
+fn account_usage_agent(value: &Value) -> Result<Value, BackendError> {
     let object = value.as_object().ok_or_else(invalid_usage_detail)?;
-    let count = |name: &str| {
-        object
-            .get(name)
-            .and_then(Value::as_u64)
-            .ok_or_else(invalid_usage_detail)
-    };
-    let input = count("input_tokens")?;
-    let output = count("output_tokens")?;
-    let cache_write_inferred = count("cache_write_inferred_tokens")?;
-    let cache_write = count("cache_write_5m_tokens")?
-        .checked_add(count("cache_write_1h_tokens")?)
-        .and_then(|value| value.checked_add(cache_write_inferred))
-        .ok_or_else(invalid_usage_detail)?;
+    let providers = object
+        .get("providers")
+        .and_then(Value::as_array)
+        .ok_or_else(invalid_usage_detail)?
+        .iter()
+        .map(account_usage_provider)
+        .collect::<Result<Vec<_>, _>>()?;
+    let (totals, cost) = fold_leaf_totals(&providers)?;
     Ok(json!({
-        "total_tokens": input.checked_add(output).ok_or_else(invalid_usage_detail)?,
-        "input_tokens": input,
-        "output_tokens": output,
-        "cache_read_input_tokens": count("cache_read_tokens")?,
-        "cache_write_input_tokens": cache_write,
-        "reasoning_tokens": count("reasoning_tokens")?,
-        "messages": count("requests")?
+        "agent": object.get("agent").cloned().ok_or_else(invalid_usage_detail)?,
+        "totals": totals,
+        "cost": cost,
+        "providers": providers
     }))
+}
+
+fn account_usage_provider(value: &Value) -> Result<Value, BackendError> {
+    let object = value.as_object().ok_or_else(invalid_usage_detail)?;
+    let models = object
+        .get("models")
+        .and_then(Value::as_array)
+        .cloned()
+        .ok_or_else(invalid_usage_detail)?;
+    let (totals, cost) = fold_leaves(&models)?;
+    Ok(json!({
+        "provider": object.get("provider").cloned().ok_or_else(invalid_usage_detail)?,
+        "totals": totals,
+        "cost": cost,
+        "models": models
+    }))
+}
+
+fn fold_leaf_totals(providers: &[Value]) -> Result<(Value, Value), BackendError> {
+    let leaves = providers
+        .iter()
+        .filter_map(|provider| provider.get("models")?.as_array())
+        .flatten()
+        .cloned()
+        .collect::<Vec<_>>();
+    fold_leaves(&leaves)
+}
+
+fn fold_leaves(leaves: &[Value]) -> Result<(Value, Value), BackendError> {
+    let mut totals = usage::UsageSummaryTotals::default();
+    let mut costs = Vec::with_capacity(leaves.len());
+    for leaf in leaves {
+        let leaf_totals: usage::UsageSummaryTotals = serde_json::from_value(
+            leaf.get("totals")
+                .cloned()
+                .ok_or_else(invalid_usage_detail)?,
+        )
+        .map_err(|_| invalid_usage_detail())?;
+        totals =
+            usage::add_summary_totals(&totals, &leaf_totals).map_err(|_| invalid_usage_detail())?;
+        costs.push(
+            serde_json::from_value::<pricing::UsageCostOutcome>(
+                leaf.get("cost").cloned().ok_or_else(invalid_usage_detail)?,
+            )
+            .map_err(|_| invalid_usage_detail())?,
+        );
+    }
+    let cost = pricing::fold_usage_cost_outcomes(&costs).map_err(|_| invalid_usage_detail())?;
+    Ok((
+        serde_json::to_value(totals).map_err(|_| invalid_usage_detail())?,
+        serde_json::to_value(cost).map_err(|_| invalid_usage_detail())?,
+    ))
 }
 
 fn invalid_usage_detail() -> BackendError {
@@ -2586,15 +2464,15 @@ fn invalid_usage_detail() -> BackendError {
     }
 }
 
-fn usage_date_range(rows: &[UsageHourlyFact], fallback_date: &str) -> (String, String) {
+fn usage_date_range(rows: &[DatedUsageRow], fallback_date: &str) -> (String, String) {
     let from = rows
         .iter()
-        .map(|row| row.usage_date.clone())
+        .map(|row| row.date.clone())
         .min()
         .unwrap_or_else(|| fallback_date.to_owned());
     let to = rows
         .iter()
-        .map(|row| row.usage_date.clone())
+        .map(|row| row.date.clone())
         .max()
         .unwrap_or_else(|| fallback_date.to_owned());
     (from, to)
@@ -2681,265 +2559,65 @@ where
     read()
 }
 
-struct UsageSubmissionContext<'a> {
-    agent: UsageAgent,
-    start: &'a DateTime<chrono::FixedOffset>,
-    end: &'a DateTime<chrono::FixedOffset>,
-    timezone: &'a str,
-    account_id: &'a str,
-    device_id: &'a str,
-    generation: u64,
-    partial: bool,
-}
-
-fn usage_rows_for_range(
-    rows_by_hour: &HashMap<(UsageAgent, String), Vec<UsageHourlyFact>>,
-    agent: UsageAgent,
-    start: &DateTime<chrono::FixedOffset>,
-    end: &DateTime<chrono::FixedOffset>,
-) -> Vec<UsageHourlyFact> {
-    let mut rows = Vec::new();
-    let mut hour = *start;
-    while hour < *end {
-        let key = (agent, hour.to_rfc3339_opts(SecondsFormat::Secs, true));
-        if let Some(bucket_rows) = rows_by_hour.get(&key) {
-            rows.extend(bucket_rows.iter().cloned());
-        }
-        hour += chrono::Duration::hours(1);
-    }
-    rows
-}
-
-fn usage_submission_fits(
-    context: &UsageSubmissionContext<'_>,
-    sequence: u64,
-    rows: &[UsageHourlyFact],
-) -> bool {
-    if rows.len() > usage::MAX_USAGE_ROWS {
-        return false;
-    }
-    let Some(submission) = usage_submission(context, sequence, rows) else {
-        return false;
-    };
-    serde_json::to_vec(&submission)
-        .ok()
-        .is_some_and(|bytes| bytes.len() <= crate::relay::MAXIMUM_REQUEST_BYTES)
-        && crate::relay::validate_usage_submission(&submission).is_ok()
-}
-
-fn usage_submission(
-    context: &UsageSubmissionContext<'_>,
-    sequence: u64,
-    rows: &[UsageHourlyFact],
-) -> Option<Value> {
-    let submission_id = stable_range_submission_id(context, sequence, rows);
-    let mut rows_value = serde_json::to_value(rows).ok()?;
-    if let Some(row_values) = rows_value.as_array_mut() {
-        for row in row_values {
-            if row.get("source_cost_microusd").is_some_and(Value::is_null)
-                && let Some(object) = row.as_object_mut()
-            {
-                object.remove("source_cost_microusd");
+/// One agent's rescanned hours, in the shape Relay accepts.
+fn usage_upload(agent: UsageAgent, generation: u64, hours: &[UsageOutboxEntry]) -> Option<Value> {
+    let mut values = Vec::with_capacity(hours.len());
+    for hour in hours {
+        let mut rows = serde_json::to_value(&hour.rows).ok()?;
+        if let Some(row_values) = rows.as_array_mut() {
+            for row in row_values {
+                if row.get("source_cost_microusd").is_some_and(Value::is_null)
+                    && let Some(object) = row.as_object_mut()
+                {
+                    object.remove("source_cost_microusd");
+                }
             }
         }
+        values.push(json!({
+            "bucket_start_utc": hour.bucket_start_utc,
+            "scan_version": hour.scan_version,
+            "partial": hour.partial,
+            "rows": rows
+        }));
     }
-    let mut submission = json!({
+    Some(json!({
         "protocol_version": MANAGED_DATA_PROTOCOL,
-        "submission_id": submission_id,
-        "device_id": context.device_id,
-        "generation": context.generation,
-        "sequence": sequence,
-        "parser_revision": PARSER_REVISION,
-        "aggregation_timezone": context.timezone,
-        "coverage": {
-            "agent": context.agent,
-            "start_at": context.start.to_rfc3339_opts(SecondsFormat::Secs, true),
-            "end_at": context.end.to_rfc3339_opts(SecondsFormat::Secs, true),
-            "status": if context.partial { "partial" } else { "complete" }
-        },
-        "rows": rows_value
-    });
-    if context.partial {
-        submission["write_mode"] = json!("merge_partial");
-    }
-    Some(submission)
+        "generation": generation,
+        "agent": agent,
+        "hours": values
+    }))
 }
 
-fn usage_multipart_submissions(
-    context: &UsageSubmissionContext<'_>,
-    sequence: u64,
-    rows: &[UsageHourlyFact],
-) -> Option<(String, Vec<Value>)> {
-    if rows.is_empty()
-        || rows.len() > usage::MAX_USAGE_ROWS.saturating_mul(MAX_USAGE_MULTIPART_PARTS)
-    {
-        return None;
+/// How many of the staged hours fit one request, by hour count and by bytes.
+///
+/// Zero means the first hour alone does not fit, which is the only case the caller cannot
+/// make progress on.
+fn usage_upload_batch_size(
+    agent: UsageAgent,
+    generation: u64,
+    hours: &[UsageOutboxEntry],
+) -> usize {
+    let fits = |count: usize| {
+        usage_upload(agent, generation, &hours[..count])
+            .filter(|upload| crate::relay::validate_usage_submission(upload).is_ok())
+            .is_some()
+    };
+    let mut high = hours.len().min(usage::MAX_USAGE_HOURS_PER_UPLOAD);
+    if high == 0 || !fits(1) {
+        return 0;
     }
-    let mut identities = HashSet::with_capacity(rows.len());
-    for row in rows {
-        let identity = serde_json::to_string(&(
-            &row.bucket_start_utc,
-            &row.usage_date,
-            row.usage_hour,
-            row.agent,
-            row.billing_channel,
-            row.channel_source,
-            &row.model,
-            row.context_bucket,
-            &row.service_tier,
-            &row.speed,
-            &row.inference_geo,
-        ))
-        .ok()?;
-        if !identities.insert(identity) {
-            return None;
+    // Byte fit is monotonic over a prefix, so the largest count that fits is a binary search
+    // rather than a serialization per candidate.
+    let mut low = 1usize;
+    while low < high {
+        let middle = low + (high - low).div_ceil(2);
+        if fits(middle) {
+            low = middle;
+        } else {
+            high = middle - 1;
         }
     }
-    let batch_id = stable_usage_batch_id(context, rows);
-    // Use the maximum part count while packing. The final count can only make the metadata
-    // smaller, so a part that fits this conservative envelope is safe at the final rebuild.
-    let provisional_count = MAX_USAGE_MULTIPART_PARTS as u64;
-    let mut ranges = Vec::<(usize, usize)>::new();
-    let mut offset = 0usize;
-    while offset < rows.len() {
-        let max_len = (rows.len() - offset).min(usage::MAX_USAGE_ROWS);
-        if !multipart_submission_fits(
-            context,
-            sequence.saturating_add(ranges.len() as u64),
-            &batch_id,
-            ranges.len() as u64,
-            provisional_count,
-            &rows[offset..offset + 1],
-        ) {
-            return None;
-        }
-        // Byte fit is monotonic over a prefix. Binary search keeps high-cardinality hours near
-        // O(parts * log(rows)) instead of serializing every growing prefix.
-        let mut low = 1usize;
-        let mut high = max_len;
-        while low < high {
-            let middle = low + (high - low).div_ceil(2);
-            if multipart_submission_fits(
-                context,
-                sequence.saturating_add(ranges.len() as u64),
-                &batch_id,
-                ranges.len() as u64,
-                provisional_count,
-                &rows[offset..offset + middle],
-            ) {
-                low = middle;
-            } else {
-                high = middle - 1;
-            }
-        }
-        let next = offset + low;
-        ranges.push((offset, next));
-        offset = next;
-        if ranges.len() >= MAX_USAGE_MULTIPART_PARTS && offset < rows.len() {
-            return None;
-        }
-    }
-    if ranges.len() < 2 || ranges.len() > MAX_USAGE_MULTIPART_PARTS {
-        return None;
-    }
-    let part_count = ranges.len() as u64;
-    let submissions = ranges
-        .iter()
-        .enumerate()
-        .map(|(part_index, (from, to))| {
-            usage_multipart_submission(
-                context,
-                sequence.saturating_add(part_index as u64),
-                &batch_id,
-                part_index as u64,
-                part_count,
-                &rows[*from..*to],
-            )
-        })
-        .collect::<Option<Vec<_>>>()?;
-    submissions
-        .iter()
-        .all(|submission| {
-            serde_json::to_vec(submission)
-                .ok()
-                .is_some_and(|bytes| bytes.len() <= crate::relay::MAXIMUM_REQUEST_BYTES)
-                && crate::relay::validate_usage_submission(submission).is_ok()
-        })
-        .then_some((batch_id, submissions))
-}
-
-fn multipart_submission_fits(
-    context: &UsageSubmissionContext<'_>,
-    sequence: u64,
-    batch_id: &str,
-    part_index: u64,
-    part_count: u64,
-    rows: &[UsageHourlyFact],
-) -> bool {
-    usage_multipart_submission(context, sequence, batch_id, part_index, part_count, rows)
-        .and_then(|submission| {
-            serde_json::to_vec(&submission)
-                .ok()
-                .filter(|bytes| bytes.len() <= crate::relay::MAXIMUM_REQUEST_BYTES)
-                .map(|_| submission)
-        })
-        .is_some_and(|submission| crate::relay::validate_usage_submission(&submission).is_ok())
-}
-
-fn usage_multipart_submission(
-    context: &UsageSubmissionContext<'_>,
-    sequence: u64,
-    batch_id: &str,
-    part_index: u64,
-    part_count: u64,
-    rows: &[UsageHourlyFact],
-) -> Option<Value> {
-    let mut submission = usage_submission(context, sequence, rows)?;
-    submission["multipart"] = json!({
-        "batch_id": batch_id,
-        "part_index": part_index,
-        "part_count": part_count
-    });
-    Some(submission)
-}
-
-fn stable_usage_batch_id(context: &UsageSubmissionContext<'_>, rows: &[UsageHourlyFact]) -> String {
-    let material = json!({
-        "parser_revision": PARSER_REVISION,
-        "agent": context.agent,
-        "aggregation_timezone": context.timezone,
-        "account_id": context.account_id,
-        "device_id": context.device_id,
-        "generation": context.generation,
-        "partial": context.partial,
-        "start_at": context.start.to_rfc3339_opts(SecondsFormat::Secs, true),
-        "end_at": context.end.to_rfc3339_opts(SecondsFormat::Secs, true),
-        "rows": rows,
-    });
-    let digest = Sha256::digest(serde_json::to_vec(&material).unwrap_or_default());
-    format!("usage_batch_{digest:x}")
-}
-
-fn stable_range_submission_id(
-    context: &UsageSubmissionContext<'_>,
-    sequence: u64,
-    rows: &[UsageHourlyFact],
-) -> String {
-    let material = json!({
-        "parser_revision": PARSER_REVISION,
-        "agent": context.agent,
-        "aggregation_timezone": context.timezone,
-        "account_id": context.account_id,
-        "device_id": context.device_id,
-        "generation": context.generation,
-        "sequence": sequence,
-        "partial": context.partial,
-        "start_at": context.start.to_rfc3339_opts(SecondsFormat::Secs, true),
-        "end_at": context.end.to_rfc3339_opts(SecondsFormat::Secs, true),
-        "rows": rows,
-    });
-    let digest = Sha256::digest(serde_json::to_vec(&material).unwrap_or_default());
-    format!("usage_{digest:x}")
+    low
 }
 
 fn floor_utc_hour(value: &DateTime<Utc>) -> String {
@@ -2949,10 +2627,6 @@ fn floor_utc_hour(value: &DateTime<Utc>) -> String {
         .and_then(|value| value.with_nanosecond(0))
         .unwrap_or(*value)
         .to_rfc3339_opts(SecondsFormat::Secs, true)
-}
-
-fn usage_stage_slots(existing_entries: usize) -> usize {
-    MAX_USAGE_OUTBOX_ENTRIES.saturating_sub(existing_entries)
 }
 
 fn overview_item(
@@ -3174,110 +2848,123 @@ mod tests {
 
     /// One statement per contract: the account read always carries its per-agent breakdown, so
     /// a summary without it is refused rather than rebuilt from the display breakdowns.
+    /// A managed period states cost at the leaf. What the panel shows above it — a total per
+    /// agent and per provider — is folded here, and folding must not invent or lose anything.
     #[test]
-    fn account_usage_detail_requires_the_agent_breakdown() {
-        let cost = json!({
-            "mode": "calculate",
-            "basis": "none",
-            "status": "unavailable",
-            "amount_microusd": null,
-            "catalog_revision": null,
-            "calculated_rows": 0,
-            "reported_rows": 0,
-            "unpriced_rows": 1,
-            "assumptions": [],
-            "unpriced": []
-        });
-        let totals = json!({
-            "input_tokens": 8,
-            "cache_read_tokens": 2,
-            "cache_write_5m_tokens": 1,
-            "cache_write_1h_tokens": 0,
-            "cache_write_inferred_tokens": 0,
-            "output_tokens": 5,
-            "reasoning_tokens": 3,
-            "requests": 2,
-            "web_search_requests": 0,
-            "web_fetch_requests": 0,
-            "source_cost_microusd": null,
-            "source_cost_covered_requests": 0
-        });
-        assert!(
-            account_usage_detail(json!({
-                "range": {"from": "2026-08-06", "to": "2026-08-12"},
-                "totals": totals,
-                "cost": cost,
-                "coverage": "complete",
-                "breakdowns": [{
-                    "dimension": "model",
-                    "key": "gpt-test",
-                    "totals": totals,
-                    "cost": cost
+    fn a_managed_period_folds_its_leaves_into_the_totals_the_panel_shows() {
+        let cost = |amount: &str, calculated: u64| {
+            json!({
+                "mode": "auto",
+                "basis": "calculated",
+                "status": "complete",
+                "amount_microusd": amount,
+                "catalog_revision": "official-2026-08-10-4",
+                "calculated_rows": calculated,
+                "reported_rows": 0,
+                "unpriced_rows": 0,
+                "assumptions": ["wildcard_speed"],
+                "unpriced": []
+            })
+        };
+        let totals = |input: u64, output: u64, messages: u64| {
+            json!({
+                "total_tokens": input + output,
+                "input_tokens": input,
+                "output_tokens": output,
+                "cache_read_input_tokens": 0,
+                "cache_write_input_tokens": 0,
+                "reasoning_tokens": 0,
+                "messages": messages
+            })
+        };
+        let period = json!({
+            "totals": totals(30, 6, 3),
+            "cost": cost("300", 3),
+            "partial": true,
+            "agents": [{
+                "agent": "codex",
+                "providers": [{
+                    "provider": "openai",
+                    "models": [
+                        {"model": "gpt-5.4", "totals": totals(10, 2, 1), "cost": cost("100", 1)},
+                        {"model": "gpt-5.6", "totals": totals(20, 4, 2), "cost": cost("200", 2)}
+                    ]
                 }]
-            }))
-            .is_err()
+            }]
+        });
+        let detail =
+            account_usage_detail(&period, &("2026-08-13".to_owned(), "2026-08-13".to_owned()))
+                .expect("detail");
+
+        assert_eq!(
+            detail["range"],
+            json!({"from": "2026-08-13", "to": "2026-08-13"})
+        );
+        assert_eq!(detail["incomplete"], json!(true));
+        assert_eq!(detail["usage"]["totals"]["messages"], json!(3));
+        let agent = &detail["usage"]["agents"][0];
+        assert_eq!(agent["agent"], "codex");
+        assert_eq!(agent["totals"]["input_tokens"], json!(30));
+        assert_eq!(agent["totals"]["messages"], json!(3));
+        assert_eq!(agent["cost"]["amount_microusd"], json!("300"));
+        assert_eq!(agent["cost"]["calculated_rows"], json!(3));
+        assert_eq!(agent["cost"]["status"], json!("complete"));
+        assert_eq!(agent["providers"][0]["totals"]["output_tokens"], json!(6));
+        assert_eq!(
+            agent["providers"][0]["models"]
+                .as_array()
+                .expect("models")
+                .len(),
+            2
         );
     }
 
+    /// A period with no agents in it still answers, and its fold says there was no cost.
     #[test]
-    fn account_usage_detail_keeps_structured_clients() {
-        let cost = json!({
-            "mode": "calculate",
-            "basis": "calculated",
-            "status": "complete",
-            "amount_microusd": "1",
-            "catalog_revision": "official-2026-08-10-4",
-            "calculated_rows": 1,
-            "reported_rows": 0,
-            "unpriced_rows": 0,
-            "assumptions": [],
-            "unpriced": []
-        });
-        let summary_totals = json!({
-            "total_tokens": 13,
-            "input_tokens": 8,
-            "output_tokens": 5,
-            "cache_read_input_tokens": 2,
-            "cache_write_input_tokens": 1,
-            "reasoning_tokens": 3,
-            "messages": 2
-        });
-        let relay_totals = json!({
-            "input_tokens": 8,
-            "cache_read_tokens": 2,
-            "cache_write_5m_tokens": 1,
-            "cache_write_1h_tokens": 0,
-            "cache_write_inferred_tokens": 0,
-            "output_tokens": 5,
-            "reasoning_tokens": 3,
-            "requests": 2,
-            "web_search_requests": 0,
-            "web_fetch_requests": 0,
-            "source_cost_microusd": null,
-            "source_cost_covered_requests": 0
-        });
-        let detail = account_usage_detail(json!({
-            "range": {"from": "2026-08-13", "to": "2026-08-13"},
-            "totals": relay_totals,
-            "cost": cost,
-            "coverage": "partial",
-            "breakdowns": [],
-            "agents": [{
-                "agent": "codex",
-                "totals": summary_totals,
-                "cost": cost,
-                "providers": [{
-                    "provider": "openai",
-                    "totals": summary_totals,
-                    "cost": cost,
-                    "models": [{"model": "gpt-5.4", "totals": summary_totals, "cost": cost}]
-                }]
-            }]
-        }))
+    fn a_managed_period_with_nothing_in_it_folds_to_no_cost() {
+        let detail = account_usage_detail(
+            &json!({
+                "totals": {
+                    "total_tokens": 0,
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "cache_read_input_tokens": 0,
+                    "cache_write_input_tokens": 0,
+                    "reasoning_tokens": 0,
+                    "messages": 0
+                },
+                "cost": {
+                    "mode": "auto",
+                    "basis": "none",
+                    "status": "complete",
+                    "amount_microusd": null,
+                    "catalog_revision": null,
+                    "calculated_rows": 0,
+                    "reported_rows": 0,
+                    "unpriced_rows": 0,
+                    "assumptions": [],
+                    "unpriced": []
+                },
+                "partial": false,
+                "agents": []
+            }),
+            &("2026-08-13".to_owned(), "2026-08-13".to_owned()),
+        )
         .expect("detail");
-        assert_eq!(detail["usage"]["agents"][0]["agent"], "codex");
-        assert_eq!(detail["usage"]["totals"]["messages"], 2);
-        assert_eq!(detail["incomplete"], json!(true));
+        assert_eq!(detail["usage"]["agents"], json!([]));
+        assert_eq!(detail["incomplete"], json!(false));
+    }
+
+    /// A period that does not carry the tree is not a period this build can read.
+    #[test]
+    fn a_managed_period_without_its_agent_tree_is_refused() {
+        assert!(
+            account_usage_detail(
+                &json!({"totals": {}, "cost": {}, "partial": false}),
+                &("2026-08-13".to_owned(), "2026-08-13".to_owned()),
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -3481,8 +3168,8 @@ mod tests {
         state
             .set_usage_upload_enabled(false)
             .expect("disable Usage upload");
-        assert!(!backend.stage_outbox("UTC").expect("staging disabled"));
-        assert!(!backend.drain_outbox().expect("upload disabled"));
+        assert!(!backend.stage_outbox().expect("staging disabled"));
+        backend.drain_outbox().expect("upload disabled");
         let disabled = backend
             .complete_diagnostic_report()
             .expect("disabled diagnostics");
@@ -3587,20 +3274,21 @@ mod tests {
     fn a_failed_collection_republishes_this_devices_reading_as_failed() {
         let now = Utc::now();
         let observed_at = (now - Duration::hours(1)).to_rfc3339_opts(SecondsFormat::Secs, true);
-        let reading = |status: &str| {
+        let collected = |status: &str, observed_at: &str| {
             serde_json::json!({
-                "device_id": "device_self",
-                "snapshot": {
+                "results": [{
                     "provider": "codex",
-                    "account": {"fingerprint": "account", "fingerprint_scope": "global"},
-                    "windows": [{"id": "monthly", "title": "Monthly", "used_percent": 0.0}],
-                    "status": status,
-                    "observed_at": observed_at
-                }
+                    "outcome": "success",
+                    "snapshots": [{
+                        "provider": "codex",
+                        "account": {"fingerprint": "account", "fingerprint_scope": "global"},
+                        "windows": [{"id": "monthly", "title": "Monthly", "used_percent": 0.0}],
+                        "status": status,
+                        "observed_at": observed_at
+                    }]
+                }]
             })
         };
-        let summary =
-            |observations: Value| serde_json::json!({"account_summary": {"quota": observations}});
         let report = serde_json::json!({
             "results": [
                 {"provider": "codex", "outcome": "auth_required", "snapshots": [], "sources": 1},
@@ -3608,12 +3296,8 @@ mod tests {
             ]
         });
 
-        let account = summary(serde_json::json!([
-            reading("available"),
-            // Another device's reading of the same provider is not this device's to speak for.
-            {"device_id": "device_other", "snapshot": reading("available")["snapshot"]}
-        ]));
-        let republished = failure_status_snapshots(&report, Some(&account), "device_self", now);
+        let previous = collected("available", &observed_at);
+        let republished = failure_status_snapshots(&report, Some(&previous), now);
         assert_eq!(republished.len(), 1);
         assert_eq!(
             republished[0].get("status").and_then(Value::as_str),
@@ -3625,28 +3309,22 @@ mod tests {
             Some(observed_at.as_str())
         );
 
-        // Once published, saying it again would rewrite the row and spend a sequence.
-        let published = summary(serde_json::json!([reading("auth_required")]));
-        assert!(failure_status_snapshots(&report, Some(&published), "device_self", now).is_empty());
+        // Once published, saying it again would rewrite the row for nothing.
+        let published = collected("auth_required", &observed_at);
+        assert!(failure_status_snapshots(&report, Some(&published), now).is_empty());
 
         // A reading that already aged out is not current wherever it is read, so restating
         // it says nothing and would rewrite the row on every refresh forever.
-        let aged_out = summary(serde_json::json!([{
-            "device_id": "device_self",
-            "snapshot": {
-                "provider": "codex",
-                "account": {"fingerprint": "account", "fingerprint_scope": "global"},
-                "windows": [{"id": "monthly", "title": "Monthly", "used_percent": 0.0}],
-                "status": "available",
-                "observed_at": (now - Duration::days(2)).to_rfc3339_opts(SecondsFormat::Secs, true)
-            }
-        }]));
-        assert!(failure_status_snapshots(&report, Some(&aged_out), "device_self", now).is_empty());
+        let aged_out = collected(
+            "available",
+            &(now - Duration::days(2)).to_rfc3339_opts(SecondsFormat::Secs, true),
+        );
+        assert!(failure_status_snapshots(&report, Some(&aged_out), now).is_empty());
 
-        // A provider this device never uploaded has nothing to republish.
-        let empty = summary(serde_json::json!([]));
-        assert!(failure_status_snapshots(&report, Some(&empty), "device_self", now).is_empty());
-        assert!(failure_status_snapshots(&report, None, "device_self", now).is_empty());
+        // A provider this device never collected has nothing to republish.
+        let empty = serde_json::json!({"results": []});
+        assert!(failure_status_snapshots(&report, Some(&empty), now).is_empty());
+        assert!(failure_status_snapshots(&report, None, now).is_empty());
     }
 
     /// A source that cannot be reached ends the refresh with its own name.  This used to
@@ -3813,6 +3491,61 @@ mod tests {
         }
     }
 
+    /// The Overview is two readings of one subscription: this device's, and the one Relay
+    /// resolved from every other device. The rule is stated once as a fixture and answered here.
+    #[test]
+    fn two_way_subscription_merge_matches_the_shared_conformance_fixture() {
+        const FIXTURE: &str =
+            include_str!("../../../protocol/fixtures/quota-observation-conformance.json");
+        let fixture: Value = serde_json::from_str(FIXTURE).expect("fixture");
+        let cases = fixture["two_way_merge"].as_array().expect("merge cases");
+        assert!(!cases.is_empty());
+        for case in cases {
+            let name = case["name"].as_str().expect("name");
+            let quota = json!({
+                "results": [{
+                    "provider": "codex",
+                    "outcome": "success",
+                    "snapshots": case["local"]
+                        .as_array()
+                        .cloned()
+                        .unwrap_or_default()
+                }]
+            });
+            let account = json!({
+                "account_summary": {
+                    "devices": [{
+                        "id": "device_remote",
+                        "display_name": "Studio",
+                        "platform": "macos",
+                        "last_seen_at": null,
+                        "last_observed_at": null
+                    }],
+                    "subscriptions": case["remote"].clone()
+                }
+            });
+            let now = DateTime::parse_from_rfc3339(case["now"].as_str().expect("now"))
+                .expect("instant")
+                .with_timezone(&Utc);
+            let items = overview_items(&quota, Some(&account), now);
+            let expected = case["expected"].as_array().expect("expected");
+            assert_eq!(items.len(), expected.len(), "{name}");
+            for (item, expected) in items.iter().zip(expected) {
+                assert_eq!(
+                    item.selected_source_id,
+                    expected["selected_source_id"].as_str().expect("selected"),
+                    "{name}"
+                );
+                assert_eq!(
+                    item.sources.len(),
+                    expected["sources"].as_u64().expect("sources") as usize,
+                    "{name}"
+                );
+                assert_eq!(item.is_stale, expected["is_stale"], "{name}");
+            }
+        }
+    }
+
     #[test]
     fn expired_observations_are_stale_and_lose_to_a_still_valid_device() {
         let root = std::env::temp_dir().join(format!("quota-overview-{}", uuid::Uuid::new_v4()));
@@ -3835,31 +3568,39 @@ mod tests {
                 "observed_at": observed_at.to_rfc3339_opts(SecondsFormat::Secs, true)
             })
         };
+        let subscription = |device_id: &str, snapshot: Value| {
+            json!({
+                "key": "codex|account|global|",
+                "provider": "codex",
+                "snapshot": snapshot.clone(),
+                "sources": [{
+                    "device_id": device_id,
+                    "observed_at": snapshot["observed_at"].clone()
+                }]
+            })
+        };
         let now = Utc::now();
         let quota = json!({"results": []});
         let mut account = json!({
             "auth_status": "signed_in",
             "device_id": "this-device",
             "account_summary": {
-                "devices": [{"device_id": "asleep", "display_name": "Asleep"}],
-                "quota": [{"device_id": "asleep", "snapshot": snapshot(now - Duration::days(2))}]
+                "devices": [{"id": "asleep", "display_name": "Asleep"}],
+                "subscriptions": [subscription("asleep", snapshot(now - Duration::days(2)))]
             }
         });
         let expired = backend.build_overview(&quota, Some(&account));
         assert_eq!(expired.len(), 1);
         assert!(expired[0].is_stale);
 
+        // Relay resolves the account's devices into one row, so a fresher reading arrives as
+        // that row rather than as a second card to collapse here.
         account["account_summary"]["devices"]
             .as_array_mut()
             .expect("devices")
-            .push(json!({"device_id": "awake", "display_name": "Studio"}));
-        account["account_summary"]["quota"]
-            .as_array_mut()
-            .expect("observations")
-            .push(json!({
-                "device_id": "awake",
-                "snapshot": snapshot(now - Duration::minutes(1))
-            }));
+            .push(json!({"id": "awake", "display_name": "Studio"}));
+        account["account_summary"]["subscriptions"] =
+            json!([subscription("awake", snapshot(now - Duration::minutes(1)))]);
         let items = backend.build_overview(&quota, Some(&account));
         assert_eq!(items.len(), 1);
         assert!(!items[0].is_stale);
@@ -3868,8 +3609,10 @@ mod tests {
         fs::remove_dir_all(root).expect("cleanup");
     }
 
+    /// Local collection is the only authority for the machine in front of you, so a local
+    /// reading of the same instant wins and a newer remote one still takes over.
     #[test]
-    fn overview_ignores_this_device_upload_and_keeps_other_devices() {
+    fn the_local_reading_wins_a_tie_and_loses_to_a_newer_remote_one() {
         let root = std::env::temp_dir().join(format!("quota-overview-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).expect("root");
         let state = Arc::new(StateStore::open(&root).expect("state"));
@@ -3879,48 +3622,104 @@ mod tests {
             "QuotaTest",
             "test",
         );
-        let snapshot = |observed_at: &str| {
+        let snapshot = |observed_at: &str, used: f64| {
             json!({
                 "provider": "codex",
                 "account": {"fingerprint": "account", "fingerprint_scope": "global"},
+                "windows": [{"id": "five_hour", "title": "5 hour", "used_percent": used}],
+                "status": "available",
+                "observed_at": observed_at
+            })
+        };
+        let now = Utc::now();
+        let local_at = (now - Duration::minutes(5)).to_rfc3339_opts(SecondsFormat::Secs, true);
+        let quota = json!({
+            "results": [{
+                "provider": "codex",
+                "outcome": "success",
+                "snapshots": [snapshot(&local_at, 10.0)]
+            }]
+        });
+        let remote = |observed_at: &str, used: f64| {
+            json!({
+                "auth_status": "signed_in",
+                "account_summary": {
+                    "devices": [{"id": "other", "display_name": "Studio"}],
+                    "subscriptions": [{
+                        "key": "codex|account|global|",
+                        "provider": "codex",
+                        "snapshot": snapshot(observed_at, used),
+                        "sources": [{"device_id": "other", "observed_at": observed_at}]
+                    }]
+                }
+            })
+        };
+
+        let tied = remote(&local_at, 90.0);
+        let items = backend.build_overview(&quota, Some(&tied));
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].sources.len(), 2);
+        assert_eq!(items[0].selected_source_id, "local");
+
+        let newer = (now - Duration::minutes(1)).to_rfc3339_opts(SecondsFormat::Secs, true);
+        let items = backend.build_overview(&quota, Some(&remote(&newer, 90.0)));
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].selected_source_id, "device:other");
+        assert_eq!(items[0].selected_source_display_name, "Studio");
+        drop(backend);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    /// A subscription only this device has, and one only the account has, both stand.
+    #[test]
+    fn a_subscription_only_one_side_knows_still_reaches_the_overview() {
+        let root = std::env::temp_dir().join(format!("quota-overview-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        let backend = NativeBackend::new(
+            state,
+            Arc::new(RelayClient::new().expect("relay")),
+            "QuotaTest",
+            "test",
+        );
+        let observed_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+        let snapshot = |fingerprint: &str| {
+            json!({
+                "provider": "codex",
+                "account": {"fingerprint": fingerprint, "fingerprint_scope": "global"},
                 "windows": [{"id": "five_hour", "title": "5 hour", "used_percent": 40.0}],
                 "status": "available",
                 "observed_at": observed_at
             })
         };
-        // The local sign-in was rejected, so this device collected nothing this refresh.
         let quota = json!({
-            "results": [{"provider": "codex", "outcome": "auth_required", "snapshots": []}]
+            "results": [{
+                "provider": "codex",
+                "outcome": "success",
+                "snapshots": [snapshot("local-only")]
+            }]
         });
-        let mut account = json!({
+        let account = json!({
             "auth_status": "signed_in",
-            "account_id": "account",
-            "device_id": "this-device",
-            "device_generation": 1,
             "account_summary": {
-                "devices": [
-                    {"device_id": "this-device", "display_name": "This Mac"},
-                    {"device_id": "other-device", "display_name": "Studio"}
-                ],
-                "quota": [
-                    {"device_id": "this-device", "snapshot": snapshot("2026-08-15T08:00:00Z")}
-                ]
+                "devices": [{"id": "other", "display_name": "Studio"}],
+                "subscriptions": [{
+                    "key": "codex|remote-only|global|",
+                    "provider": "codex",
+                    "snapshot": snapshot("remote-only"),
+                    "sources": [{"device_id": "other", "observed_at": observed_at}]
+                }]
             }
         });
-
-        assert!(backend.build_overview(&quota, Some(&account)).is_empty());
-
-        account["account_summary"]["quota"]
-            .as_array_mut()
-            .expect("observations")
-            .push(json!({
-                "device_id": "other-device",
-                "snapshot": snapshot("2026-08-15T09:00:00Z")
-            }));
         let items = backend.build_overview(&quota, Some(&account));
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0].sources.len(), 1);
-        assert_eq!(items[0].selected_source_display_name, "Studio");
+        assert_eq!(items.len(), 2);
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| item.identity.fingerprint.as_str())
+                .collect::<Vec<_>>(),
+            vec!["local-only", "remote-only"]
+        );
         drop(backend);
         fs::remove_dir_all(root).expect("cleanup");
     }
@@ -4125,12 +3924,8 @@ mod tests {
             .write_session_json(&json!({"status":"active"}))
             .expect("session");
         state
-            .insert_usage_dirty_range_for_test(&UsageDirtyRange {
-                agent: UsageAgent::Codex,
-                start_at: "2026-08-10T12:00:00Z".into(),
-                end_at: "2026-08-10T13:00:00Z".into(),
-            })
-            .expect("dirty range");
+            .insert_usage_dirty_hour_for_test(UsageAgent::Codex, "2026-08-10T12:00:00Z", 1)
+            .expect("dirty hour");
         let backend = NativeBackend::new(
             state.clone(),
             Arc::new(RelayClient::new().expect("relay")),
@@ -4252,20 +4047,15 @@ mod tests {
         let now = DateTime::parse_from_rfc3339("2026-08-15T04:30:00Z")
             .expect("now")
             .with_timezone(&Utc);
-        let ranges = [
-            UsageDirtyRange {
-                agent: UsageAgent::Codex,
-                start_at: "2026-08-15T03:00:00Z".into(),
-                end_at: "2026-08-15T04:00:00Z".into(),
-            },
-            UsageDirtyRange {
-                agent: UsageAgent::Codex,
-                start_at: "2026-08-15T04:00:00Z".into(),
-                end_at: "2026-08-15T05:00:00Z".into(),
-            },
-        ];
-        assert_eq!(uploadable_dirty_range_count(&ranges, now), 1);
-        assert_eq!(uploadable_dirty_range_count(&ranges[1..], now), 0);
+        let hour = |bucket_start_utc: &str| crate::state::DirtyUsageHour {
+            agent: UsageAgent::Codex,
+            bucket_start_utc: bucket_start_utc.into(),
+            scan_version: 1,
+            partial: false,
+        };
+        let hours = [hour("2026-08-15T03:00:00Z"), hour("2026-08-15T04:00:00Z")];
+        assert_eq!(uploadable_dirty_hour_count(&hours, now), 1);
+        assert_eq!(uploadable_dirty_hour_count(&hours[1..], now), 0);
     }
 
     #[test]
@@ -4277,119 +4067,94 @@ mod tests {
         assert_ne!(resolve_timezone(&invalid).name(), "not/a-zone");
     }
 
+    /// An upload is bounded by hours and by bytes, and packing never drops an hour to fit.
     #[test]
-    fn usage_upload_batch_matches_stage_and_drain_budget() {
-        assert_eq!(usage_stage_slots(0), 64);
-        assert_eq!(usage_stage_slots(63), 1);
-        assert_eq!(usage_stage_slots(64), 0);
-        assert_eq!(MAX_USAGE_OUTBOX_ENTRIES, MAX_USAGE_MULTIPART_PARTS);
-    }
-
-    #[test]
-    fn multipart_builder_splits_rows_and_bytes_without_truncating() {
-        let start = DateTime::parse_from_rfc3339("2026-08-10T12:00:00Z").expect("start");
-        let end = DateTime::parse_from_rfc3339("2026-08-10T13:00:00Z").expect("end");
-        let context = UsageSubmissionContext {
+    fn an_upload_packs_by_hours_and_by_bytes_without_dropping_one() {
+        let row = |speed: usize| usage::UsageRow {
             agent: UsageAgent::Codex,
-            start: &start,
-            end: &end,
-            timezone: "UTC",
-            account_id: "account_test",
-            device_id: "device_test",
-            generation: 1,
-            partial: false,
-        };
-        let fact = || UsageHourlyFact {
-            bucket_start_utc: "2026-08-10T12:00:00Z".into(),
-            usage_date: "2026-08-10".into(),
-            usage_hour: 12,
-            agent: UsageAgent::Codex,
-            billing_channel: crate::usage::BillingChannel::Unknown,
-            channel_source: crate::usage::ChannelSource::Unknown,
-            model: "model".into(),
-            context_bucket: crate::usage::ContextBucket::Le128k,
+            billing_channel: usage::BillingChannel::OpenaiDirect,
+            channel_source: usage::ChannelSource::Explicit,
+            model: "gpt-5.6-sol".into(),
+            context_bucket: usage::ContextBucket::Le128k,
             service_tier: "standard".into(),
-            speed: "standard".into(),
+            speed: format!("speed{speed}"),
             inference_geo: "global".into(),
-            input_tokens: 1,
-            cache_read_tokens: 0,
-            cache_write_5m_tokens: 0,
+            input_tokens: 1_200,
+            cache_read_tokens: 400,
+            cache_write_5m_tokens: 100,
             cache_write_1h_tokens: 0,
             cache_write_inferred_tokens: 0,
-            output_tokens: 1,
-            reasoning_tokens: 0,
-            requests: 1,
-            web_search_requests: 0,
+            output_tokens: 350,
+            reasoning_tokens: 120,
+            requests: 4,
+            web_search_requests: 1,
             web_fetch_requests: 0,
             source_cost_microusd: None,
             source_cost_covered_requests: 0,
         };
-        let rows = (0..=usage::MAX_USAGE_ROWS)
-            .map(|index| {
-                let mut row = fact();
-                row.model = format!("model-{index}");
-                row
-            })
+        let hour = |index: usize, rows: usize| UsageOutboxEntry {
+            agent: UsageAgent::Codex,
+            bucket_start_utc: DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+                .expect("base hour")
+                .checked_add_signed(chrono::Duration::hours(index as i64))
+                .expect("hour")
+                .to_rfc3339_opts(SecondsFormat::Secs, true),
+            scan_version: 3,
+            partial: false,
+            rows: (0..rows).map(row).collect(),
+        };
+
+        // Small hours: the hour bound is what stops the batch.
+        let many = (0..usage::MAX_USAGE_HOURS_PER_UPLOAD + 10)
+            .map(|index| hour(index, 1))
             .collect::<Vec<_>>();
-        let (batch_id, submissions) =
-            usage_multipart_submissions(&context, 10, &rows).expect("row-bound multipart");
-        assert_eq!(submissions.len(), 2);
-        let mut retained = 0usize;
-        for (index, submission) in submissions.iter().enumerate() {
-            let multipart = submission
-                .get("multipart")
-                .and_then(Value::as_object)
-                .expect("multipart metadata");
-            assert_eq!(
-                multipart.get("batch_id").and_then(Value::as_str),
-                Some(batch_id.as_str())
-            );
-            assert_eq!(
-                multipart.get("part_index").and_then(Value::as_u64),
-                Some(index as u64)
-            );
-            assert_eq!(multipart.get("part_count").and_then(Value::as_u64), Some(2));
-            assert_eq!(
-                submission.get("sequence").and_then(Value::as_u64),
-                Some(10 + index as u64)
-            );
-            let part_rows = submission
-                .get("rows")
-                .and_then(Value::as_array)
-                .expect("part rows");
-            assert!(part_rows.len() <= usage::MAX_USAGE_ROWS);
-            retained += part_rows.len();
-            assert!(
-                serde_json::to_vec(submission).expect("bytes").len()
-                    <= crate::relay::MAXIMUM_REQUEST_BYTES
-            );
-            crate::relay::validate_usage_submission(submission).expect("valid part");
-        }
-        assert_eq!(retained, rows.len());
+        assert_eq!(
+            usage_upload_batch_size(UsageAgent::Codex, 1, &many),
+            usage::MAX_USAGE_HOURS_PER_UPLOAD
+        );
+        let upload = usage_upload(
+            UsageAgent::Codex,
+            1,
+            &many[..usage::MAX_USAGE_HOURS_PER_UPLOAD],
+        )
+        .expect("upload");
+        assert!(crate::relay::validate_usage_submission(&upload).is_ok());
 
-        let fat_rows = (0..usage::MAX_USAGE_ROWS)
-            .map(|index| {
-                let mut row = fact();
-                row.model = format!("{index:06}-{}", "m".repeat(121));
-                row.service_tier = "s".repeat(64);
-                row.speed = "f".repeat(64);
-                row.inference_geo = "g".repeat(64);
-                row
-            })
+        // Fat hours: the byte bound is, and every packed hour still travels whole.
+        let fat = (0..8)
+            .map(|index| hour(index, usage::MAX_USAGE_ROWS_PER_HOUR))
             .collect::<Vec<_>>();
-        let (_, byte_parts) =
-            usage_multipart_submissions(&context, 20, &fat_rows).expect("byte-bound multipart");
-        assert!(byte_parts.len() > 1);
-        assert!(byte_parts.iter().all(|part| {
-            serde_json::to_vec(part).expect("bytes").len() <= crate::relay::MAXIMUM_REQUEST_BYTES
-        }));
+        let taken = usage_upload_batch_size(UsageAgent::Codex, 1, &fat);
+        assert!((1..fat.len()).contains(&taken), "{taken}");
+        let upload = usage_upload(UsageAgent::Codex, 1, &fat[..taken]).expect("upload");
+        assert!(crate::relay::validate_usage_submission(&upload).is_ok());
+        assert_eq!(
+            upload["hours"].as_array().expect("hours").len(),
+            taken,
+            "packing never truncates an hour"
+        );
+        assert!(serde_json::to_vec(&upload).expect("bytes").len() <= 1_048_576);
+    }
 
-        let mut duplicate_rows = rows.clone();
-        duplicate_rows[usage::MAX_USAGE_ROWS] = duplicate_rows[0].clone();
-        assert!(usage_multipart_submissions(&context, 30, &duplicate_rows).is_none());
-
-        let too_many = vec![fact(); usage::MAX_USAGE_ROWS * MAX_USAGE_MULTIPART_PARTS + 1];
-        assert!(usage_multipart_submissions(&context, 40, &too_many).is_none());
+    /// An empty hour is a fact: it is how a device says everything it once reported for that
+    /// hour is gone.
+    #[test]
+    fn an_hour_with_nothing_left_in_it_still_travels() {
+        let upload = usage_upload(
+            UsageAgent::Codex,
+            3,
+            &[UsageOutboxEntry {
+                agent: UsageAgent::Codex,
+                bucket_start_utc: "2026-08-12T09:00:00Z".into(),
+                scan_version: 7,
+                partial: true,
+                rows: Vec::new(),
+            }],
+        )
+        .expect("upload");
+        assert!(crate::relay::validate_usage_submission(&upload).is_ok());
+        assert_eq!(upload["hours"][0]["partial"], json!(true));
+        assert_eq!(upload["hours"][0]["rows"], json!([]));
     }
 
     #[test]
@@ -4415,7 +4180,6 @@ mod tests {
                     },
                 })
                 .collect(),
-            rows: Vec::new(),
         };
         let report = backend
             .usage_report(&collection, None, None)

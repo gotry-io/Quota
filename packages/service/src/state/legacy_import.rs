@@ -1,6 +1,10 @@
 //! One-time move of a released single-file image into `identity.sqlite`. Only what this device
 //! cannot regenerate comes across; the rest was a cache the next refresh rebuilds. The image is
 //! read read-only and removed either way, because a retry on every launch is worse than a reset.
+//!
+//! A released image's staged uploads do not come across. They were requests in a contract this
+//! build no longer speaks, and an hour is replaced by version now: the first scan after the
+//! import recomputes every retained hour and sends it again.
 
 use std::fs;
 use std::path::Path;
@@ -51,37 +55,14 @@ fn copy_identity(live: &Path, identity: &mut Connection) -> Result<(), StateErro
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()?;
-    let context: Option<(String, String, i64, String, String)> = legacy
+    let context: Option<(String, String, i64, String)> = legacy
         .query_row(
-            "SELECT account_id, device_id, generation, aggregation_timezone, lower_bound
+            "SELECT account_id, device_id, generation, lower_bound
              FROM usage_upload_context WHERE id = 1",
             [],
-            |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                ))
-            },
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )
         .optional()?;
-    let outbox: Vec<(String, String, String, i64, i64, String)> = rows(
-        &legacy,
-        "SELECT submission_id, account_id, device_id, generation, sequence, payload_json
-         FROM usage_outbox",
-        |row| {
-            Ok((
-                row.get(0)?,
-                row.get(1)?,
-                row.get(2)?,
-                row.get(3)?,
-                row.get(4)?,
-                row.get(5)?,
-            ))
-        },
-    )?;
     let sessions: Vec<(String, String, String, Option<String>, String)> = rows(
         &legacy,
         "SELECT provider, cookie_header, account_fingerprint, account_label, updated_at
@@ -119,17 +100,9 @@ fn copy_identity(live: &Path, identity: &mut Connection) -> Result<(), StateErro
     if let Some(context) = context {
         tx.execute(
             "INSERT OR REPLACE INTO usage_upload_context(
-                id, account_id, device_id, generation, aggregation_timezone, lower_bound
-             ) VALUES (1, ?1, ?2, ?3, ?4, ?5)",
-            params![context.0, context.1, context.2, context.3, context.4],
-        )?;
-    }
-    for entry in outbox {
-        tx.execute(
-            "INSERT OR REPLACE INTO usage_outbox(
-                submission_id, account_id, device_id, generation, sequence, payload_json
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![entry.0, entry.1, entry.2, entry.3, entry.4, entry.5],
+                id, account_id, device_id, generation, lower_bound
+             ) VALUES (1, ?1, ?2, ?3, ?4)",
+            params![context.0, context.1, context.2, context.3],
         )?;
     }
     for entry in sessions {
@@ -248,12 +221,24 @@ mod tests {
                 .expect("session"),
             7
         );
+        // A released image's staged uploads spoke a contract this build has retired. What
+        // this device still owes its Account is recomputed by the first scan instead.
         assert_eq!(
             identity
                 .query_row("SELECT COUNT(*) FROM usage_outbox", [], |row| row
                     .get::<_, i64>(0))
                 .expect("outbox"),
-            1
+            0
+        );
+        assert_eq!(
+            identity
+                .query_row(
+                    "SELECT generation FROM usage_upload_context WHERE id = 1",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .expect("upload context"),
+            3
         );
         assert_eq!(
             identity

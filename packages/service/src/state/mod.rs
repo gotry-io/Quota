@@ -7,7 +7,7 @@
 //! an identity it cannot read means this device starts over as a new installation. Neither file
 //! is ever salvaged, and nothing is ever copied out of a damaged one.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs::{self, File, OpenOptions, Permissions};
 use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
@@ -35,7 +35,9 @@ use crate::protocol::{
     MAXIMUM_DIAGNOSTIC_RECENT, ProviderBrowserSessionView, ProviderConfigView, QuotaOverviewItem,
     RecoveryAction, StateSnapshot, UsagePeriod, UsagePeriodCache, UsageSource,
 };
-use crate::usage::{NormalizedUsageEvent, UsageAgent, UsageFileIndex, UsageScanResult};
+use crate::usage::{
+    DatedUsageRow, NormalizedUsageEvent, UsageAgent, UsageFileIndex, UsageRow, UsageScanResult,
+};
 
 mod legacy_import;
 
@@ -47,7 +49,8 @@ const CACHE_NAME: &str = "cache.sqlite";
 const CACHE_RESET_KEY: &str = "cache_reset_at";
 const IDENTITY_RESET_KEY: &str = "identity_reset_at";
 const REBUILDING_KEY: &str = "rebuilding";
-const MAX_USAGE_OUTBOX_ENTRIES: i64 = 64;
+/// The monotonic revision each rescanned hour is stamped with.
+const USAGE_SCAN_VERSION_KEY: &str = "usage_scan_version";
 const MAX_DIAGNOSTIC_ATTEMPTS: i64 = 5_000;
 const DIAGNOSTIC_ATTEMPT_RETENTION_DAYS: i64 = 7;
 const ATTEMPT_PRUNE_INTERVAL_SECONDS: u64 = 3_600;
@@ -1586,18 +1589,9 @@ impl StateStore {
         }
     }
 
-    pub fn outbox_entries(&self) -> Result<Vec<Value>, StateError> {
-        self.with_identity(|conn| {
-        let mut statement = conn.prepare(
-            "SELECT payload_json FROM usage_outbox ORDER BY account_id, device_id, generation, sequence",
-        )?;
-        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
-        let mut values = Vec::new();
-        for row in rows {
-            values.push(serde_json::from_str(&row?)?);
-        }
-        Ok(values)
-        })
+    /// Everything this device still owes an Account, oldest hour first.
+    pub fn outbox_entries(&self) -> Result<Vec<UsageOutboxEntry>, StateError> {
+        self.with_identity(|conn| read_outbox(conn, None))
     }
 
     pub fn outbox_entries_for(
@@ -1605,300 +1599,109 @@ impl StateStore {
         account_id: &str,
         device_id: &str,
         generation: u64,
-    ) -> Result<Vec<Value>, StateError> {
-        self.with_identity(|conn| {
-            let mut statement = conn.prepare(
-                "SELECT payload_json FROM usage_outbox
-             WHERE account_id = ?1 AND device_id = ?2 AND generation = ?3
-             ORDER BY sequence, submission_id",
-            )?;
-            let rows = statement.query_map(params![account_id, device_id, generation], |row| {
-                row.get::<_, String>(0)
-            })?;
-            let mut values = Vec::new();
-            for row in rows {
-                values.push(serde_json::from_str(&row?)?);
-            }
-            Ok(values)
-        })
+    ) -> Result<Vec<UsageOutboxEntry>, StateError> {
+        self.with_identity(|conn| read_outbox(conn, Some((account_id, device_id, generation))))
     }
 
-    /// Atomically reserves an immutable Usage submission and consumes the exact dirty range that
-    /// produced it.  A crash can therefore leave either both rows or neither row; a retry with the
-    /// same deterministic submission id is idempotent and still consumes any range left by an
-    /// earlier version of the service.
-    pub fn stage_outbox_entry(
+    /// Stages the hours a scan changed and retires the dirty marks that produced them.
+    ///
+    /// The entries are written before the marks are cleared. A crash in between leaves the hour
+    /// dirty, so the next refresh stages the same key again with the same or a newer scan
+    /// version — an hour is replaced by version, so restaging it is not a second write.
+    pub fn stage_outbox_entries(
         &self,
         account_id: &str,
-        value: &Value,
-        consumed: &UsageDirtyRange,
+        device_id: &str,
+        generation: u64,
+        entries: &[UsageOutboxEntry],
     ) -> Result<bool, StateError> {
-        if account_id.is_empty() {
+        if account_id.is_empty() || device_id.is_empty() || generation == 0 {
             return Err(StateError::InvalidState);
         }
-        let object = value.as_object().ok_or(StateError::InvalidState)?;
-        let submission_id = object
-            .get("submission_id")
-            .and_then(Value::as_str)
-            .filter(|value| !value.is_empty())
-            .ok_or(StateError::InvalidState)?;
-        let device_id = object
-            .get("device_id")
-            .and_then(Value::as_str)
-            .ok_or(StateError::InvalidState)?;
-        let generation = object
-            .get("generation")
-            .and_then(Value::as_i64)
-            .filter(|value| *value > 0)
-            .ok_or(StateError::InvalidState)?;
-        let sequence = object
-            .get("sequence")
-            .and_then(Value::as_i64)
-            .filter(|value| *value >= 0)
-            .ok_or(StateError::InvalidState)?;
-        let raw = serde_json::to_string(value)?;
-        if raw.len() > crate::relay::MAXIMUM_REQUEST_BYTES {
-            return Err(StateError::InvalidState);
-        }
-        // The request is staged before its dirty range is consumed. If the second step does not
-        // land, the same deterministic submission id is staged again and takes the range with it,
-        // so the interval is never dropped without a request that covers it.
-        let staged = self.with_identity_mut(|conn| {
-        let tx = conn.transaction()?;
-        let existing: Option<(String, String, i64, i64, String)> = tx
-            .query_row(
-                "SELECT account_id, device_id, generation, sequence, payload_json
-                 FROM usage_outbox WHERE submission_id = ?1",
-                params![submission_id],
-                |row| {
-                    Ok((
-                        row.get(0)?,
-                        row.get(1)?,
-                        row.get(2)?,
-                        row.get(3)?,
-                        row.get(4)?,
-                    ))
-                },
-            )
-            .optional()?;
-        if let Some((
-            stored_account,
-            stored_device,
-            stored_generation,
-            stored_sequence,
-            stored_raw,
-        )) = existing
-        {
-            if stored_account != account_id
-                || stored_device != device_id
-                || stored_generation != generation
-                || stored_sequence != sequence
-                || stored_raw != raw
-            {
-                return Err(StateError::InvalidState);
-            }
-            tx.commit()?;
+        if entries.is_empty() {
             return Ok(false);
         }
-        let count: i64 = tx.query_row("SELECT COUNT(*) FROM usage_outbox", [], |row| row.get(0))?;
-        if count >= MAX_USAGE_OUTBOX_ENTRIES {
-            return Err(StateError::Unavailable);
-        }
-        tx.execute(
-            "INSERT INTO usage_outbox(submission_id,account_id,device_id,generation,sequence,payload_json)
-             VALUES (?1,?2,?3,?4,?5,?6)",
-            params![submission_id, account_id, device_id, generation, sequence, raw],
-        )?;
-        tx.commit()?;
-        Ok(true)
+        self.with_identity_mut(|conn| {
+            let tx = conn.transaction()?;
+            for entry in entries {
+                let rows = serde_json::to_string(&entry.rows)?;
+                if rows.len() > crate::relay::MAXIMUM_REQUEST_BYTES {
+                    return Err(StateError::InvalidState);
+                }
+                tx.execute(
+                    "INSERT INTO usage_outbox(
+                        agent, bucket_start_utc, account_id, device_id, generation,
+                        scan_version, partial, rows_json
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                     ON CONFLICT(agent, bucket_start_utc) DO UPDATE SET
+                        account_id = excluded.account_id,
+                        device_id = excluded.device_id,
+                        generation = excluded.generation,
+                        scan_version = excluded.scan_version,
+                        partial = excluded.partial,
+                        rows_json = excluded.rows_json",
+                    params![
+                        entry.agent.as_str(),
+                        entry.bucket_start_utc,
+                        account_id,
+                        device_id,
+                        generation as i64,
+                        entry.scan_version as i64,
+                        i64::from(entry.partial),
+                        rows,
+                    ],
+                )?;
+            }
+            tx.commit()?;
+            Ok(())
         })?;
-        let consumed_range = self.consume_dirty_usage_range(consumed)?;
-        if staged || consumed_range {
-            self.bump_revision()?;
-        }
-        Ok(staged)
+        self.with_cache_mut(|conn| {
+            let tx = conn.transaction()?;
+            for entry in entries {
+                tx.execute(
+                    "DELETE FROM usage_dirty_hours
+                     WHERE agent = ?1 AND bucket_start_utc = ?2 AND scan_version <= ?3",
+                    params![
+                        entry.agent.as_str(),
+                        entry.bucket_start_utc,
+                        entry.scan_version as i64
+                    ],
+                )?;
+            }
+            tx.commit()?;
+            Ok(())
+        })?;
+        self.bump_revision()?;
+        Ok(true)
     }
 
-    /// Acknowledges a successful/duplicate Relay response and removes the immutable request in one
-    /// SQLite transaction. Relay deduplicates retries by the immutable submission id. Multipart
-    /// requests have already consumed their dirty range when all parts are staged, so an ACK never
-    /// changes dirty state.
-    pub fn acknowledge_outbox_entry(&self, submission_id: &str) -> Result<bool, StateError> {
+    /// Forgets hours Relay has answered for. Accepted and ignored are the same move here: an
+    /// ignored hour is one a newer scan already replaced or one before this device's deletion
+    /// watermark, and either way this device is done with it.
+    pub fn forget_outbox_hours(
+        &self,
+        agent: UsageAgent,
+        buckets: &[String],
+    ) -> Result<bool, StateError> {
+        if buckets.is_empty() {
+            return Ok(false);
+        }
         let removed = self.with_identity_mut(|conn| {
-            Ok(conn.execute(
-                "DELETE FROM usage_outbox WHERE submission_id = ?1",
-                params![submission_id],
-            )? > 0)
+            let tx = conn.transaction()?;
+            let mut removed = 0usize;
+            for bucket in buckets {
+                removed += tx.execute(
+                    "DELETE FROM usage_outbox WHERE agent = ?1 AND bucket_start_utc = ?2",
+                    params![agent.as_str(), bucket],
+                )?;
+            }
+            tx.commit()?;
+            Ok(removed > 0)
         })?;
         if removed {
             let _ = self.bump_revision();
         }
         Ok(removed)
-    }
-
-    /// Stage every part of one atomic UTC-hour batch in one SQLite transaction. The complete set
-    /// of immutable outbox entries and consumption of the source dirty range commit together, so
-    /// a crash can recover solely from the durable entries. ACKs only remove those entries.
-    pub fn stage_multipart_outbox_entries(
-        &self,
-        account_id: &str,
-        device_id: &str,
-        generation: u64,
-        batch_id: &str,
-        consumed: &UsageDirtyRange,
-        submissions: &[Value],
-    ) -> Result<bool, StateError> {
-        if account_id.is_empty()
-            || device_id.is_empty()
-            || generation == 0
-            || batch_id.is_empty()
-            || submissions.len() < 2
-        {
-            return Err(StateError::InvalidState);
-        }
-        let first = submissions.first().ok_or(StateError::InvalidState)?;
-        let first_info = multipart_info(first).ok_or(StateError::InvalidState)?;
-        if first_info.0 != batch_id || first_info.2 != submissions.len() as u64 {
-            return Err(StateError::InvalidState);
-        }
-        let first_coverage = first
-            .get("coverage")
-            .and_then(Value::as_object)
-            .ok_or(StateError::InvalidState)?;
-        if first_coverage.get("agent").and_then(Value::as_str) != Some(consumed.agent.as_str())
-            || first_coverage.get("start_at").and_then(Value::as_str)
-                != Some(consumed.start_at.as_str())
-            || first_coverage.get("end_at").and_then(Value::as_str)
-                != Some(consumed.end_at.as_str())
-        {
-            return Err(StateError::InvalidState);
-        }
-        for (index, submission) in submissions.iter().enumerate() {
-            let Some((part_batch, part_index, part_count)) = multipart_info(submission) else {
-                return Err(StateError::InvalidState);
-            };
-            if part_batch != batch_id
-                || part_index != index as u64
-                || part_count != submissions.len() as u64
-                || submission.get("device_id").and_then(Value::as_str) != Some(device_id)
-                || submission.get("generation").and_then(Value::as_u64) != Some(generation)
-                || submission
-                    .get("coverage")
-                    .and_then(Value::as_object)
-                    .and_then(|coverage| coverage.get("agent"))
-                    .and_then(Value::as_str)
-                    != Some(consumed.agent.as_str())
-                || submission
-                    .get("coverage")
-                    .and_then(Value::as_object)
-                    .and_then(|coverage| coverage.get("start_at"))
-                    .and_then(Value::as_str)
-                    != Some(consumed.start_at.as_str())
-                || submission
-                    .get("coverage")
-                    .and_then(Value::as_object)
-                    .and_then(|coverage| coverage.get("end_at"))
-                    .and_then(Value::as_str)
-                    != Some(consumed.end_at.as_str())
-            {
-                return Err(StateError::InvalidState);
-            }
-            if serde_json::to_string(submission)?.len() > crate::relay::MAXIMUM_REQUEST_BYTES {
-                return Err(StateError::InvalidState);
-            }
-        }
-        let staged = self.with_identity_mut(|conn| {
-            let tx = conn.transaction()?;
-            let existing_count: i64 =
-                tx.query_row("SELECT COUNT(*) FROM usage_outbox", [], |row| row.get(0))?;
-            let mut missing = 0i64;
-            let mut pending = Vec::with_capacity(submissions.len());
-            let mut submission_ids = HashSet::with_capacity(submissions.len());
-            for submission in submissions {
-                let submission_id = submission
-                    .get("submission_id")
-                    .and_then(Value::as_str)
-                    .ok_or(StateError::InvalidState)?;
-                if !submission_ids.insert(submission_id.to_owned()) {
-                    return Err(StateError::InvalidState);
-                }
-                let raw = serde_json::to_string(submission)?;
-                let existing: Option<(String, String, i64, i64, String)> = tx
-                    .query_row(
-                        "SELECT account_id, device_id, generation, sequence, payload_json
-                     FROM usage_outbox WHERE submission_id = ?1",
-                        params![submission_id],
-                        |row| {
-                            Ok((
-                                row.get(0)?,
-                                row.get(1)?,
-                                row.get(2)?,
-                                row.get(3)?,
-                                row.get(4)?,
-                            ))
-                        },
-                    )
-                    .optional()?;
-                if let Some((
-                    stored_account,
-                    stored_device,
-                    stored_generation,
-                    stored_sequence,
-                    stored_raw,
-                )) = existing
-                {
-                    if stored_account != account_id
-                        || stored_device != device_id
-                        || stored_generation != generation as i64
-                        || stored_sequence
-                            != submission
-                                .get("sequence")
-                                .and_then(Value::as_i64)
-                                .unwrap_or(-1)
-                        || stored_raw != raw
-                    {
-                        return Err(StateError::InvalidState);
-                    }
-                    continue;
-                }
-                missing = missing.saturating_add(1);
-                pending.push((
-                    submission_id.to_owned(),
-                    submission
-                        .get("sequence")
-                        .and_then(Value::as_i64)
-                        .ok_or(StateError::InvalidState)?,
-                    raw,
-                ));
-            }
-            if existing_count.saturating_add(missing) > MAX_USAGE_OUTBOX_ENTRIES {
-                return Err(StateError::Unavailable);
-            }
-            for (submission_id, sequence, raw) in pending {
-                tx.execute(
-                    "INSERT INTO usage_outbox(submission_id, account_id, device_id, generation,
-                    sequence, payload_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                    params![
-                        submission_id,
-                        account_id,
-                        device_id,
-                        generation as i64,
-                        sequence,
-                        raw,
-                    ],
-                )?;
-            }
-            tx.commit()?;
-            Ok(missing > 0)
-        })?;
-        // A rescan may dirty an interval while an earlier batch is still in the outbox. In that
-        // case all parts can already exist, but this call must still consume the new dirty range.
-        let consumed_dirty = self.consume_dirty_usage_range(consumed)?;
-        let changed = staged || consumed_dirty;
-        if changed {
-            self.bump_revision()?;
-        }
-        Ok(changed)
     }
 
     pub fn usage_file_index(
@@ -1907,7 +1710,8 @@ impl StateStore {
     ) -> Result<HashMap<String, UsageFileIndex>, StateError> {
         self.with_cache(|conn| {
             let mut statement = conn.prepare(
-                "SELECT source_file_id, identity, size, modified_ns, parser_revision
+                "SELECT source_file_id, identity, size, modified_ns, parser_revision,
+                        parsed_offset, tail_hash
              FROM usage_file_index WHERE agent = ?1",
             )?;
             let rows = statement.query_map(params![agent.as_str()], |row| {
@@ -1928,6 +1732,8 @@ impl StateStore {
                         size: row.get::<_, i64>(2)? as u64,
                         modified_ns,
                         parser_revision: row.get(4)?,
+                        parsed_offset: row.get::<_, i64>(5)? as u64,
+                        tail_hash: row.get(6)?,
                     },
                 ))
             })?;
@@ -1959,20 +1765,6 @@ impl StateStore {
         })
     }
 
-    pub fn usage_events(&self) -> Result<Vec<NormalizedUsageEvent>, StateError> {
-        self.with_cache(|conn| {
-        let mut statement = conn.prepare(
-            "SELECT event_json FROM usage_file_records ORDER BY occurred_at, agent, source_file_id, record_index",
-        )?;
-        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
-        let mut events = Vec::new();
-        for row in rows {
-            events.push(serde_json::from_str(&row?)?);
-        }
-        Ok(events)
-        })
-    }
-
     pub fn usage_event_count(&self) -> Result<u64, StateError> {
         self.with_cache(|conn| {
             let count = conn.query_row("SELECT COUNT(*) FROM usage_file_records", [], |row| {
@@ -1982,51 +1774,7 @@ impl StateStore {
         })
     }
 
-    pub fn dirty_usage_ranges(&self) -> Result<Vec<UsageDirtyRange>, StateError> {
-        self.with_cache(|conn| {
-        let mut statement = conn.prepare(
-            "SELECT agent, start_at, end_at FROM usage_dirty_ranges ORDER BY start_at, end_at, agent",
-        )?;
-        let rows = statement.query_map([], |row| {
-            let agent: String = row.get(0)?;
-            let agent = parse_usage_agent(&agent).ok_or_else(|| {
-                rusqlite::Error::InvalidColumnType(
-                    0,
-                    "agent".to_owned(),
-                    rusqlite::types::Type::Text,
-                )
-            })?;
-            Ok(UsageDirtyRange {
-                agent,
-                start_at: row.get(1)?,
-                end_at: row.get(2)?,
-            })
-        })?;
-        let mut ranges = Vec::new();
-        for row in rows {
-            ranges.push(row?);
-        }
-        Ok(ranges)
-        })
-    }
-
-    #[cfg(test)]
-    pub fn insert_usage_dirty_range_for_test(
-        &self,
-        range: &UsageDirtyRange,
-    ) -> Result<(), StateError> {
-        self.with_cache_mut(|conn| {
-            conn.execute(
-                "INSERT OR IGNORE INTO usage_dirty_ranges(agent, start_at, end_at)
-             VALUES (?1, ?2, ?3)",
-                params![range.agent.as_str(), range.start_at, range.end_at],
-            )?;
-            Ok(())
-        })
-    }
-
-    /// Returns UTC hours whose indexed source is known to be partial. These markers prevent a
-    /// complete upload from replacing remote facts that may be absent from an incomplete source.
+    /// UTC hours whose indexed source came up short, so every read of them says so.
     pub fn partial_usage_hours(&self) -> Result<HashSet<(UsageAgent, String)>, StateError> {
         self.with_cache(|conn| {
             let mut statement = conn.prepare(
@@ -2051,15 +1799,128 @@ impl StateStore {
         })
     }
 
-    /// Switches the upload identity atomically.  A new account/device generation gets a fresh
-    /// sequence stream and is seeded only with retained local events at or after its privacy lower
-    /// bound; old account requests and receipts cannot be replayed under the new identity.
+    /// The hours whose facts changed since the last time they were staged for upload.
+    pub fn dirty_usage_hours(&self) -> Result<Vec<DirtyUsageHour>, StateError> {
+        self.with_cache(|conn| {
+            let mut statement = conn.prepare(
+                "SELECT agent, bucket_start_utc, scan_version, partial FROM usage_dirty_hours
+                 ORDER BY bucket_start_utc, agent",
+            )?;
+            let rows = statement.query_map([], |row| {
+                let agent: String = row.get(0)?;
+                let agent = parse_usage_agent(&agent).ok_or_else(|| {
+                    rusqlite::Error::InvalidColumnType(
+                        0,
+                        "agent".to_owned(),
+                        rusqlite::types::Type::Text,
+                    )
+                })?;
+                Ok(DirtyUsageHour {
+                    agent,
+                    bucket_start_utc: row.get(1)?,
+                    scan_version: row.get::<_, i64>(2)? as u64,
+                    partial: row.get::<_, i64>(3)? != 0,
+                })
+            })?;
+            let mut hours = Vec::new();
+            for row in rows {
+                hours.push(row?);
+            }
+            Ok(hours)
+        })
+    }
+
+    /// Marks an hour dirty without a scan behind it, for tests that only need the mark.
+    pub fn insert_usage_dirty_hour_for_test(
+        &self,
+        agent: UsageAgent,
+        bucket_start_utc: &str,
+        scan_version: u64,
+    ) -> Result<(), StateError> {
+        self.with_cache_mut(|conn| {
+            conn.execute(
+                "INSERT OR REPLACE INTO usage_dirty_hours(
+                    agent, bucket_start_utc, scan_version, partial
+                 ) VALUES (?1, ?2, ?3, 0)",
+                params![agent.as_str(), bucket_start_utc, scan_version as i64],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// The rows of one hour, as the upload carries them.
+    pub fn usage_hour_rows(
+        &self,
+        agent: UsageAgent,
+        bucket_start_utc: &str,
+    ) -> Result<Vec<UsageRow>, StateError> {
+        self.with_cache(|conn| {
+            let mut statement = conn.prepare(FACT_ROW_QUERY)?;
+            let rows = statement
+                .query_map(params![agent.as_str(), bucket_start_utc], read_fact_row)?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(rows)
+        })
+    }
+
+    /// Folds the stored hours into the rows one period is computed from.
+    ///
+    /// A day is a UTC day, because that is the grain an hour rolls into. `range` names the
+    /// calendar days this device's clock is asking about; `None` is everything retained.
+    pub fn usage_period_rows(
+        &self,
+        range: Option<(&str, &str)>,
+    ) -> Result<(Vec<DatedUsageRow>, bool), StateError> {
+        self.with_cache(|conn| {
+            let (clause, from, to) = match range {
+                Some((from, to)) => (
+                    "WHERE substr(bucket_start_utc, 1, 10) BETWEEN ?1 AND ?2",
+                    from.to_owned(),
+                    to.to_owned(),
+                ),
+                None => ("WHERE ?1 = ?1 AND ?2 = ?2", String::new(), String::new()),
+            };
+            let mut statement = conn.prepare(&format!(
+                "SELECT substr(bucket_start_utc, 1, 10) AS date, agent, billing_channel,
+                        channel_source, model, context_bucket, service_tier, speed, inference_geo,
+                        SUM(input_tokens), SUM(cache_read_tokens), SUM(cache_write_5m_tokens),
+                        SUM(cache_write_1h_tokens), SUM(cache_write_inferred_tokens),
+                        SUM(output_tokens), SUM(reasoning_tokens), SUM(requests),
+                        SUM(web_search_requests), SUM(web_fetch_requests),
+                        SUM(source_cost_microusd), SUM(source_cost_covered_requests),
+                        MAX(partial)
+                 FROM usage_hourly_facts {clause}
+                 GROUP BY date, agent, billing_channel, channel_source, model, context_bucket,
+                          service_tier, speed, inference_geo
+                 ORDER BY date, agent, billing_channel, model"
+            ))?;
+            let mut partial = false;
+            let mut rows = Vec::new();
+            let mapped = statement.query_map(params![from, to], |row| {
+                let date: String = row.get(0)?;
+                let hour_partial: i64 = row.get(21)?;
+                Ok((date, read_grouped_row(row)?, hour_partial != 0))
+            })?;
+            for entry in mapped {
+                let (date, row, row_partial) = entry?;
+                partial = partial || row_partial;
+                rows.push(DatedUsageRow { date, row });
+            }
+            Ok((rows, partial))
+        })
+    }
+
+    /// Switches the upload identity atomically.
+    ///
+    /// A new account or device generation owes that Account every hour this device still holds
+    /// at or after its privacy lower bound, so the dirty set is rebuilt from the stored facts
+    /// and the old queue is dropped: requests staged for one identity cannot be replayed under
+    /// another.
     pub fn ensure_usage_context(
         &self,
         account_id: &str,
         device_id: &str,
         generation: u64,
-        aggregation_timezone: &str,
         lower_bound: &str,
     ) -> Result<u64, StateError> {
         let lower_bound =
@@ -2068,28 +1929,19 @@ impl StateStore {
             return Err(StateError::InvalidState);
         }
         let unchanged = self.with_identity(|conn| {
-            let current: Option<(String, String, i64, String, String)> = conn
+            let current: Option<(String, String, i64, String)> = conn
                 .query_row(
-                    "SELECT account_id, device_id, generation, aggregation_timezone, lower_bound
+                    "SELECT account_id, device_id, generation, lower_bound
                      FROM usage_upload_context WHERE id = 1",
                     [],
-                    |row| {
-                        Ok((
-                            row.get(0)?,
-                            row.get(1)?,
-                            row.get(2)?,
-                            row.get(3)?,
-                            row.get(4)?,
-                        ))
-                    },
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
                 )
                 .optional()?;
             Ok(current.is_some_and(|current| {
                 current.0 == account_id
                     && current.1 == device_id
                     && current.2 == generation as i64
-                    && current.3 == aggregation_timezone
-                    && current.4 == lower_bound.to_rfc3339_opts(SecondsFormat::AutoSi, true)
+                    && current.3 == lower_bound.to_rfc3339_opts(SecondsFormat::AutoSi, true)
             }))
         })?;
         if unchanged {
@@ -2109,37 +1961,17 @@ impl StateStore {
         // The dirty set is re-seeded before the identity that owns it is written. A crash in
         // between leaves the old identity in place, and the next call sees it unchanged and does
         // both steps again; the other order would leave a new identity pointing at an old queue.
+        let floor = floor_hour(lower_bound).to_rfc3339_opts(SecondsFormat::Secs, true);
         self.with_cache_mut(|conn| {
             let tx = conn.transaction()?;
-            tx.execute("DELETE FROM usage_dirty_ranges", [])?;
-            let mut statement = tx.prepare("SELECT agent, occurred_at FROM usage_file_records")?;
-            let rows = statement
-                .query_map([], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-                })?
-                .collect::<Result<Vec<_>, _>>()?;
-            drop(statement);
-            let mut hours_by_agent: BTreeMap<UsageAgent, Vec<String>> = BTreeMap::new();
-            for (agent_raw, occurred_at) in rows {
-                let Some(agent) = parse_usage_agent(&agent_raw) else {
-                    continue;
-                };
-                let Ok(occurred_at) = DateTime::parse_from_rfc3339(&occurred_at) else {
-                    continue;
-                };
-                if occurred_at < lower_bound {
-                    continue;
-                }
-                hours_by_agent
-                    .entry(agent)
-                    .or_default()
-                    .push(floor_hour(occurred_at).to_rfc3339_opts(SecondsFormat::Secs, true));
-            }
-            for (agent, mut hours) in hours_by_agent {
-                hours.sort_unstable();
-                hours.dedup();
-                mark_dirty_hours(&tx, agent, hours)?;
-            }
+            tx.execute("DELETE FROM usage_dirty_hours", [])?;
+            tx.execute(
+                "INSERT INTO usage_dirty_hours(agent, bucket_start_utc, scan_version, partial)
+                 SELECT agent, bucket_start_utc, MAX(scan_version), MAX(partial)
+                 FROM usage_hourly_facts WHERE bucket_start_utc >= ?1
+                 GROUP BY agent, bucket_start_utc",
+                params![floor],
+            )?;
             tx.commit()?;
             Ok(())
         })?;
@@ -2148,19 +1980,17 @@ impl StateStore {
             tx.execute("DELETE FROM usage_outbox", [])?;
             tx.execute(
                 "INSERT INTO usage_upload_context(
-                id, account_id, device_id, generation, aggregation_timezone, lower_bound
-             ) VALUES (1, ?1, ?2, ?3, ?4, ?5)
+                id, account_id, device_id, generation, lower_bound
+             ) VALUES (1, ?1, ?2, ?3, ?4)
              ON CONFLICT(id) DO UPDATE SET
                 account_id = excluded.account_id,
                 device_id = excluded.device_id,
                 generation = excluded.generation,
-                aggregation_timezone = excluded.aggregation_timezone,
                 lower_bound = excluded.lower_bound",
                 params![
                     account_id,
                     device_id,
                     generation,
-                    aggregation_timezone,
                     lower_bound.to_rfc3339_opts(SecondsFormat::AutoSi, true)
                 ],
             )?;
@@ -2170,68 +2000,53 @@ impl StateStore {
         self.bump_revision()
     }
 
-    /// Removes only an uploaded portion of a dirty range.  Any not-yet-complete tail is put back
-    /// in the table so a refresh before the next UTC hour cannot lose the active hour.
-    fn consume_dirty_usage_range(&self, consumed: &UsageDirtyRange) -> Result<bool, StateError> {
-        self.with_cache_mut(|conn| {
-            let tx = conn.transaction()?;
-            let changed = consume_dirty_usage_range_tx(&tx, consumed)?;
-            tx.commit()?;
-            Ok(changed > 0)
+    /// The revision this scan's hours are stamped with.
+    ///
+    /// Relay keeps the version of the scan behind each stored hour and replaces an hour only
+    /// for a strictly newer one, so this counter has to keep climbing across a cache rebuild.
+    /// It lives in identity, which is the file this device never regenerates.
+    pub fn next_usage_scan_version(&self) -> Result<u64, StateError> {
+        self.with_identity_mut(|conn| {
+            let current = preference(conn, USAGE_SCAN_VERSION_KEY)?
+                .and_then(|value| value.parse::<u64>().ok())
+                .unwrap_or(0);
+            let next = current.saturating_add(1);
+            write_preference(conn, USAGE_SCAN_VERSION_KEY, &next.to_string())?;
+            Ok(next)
         })
     }
 
+    /// Applies one agent's scan and recomputes only the hours it changed.
+    ///
+    /// A source is replaced whole, or appended to when the bytes already parsed are still
+    /// there. Either way the hours whose events moved are recomputed from the retained record
+    /// history, which is what makes an hour a single fact rather than a running merge.
     pub fn apply_usage_scan(
         &self,
         agent: UsageAgent,
         scan: &UsageScanResult,
+        scan_version: u64,
     ) -> Result<u64, StateError> {
         self.with_cache_mut(|conn| {
             let tx = conn.transaction()?;
             let mut changed = 0usize;
+            let mut dirty_hours: BTreeSet<String> = BTreeSet::new();
             for source in &scan.sources {
                 if source.coverage.status != crate::usage::CoverageStatus::Complete {
                     // Preserve the last successful rows and merge newly valid records. This keeps
                     // data useful without allowing an incomplete scan to delete facts. The old file
                     // index remains untouched so the source is retried on the next refresh.
-                    let old_events = record_events(&tx, agent, &source.source.source_file_id)?;
-                    let mut merged = BTreeMap::<String, NormalizedUsageEvent>::new();
-                    for stored in &old_events {
-                        let event: NormalizedUsageEvent = serde_json::from_str(&stored.event_json)?;
-                        merged.insert(stored.record_key.clone(), event);
-                    }
+                    let mut hours = Vec::new();
                     for (record_index, event) in source.records.iter().enumerate() {
-                        merged.insert(source_record_key(source, record_index), event.clone());
+                        let key = source_record_key(source, record_index);
+                        hours.push(insert_record(
+                            &tx,
+                            agent,
+                            &source.source.source_file_id,
+                            &key,
+                            event,
+                        )?);
                     }
-                    let merged_events = merged.into_iter().collect::<Vec<_>>();
-                    tx.execute(
-                        "DELETE FROM usage_file_records WHERE agent = ?1 AND source_file_id = ?2",
-                        params![agent.as_str(), source.source.source_file_id],
-                    )?;
-                    for (record_index, (record_key, event)) in merged_events.iter().enumerate() {
-                        let event_json = serde_json::to_string(event)?;
-                        if event_json.len() > crate::relay::MAXIMUM_REQUEST_BYTES {
-                            return Err(StateError::InvalidState);
-                        }
-                        tx.execute(
-                            "INSERT INTO usage_file_records(
-                            agent, source_file_id, record_index, record_key, occurred_at, event_json
-                         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                            params![
-                                agent.as_str(),
-                                source.source.source_file_id,
-                                record_index as i64,
-                                record_key,
-                                event.occurred_at,
-                                event_json,
-                            ],
-                        )?;
-                    }
-                    let hours = merged_events
-                        .iter()
-                        .filter_map(|(_, event)| event_hour(&event.occurred_at).ok())
-                        .collect::<Vec<_>>();
-                    let mut hours = hours;
                     if source.coverage.reasons.iter().any(|reason| {
                         reason.code == crate::usage::CoverageReasonCode::InvalidTimestamp
                     }) && let Ok(start) = event_hour(&source.coverage.start_at)
@@ -2247,53 +2062,50 @@ impl StateStore {
                         &source.source.source_file_id,
                         hours.clone(),
                     )?;
-                    mark_dirty_hours(&tx, agent, hours)?;
+                    dirty_hours.extend(hours);
                     changed += 1;
                     continue;
                 }
-                let old_events = record_events(&tx, agent, &source.source.source_file_id)?;
-                // A complete rescan also restores the remote replace semantics for every hour that
-                // was previously merged as partial. Even if the repaired rows are byte-identical,
-                // the interval must be uploaded once with `coverage.status=complete` so Relay can
-                // retire its partial marker.
-                let prior_partial_hours =
-                    partial_source_hours_tx(&tx, agent, &source.source.source_file_id)?;
+                // A complete rescan also restores replace semantics for every hour that was
+                // previously merged as partial, so those hours are recomputed once more.
+                dirty_hours.extend(partial_source_hours_tx(
+                    &tx,
+                    agent,
+                    &source.source.source_file_id,
+                )?);
                 tx.execute(
                     "DELETE FROM usage_partial_sources WHERE agent = ?1 AND source_file_id = ?2",
                     params![agent.as_str(), source.source.source_file_id],
                 )?;
-                tx.execute(
-                    "DELETE FROM usage_file_records WHERE agent = ?1 AND source_file_id = ?2",
-                    params![agent.as_str(), source.source.source_file_id],
-                )?;
-                for (record_index, event) in source.records.iter().enumerate() {
-                    let event_json = serde_json::to_string(event)?;
-                    if event_json.len() > crate::relay::MAXIMUM_REQUEST_BYTES {
-                        return Err(StateError::InvalidState);
-                    }
+                if !source.append {
+                    dirty_hours.extend(record_hours(&tx, agent, &source.source.source_file_id)?);
                     tx.execute(
-                        "INSERT INTO usage_file_records(
-                        agent, source_file_id, record_index, record_key, occurred_at, event_json
-                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                        params![
-                            agent.as_str(),
-                            source.source.source_file_id,
-                            record_index as i64,
-                            source_record_key(source, record_index),
-                            event.occurred_at,
-                            event_json,
-                        ],
+                        "DELETE FROM usage_file_records WHERE agent = ?1 AND source_file_id = ?2",
+                        params![agent.as_str(), source.source.source_file_id],
                     )?;
+                }
+                for (record_index, event) in source.records.iter().enumerate() {
+                    let key = source_record_key(source, record_index);
+                    dirty_hours.insert(insert_record(
+                        &tx,
+                        agent,
+                        &source.source.source_file_id,
+                        &key,
+                        event,
+                    )?);
                 }
                 changed += tx.execute(
                     "INSERT INTO usage_file_index(
-                    agent, source_file_id, identity, size, modified_ns, parser_revision
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                    agent, source_file_id, identity, size, modified_ns, parser_revision,
+                    parsed_offset, tail_hash
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
                  ON CONFLICT(agent, source_file_id) DO UPDATE SET
                     identity = excluded.identity,
                     size = excluded.size,
                     modified_ns = excluded.modified_ns,
-                    parser_revision = excluded.parser_revision",
+                    parser_revision = excluded.parser_revision,
+                    parsed_offset = excluded.parsed_offset,
+                    tail_hash = excluded.tail_hash",
                     params![
                         agent.as_str(),
                         source.source.source_file_id,
@@ -2301,16 +2113,13 @@ impl StateStore {
                         source.source.size as i64,
                         source.source.modified_ns.to_string(),
                         source.index.parser_revision,
+                        source.index.parsed_offset as i64,
+                        source.index.tail_hash,
                     ],
                 )?;
-                let mut dirty_hours = changed_event_hours(&old_events, &source.records)?;
-                dirty_hours.extend(prior_partial_hours);
-                dirty_hours.sort_unstable();
-                dirty_hours.dedup();
-                mark_dirty_hours(&tx, agent, dirty_hours)?;
             }
             for source_file_id in &scan.deleted_source_file_ids {
-                let old_events = record_events(&tx, agent, source_file_id)?;
+                dirty_hours.extend(record_hours(&tx, agent, source_file_id)?);
                 tx.execute(
                     "DELETE FROM usage_partial_sources WHERE agent = ?1 AND source_file_id = ?2",
                     params![agent.as_str(), source_file_id],
@@ -2323,14 +2132,19 @@ impl StateStore {
                     "DELETE FROM usage_file_index WHERE agent = ?1 AND source_file_id = ?2",
                     params![agent.as_str(), source_file_id],
                 )?;
-                mark_dirty_hours(&tx, agent, changed_event_hours(&old_events, &[])?)?;
+            }
+            let mut recomputed = 0usize;
+            for hour in &dirty_hours {
+                if recompute_hour(&tx, agent, hour, scan_version)? {
+                    recomputed += 1;
+                }
             }
             // One complete scan is what the cache was waiting for: from here on the local Usage
             // it reports is this device's own history again, not a hole left by a rebuild.
             if scan.coverage.status == crate::usage::CoverageStatus::Complete {
                 write_metadata_flag(&tx, REBUILDING_KEY, false)?;
             }
-            if changed == 0 {
+            if changed == 0 && recomputed == 0 {
                 let revision = metadata_u64(&tx, "revision")?;
                 tx.commit()?;
                 return Ok(revision);
@@ -2371,79 +2185,147 @@ fn validate_browser_session(
     Ok(session)
 }
 
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub struct UsageDirtyRange {
+/// One hour this device has recomputed and not yet handed to its Account.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DirtyUsageHour {
     pub agent: UsageAgent,
-    pub start_at: String,
-    pub end_at: String,
+    pub bucket_start_utc: String,
+    pub scan_version: u64,
+    pub partial: bool,
 }
 
-#[derive(Debug, Clone)]
-struct StoredUsageEvent {
-    record_key: String,
-    occurred_at: String,
-    event_json: String,
+/// One staged upload: an hour, the version of the scan behind it, and its rows.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UsageOutboxEntry {
+    pub agent: UsageAgent,
+    pub bucket_start_utc: String,
+    pub scan_version: u64,
+    pub partial: bool,
+    pub rows: Vec<UsageRow>,
 }
 
-fn consume_dirty_usage_range_tx(
-    tx: &rusqlite::Transaction<'_>,
-    consumed: &UsageDirtyRange,
-) -> Result<usize, StateError> {
-    let consumed_start =
-        DateTime::parse_from_rfc3339(&consumed.start_at).map_err(|_| StateError::InvalidState)?;
-    let consumed_end =
-        DateTime::parse_from_rfc3339(&consumed.end_at).map_err(|_| StateError::InvalidState)?;
-    if consumed_start >= consumed_end {
-        return Ok(0);
+const FACT_ROW_QUERY: &str = "SELECT agent, billing_channel, channel_source, model, context_bucket,
+            service_tier, speed, inference_geo, input_tokens, cache_read_tokens,
+            cache_write_5m_tokens, cache_write_1h_tokens, cache_write_inferred_tokens,
+            output_tokens, reasoning_tokens, requests, web_search_requests, web_fetch_requests,
+            source_cost_microusd, source_cost_covered_requests
+     FROM usage_hourly_facts WHERE agent = ?1 AND bucket_start_utc = ?2
+     ORDER BY billing_channel, model, context_bucket, service_tier, speed, inference_geo";
+
+fn read_outbox(
+    conn: &Connection,
+    scope: Option<(&str, &str, u64)>,
+) -> Result<Vec<UsageOutboxEntry>, StateError> {
+    let (clause, account_id, device_id, generation) = match scope {
+        Some((account_id, device_id, generation)) => (
+            "WHERE account_id = ?1 AND device_id = ?2 AND generation = ?3",
+            account_id.to_owned(),
+            device_id.to_owned(),
+            generation as i64,
+        ),
+        None => (
+            "WHERE ?1 = ?1 AND ?2 = ?2 AND ?3 = ?3",
+            String::new(),
+            String::new(),
+            0,
+        ),
+    };
+    let mut statement = conn.prepare(&format!(
+        "SELECT agent, bucket_start_utc, scan_version, partial, rows_json FROM usage_outbox
+         {clause} ORDER BY bucket_start_utc, agent"
+    ))?;
+    let rows = statement.query_map(params![account_id, device_id, generation], |row| {
+        let agent: String = row.get(0)?;
+        let agent = parse_usage_agent(&agent).ok_or_else(|| {
+            rusqlite::Error::InvalidColumnType(0, "agent".to_owned(), rusqlite::types::Type::Text)
+        })?;
+        Ok((
+            agent,
+            row.get::<_, String>(1)?,
+            row.get::<_, i64>(2)? as u64,
+            row.get::<_, i64>(3)? != 0,
+            row.get::<_, String>(4)?,
+        ))
+    })?;
+    let mut entries = Vec::new();
+    for row in rows {
+        let (agent, bucket_start_utc, scan_version, partial, rows_json) = row?;
+        entries.push(UsageOutboxEntry {
+            agent,
+            bucket_start_utc,
+            scan_version,
+            partial,
+            rows: serde_json::from_str(&rows_json)?,
+        });
     }
-    let mut changed = 0usize;
-    let mut statement =
-        tx.prepare("SELECT start_at, end_at FROM usage_dirty_ranges WHERE agent = ?1")?;
-    let rows = statement
-        .query_map(params![consumed.agent.as_str()], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })?
-        .collect::<Result<Vec<_>, _>>()?;
-    drop(statement);
-    for (old_start_raw, old_end_raw) in rows {
-        let (Ok(old_start), Ok(old_end)) = (
-            DateTime::parse_from_rfc3339(&old_start_raw),
-            DateTime::parse_from_rfc3339(&old_end_raw),
-        ) else {
-            continue;
-        };
-        if old_end <= consumed_start || old_start >= consumed_end {
-            continue;
-        }
-        tx.execute(
-            "DELETE FROM usage_dirty_ranges WHERE agent = ?1 AND start_at = ?2 AND end_at = ?3",
-            params![consumed.agent.as_str(), old_start_raw, old_end_raw],
-        )?;
-        changed += 1;
-        let overlap_start = old_start.max(consumed_start);
-        let overlap_end = old_end.min(consumed_end);
-        if old_start < overlap_start {
-            tx.execute(
-                "INSERT OR IGNORE INTO usage_dirty_ranges(agent, start_at, end_at) VALUES (?1, ?2, ?3)",
-                params![
-                    consumed.agent.as_str(),
-                    old_start.to_rfc3339_opts(SecondsFormat::Secs, true),
-                    overlap_start.to_rfc3339_opts(SecondsFormat::Secs, true)
-                ],
-            )?;
-        }
-        if overlap_end < old_end {
-            tx.execute(
-                "INSERT OR IGNORE INTO usage_dirty_ranges(agent, start_at, end_at) VALUES (?1, ?2, ?3)",
-                params![
-                    consumed.agent.as_str(),
-                    overlap_end.to_rfc3339_opts(SecondsFormat::Secs, true),
-                    old_end.to_rfc3339_opts(SecondsFormat::Secs, true)
-                ],
-            )?;
-        }
-    }
-    Ok(changed)
+    Ok(entries)
+}
+
+fn read_fact_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<UsageRow> {
+    read_row_at(row, 0)
+}
+
+/// The grouped period projection names the date first, so its row columns start one later.
+fn read_grouped_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<UsageRow> {
+    read_row_at(row, 1)
+}
+
+fn read_row_at(row: &rusqlite::Row<'_>, offset: usize) -> rusqlite::Result<UsageRow> {
+    let column = |index: usize, name: &str| {
+        rusqlite::Error::InvalidColumnType(index, name.to_owned(), rusqlite::types::Type::Text)
+    };
+    let agent: String = row.get(offset)?;
+    let agent = parse_usage_agent(&agent).ok_or_else(|| column(offset, "agent"))?;
+    let billing_channel: String = row.get(offset + 1)?;
+    let billing_channel = crate::usage::BillingChannel::ALL
+        .into_iter()
+        .find(|value| value.as_str() == billing_channel)
+        .ok_or_else(|| column(offset + 1, "billing_channel"))?;
+    let channel_source: String = row.get(offset + 2)?;
+    let channel_source = match channel_source.as_str() {
+        "explicit" => crate::usage::ChannelSource::Explicit,
+        "agent_default" => crate::usage::ChannelSource::AgentDefault,
+        "unknown" => crate::usage::ChannelSource::Unknown,
+        _ => return Err(column(offset + 2, "channel_source")),
+    };
+    let context_bucket: String = row.get(offset + 4)?;
+    let context_bucket = [
+        crate::usage::ContextBucket::Le128k,
+        crate::usage::ContextBucket::Gt128kLe200k,
+        crate::usage::ContextBucket::Gt200kLe256k,
+        crate::usage::ContextBucket::Gt256kLe272k,
+        crate::usage::ContextBucket::Gt272k,
+    ]
+    .into_iter()
+    .find(|value| value.as_str() == context_bucket)
+    .ok_or_else(|| column(offset + 4, "context_bucket"))?;
+    let count = |index: usize| -> rusqlite::Result<u64> {
+        Ok(row.get::<_, i64>(offset + index)?.max(0) as u64)
+    };
+    Ok(UsageRow {
+        agent,
+        billing_channel,
+        channel_source,
+        model: row.get(offset + 3)?,
+        context_bucket,
+        service_tier: row.get(offset + 5)?,
+        speed: row.get(offset + 6)?,
+        inference_geo: row.get(offset + 7)?,
+        input_tokens: count(8)?,
+        cache_read_tokens: count(9)?,
+        cache_write_5m_tokens: count(10)?,
+        cache_write_1h_tokens: count(11)?,
+        cache_write_inferred_tokens: count(12)?,
+        output_tokens: count(13)?,
+        reasoning_tokens: count(14)?,
+        requests: count(15)?,
+        web_search_requests: count(16)?,
+        web_fetch_requests: count(17)?,
+        source_cost_microusd: row
+            .get::<_, Option<i64>>(offset + 18)?
+            .map(|value| value.max(0).to_string()),
+        source_cost_covered_requests: count(19)?,
+    })
 }
 
 fn parse_usage_agent(value: &str) -> Option<UsageAgent> {
@@ -2458,85 +2340,177 @@ fn parse_usage_agent(value: &str) -> Option<UsageAgent> {
     })
 }
 
-fn multipart_info(value: &Value) -> Option<(String, u64, u64)> {
-    let multipart = value.get("multipart")?.as_object()?;
-    if multipart.len() != 3 {
-        return None;
-    }
-    let batch_id = multipart.get("batch_id")?.as_str()?.to_owned();
-    if batch_id.is_empty() {
-        return None;
-    }
-    let part_index = multipart.get("part_index")?.as_u64()?;
-    let part_count = multipart.get("part_count")?.as_u64()?;
-    ((2..=64).contains(&part_count) && part_index < part_count)
-        .then_some((batch_id, part_index, part_count))
-}
-
-fn record_events(
+/// Stores one parsed record and answers the UTC hour it belongs to.
+fn insert_record(
     tx: &rusqlite::Transaction<'_>,
     agent: UsageAgent,
     source_file_id: &str,
-) -> Result<Vec<StoredUsageEvent>, StateError> {
+    record_key: &str,
+    event: &NormalizedUsageEvent,
+) -> Result<String, StateError> {
+    let event_json = serde_json::to_string(event)?;
+    if event_json.len() > crate::relay::MAXIMUM_REQUEST_BYTES {
+        return Err(StateError::InvalidState);
+    }
+    let occurred_at =
+        crate::usage::canonical_instant(&event.occurred_at).ok_or(StateError::InvalidState)?;
+    tx.execute(
+        "INSERT INTO usage_file_records(
+            agent, source_file_id, record_key, occurred_at, event_json
+         ) VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(agent, source_file_id, record_key) DO UPDATE SET
+            occurred_at = excluded.occurred_at,
+            event_json = excluded.event_json",
+        params![
+            agent.as_str(),
+            source_file_id,
+            record_key,
+            occurred_at,
+            event_json
+        ],
+    )?;
+    event_hour(&occurred_at)
+}
+
+/// Every UTC hour one source currently has records in.
+fn record_hours(
+    tx: &rusqlite::Transaction<'_>,
+    agent: UsageAgent,
+    source_file_id: &str,
+) -> Result<Vec<String>, StateError> {
     let mut statement = tx.prepare(
-        "SELECT record_index, record_key, occurred_at, event_json FROM usage_file_records
+        "SELECT DISTINCT substr(occurred_at, 1, 13) FROM usage_file_records
          WHERE agent = ?1 AND source_file_id = ?2",
     )?;
     let rows = statement.query_map(params![agent.as_str(), source_file_id], |row| {
-        let record_index: i64 = row.get(0)?;
-        let record_key: String = row.get(1)?;
-        Ok(StoredUsageEvent {
-            record_key: if record_key.is_empty() {
-                format!("legacy:{record_index}")
-            } else {
-                record_key
-            },
-            occurred_at: row.get(2)?,
-            event_json: row.get(3)?,
-        })
+        row.get::<_, String>(0)
     })?;
-    let mut events = Vec::new();
+    let mut hours = Vec::new();
     for row in rows {
-        events.push(row?);
+        hours.push(format!("{}:00:00Z", row?));
     }
-    Ok(events)
+    Ok(hours)
 }
 
-fn changed_event_hours(
-    old_events: &[StoredUsageEvent],
-    new_events: &[NormalizedUsageEvent],
-) -> Result<Vec<String>, StateError> {
-    let mut old_by_hour: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let mut new_by_hour: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for stored in old_events {
-        let hour = event_hour(&stored.occurred_at)?;
-        old_by_hour
-            .entry(hour)
-            .or_default()
-            .push(stored.event_json.clone());
+/// Rebuilds one hour's facts from the records this device currently retains for it.
+///
+/// The hour is the unit: what is stored is replaced outright rather than merged, so a record
+/// that moved out of the hour leaves no trace of itself behind.
+fn recompute_hour(
+    tx: &rusqlite::Transaction<'_>,
+    agent: UsageAgent,
+    bucket_start_utc: &str,
+    scan_version: u64,
+) -> Result<bool, StateError> {
+    let start =
+        DateTime::parse_from_rfc3339(bucket_start_utc).map_err(|_| StateError::InvalidState)?;
+    let end = (start + Duration::hours(1)).to_rfc3339_opts(SecondsFormat::Millis, true);
+    let start_key = start.to_rfc3339_opts(SecondsFormat::Millis, true);
+    let mut statement = tx.prepare(
+        "SELECT event_json FROM usage_file_records
+         WHERE agent = ?1 AND occurred_at >= ?2 AND occurred_at < ?3",
+    )?;
+    let stored = statement
+        .query_map(params![agent.as_str(), start_key, end], |row| {
+            row.get::<_, String>(0)
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(statement);
+    let mut events = Vec::with_capacity(stored.len());
+    for value in &stored {
+        events.push(serde_json::from_str::<NormalizedUsageEvent>(value)?);
     }
-    for event in new_events {
-        let event_json = serde_json::to_string(event)?;
-        let hour = event_hour(&event.occurred_at)?;
-        new_by_hour.entry(hour).or_default().push(event_json);
+    let rows = crate::usage::aggregate_hour_rows(&events)
+        .and_then(|rows| {
+            crate::usage::fold_rows_into_other(rows, crate::usage::MAX_USAGE_ROWS_PER_HOUR)
+        })
+        .map_err(|_| StateError::InvalidState)?;
+    let partial: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM usage_partial_sources WHERE agent = ?1 AND start_at = ?2",
+        params![agent.as_str(), bucket_start_utc],
+        |row| row.get(0),
+    )?;
+    let partial = partial > 0;
+    // An hour whose facts came out the same is the same hour. Restamping it would spend a
+    // scan version and send an upload that says nothing.
+    let mut stored = tx.prepare(FACT_ROW_QUERY)?;
+    let previous = stored
+        .query_map(params![agent.as_str(), bucket_start_utc], read_fact_row)?
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(stored);
+    let previous_partial: Option<i64> = tx
+        .query_row(
+            "SELECT MAX(partial) FROM usage_hourly_facts WHERE agent = ?1 AND bucket_start_utc = ?2",
+            params![agent.as_str(), bucket_start_utc],
+            |row| row.get(0),
+        )
+        .optional()?
+        .flatten();
+    if previous == rows && previous_partial.map(|value| value != 0).unwrap_or(false) == partial {
+        return Ok(false);
     }
-    for values in old_by_hour.values_mut() {
-        values.sort_unstable();
+    tx.execute(
+        "DELETE FROM usage_hourly_facts WHERE agent = ?1 AND bucket_start_utc = ?2",
+        params![agent.as_str(), bucket_start_utc],
+    )?;
+    for row in &rows {
+        let source_cost = match &row.source_cost_microusd {
+            Some(value) => Some(value.parse::<i64>().map_err(|_| StateError::InvalidState)?),
+            None => None,
+        };
+        tx.execute(
+            "INSERT INTO usage_hourly_facts(
+                agent, bucket_start_utc, billing_channel, channel_source, model, context_bucket,
+                service_tier, speed, inference_geo, input_tokens, cache_read_tokens,
+                cache_write_5m_tokens, cache_write_1h_tokens, cache_write_inferred_tokens,
+                output_tokens, reasoning_tokens, requests, web_search_requests,
+                web_fetch_requests, source_cost_microusd, source_cost_covered_requests,
+                partial, scan_version
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
+                       ?17, ?18, ?19, ?20, ?21, ?22, ?23)",
+            params![
+                agent.as_str(),
+                bucket_start_utc,
+                row.billing_channel.as_str(),
+                serde_json::to_value(row.channel_source)?
+                    .as_str()
+                    .unwrap_or_default(),
+                row.model,
+                row.context_bucket.as_str(),
+                row.service_tier,
+                row.speed,
+                row.inference_geo,
+                row.input_tokens as i64,
+                row.cache_read_tokens as i64,
+                row.cache_write_5m_tokens as i64,
+                row.cache_write_1h_tokens as i64,
+                row.cache_write_inferred_tokens as i64,
+                row.output_tokens as i64,
+                row.reasoning_tokens as i64,
+                row.requests as i64,
+                row.web_search_requests as i64,
+                row.web_fetch_requests as i64,
+                source_cost,
+                row.source_cost_covered_requests as i64,
+                i64::from(partial),
+                scan_version as i64,
+            ],
+        )?;
     }
-    for values in new_by_hour.values_mut() {
-        values.sort_unstable();
-    }
-    let mut hours = old_by_hour
-        .keys()
-        .chain(new_by_hour.keys())
-        .cloned()
-        .collect::<Vec<_>>();
-    hours.sort_unstable();
-    hours.dedup();
-    Ok(hours
-        .into_iter()
-        .filter(|hour| old_by_hour.get(hour) != new_by_hour.get(hour))
-        .collect())
+    tx.execute(
+        "INSERT INTO usage_dirty_hours(agent, bucket_start_utc, scan_version, partial)
+         VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(agent, bucket_start_utc) DO UPDATE SET
+            scan_version = excluded.scan_version,
+            partial = excluded.partial",
+        params![
+            agent.as_str(),
+            bucket_start_utc,
+            scan_version as i64,
+            i64::from(partial)
+        ],
+    )?;
+    Ok(true)
 }
 
 fn source_record_key(source: &crate::usage::UsageSourceScan, record_index: usize) -> String {
@@ -2545,24 +2519,12 @@ fn source_record_key(source: &crate::usage::UsageSourceScan, record_index: usize
         .get(record_index)
         .filter(|key| !key.is_empty())
         .cloned()
-        .unwrap_or_else(|| format!("legacy:{record_index}"))
+        .unwrap_or_else(|| format!("record:{record_index}"))
 }
 
 fn event_hour(value: &str) -> Result<String, StateError> {
     let instant = DateTime::parse_from_rfc3339(value).map_err(|_| StateError::InvalidState)?;
     Ok(floor_hour(instant).to_rfc3339_opts(SecondsFormat::Secs, true))
-}
-
-fn mark_dirty_hours(
-    tx: &rusqlite::Transaction<'_>,
-    agent: UsageAgent,
-    hours: Vec<String>,
-) -> Result<(), StateError> {
-    for hour in hours {
-        let start = DateTime::parse_from_rfc3339(&hour).map_err(|_| StateError::InvalidState)?;
-        merge_dirty_range(tx, agent, start, start + Duration::hours(1))?;
-    }
-    Ok(())
 }
 
 fn mark_partial_source_hours_tx(
@@ -2604,54 +2566,6 @@ fn partial_source_hours_tx(
     let rows = statement.query_map(params![agent.as_str(), source_file_id], |row| row.get(0))?;
     rows.collect::<Result<Vec<_>, _>>()
         .map_err(StateError::from)
-}
-
-fn merge_dirty_range(
-    tx: &rusqlite::Transaction<'_>,
-    agent: UsageAgent,
-    mut start: DateTime<chrono::FixedOffset>,
-    mut end: DateTime<chrono::FixedOffset>,
-) -> Result<(), StateError> {
-    let mut statement =
-        tx.prepare("SELECT start_at, end_at FROM usage_dirty_ranges WHERE agent = ?1")?;
-    let rows = statement.query_map(params![agent.as_str()], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-    })?;
-    let mut overlaps = Vec::new();
-    for row in rows {
-        let (old_start, old_end) = row?;
-        let (Ok(old_start), Ok(old_end)) = (
-            DateTime::parse_from_rfc3339(&old_start),
-            DateTime::parse_from_rfc3339(&old_end),
-        ) else {
-            continue;
-        };
-        if old_end >= start && old_start <= end {
-            start = start.min(old_start);
-            end = end.max(old_end);
-            overlaps.push((old_start, old_end));
-        }
-    }
-    drop(statement);
-    for (old_start, old_end) in &overlaps {
-        tx.execute(
-            "DELETE FROM usage_dirty_ranges WHERE agent = ?1 AND start_at = ?2 AND end_at = ?3",
-            params![
-                agent.as_str(),
-                old_start.to_rfc3339_opts(SecondsFormat::Secs, true),
-                old_end.to_rfc3339_opts(SecondsFormat::Secs, true)
-            ],
-        )?;
-    }
-    tx.execute(
-        "INSERT OR IGNORE INTO usage_dirty_ranges(agent, start_at, end_at) VALUES (?1, ?2, ?3)",
-        params![
-            agent.as_str(),
-            start.to_rfc3339_opts(SecondsFormat::Secs, true),
-            end.to_rfc3339_opts(SecondsFormat::Secs, true)
-        ],
-    )?;
-    Ok(())
 }
 
 fn floor_hour(value: DateTime<chrono::FixedOffset>) -> DateTime<chrono::FixedOffset> {
@@ -4206,44 +4120,93 @@ mod tests {
         fs::remove_dir_all(root).expect("cleanup");
     }
 
+    fn outbox_entry(bucket: &str, scan_version: u64) -> UsageOutboxEntry {
+        UsageOutboxEntry {
+            agent: UsageAgent::Codex,
+            bucket_start_utc: bucket.into(),
+            scan_version,
+            partial: false,
+            rows: Vec::new(),
+        }
+    }
+
+    /// Staging is keyed by the hour, so restaging one replaces what stood there.
     #[test]
-    fn usage_outbox_is_bounded_without_consuming_more_dirty_state() {
-        let root = std::env::temp_dir().join(format!("quota-outbox-cap-{}", Uuid::new_v4()));
+    fn staging_an_hour_again_replaces_the_entry_and_retires_its_dirty_mark() {
+        let root = std::env::temp_dir().join(format!("quota-outbox-stage-{}", Uuid::new_v4()));
         fs::create_dir_all(&root).expect("root");
         let store = StateStore::open(&root).expect("state");
-        let consumed = UsageDirtyRange {
-            agent: UsageAgent::Codex,
-            start_at: "2026-08-10T12:00:00Z".into(),
-            end_at: "2026-08-10T13:00:00Z".into(),
-        };
+        store
+            .apply_usage_scan(
+                UsageAgent::Codex,
+                &usage_scan(vec![usage_event("2026-08-10T12:15:00Z", 1)], 1),
+                7,
+            )
+            .expect("initial scan");
+        let dirty = store.dirty_usage_hours().expect("dirty");
+        assert_eq!(dirty.len(), 1);
+        assert_eq!(dirty[0].bucket_start_utc, "2026-08-10T12:00:00Z");
+        assert_eq!(dirty[0].scan_version, 7);
 
-        for sequence in 0..MAX_USAGE_OUTBOX_ENTRIES {
-            let value = serde_json::json!({
-                "submission_id": format!("submission_{sequence}"),
-                "device_id": "device_test",
-                "generation": 1,
-                "sequence": sequence
-            });
-            assert!(
-                store
-                    .stage_outbox_entry("account_test", &value, &consumed)
-                    .expect("stage")
-            );
-        }
-        let overflow = serde_json::json!({
-            "submission_id": "submission_overflow",
-            "device_id": "device_test",
-            "generation": 1,
-            "sequence": MAX_USAGE_OUTBOX_ENTRIES
-        });
-        assert!(matches!(
-            store.stage_outbox_entry("account_test", &overflow, &consumed),
-            Err(StateError::Unavailable)
-        ));
-        assert_eq!(
-            store.outbox_entries().expect("entries").len(),
-            MAX_USAGE_OUTBOX_ENTRIES as usize
+        let rows = store
+            .usage_hour_rows(UsageAgent::Codex, "2026-08-10T12:00:00Z")
+            .expect("rows");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].input_tokens, 1);
+
+        let entry = UsageOutboxEntry {
+            agent: UsageAgent::Codex,
+            bucket_start_utc: "2026-08-10T12:00:00Z".into(),
+            scan_version: 7,
+            partial: false,
+            rows,
+        };
+        assert!(
+            store
+                .stage_outbox_entries("account_test", "device_test", 1, &[entry])
+                .expect("stage")
         );
+        assert!(store.dirty_usage_hours().expect("dirty").is_empty());
+        assert_eq!(store.outbox_entries().expect("entries").len(), 1);
+
+        store
+            .apply_usage_scan(
+                UsageAgent::Codex,
+                &usage_scan(vec![usage_event("2026-08-10T12:15:00Z", 9)], 2),
+                8,
+            )
+            .expect("rescan");
+        let rows = store
+            .usage_hour_rows(UsageAgent::Codex, "2026-08-10T12:00:00Z")
+            .expect("rows");
+        assert!(
+            store
+                .stage_outbox_entries(
+                    "account_test",
+                    "device_test",
+                    1,
+                    &[UsageOutboxEntry {
+                        agent: UsageAgent::Codex,
+                        bucket_start_utc: "2026-08-10T12:00:00Z".into(),
+                        scan_version: 8,
+                        partial: false,
+                        rows,
+                    }]
+                )
+                .expect("restage")
+        );
+        let entries = store.outbox_entries().expect("entries");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].scan_version, 8);
+        assert_eq!(entries[0].rows[0].input_tokens, 9);
+
+        // Accepted and ignored are the same move: both mean the hour is answered for.
+        assert!(
+            store
+                .forget_outbox_hours(UsageAgent::Codex, &["2026-08-10T12:00:00Z".to_owned()])
+                .expect("forget")
+        );
+        assert!(store.outbox_entries().expect("entries").is_empty());
         drop(store);
         fs::remove_dir_all(root).expect("cleanup");
     }
@@ -4254,156 +4217,93 @@ mod tests {
         fs::create_dir_all(&root).expect("root");
         let store = StateStore::open(&root).expect("state");
         store
-            .ensure_usage_context(
+            .ensure_usage_context("account_test", "device_test", 1, "2026-08-10T00:00:00Z")
+            .expect("context");
+        store
+            .stage_outbox_entries(
                 "account_test",
                 "device_test",
                 1,
-                "UTC",
-                "2026-08-10T00:00:00Z",
+                &[outbox_entry("2026-08-10T12:00:00Z", 1)],
             )
-            .expect("context");
+            .expect("current entry");
         {
             let conn = store.identity.lock().expect("database");
             conn.execute(
                 "INSERT INTO usage_outbox(
-                    submission_id, account_id, device_id, generation, sequence, payload_json
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![
-                    "submission_current",
-                    "account_test",
-                    "device_test",
-                    1,
-                    0,
-                    r#"{"submission_id":"submission_current"}"#
-                ],
-            )
-            .expect("current entry");
-            conn.execute(
-                "INSERT INTO usage_outbox(
-                    submission_id, account_id, device_id, generation, sequence, payload_json
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![
-                    "submission_foreign",
-                    "account_old",
-                    "device_old",
-                    1,
-                    0,
-                    r#"{"submission_id":"submission_foreign"}"#
-                ],
+                    agent, bucket_start_utc, account_id, device_id, generation,
+                    scan_version, partial, rows_json
+                 ) VALUES ('codex', '2026-08-10T13:00:00Z', 'account_old', 'device_old', 1,
+                           1, 0, '[]')",
+                [],
             )
             .expect("foreign entry");
         }
 
         let revision = store
-            .ensure_usage_context(
-                "account_test",
-                "device_test",
-                1,
-                "UTC",
-                "2026-08-10T00:00:00Z",
-            )
+            .ensure_usage_context("account_test", "device_test", 1, "2026-08-10T00:00:00Z")
             .expect("unchanged context");
-
-        assert_eq!(revision, 2);
-        assert_eq!(store.outbox_entries().expect("entries").len(), 1);
+        assert!(revision > 0);
+        let entries = store.outbox_entries().expect("entries");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].bucket_start_utc, "2026-08-10T12:00:00Z");
         assert_eq!(
             store
                 .outbox_entries_for("account_test", "device_test", 1)
                 .expect("current entries"),
-            vec![serde_json::json!({"submission_id": "submission_current"})]
+            entries
         );
         drop(store);
         fs::remove_dir_all(root).expect("cleanup");
     }
 
+    /// A new upload identity owes the Account every hour this device still holds after its
+    /// privacy lower bound, and nothing it staged for the previous one.
     #[test]
-    fn multipart_staging_consumes_dirty_atomically_and_ack_never_deletes_new_dirty() {
-        let root = std::env::temp_dir().join(format!("quota-multipart-state-{}", Uuid::new_v4()));
+    fn a_new_upload_identity_reseeds_every_retained_hour() {
+        let root = std::env::temp_dir().join(format!("quota-outbox-reseed-{}", Uuid::new_v4()));
         fs::create_dir_all(&root).expect("root");
         let store = StateStore::open(&root).expect("state");
-        let event = usage_event("2026-08-10T12:15:00Z", 1);
         store
-            .apply_usage_scan(UsageAgent::Codex, &usage_scan(vec![event.clone()], 1))
-            .expect("initial scan");
-        let consumed = UsageDirtyRange {
-            agent: UsageAgent::Codex,
-            start_at: "2026-08-10T12:00:00Z".into(),
-            end_at: "2026-08-10T13:00:00Z".into(),
-        };
-        let submission = |index: u64, sequence: u64| {
-            serde_json::json!({
-                "submission_id": format!("multipart-{index}"),
-                "device_id": "device_test",
-                "generation": 1,
-                "sequence": sequence,
-                "coverage": {
-                    "agent": "codex",
-                    "start_at": "2026-08-10T12:00:00Z",
-                    "end_at": "2026-08-10T13:00:00Z"
-                },
-                "multipart": {
-                    "batch_id": "batch-test",
-                    "part_index": index,
-                    "part_count": 2
-                }
-            })
-        };
-        let parts = vec![submission(0, 0), submission(1, 1)];
-        assert!(
-            store
-                .stage_multipart_outbox_entries(
-                    "account_test",
-                    "device_test",
+            .apply_usage_scan(
+                UsageAgent::Codex,
+                &usage_scan(
+                    vec![
+                        usage_event("2026-08-09T12:15:00Z", 1),
+                        usage_event("2026-08-10T12:15:00Z", 2),
+                    ],
                     1,
-                    "batch-test",
-                    &consumed,
-                    &parts,
-                )
-                .expect("stage multipart")
-        );
-        assert!(store.dirty_usage_ranges().expect("dirty").is_empty());
-        assert_eq!(store.outbox_entries().expect("outbox").len(), 2);
-        assert!(
-            !store
-                .stage_multipart_outbox_entries(
-                    "account_test",
-                    "device_test",
-                    1,
-                    "batch-test",
-                    &consumed,
-                    &parts,
-                )
-                .expect("idempotent stage")
-        );
-        assert!(
-            store
-                .acknowledge_outbox_entry("multipart-0")
-                .expect("ack first")
-        );
+                ),
+                3,
+            )
+            .expect("scan");
+        store
+            .ensure_usage_context("account_a", "device_a", 1, "2026-08-10T00:00:00Z")
+            .expect("first identity");
+        let dirty = store.dirty_usage_hours().expect("dirty");
+        assert_eq!(dirty.len(), 1);
+        assert_eq!(dirty[0].bucket_start_utc, "2026-08-10T12:00:00Z");
+        store
+            .stage_outbox_entries(
+                "account_a",
+                "device_a",
+                1,
+                &[outbox_entry("2026-08-10T12:00:00Z", 3)],
+            )
+            .expect("stage");
 
-        let changed = usage_event("2026-08-10T12:15:00Z", 9);
         store
-            .apply_usage_scan(UsageAgent::Codex, &usage_scan(vec![changed], 2))
-            .expect("new scan");
-        assert_eq!(store.dirty_usage_ranges().expect("new dirty").len(), 1);
-        assert!(
-            store
-                .acknowledge_outbox_entry("multipart-1")
-                .expect("ack final")
-        );
-        assert_eq!(
-            store
-                .dirty_usage_ranges()
-                .expect("new dirty survives")
-                .len(),
-            1
-        );
+            .ensure_usage_context("account_b", "device_b", 2, "1970-01-01T00:00:00Z")
+            .expect("second identity");
+        assert!(store.outbox_entries().expect("entries").is_empty());
+        assert_eq!(store.dirty_usage_hours().expect("dirty").len(), 2);
         drop(store);
         fs::remove_dir_all(root).expect("cleanup");
     }
 
+    /// A rescan recomputes only the hours whose records moved, and leaves the rest alone.
     #[test]
-    fn usage_dirty_hours_compare_canonical_old_and_new_file_rows() {
+    fn a_rescan_recomputes_only_the_hours_it_changed() {
         let root = std::env::temp_dir().join(format!("quota-usage-state-{}", Uuid::new_v4()));
         fs::create_dir_all(&root).expect("root");
         let store = StateStore::open(&root).expect("state");
@@ -4413,54 +4313,54 @@ mod tests {
             .apply_usage_scan(
                 UsageAgent::Codex,
                 &usage_scan(vec![first.clone(), second.clone()], 1),
+                1,
             )
             .expect("initial scan");
-        assert_eq!(store.dirty_usage_ranges().expect("dirty").len(), 1);
+        let dirty = store.dirty_usage_hours().expect("dirty");
+        assert_eq!(dirty.len(), 2);
         store
-            .consume_dirty_usage_range(&UsageDirtyRange {
-                agent: UsageAgent::Codex,
-                start_at: "2026-08-10T12:00:00Z".into(),
-                end_at: "2026-08-10T14:00:00Z".into(),
-            })
+            .stage_outbox_entries(
+                "account_test",
+                "device_test",
+                1,
+                &dirty
+                    .iter()
+                    .map(|hour| outbox_entry(&hour.bucket_start_utc, hour.scan_version))
+                    .collect::<Vec<_>>(),
+            )
             .expect("clear initial");
+        assert!(store.dirty_usage_hours().expect("dirty").is_empty());
 
         let appended = usage_event("2026-08-10T14:15:00Z", 3);
         store
             .apply_usage_scan(
                 UsageAgent::Codex,
-                &usage_scan(vec![first.clone(), second.clone(), appended], 2),
+                &usage_scan(vec![first.clone(), second.clone(), appended.clone()], 2),
+                2,
             )
             .expect("append scan");
-        assert_eq!(
-            store.dirty_usage_ranges().expect("dirty"),
-            vec![UsageDirtyRange {
-                agent: UsageAgent::Codex,
-                start_at: "2026-08-10T14:00:00Z".into(),
-                end_at: "2026-08-10T15:00:00Z".into(),
-            }]
-        );
+        let dirty = store.dirty_usage_hours().expect("dirty");
+        assert_eq!(dirty.len(), 1);
+        assert_eq!(dirty[0].bucket_start_utc, "2026-08-10T14:00:00Z");
+        assert_eq!(dirty[0].scan_version, 2);
         store
-            .consume_dirty_usage_range(&UsageDirtyRange {
-                agent: UsageAgent::Codex,
-                start_at: "2026-08-10T14:00:00Z".into(),
-                end_at: "2026-08-10T15:00:00Z".into(),
-            })
+            .stage_outbox_entries(
+                "account_test",
+                "device_test",
+                1,
+                &[outbox_entry("2026-08-10T14:00:00Z", 2)],
+            )
             .expect("clear append");
 
+        // The same bytes again: every record lands where it already was, and nothing is dirty.
         store
             .apply_usage_scan(
                 UsageAgent::Codex,
-                &usage_scan(
-                    vec![
-                        first.clone(),
-                        second.clone(),
-                        usage_event("2026-08-10T14:15:00Z", 3),
-                    ],
-                    2,
-                ),
+                &usage_scan(vec![first, second.clone(), appended], 3),
+                3,
             )
             .expect("equivalent rewrite");
-        assert!(store.dirty_usage_ranges().expect("dirty").is_empty());
+        assert!(store.dirty_usage_hours().expect("dirty").is_empty());
 
         store
             .apply_usage_scan(
@@ -4471,17 +4371,58 @@ mod tests {
                         second,
                         usage_event("2026-08-10T14:15:00Z", 3),
                     ],
-                    3,
+                    4,
                 ),
+                4,
             )
             .expect("old hour edit");
+        let dirty = store.dirty_usage_hours().expect("dirty");
+        assert_eq!(dirty.len(), 1);
+        assert_eq!(dirty[0].bucket_start_utc, "2026-08-10T12:00:00Z");
         assert_eq!(
-            store.dirty_usage_ranges().expect("dirty"),
-            vec![UsageDirtyRange {
-                agent: UsageAgent::Codex,
-                start_at: "2026-08-10T12:00:00Z".into(),
-                end_at: "2026-08-10T13:00:00Z".into(),
-            }]
+            store
+                .usage_hour_rows(UsageAgent::Codex, "2026-08-10T12:00:00Z")
+                .expect("rows")[0]
+                .input_tokens,
+            9
+        );
+        assert_eq!(
+            store
+                .usage_hour_rows(UsageAgent::Codex, "2026-08-10T14:00:00Z")
+                .expect("rows")[0]
+                .input_tokens,
+            3
+        );
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    /// An appended tail adds to what is stored instead of replacing it, and the hours it lands
+    /// in are the only ones recomputed.
+    #[test]
+    fn an_appended_tail_keeps_the_records_already_indexed() {
+        let root = std::env::temp_dir().join(format!("quota-usage-append-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let store = StateStore::open(&root).expect("state");
+        store
+            .apply_usage_scan(
+                UsageAgent::Codex,
+                &usage_scan(vec![usage_event("2026-08-10T12:15:00Z", 1)], 1),
+                1,
+            )
+            .expect("initial scan");
+        let mut appended = usage_scan(vec![usage_event("2026-08-10T13:15:00Z", 2)], 2);
+        appended.sources[0].append = true;
+        appended.sources[0].record_keys = vec!["line:64:0".into()];
+        store
+            .apply_usage_scan(UsageAgent::Codex, &appended, 2)
+            .expect("append scan");
+        assert_eq!(store.usage_event_count().expect("count"), 2);
+        let (rows, _) = store.usage_period_rows(None).expect("rows");
+        assert_eq!(
+            rows.iter().map(|row| row.input_tokens).sum::<u64>(),
+            3,
+            "{rows:?}"
         );
         drop(store);
         fs::remove_dir_all(root).expect("cleanup");
@@ -4494,14 +4435,15 @@ mod tests {
         let store = StateStore::open(&root).expect("state");
         let first = usage_event("2026-08-10T12:15:00Z", 1);
         store
-            .apply_usage_scan(UsageAgent::Codex, &usage_scan(vec![first.clone()], 1))
+            .apply_usage_scan(UsageAgent::Codex, &usage_scan(vec![first.clone()], 1), 1)
             .expect("initial scan");
         store
-            .consume_dirty_usage_range(&UsageDirtyRange {
-                agent: UsageAgent::Codex,
-                start_at: "2026-08-10T12:00:00Z".into(),
-                end_at: "2026-08-10T13:00:00Z".into(),
-            })
+            .stage_outbox_entries(
+                "account_test",
+                "device_test",
+                1,
+                &[outbox_entry("2026-08-10T12:00:00Z", 1)],
+            )
             .expect("clear initial");
 
         let second = usage_event("2026-08-10T13:15:00Z", 2);
@@ -4513,36 +4455,35 @@ mod tests {
             count: 1,
         }];
         store
-            .apply_usage_scan(UsageAgent::Codex, &partial)
+            .apply_usage_scan(UsageAgent::Codex, &partial, 2)
             .expect("partial scan");
-        assert_eq!(store.usage_events().expect("events").len(), 2);
+        assert_eq!(store.usage_event_count().expect("count"), 2);
         assert!(
             store
                 .partial_usage_hours()
                 .expect("partial hours")
                 .contains(&(UsageAgent::Codex, "2026-08-10T12:00:00Z".into()))
         );
-        assert!(
-            store
-                .dirty_usage_ranges()
-                .expect("dirty")
-                .iter()
-                .any(|range| {
-                    range.start_at == "2026-08-10T12:00:00Z"
-                        && range.end_at == "2026-08-10T14:00:00Z"
-                })
-        );
+        let dirty = store.dirty_usage_hours().expect("dirty");
+        assert_eq!(dirty.len(), 2);
+        assert!(dirty.iter().all(|hour| hour.partial));
         store
-            .consume_dirty_usage_range(&UsageDirtyRange {
-                agent: UsageAgent::Codex,
-                start_at: "2026-08-10T12:00:00Z".into(),
-                end_at: "2026-08-10T14:00:00Z".into(),
-            })
+            .stage_outbox_entries(
+                "account_test",
+                "device_test",
+                1,
+                &dirty
+                    .iter()
+                    .map(|hour| outbox_entry(&hour.bucket_start_utc, hour.scan_version))
+                    .collect::<Vec<_>>(),
+            )
             .expect("clear partial upload");
+
         store
             .apply_usage_scan(
                 UsageAgent::Codex,
                 &usage_scan(vec![first, usage_event("2026-08-10T13:15:00Z", 2)], 3),
+                3,
             )
             .expect("complete repair");
         assert!(
@@ -4551,14 +4492,11 @@ mod tests {
                 .expect("partial hours")
                 .is_empty()
         );
-        assert_eq!(
-            store.dirty_usage_ranges().expect("dirty"),
-            vec![UsageDirtyRange {
-                agent: UsageAgent::Codex,
-                start_at: "2026-08-10T12:00:00Z".into(),
-                end_at: "2026-08-10T14:00:00Z".into(),
-            }]
-        );
+        // A repaired source restates its hours once so the reader stops calling them partial,
+        // even when the numbers behind them did not move.
+        let dirty = store.dirty_usage_hours().expect("dirty");
+        assert_eq!(dirty.len(), 2);
+        assert!(dirty.iter().all(|hour| !hour.partial));
         drop(store);
         fs::remove_dir_all(root).expect("cleanup");
     }
@@ -4571,15 +4509,8 @@ mod tests {
         let first = usage_event("2026-08-10T12:15:00Z", 1);
         let second = usage_event("2026-08-10T12:30:00Z", 2);
         store
-            .apply_usage_scan(UsageAgent::Codex, &usage_scan(vec![first, second], 1))
+            .apply_usage_scan(UsageAgent::Codex, &usage_scan(vec![first, second], 1), 1)
             .expect("initial scan");
-        store
-            .consume_dirty_usage_range(&UsageDirtyRange {
-                agent: UsageAgent::Codex,
-                start_at: "2026-08-10T12:00:00Z".into(),
-                end_at: "2026-08-10T13:00:00Z".into(),
-            })
-            .expect("clear initial");
 
         let updated = usage_event("2026-08-10T12:15:00Z", 9);
         let added = usage_event("2026-08-10T12:45:00Z", 3);
@@ -4594,36 +4525,73 @@ mod tests {
         // replaced and line 2 is inserted.
         partial.sources[0].record_keys = vec!["line:0:0".into(), "line:2:0".into()];
         store
-            .apply_usage_scan(UsageAgent::Codex, &partial)
+            .apply_usage_scan(UsageAgent::Codex, &partial, 2)
             .expect("partial scan");
 
-        let mut inputs = store
-            .usage_events()
-            .expect("events")
-            .into_iter()
-            .map(|event| event.input_tokens)
-            .collect::<Vec<_>>();
-        inputs.sort_unstable();
-        assert_eq!(inputs, vec![2, 3, 9]);
+        let (rows, _) = store.usage_period_rows(None).expect("rows");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].input_tokens, 14);
+        assert_eq!(rows[0].requests, 3);
         drop(store);
         fs::remove_dir_all(root).expect("cleanup");
     }
 
+    /// A period folds the stored hours, and the calendar days it names are the caller's.
     #[test]
-    fn usage_parser_upgrade_replaces_unreadable_old_event_json() {
+    fn a_period_folds_the_hours_of_the_days_it_names() {
+        let root = std::env::temp_dir().join(format!("quota-usage-period-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let store = StateStore::open(&root).expect("state");
+        store
+            .apply_usage_scan(
+                UsageAgent::Codex,
+                &usage_scan(
+                    vec![
+                        usage_event("2026-08-09T23:15:00Z", 1),
+                        usage_event("2026-08-10T00:15:00Z", 2),
+                        usage_event("2026-08-10T12:15:00Z", 4),
+                    ],
+                    1,
+                ),
+                1,
+            )
+            .expect("scan");
+        let (rows, partial) = store
+            .usage_period_rows(Some(("2026-08-10", "2026-08-10")))
+            .expect("day");
+        assert!(!partial);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].date, "2026-08-10");
+        assert_eq!(rows[0].input_tokens, 6);
+        assert_eq!(rows[0].requests, 2);
+        let (all, _) = store.usage_period_rows(None).expect("all");
+        assert_eq!(all.len(), 2);
+        assert_eq!(all.iter().map(|row| row.input_tokens).sum::<u64>(), 7);
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    /// A stored record body this build can no longer read is replaced by the rescan that
+    /// found it, and the hour it belongs to is folded from the readable value.
+    #[test]
+    fn a_rescan_replaces_a_record_body_this_build_cannot_read() {
         let root = std::env::temp_dir().join(format!("quota-usage-upgrade-{}", Uuid::new_v4()));
         fs::create_dir_all(&root).expect("root");
         let store = StateStore::open(&root).expect("state");
-        let event = usage_event("2026-08-10T12:15:00Z", 1);
         store
-            .apply_usage_scan(UsageAgent::Codex, &usage_scan(vec![event.clone()], 1))
+            .apply_usage_scan(
+                UsageAgent::Codex,
+                &usage_scan(vec![usage_event("2026-08-10T12:15:00Z", 1)], 1),
+                1,
+            )
             .expect("initial scan");
         store
-            .consume_dirty_usage_range(&UsageDirtyRange {
-                agent: UsageAgent::Codex,
-                start_at: "2026-08-10T12:00:00Z".into(),
-                end_at: "2026-08-10T13:00:00Z".into(),
-            })
+            .stage_outbox_entries(
+                "account_test",
+                "device_test",
+                1,
+                &[outbox_entry("2026-08-10T12:00:00Z", 1)],
+            )
             .expect("clear initial");
         store
             .cache
@@ -4636,16 +4604,17 @@ mod tests {
             .expect("corrupt old wire value");
 
         store
-            .apply_usage_scan(UsageAgent::Codex, &usage_scan(vec![event], 2))
+            .apply_usage_scan(
+                UsageAgent::Codex,
+                &usage_scan(vec![usage_event("2026-08-10T12:15:00Z", 9)], 2),
+                2,
+            )
             .expect("parser upgrade");
-        assert_eq!(
-            store.dirty_usage_ranges().expect("dirty"),
-            vec![UsageDirtyRange {
-                agent: UsageAgent::Codex,
-                start_at: "2026-08-10T12:00:00Z".into(),
-                end_at: "2026-08-10T13:00:00Z".into(),
-            }]
-        );
+        let dirty = store.dirty_usage_hours().expect("dirty");
+        assert_eq!(dirty.len(), 1);
+        assert_eq!(dirty[0].bucket_start_utc, "2026-08-10T12:00:00Z");
+        let (rows, _) = store.usage_period_rows(None).expect("rows");
+        assert_eq!(rows[0].input_tokens, 9);
         drop(store);
         fs::remove_dir_all(root).expect("cleanup");
     }
@@ -4659,6 +4628,7 @@ mod tests {
             .apply_usage_scan(
                 UsageAgent::Codex,
                 &usage_scan(vec![usage_event("2026-08-10T12:15:00Z", 1)], 1),
+                1,
             )
             .expect("initial scan");
         store
@@ -4672,7 +4642,6 @@ mod tests {
             .expect("replace event body");
 
         assert_eq!(store.usage_event_count().expect("count"), 1);
-        assert!(store.usage_events().is_err());
         drop(store);
         fs::remove_dir_all(root).expect("cleanup");
     }
@@ -4720,6 +4689,7 @@ mod tests {
             .apply_usage_scan(
                 UsageAgent::Codex,
                 &usage_scan(vec![usage_event("2026-08-10T12:15:00Z", 1)], 1),
+                1,
             )
             .expect("scan");
         let revision = store.current_revision().expect("revision");
@@ -4749,6 +4719,7 @@ mod tests {
             .apply_usage_scan(
                 UsageAgent::Codex,
                 &usage_scan(vec![usage_event("2026-08-10T12:15:00Z", 1)], 1),
+                1,
             )
             .expect("rebuild scan");
         assert!(!store.snapshot().expect("snapshot").cache.rebuilding);
@@ -4808,7 +4779,8 @@ mod tests {
         fs::remove_dir_all(root).expect("cleanup");
     }
 
-    /// A device upgrading from the released single-file image keeps its account and its queue.
+    /// A device upgrading from the released single-file image keeps who it is and who it is
+    /// signed in as. What it still owes an Account is recomputed rather than carried across.
     #[test]
     fn a_released_image_is_imported_once_and_then_gone() {
         let root = temp_root("released-image");
@@ -4843,7 +4815,7 @@ mod tests {
             "released-installation"
         );
         assert!(store.session_json().expect("session").is_some());
-        assert_eq!(store.outbox_entries().expect("outbox").len(), 1);
+        assert!(store.outbox_entries().expect("outbox").is_empty());
         assert!(!store.usage_upload_enabled().expect("upload preference"));
         assert!(store.identity_reset_at().expect("marker").is_none());
         assert!(!legacy.exists());
@@ -4934,12 +4906,14 @@ mod tests {
             unchanged_source_file_ids: Vec::new(),
             deleted_source_file_ids: Vec::new(),
             sources: vec![UsageSourceScan {
+                append: false,
                 index: UsageFileIndex {
                     source_file_id: "source-1".into(),
                     identity: "identity-1".into(),
                     size: events.len() as u64,
                     modified_ns,
                     parser_revision: "usage-rust-v4".into(),
+                    ..UsageFileIndex::default()
                 },
                 source,
                 record_keys: (0..events.len())
