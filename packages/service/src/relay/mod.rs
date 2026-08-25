@@ -2693,7 +2693,7 @@ fn macos_computer_name() -> Option<String> {
         .args(["--get", "ComputerName"])
         .output()
         .ok()?;
-    output.status.success().then(|| ())?;
+    output.status.success().then_some(())?;
     String::from_utf8(output.stdout).ok()
 }
 
@@ -3086,7 +3086,7 @@ mod tests {
         let (captured_at, snapshots) =
             snapshot_payload_from_quota_report(&report, &[]).expect("quota report");
         assert_eq!(captured_at, "2026-08-10T00:00:00Z");
-        assert_eq!(snapshots, [snapshot.clone()]);
+        assert_eq!(snapshots, std::slice::from_ref(&snapshot));
 
         let mut cursor = snapshot.clone();
         cursor["provider"] = serde_json::json!("cursor");
@@ -3289,6 +3289,8 @@ mod tests {
         }
     }
 
+    type WireValidator = fn(&Value) -> Result<(), RelayError>;
+
     /// The zod schema is the definition; this module restates it for its own trust
     /// boundary. Both answer the same file, so a payload one starts accepting cannot pass
     /// unnoticed by the other.
@@ -3297,7 +3299,7 @@ mod tests {
         const FIXTURE: &str = include_str!("../../../protocol/fixtures/wire-conformance.json");
         let fixture: Value = serde_json::from_str(FIXTURE).expect("fixture");
         let contracts = fixture["contracts"].as_object().expect("contracts");
-        let validators: [(&str, fn(&Value) -> Result<(), RelayError>); 3] = [
+        let validators: [(&str, WireValidator); 3] = [
             ("quota_snapshot_envelope", validate_snapshot_envelope),
             ("account_summary", validate_account_summary),
             ("usage_submission", validate_usage_submission),

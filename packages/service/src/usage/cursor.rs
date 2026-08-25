@@ -401,10 +401,9 @@ fn parse_store_database(
         let mut parsed = parser.parse(&value, source_file_id);
         if let Some(record) = parsed.records.first_mut()
             && record.record_key.is_empty()
+            && let Some(key) = key.filter(|value| !value.is_empty())
         {
-            if let Some(key) = key.filter(|value| !value.is_empty()) {
-                record.record_key = key;
-            }
+            record.record_key = key;
         }
         ignored = ignored.saturating_add(super::scan::collect_parsed(
             parsed,
@@ -592,10 +591,10 @@ fn usage_map(value: &Map<String, Value>) -> Result<Option<&Map<String, Value>>, 
         return object(Some(usage)).ok_or(()).map(Some);
     }
     if let Some(message) = object(value.get("message")) {
-        if let Some(token_count) = message.get("tokenCount") {
-            if !token_count.is_null() {
-                return object(Some(token_count)).ok_or(()).map(Some);
-            }
+        if let Some(token_count) = message.get("tokenCount")
+            && !token_count.is_null()
+        {
+            return object(Some(token_count)).ok_or(()).map(Some);
         }
         if let Some(usage) = message.get("usage") {
             if usage.is_null() {
