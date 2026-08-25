@@ -229,23 +229,26 @@ data requirements. Architecture and product behavior are defined in
   variants in [`provider-collection.md`](provider-collection.md). Except for the explicit
   catalog-allowlisted browser-session acquisition above, do not import browser Cookies. Hidden
   WebView state is never an authentication source.
-- Spawn explicit executables with argument arrays. Never interpolate provider or user data into a
-  shell command. Respect cancellation and terminate subprocesses on success, failure, timeout, and
-  cancellation.
+- Collection starts exactly one process: `/usr/bin/security` to read Claude Code's Keychain grant,
+  once per refresh and shared by discovery and collection. No collector runs a provider's CLI, and a
+  provider grant that has expired is reported as `auth_required` rather than renewed by driving the
+  program that owns it. Spawn explicit executables with argument arrays. Never interpolate provider
+  or user data into a shell command. Respect cancellation and terminate subprocesses on success,
+  failure, timeout, and cancellation.
 - Provider HTTP requests use a 20-second timeout and 1 MiB response-body limit; browser-session
-  account validation tightens that timeout to ten seconds so it completes inside private IPC.
-  Provider JSON-RPC
-  uses a 1 MiB stdout-line limit and 64 KiB stderr-capture limit. Private IPC limits every line to
-  1 MiB, rejects malformed envelopes, exposes only stable error/recovery codes, and closes a corrupt
-  connection. stdin EOF cancels service work and ends the child.
+  account validation tightens that timeout to ten seconds so it completes inside private IPC. The
+  Keychain lookup is bounded to ten seconds and 1 MiB, and its secret is held in a type whose
+  `Debug` is redacted so the collection context that carries it cannot print it. Private IPC limits
+  every line to 1 MiB, rejects malformed envelopes, exposes only stable error/recovery codes, and
+  closes a corrupt connection. stdin EOF cancels service work and ends the child.
 - Error output and logs use allowlisted codes and fixed recovery text. Never include raw HTTP bodies,
   subprocess stderr, JWTs, authorization codes, user/device secrets, installation IDs, raw GitHub
   subjects, full email addresses, or local source paths.
 - The service owns one bounded diagnostic v2 report for Quota/Usage surfaces and their source checks.
   QuotaBar's Settings action and Linux `quotacli doctor` consume that same report; they never inspect
   local state or source logs or derive policy themselves. The report may contain fixed statuses,
-  bounded counters, timestamps, impact/recovery codes, and catalog-owned `provider:<id>` or
-  `agent:<id>` subjects. It must distinguish only `this_device`, `account`, and `system`; account or
+  bounded counters, timestamps, impact/recovery codes, and catalog-owned `provider:<id>`,
+  `provider:<id>/<source_id>`, or `agent:<id>` subjects. It must distinguish only `this_device`, `account`, and `system`; account or
   device display names and IDs never become diagnostic identity. Paths, filenames, model names/lists,
   prompts, completions, session/conversation/installation/device IDs, credentials, tokens, raw
   provider responses, and parser excerpts are forbidden. JSON and copied text are equally redacted.

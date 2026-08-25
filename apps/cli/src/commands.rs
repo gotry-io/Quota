@@ -9,6 +9,7 @@ use quota_service::config::default_state_root;
 use quota_service::protocol::{
     ComponentName, ComponentStatus, IpcEvent, IpcRequest, Operation, RequestMessageType,
 };
+use quota_service::providers::source_display_name;
 use quota_service::relay::{AccountManager, RelayClient, local_device_display_name};
 use quota_service::service::backend::NativeBackend;
 use quota_service::service::{BackendError, EventSink, LocalService, validate_provider_config};
@@ -226,12 +227,23 @@ fn render_status_text(value: &Value, output: &mut dyn CliOutput) {
             .get("outcome")
             .and_then(Value::as_str)
             .unwrap_or("error");
-        let Some(snapshots) = result.get("snapshots").and_then(Value::as_array) else {
-            output.stdout(&format!("{provider}\t{outcome}"));
-            continue;
-        };
+        let snapshots = result
+            .get("snapshots")
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
         if snapshots.is_empty() {
-            output.stdout(&format!("{provider}\t{outcome}"));
+            // Which source failed, and what to do about it: "codex unavailable" alone
+            // leaves the reader with nothing to go and fix.
+            let source = failing_source(result)
+                .map(|source_id| format!("\t{}", source_display_name(source_id)))
+                .unwrap_or_default();
+            let message = result
+                .get("message")
+                .and_then(Value::as_str)
+                .map(|message| format!("\t{message}"))
+                .unwrap_or_default();
+            output.stdout(&format!("{provider}\t{outcome}{source}{message}"));
             continue;
         }
         for snapshot in snapshots {
@@ -264,6 +276,18 @@ fn render_status_text(value: &Value, output: &mut dyn CliOutput) {
             }
         }
     }
+}
+
+/// The source whose failure decided this result: the last one that did not answer.
+fn failing_source(result: &Value) -> Option<&str> {
+    result
+        .get("sources")
+        .and_then(Value::as_array)?
+        .iter()
+        .rev()
+        .find(|source| source.get("outcome").and_then(Value::as_str) != Some("success"))?
+        .get("source_id")
+        .and_then(Value::as_str)
 }
 
 fn report_exit_code(value: &Value) -> i32 {
@@ -1195,6 +1219,42 @@ mod tests {
             2
         );
         assert!(!output.stderr.join("\n").contains("secret"));
+    }
+
+    /// A failed provider that names no source and no recovery leaves the reader guessing
+    /// which of its readings broke and where to fix it.
+    #[test]
+    fn text_status_names_the_source_that_failed_and_what_to_do() {
+        let mut output = BufferOutput::default();
+        render_status_text(
+            &json!({
+                "results": [{
+                    "provider": "claude",
+                    "outcome": "auth_required",
+                    "snapshots": [],
+                    "message": "The saved sign-in expired or was rejected. \
+                                Open Claude Code to refresh the sign-in.",
+                    "sources": [
+                        {"source_id": "anthropic_oauth_usage_api",
+                         "outcome": "auth_required", "category": "auth_required"}
+                    ]
+                }, {
+                    "provider": "grok",
+                    "outcome": "unavailable",
+                    "snapshots": [],
+                    "sources": []
+                }]
+            }),
+            &mut output,
+        );
+        assert_eq!(
+            output.stdout,
+            vec![
+                "claude\tauth_required\tOAuth\tThe saved sign-in expired or was rejected. \
+                 Open Claude Code to refresh the sign-in.",
+                "grok\tunavailable",
+            ]
+        );
     }
 
     #[test]

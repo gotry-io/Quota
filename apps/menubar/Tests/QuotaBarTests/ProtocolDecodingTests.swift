@@ -729,7 +729,7 @@ func decodesCollectionReportAndCalculatesRemainingQuota() throws {
   let data = Data(
     #"""
     {
-      "protocol_version": 3,
+      "protocol_version": 4,
       "captured_at": "2026-08-02T01:00:00Z",
       "results": [{
         "provider": "codex",
@@ -751,12 +751,24 @@ func decodesCollectionReportAndCalculatesRemainingQuota() throws {
           "status": "available",
           "observed_at": "2026-08-02T01:00:00Z"
         }],
-        "source": "chatgpt_usage_api"
+        "source": "chatgpt_usage_api",
+        "sources": [
+          {"source_id": "chatgpt_usage_api", "outcome": "success", "category": "success"}
+        ]
       }, {
         "provider": "claude",
         "outcome": "auth_required",
         "snapshots": [],
-        "message": "Run `claude auth login`."
+        "message": "Open Claude Code to refresh the sign-in.",
+        "sources": [
+          {
+            "source_id": "anthropic_oauth_usage_api",
+            "outcome": "auth_required",
+            "category": "auth_required"
+          },
+          {"source_id": "claude_web_usage_api", "outcome": "auth_required",
+           "category": "auth_required"}
+        ]
       }]
     }
     """#.utf8
@@ -768,6 +780,12 @@ func decodesCollectionReportAndCalculatesRemainingQuota() throws {
   #expect(report.results.first?.snapshots.first?.windows.first?.remainingPercent == 84)
   #expect(report.results.first?.snapshots.first?.account.fingerprintScope == .source)
   #expect(report.results.last?.outcome == .authRequired)
+  // Every rung is named, and the last one to fail is the one the reader is sent to.
+  #expect(report.results.last?.sources.map(\.sourceID) == [
+    "anthropic_oauth_usage_api", "claude_web_usage_api",
+  ])
+  #expect(report.results.last?.failingSource?.displayName == "Browser session")
+  #expect(report.results.first?.failingSource == nil)
 }
 
 @Test
@@ -775,7 +793,7 @@ func rejectsCollectionResultWithoutSnapshots() {
   let data = Data(
     #"""
     {
-      "protocol_version": 3,
+      "protocol_version": 4,
       "captured_at": "2026-08-02T01:00:00Z",
       "results": [{
         "provider": "claude",
@@ -997,22 +1015,4 @@ func decodesVersionedPricingCatalogWithoutRequiringBuiltInEntries() throws {
   let catalog = try QuotaWireCodec.makeDecoder().decode(PricingCatalog.self, from: data)
   #expect(catalog.entries.first?.rates.uncachedInputPerMillion == "1.25")
   #expect(catalog.entries.first?.sourceURL.scheme == "https")
-}
-
-@Test
-func aReportPersistedByAnEarlierBuildDecodesWithoutTheSourceCount() throws {
-  let data = Data(
-    #"""
-    {
-      "protocol_version": 3,
-      "captured_at": "2026-08-02T01:00:00Z",
-      "results": [{ "provider": "codex", "outcome": "unavailable", "snapshots": [] }]
-    }
-    """#.utf8
-  )
-
-  let report = try QuotaWireCodec.makeDecoder().decode(QuotaCollectionReport.self, from: data)
-
-  // The service always stamps it now; SQLite can still hold a report that predates it.
-  #expect(report.results.first?.sources == nil)
 }

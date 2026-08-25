@@ -3,7 +3,7 @@ use chrono_tz::Tz;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, atomic::AtomicBool};
+use std::sync::{Arc, OnceLock, atomic::AtomicBool};
 
 use super::json::{parse_date, unix_now, unix_seconds_to_iso};
 
@@ -27,6 +27,19 @@ impl ErrorCategory {
         match self {
             Self::AuthRequired => "auth_required",
             Self::AccessDenied | Self::Unavailable => "unavailable",
+            Self::Unsupported => "unsupported",
+            Self::Error => "error",
+        }
+    }
+
+    /// The category as itself, including the refusal [`Self::as_str`] folds away.  Only a
+    /// reader on this device can act on that difference, and only the local collection
+    /// report carries it.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::AuthRequired => "auth_required",
+            Self::AccessDenied => "access_denied",
+            Self::Unavailable => "unavailable",
             Self::Unsupported => "unsupported",
             Self::Error => "error",
         }
@@ -104,6 +117,30 @@ pub struct ValidatedBrowserSession {
     pub account_label: Option<String>,
 }
 
+/// What one macOS Keychain generic-password read found.
+///
+/// `Debug` is written by hand: the secret is the whole point of the entry, and a
+/// context that derives `Debug` around it must not be able to print it.
+#[derive(Clone, Eq, PartialEq)]
+pub enum KeychainSecret {
+    Found(Vec<u8>),
+    /// No entry for that service, or this build does not read the Keychain at all.
+    Absent,
+    /// The entry is there and its secret was withheld.  That is an access decision, and
+    /// signing in again only rewrites a secret this device still would not be handed.
+    Refused,
+}
+
+impl std::fmt::Debug for KeychainSecret {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Found(_) => "KeychainSecret::Found(<redacted>)",
+            Self::Absent => "KeychainSecret::Absent",
+            Self::Refused => "KeychainSecret::Refused",
+        })
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct CollectionContext {
     pub home_directory: PathBuf,
@@ -114,6 +151,11 @@ pub struct CollectionContext {
     pub client_version: String,
     pub now: Option<String>,
     pub cancel: Option<Arc<AtomicBool>>,
+    /// The one macOS Keychain read a refresh performs, shared by every collector running
+    /// under this context.  Claude Code's credential entry is the only Keychain item any
+    /// collector reads, and `/usr/bin/security` is the only process the scheduled refresh
+    /// still starts.
+    pub keychain: Arc<OnceLock<KeychainSecret>>,
 }
 
 impl Default for CollectionContext {
@@ -131,6 +173,7 @@ impl Default for CollectionContext {
             client_version: "development".to_owned(),
             now: None,
             cancel: None,
+            keychain: Arc::new(OnceLock::new()),
         }
     }
 }
@@ -205,6 +248,13 @@ impl CollectionContext {
 
     pub fn browser_session(&self, provider: ProviderId) -> Option<&str> {
         self.browser_sessions.get(&provider).map(String::as_str)
+    }
+
+    /// The macOS Keychain secret this refresh may read, fetched at most once however
+    /// many collectors ask for it.  Discovery and collection both need the same answer,
+    /// and asking twice starts a second `/usr/bin/security` for no new information.
+    pub fn keychain_secret(&self, read: impl FnOnce() -> KeychainSecret) -> &KeychainSecret {
+        self.keychain.get_or_init(read)
     }
 }
 
@@ -364,6 +414,33 @@ mod tests {
             assert_eq!(error.category, category);
             assert_eq!(error.source_id, "official_source");
         }
+    }
+
+    /// Discovery and collection both need this device's Claude grant, and asking twice
+    /// starts a second `/usr/bin/security` for an answer the first already gave.
+    #[test]
+    fn the_keychain_is_read_once_per_context() {
+        let context = CollectionContext::default();
+        let mut reads = 0;
+        for _ in 0..3 {
+            let secret = context.keychain_secret(|| {
+                reads += 1;
+                KeychainSecret::Found(b"{}".to_vec())
+            });
+            assert_eq!(*secret, KeychainSecret::Found(b"{}".to_vec()));
+        }
+        assert_eq!(reads, 1);
+        // A clone of the context is the same refresh, and shares the same answer.
+        let cloned = context.clone();
+        assert_eq!(
+            *cloned.keychain_secret(|| panic!("second read")),
+            KeychainSecret::Found(b"{}".to_vec())
+        );
+        // A secret must not be printable through the context that carries it.
+        assert_eq!(
+            format!("{:?}", KeychainSecret::Found(b"sk-ant-secret".to_vec())),
+            "KeychainSecret::Found(<redacted>)"
+        );
     }
 
     #[test]

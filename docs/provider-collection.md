@@ -34,11 +34,19 @@ Supported order today: Codex, Claude Code, Grok, OpenRouter, DeepSeek, Kimi Code
 API-key HTTPS providers share the bounded request, credential resolution, URL validation, and
 snapshot helpers in `packages/service/src/providers/common/`.
 
-Every collection result reports `sources`, the number of local credential sources discovery found.
-Zero means the provider was never set up on this device, which is a different state from collection
-failing here and is what lets a client stay quiet about the first and speak about the second.
-`auth_required` additionally carries a result message when a discovered source was rejected, because
-a stored sign-in the provider no longer accepts recovers differently from one that never existed.
+Every collection result reports `sources`, one entry per local credential source discovery found,
+each carrying the `source_id` of the rung that answered for it, its `outcome`, and the `category`
+that separates a refusal from an ordinary failure. An empty list means the provider was never set up
+on this device, which is a different state from collection failing here and is what lets a client
+stay quiet about the first and speak about the second. `auth_required` additionally carries a result
+message naming what restores collection, because a stored sign-in the provider no longer accepts
+recovers differently from one that never existed, and a browser session saved here is re-added here
+while a provider's own grant is renewed by opening that provider's program.
+
+A scheduled refresh starts exactly one process: the macOS Keychain lookup that finds Claude Code's
+grant, performed once per refresh and shared by discovery and collection. No collector runs a
+provider's CLI. Requests otherwise identify as `Quota/<version>`, except where a section below says
+the provider only answers its own client.
 
 How long a collected snapshot describes current quota is derived from the reading itself, as
 described in [`architecture.md`](architecture.md). Collectors do not report it, providers do not
@@ -59,63 +67,34 @@ report it, and nothing stamps it onto the upload.
    changing their used/remaining meaning. Classify primary and secondary by reported duration
    (5-hour, weekly, or 30-day monthly) rather than by payload slot, so a Free-tier monthly
    window is not labeled as 5-hour. A null code-review object is absent, not malformed.
-5. Fall back to `codex -s read-only -a never app-server` and call
-   `account/rateLimits/read` when the direct OAuth result is unavailable or rejects the cached
-   access token. Codex owns any access-token renewal performed while its app-server starts.
-6. If OAuth credentials are missing or WHAM/RPC return 401/403, and a stored ChatGPT browser session
+5. If OAuth credentials are missing or WHAM returns 401/403, and a stored ChatGPT browser session
    exists, read `GET https://chatgpt.com/api/auth/session` (then `/backend-api/me`) with the catalog
    session cookies. Use a session `accessToken` as Bearer for the same WHAM URL when present;
    otherwise send the Cookie header. QuotaBar acquires those cookies from `chatgpt.com`.
-7. Do not fall back after a successful but malformed response; report the parser failure instead.
+6. Do not fall back after a successful but malformed response; report the parser failure instead.
 
-The local service never submits the Codex refresh token or writes `auth.json`. `CODEX_CLI_PATH` can identify
-the executable when it is outside `PATH`; the service also checks common user-local and Homebrew paths
-plus the signed CLI embedded in Codex and ChatGPT desktop apps for GUI launches. Hidden WebView
-dashboard scraping and reset-credit redemption are not used.
+The local service never submits the Codex refresh token or writes `auth.json`, and never starts the
+Codex CLI: a grant Codex no longer accepts is reported as `auth_required`, and the reader renews it
+by opening Codex. The PAT requests present the Codex CLI's own `User-Agent` and
+`originator: codex_cli_rs`, because the endpoint only honors personal access tokens from requests
+that identify as that CLI; sending another program's client identity is a provider-terms risk this
+build takes knowingly. Hidden WebView dashboard scraping and reset-credit redemption are not used.
 
 ## Claude Code
 
 1. Discover `$CLAUDE_CONFIG_DIR/.credentials.json`, `~/.claude/.credentials.json`, or the macOS
    Keychain generic password service `Claude Code-credentials` when collection home is the
    process `HOME`. Isolated or remapped homes do not read the live Keychain.
-2. Parse only `claudeAiOauth` and require `accessToken` with a usable `user:profile` scope.
-3. On macOS, when the token is expired or within one minute of expiry, run the official Claude CLI's
-   interactive `/status` path in a bounded probe-only PTY. The probe disables tools, auto-update, and
-   deep-link registration; it does not run a model prompt or an authentication command. Reload the
-   file or Keychain entry after Claude rotates its own credentials. The probe runs with
-   `--allowed-tools "" --strict-mcp-config` and is driven by the CLI's output, matched without
-   regard to spacing: it answers Claude's interactive prompts from a fixed table (the first-run
-   folder-trust dialog for the stable, empty, owner-only probe directory under the user temp root;
-   "ready to code" / "press Enter" notices; the command's own palette row), submits the slash command
-   with a carriage return once output settles, treats `/usage` as rendered when the session row
-   carries a percentage (nudging a panel that is still loading, leaving one that reports a load
-   failure), closes the panel with Escape, then submits `/exit`. A TUI that does not leave within
-   the grace period is stopped, and the whole probe is capped at 45 seconds.
-4. Call `GET https://api.anthropic.com/api/oauth/usage` with
+2. Parse only `claudeAiOauth` and require `accessToken` with a usable `user:profile` scope. A grant
+   that is expired or within one minute of expiry is `auth_required`: Claude Code owns renewal, and
+   this build no longer drives it.
+3. Call `GET https://api.anthropic.com/api/oauth/usage` with
    `anthropic-beta: oauth-2025-04-20`.
-5. On HTTP 401, perform the same Claude-owned refresh once, reload credentials, and retry exactly
-   once. Do not refresh for missing scopes, rate limits, malformed responses, or other failures.
-6. Map the five-hour, seven-day, model-scoped, and extra-usage windows that are present. Every
+4. Map the five-hour, seven-day, model-scoped, and extra-usage windows that are present. Every
    weekly limit meters one seven-day cycle, so a weekly window that reports no reset of its own —
-   model-scoped or not — takes the seven-day window's reset. This applies to both the OAuth body and
-   the CLI panel.
-7. Enrich identity best-effort through `/api/oauth/profile`; usage remains valid if enrichment fails.
-8. If local OAuth credentials exist but the usage API fails (except a successful but malformed
-   body), and the official Claude CLI is available on macOS, run the same bounded PTY probe with
-   `/usage` and map the Settings/Usage panel. Each window is a title followed by a bar and
-   `<n>% used`; take that value verbatim (a `left` / `remaining` / `available` phrasing is converted
-   to used percent), matching without regard to spacing because the TUI places words with cursor
-   moves. `Current session` is the five-hour window, `Current week (all models)` is
-   `seven_day`, `Current week (Sonnet only)` / `(Opus)` keep their OAuth ids, and any other
-   `Current week (<Model>)` row is the same `claude-weekly-scoped-<model>` window the OAuth usage
-   body reports. A window's own `Resets 4pm (Asia/Shanghai)` / `Resets Aug 25 at 9am` line is read as
-   a fixed grammar rather than as words, because compaction removes the spacing the TUI never
-   guaranteed: the panel prints local wall-clock time, an unnamed zone is the collection timezone, a
-   named zone that does not resolve is refused rather than read in this machine's, and the instant
-   must fall inside the window it belongs to. Anything that does not match exactly leaves the reset
-   unset rather than guessing. Missing credentials skip the probe so an unsigned-in machine
-   never spawns the CLI.
-9. If OAuth and CLI usage are unavailable or return 401/403, and a stored Claude browser session
+   model-scoped or not — takes the seven-day window's reset.
+5. Enrich identity best-effort through `/api/oauth/profile`; usage remains valid if enrichment fails.
+6. If OAuth usage is unavailable or returns 401/403, and a stored Claude browser session
    exists, send the stored allowlisted Cookie header (`sessionKey` plus optional `lastActiveOrg`)
    to `https://claude.ai/api/organizations` then `/organizations/{id}/usage`. Prefer the listed org
    matching `lastActiveOrg`, then the org on `/api/account`, unless that org is `api_disabled`;
@@ -126,11 +105,13 @@ dashboard scraping and reset-credit redemption are not used.
 
 An absent, stale, or unreadable session is `auth_required`. A Claude Code installation configured
 only for a third-party API gateway does not provide Anthropic subscription OAuth quota unless a
-valid `claude.ai` browser session is stored. Interactive PTY login is not a fallback. The local
-service never submits the Claude refresh token or writes its credential file or Keychain entry. `CLAUDE_CLI_PATH` can identify the
-executable when it is outside `PATH`; the native installer, legacy installer, Homebrew, and cmux
-locations are also checked for GUI launches. Platforms without the bounded local PTY adapter retain
-direct usage collection and report `auth_required` if Claude rejects the cached token.
+valid `claude.ai` browser session is stored. Collection never starts the Claude CLI, in any form:
+an expired grant is reported as the sign-in it is, and the reader renews it by opening Claude Code.
+The local service never submits the Claude refresh token or writes its credential file or Keychain
+entry. The Keychain read is the one process a refresh starts, and it is performed once and shared.
+The usage request presents `User-Agent: claude-code/2.1.0`, which is the official CLI's identity
+rather than this build's; sending another program's client identity is a provider-terms risk this
+build takes knowingly.
 
 ## Local Usage logs
 
@@ -278,14 +259,10 @@ upload partitions are summarized by the unified `quotacli doctor`/QuotaBar diagn
 1. Discover `$GROK_HOME/auth.json` or `~/.grok/auth.json`.
 2. Prefer the non-empty `https://auth.x.ai::<client-id>` entry with the latest expiry, then legacy
    sign-in entries.
-3. If the cached token is expired or within one minute of expiry, snapshot readable `auth.json`, then
-   run the official Grok CLI headless `grok agent stdio` flow (`initialize` + `authenticate` with
-   `cached_token` only). Reload only on real credential rotation. If the CLI deletes `auth.json` after
-   a failed silent refresh, restore the snapshot and treat refresh as unsuccessful.
+3. A cached token that is expired or within one minute of expiry is `auth_required`: the Grok CLI
+   owns renewal, and this build no longer drives it.
 4. Call `GET https://cli-chat-proxy.grok.com/v1/billing?format=credits` with the local Grok OAuth
-   token. On HTTP 401/403, run the same CLI refresh only when credentials have not already rotated,
-   then retry once. A failed/no-op refresh must not suppress that retry. A valid cached token works
-   without the `grok` executable.
+   token. HTTP 401/403 is `auth_required`. A valid cached token works without the `grok` executable.
 5. Prefer `config.creditUsagePercent` and `config.currentPeriod`. For non-unified accounts, retain the
    deprecated `config.used.val / config.monthlyLimit.val * 100` fields documented by Grok Build. A
    new period that omits those usage fields is 0% used, not malformed.
@@ -300,9 +277,7 @@ upload partitions are summarized by the unified `quotacli doctor`/QuotaBar diagn
    When that is absent, infer a weak hint from local credentials only: OIDC scopes under
    `https://auth.x.ai::` (and `auth_mode: oidc`) map to `supergrok`; other `auth_mode` values may be
    kept as a plan slug when they look like a plan name. Do not invent a plan when no signal is present.
-8. If the provider-owned refresh is unavailable or the retried request is unauthorized, report
-   `auth_required` and require `grok login`.
-9. If OAuth credentials are missing or billing returns 401/403, and a stored Grok browser session
+8. If OAuth credentials are missing or billing returns 401/403, and a stored Grok browser session
    exists, call the same gRPC-web billing RPC with the catalog `sso` / `sso-rw` cookies. Map used
    percent and reset from the protobuf payload. The RPC exposes only the reset instant: 20–45 days
    out is **Monthly**, anything nearer is the **Weekly** credit pool, and no reset stays
@@ -310,11 +285,13 @@ upload partitions are summarized by the unified `quotacli doctor`/QuotaBar diagn
    cookie-only requests that lack the browser Web Key Exchange proof; that is `auth_required`, not a
    parser failure.
 
-The local service never submits the refresh token itself and never starts Grok's interactive browser login.
-The provider-owned CLI is solely responsible for refresh-token rotation and credential-file writes;
-The service only restores a pre-refresh snapshot when that CLI leaves credentials unreadable.
-`GROK_CLI_PATH` can identify the executable when it is outside `PATH`; it also checks Grok's
-installer directory, common user-local paths, and Homebrew paths for GUI launches.
+The local service never submits the refresh token itself, never starts Grok's interactive browser
+login, and never starts the Grok CLI at all. That CLI is solely responsible for refresh-token
+rotation and credential-file writes, and the reader runs it by opening Grok. Proxy requests carry
+`X-XAI-Token-Auth: xai-grok-cli` and the gRPC-web billing call carries `x-user-agent: connect-es/2.1.1`
+with grok.com `Origin` and `Referer`, because those endpoints answer only requests that identify as
+Grok's own clients; sending another program's client identity is a provider-terms risk this build
+takes knowingly.
 
 Local context-token or session totals are not subscription quota.
 
@@ -403,6 +380,11 @@ Aligned with CodexBar's Kimi Code Automatic order: API key → CLI credential �
    the same weekly / 5-hour rules. QuotaBar acquires `kimi-auth` from `www.kimi.com` / `kimi.com`.
 6. Absent key/CLI credential and no browser session → `auth_required`. HTTP 401/403 →
    `auth_required`.
+
+The CLI-credential request carries `X-Msh-Platform: kimi_code_cli`, because Kimi honors that token
+only from requests identifying as its CLI; sending another program's client identity is a
+provider-terms risk this build takes knowingly. The credential file is read only: this build never
+starts the Kimi CLI.
 
 ## LiteLLM
 

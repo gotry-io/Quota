@@ -28,13 +28,16 @@ struct ProviderStatusCopy: Equatable {
       return nil
     case .authRequired:
       // A rejected sign-in explains itself; an absent one is setup that never happened.
-      // Recovery is the whole message, so this one carries no title.
+      // Recovery is the whole message, so the title only names the source that was
+      // rejected: an expired OAuth grant and a stale saved browser session are fixed in
+      // different places, and a provider that was never set up here names nothing.
       let detail = conciseMessage(result.message) ?? "Account setup required."
+      let source = result.failingSource?.displayName
       return ProviderStatusCopy(
         kind: .needsSignIn,
-        title: nil,
+        title: source,
         detail: detail,
-        accessibilityLabel: detail
+        accessibilityLabel: source.map { accessibility(title: $0, detail: detail) } ?? detail
       )
     case .unavailable:
       kind = .unavailable
@@ -48,13 +51,15 @@ struct ProviderStatusCopy: Equatable {
       state = .failed
     }
     // One spelling for one word: the same failure can appear as this row's status and as an
-    // account device's observation state in the same block.
+    // account device's observation state in the same block.  The source that failed goes in
+    // front of it, because "unavailable" says nothing about which reading to go fix.
     let detail = conciseMessage(result.message) ?? detailFallback
+    let title = result.failingSource.map { "\($0.displayName) · \(state.label)" } ?? state.label
     return ProviderStatusCopy(
       kind: kind,
-      title: state.label,
+      title: title,
       detail: detail,
-      accessibilityLabel: accessibility(title: state.label, detail: detail)
+      accessibilityLabel: accessibility(title: title, detail: detail)
     )
   }
 

@@ -373,7 +373,7 @@ pub const MANAGED_DATA_PROTOCOL: i64 = 5;
 pub const LOCAL_USAGE_PROTOCOL: i64 = 3;
 
 /// The private local quota collection report, versioned independently of both.
-pub const LOCAL_COLLECTION_PROTOCOL: i64 = 3;
+pub const LOCAL_COLLECTION_PROTOCOL: i64 = 4;
 
 #[derive(Debug, Clone, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(deny_unknown_fields)]

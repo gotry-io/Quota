@@ -29,8 +29,11 @@ func consumesServiceMergedOverviewWithoutReprocessingObservations() async throws
         snapshots: [snapshot],
         source: "test",
         message: nil,
-        sources: 1,
-              accessDenied: nil
+        sources: [
+          QuotaCollectionSource(
+            sourceID: "chatgpt_usage_api", outcome: .success, category: .success)
+        ],
+        accessDenied: nil
       )
     ]
   )
@@ -265,7 +268,7 @@ func anotherDeviceReadingDoesNotHideThisMacsOwnCollectionFailure() async throws 
     observedAt: now,
     isStale: false
   )
-  func state(sources: Int) -> LocalServiceState {
+  func state(sources: [QuotaCollectionSource]) -> LocalServiceState {
     LocalServiceState(
       ipcVersion: 1,
       revision: 3,
@@ -313,7 +316,7 @@ func anotherDeviceReadingDoesNotHideThisMacsOwnCollectionFailure() async throws 
     )
   }
 
-  func codexRow(sources: Int) async -> ProviderQuotaPresentation? {
+  func codexRow(sources: [QuotaCollectionSource]) async -> ProviderQuotaPresentation? {
     let model = MenuBarViewModel(client: StubLocalService(state: state(sources: sources)))
     await model.refreshIfNeeded()
     guard case .content(let providers, _) = model.overviewState(enabledProviders: [.codex]) else {
@@ -324,13 +327,18 @@ func anotherDeviceReadingDoesNotHideThisMacsOwnCollectionFailure() async throws 
   }
 
   // This Mac holds a Codex sign-in and could not read it. The MacBook Air's reading fills
-  // the row; it does not mean anything about this Mac.
-  let tried = await codexRow(sources: 1)
+  // the row; it does not mean anything about this Mac.  The status names the rung that
+  // failed, so the reader knows which of Codex's readings to go fix.
+  let tried = await codexRow(sources: [
+    QuotaCollectionSource(
+      sourceID: "chatgpt_usage_api", outcome: .unavailable, category: .unavailable)
+  ])
   #expect(tried?.accounts.count == 1)
   #expect(tried?.status?.kind == .unavailable)
+  #expect(tried?.status?.title == "OAuth · Unavailable")
 
   // A Mac that never had Codex has nothing to recover, so the account keeps the row quiet.
-  let neverConfigured = await codexRow(sources: 0)
+  let neverConfigured = await codexRow(sources: [])
   #expect(neverConfigured?.accounts.count == 1)
   #expect(neverConfigured?.status == nil)
 }

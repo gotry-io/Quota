@@ -26,7 +26,7 @@ use crate::protocol::{
     QuotaOverviewIdentity, QuotaOverviewItem, QuotaOverviewSource, RecoveryAction, UsagePeriod,
     UsageSource,
 };
-use crate::providers::common::{ErrorCategory, ProviderSession};
+use crate::providers::common::{ErrorCategory, ProviderError, ProviderSession};
 use crate::providers::{self, CollectionContext};
 use crate::relay::{AccountManager, RelayClient};
 use crate::service::{BackendError, LocalBackend, LoginOutcome, RefreshOutcome};
@@ -609,7 +609,12 @@ impl NativeBackend {
                     .map_err(|_| BackendError::unavailable())?;
                 // From the report in hand, which is the collection this check explains. The
                 // journal answers when it ran, not what it found.
-                let discovered = result.get("sources").and_then(Value::as_u64).unwrap_or(0) > 0;
+                let report_sources = result
+                    .get("sources")
+                    .and_then(Value::as_array)
+                    .map(Vec::as_slice)
+                    .unwrap_or_default();
+                let discovered = !report_sources.is_empty();
                 if !explicit && !discovered {
                     continue;
                 }
@@ -664,10 +669,24 @@ impl NativeBackend {
                     };
                     // A source this device holds and cannot use is actionable however it
                     // was set up. Only absent setup is quiet, and it never reaches here.
+                    // The finding names the rung that failed, because "Claude could not be
+                    // read" and "the browser session saved for Claude went stale" are
+                    // different problems with different fixes.
+                    let failing_source = report_sources
+                        .iter()
+                        .rev()
+                        .find(|source| {
+                            source.get("outcome").and_then(Value::as_str) != Some("success")
+                        })
+                        .and_then(|source| source.get("source_id"))
+                        .and_then(Value::as_str);
                     findings.push(DiagnosticFinding {
                         component: "quota_collection".into(),
                         source: DiagnosticSource::ThisDevice,
-                        subject: Some(subject),
+                        subject: Some(match failing_source {
+                            Some(source_id) => format!("{subject}/{source_id}"),
+                            None => subject.clone(),
+                        }),
                         code: code.into(),
                         severity: DiagnosticSeverity::Warning,
                         impact: DiagnosticImpact::Source,
@@ -1411,7 +1430,8 @@ impl NativeBackend {
                                 json!({
                                     "provider": provider,
                                     "outcome": "error",
-                                    "snapshots": []
+                                    "snapshots": [],
+                                    "sources": []
                                 }),
                                 true,
                             ),
@@ -1424,7 +1444,8 @@ impl NativeBackend {
                             json!({
                                 "provider": provider,
                                 "outcome": "auth_required",
-                                "snapshots": []
+                                "snapshots": [],
+                                "sources": []
                             }),
                             false,
                         ),
@@ -1499,9 +1520,11 @@ impl NativeBackend {
                     metrics([("sources", source_count), ("snapshots", snapshot_count)]),
                 )?;
             }
-            // Stamped here, with the count this loop already journals, so no collector
-            // return path can forget it — a panicked one included.
-            result["sources"] = json!(source_count);
+            // A collector that panicked reported nothing at all, so the sources it was
+            // handed are stated here rather than lost with it.
+            if !result["sources"].is_array() {
+                result["sources"] = json!([]);
+            }
             results.push(result);
         }
         if cancel.load(Ordering::Acquire) {
@@ -1534,6 +1557,7 @@ impl NativeBackend {
             client_version: self.client_version.clone(),
             now: Some(now_rfc3339()),
             cancel: Some(cancel),
+            keychain: Default::default(),
         })
     }
 
@@ -2454,30 +2478,54 @@ fn collect_discovered_provider(
         return json!({
             "provider": provider,
             "outcome": "auth_required",
-            "snapshots": []
+            "snapshots": [],
+            "sources": []
         });
     }
     let mut snapshots = Vec::new();
-    let mut failure = None;
+    let mut sources = Vec::new();
+    let mut failure: Option<ProviderError> = None;
     for session in sessions {
         match providers::collect(provider, &session, context) {
             // Expiry is derived from the reading itself by whoever reads it, so this
             // uploads the observation and nothing about how long it stays current.
-            Ok(snapshot) => snapshots.push(serde_json::to_value(&snapshot).unwrap_or(Value::Null)),
-            Err(error) => failure = Some(error.category),
+            Ok(snapshot) => {
+                sources.push(json!({
+                    "source_id": providers::session_source_id(provider, &session),
+                    "outcome": "success",
+                    "category": "success"
+                }));
+                snapshots.push(serde_json::to_value(&snapshot).unwrap_or(Value::Null));
+            }
+            // The rung that reached the verdict names itself, so a report distinguishes an
+            // OAuth endpoint that is unreachable from a stored browser session that went
+            // stale.  Losing that left every failure looking like the provider's.
+            Err(error) => {
+                sources.push(json!({
+                    "source_id": error.source_id,
+                    "outcome": error.category.as_str(),
+                    "category": error.category.name()
+                }));
+                failure = Some(error);
+            }
         }
     }
     if snapshots.is_empty() {
-        let category = failure.unwrap_or(ErrorCategory::Unavailable);
-        let mut result =
-            json!({"provider": provider, "outcome": category.as_str(), "snapshots": []});
+        let failure =
+            failure.unwrap_or_else(|| ProviderError::new(ErrorCategory::Unavailable, "provider"));
+        let mut result = json!({
+            "provider": provider,
+            "outcome": failure.category.as_str(),
+            "snapshots": [],
+            "sources": sources
+        });
         // A discovered source that answers `auth_required` is a sign-in this machine still
         // holds and the provider no longer accepts. That is a different recovery from a
         // provider that was never set up here, so it is reported as its own message.
-        if category == ErrorCategory::AuthRequired {
-            result["message"] = json!("The saved sign-in expired or was rejected. Sign in again.");
+        if failure.category == ErrorCategory::AuthRequired {
+            result["message"] = json!(auth_required_message(provider, failure.source_id));
         }
-        if category == ErrorCategory::AccessDenied {
+        if failure.category == ErrorCategory::AccessDenied {
             result["access_denied"] = json!(true);
             result["message"] =
                 json!("A saved sign-in is stored here but this Mac was refused it. Check access.");
@@ -2487,8 +2535,35 @@ fn collect_discovered_provider(
         json!({
             "provider": provider,
             "outcome": "success",
-            "snapshots": snapshots
+            "snapshots": snapshots,
+            "sources": sources
         })
+    }
+}
+
+/// What restores collection after a sign-in stops being accepted.
+///
+/// The source that failed decides it.  A stored browser session is re-added in this app,
+/// while a provider's own grant is renewed by the program that owns it — telling the reader
+/// to "sign in again" left them nowhere to do it.
+fn auth_required_message(provider: ProviderId, source_id: &str) -> &'static str {
+    if providers::is_browser_session_source(source_id) {
+        return "The saved browser session expired or was rejected. Add it again in Settings.";
+    }
+    match provider {
+        ProviderId::Claude => {
+            "The saved sign-in expired or was rejected. Open Claude Code to refresh the sign-in."
+        }
+        ProviderId::Codex => {
+            "The saved sign-in expired or was rejected. Open Codex to refresh the sign-in."
+        }
+        ProviderId::Grok => {
+            "The saved sign-in expired or was rejected. Open Grok to refresh the sign-in."
+        }
+        ProviderId::Cursor => {
+            "The saved sign-in expired or was rejected. Open Cursor to refresh the sign-in."
+        }
+        _ => "The saved sign-in expired or was rejected. Sign in again.",
     }
 }
 
@@ -4018,7 +4093,10 @@ mod tests {
             assert!(result.contains_key("snapshots"));
             // An isolated home has no credentials, so every provider reports that it was
             // never set up here rather than that collection failed here.
-            assert_eq!(result.get("sources").and_then(Value::as_u64), Some(0));
+            assert_eq!(
+                result.get("sources").and_then(Value::as_array),
+                Some(&Vec::new())
+            );
         }
         assert!(state.session_json().expect("session state").is_none());
         drop(backend);
@@ -4334,6 +4412,55 @@ mod tests {
         assert!(failure_status_snapshots(&report, None, "device_self", now).is_empty());
     }
 
+    /// A source that cannot be reached ends the refresh with its own name.  This used to
+    /// fall through to a provider CLI, so being offline for a moment started programs.
+    #[test]
+    fn an_unreachable_source_reports_unavailable_and_names_itself() {
+        // A port nothing is listening on: bound to learn a free one, then released.
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .expect("port")
+            .local_addr()
+            .expect("address")
+            .port();
+        let context = CollectionContext {
+            home_directory: PathBuf::from("/tmp/quota-unreachable-source-home"),
+            environment: HashMap::from([
+                ("LITELLM_API_KEY".to_owned(), "sk-litellm-test".to_owned()),
+                (
+                    "LITELLM_BASE_URL".to_owned(),
+                    format!("http://127.0.0.1:{port}"),
+                ),
+            ]),
+            config_path: Some(PathBuf::from(
+                "/tmp/quota-unreachable-source-home/none.json",
+            )),
+            browser_sessions: HashMap::new(),
+            client_name: "QuotaTest".to_owned(),
+            client_version: "test".to_owned(),
+            now: Some("2026-08-15T08:00:00Z".to_owned()),
+            cancel: None,
+            keychain: Default::default(),
+        };
+        let sessions = providers::discover(ProviderId::LiteLlm, &context);
+        assert_eq!(sessions.len(), 1);
+        let result = collect_discovered_provider(ProviderId::LiteLlm, sessions, &context);
+        assert_eq!(
+            result.get("outcome").and_then(Value::as_str),
+            Some("unavailable")
+        );
+        assert_eq!(
+            result.get("sources"),
+            Some(&json!([{
+                "source_id": crate::providers::litellm::SOURCE,
+                "outcome": "unavailable",
+                "category": "unavailable"
+            }]))
+        );
+        // Nothing to sign in to and nothing refused: a network failure says neither.
+        assert!(result.get("message").is_none());
+        assert!(result.get("access_denied").is_none());
+    }
+
     #[test]
     fn rejected_local_sign_in_is_reported_separately_from_missing_setup() {
         let context = CollectionContext {
@@ -4345,6 +4472,7 @@ mod tests {
             client_version: "test".to_owned(),
             now: Some("2026-08-15T08:00:00Z".to_owned()),
             cancel: None,
+            keychain: Default::default(),
         };
         let rejected = collect_discovered_provider(
             ProviderId::Claude,
@@ -4358,9 +4486,22 @@ mod tests {
             rejected.get("outcome").and_then(Value::as_str),
             Some("auth_required")
         );
+        // Recovery names the program that can renew the grant.  Told only to "sign in
+        // again", a reader has nowhere to do it.
         assert_eq!(
             rejected.get("message").and_then(Value::as_str),
-            Some("The saved sign-in expired or was rejected. Sign in again.")
+            Some(
+                "The saved sign-in expired or was rejected. Open Claude Code to refresh the sign-in."
+            )
+        );
+        // The rung that reached the verdict travels with it.
+        assert_eq!(
+            rejected.get("sources"),
+            Some(&json!([{
+                "source_id": crate::providers::claude::SOURCE,
+                "outcome": "auth_required",
+                "category": "auth_required"
+            }]))
         );
         let never_configured =
             collect_discovered_provider(ProviderId::Claude, Vec::new(), &context);
@@ -4578,7 +4719,12 @@ mod tests {
                 crate::protocol::ComponentName::Quota,
                 crate::protocol::ComponentStatus::Ready,
                 Some(json!({"results":[{
-                    "provider":"codex","outcome":"auth_required","snapshots":[],"sources":1
+                    "provider":"codex","outcome":"auth_required","snapshots":[],
+                    "sources":[{
+                        "source_id":"chatgpt_usage_api",
+                        "outcome":"auth_required",
+                        "category":"auth_required"
+                    }]
                 }]})),
                 Some("2026-08-15T08:00:00Z".into()),
                 None,
@@ -4620,8 +4766,10 @@ mod tests {
         assert_eq!(report.summary.data, DiagnosticDataState::Current);
         assert_eq!(report.summary.operation, DiagnosticOperation::Healthy);
         assert_eq!(report.summary.attention, DiagnosticAttention::Required);
+        // The finding names the rung that failed, not just the provider: a stale browser
+        // session and an unreachable OAuth endpoint are different problems.
         assert!(report.findings.iter().any(|finding| {
-            finding.subject.as_deref() == Some("provider:codex")
+            finding.subject.as_deref() == Some("provider:codex/chatgpt_usage_api")
                 && finding.severity == DiagnosticSeverity::Warning
                 && finding.impact == DiagnosticImpact::Source
                 && finding.recovery == DiagnosticRecovery::ConfigureProvider

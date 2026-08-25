@@ -760,7 +760,7 @@ final class MenuBarViewModel {
       // A local failure is about this Mac. Another device's reading fills the row but does
       // not mean collection here is fine, so the failure still shows. A provider that was
       // never set up here has nothing to recover and stays quiet once the account covers it.
-      let collectedHere = (result?.sources ?? 0) > 0
+      let collectedHere = !(result?.sources.isEmpty ?? true)
       let status =
         accounts.isEmpty || collectedHere ? result.flatMap(ProviderStatusCopy.from) : nil
       guard !accounts.isEmpty || status != nil else { return nil }
