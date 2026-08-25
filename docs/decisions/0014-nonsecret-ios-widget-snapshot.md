@@ -1,22 +1,16 @@
 # ADR 0014: Non-secret iOS widget snapshot via App Group
 
-> Updated 2026-08-26: the app process also refreshes when it is not on screen. A
-> `BGAppRefreshTask` (`io.gotry.quota.refresh`, earliest begin thirty minutes out) runs the same
-> refresh a pull-to-refresh runs and republishes the snapshot. The extension still never fetches.
-
 - Status: Accepted
 - Date: 2026-08-14
-- Related: [ADR 0013](./0013-readonly-ios-account-client.md), [`docs/architecture.md`](../architecture.md), [`docs/security.md`](../security.md)
+- Related: [ADR 0013](./0013-readonly-ios-account-client.md)
 
 ## Context
 
-Quota iOS is a read-only Account viewer ([ADR 0013](./0013-readonly-ios-account-client.md)). Home Screen
-and Lock Screen widgets need remaining quota and compact Today Usage without turning the WidgetKit
-extension into a second OAuth or Relay client.
-
-Widget extensions run in a constrained process. Giving them Keychain access, Bearer tokens,
-`URLSession`, or account wire models would expand the credential and network surface for a surface
-that only needs to render the last published remaining-quota projection.
+Quota iOS is a read-only Account viewer ([ADR 0013](./0013-readonly-ios-account-client.md)), and its
+Home Screen and Lock Screen widgets need remaining quota and compact Today Usage. A widget extension
+runs in a constrained process; giving it Keychain access, Bearer tokens, `URLSession`, or account
+wire models would expand the credential and network surface for something that only re-draws the
+last published projection.
 
 ## Decision
 
@@ -34,17 +28,16 @@ Relay.
 - The extension target `QuotaWidgets` (`io.gotry.quota.widgets`) embeds in Quota, uses the same App
   Group, and depends only on `QuotaWidgetData` and `QuotaPresentation`. It must not import or link
   `QuotaWire`, `QuotaRelay`, `QuotaAccount`, Security, or use `URLSession`/Keychain.
-- Timeline policy inside the extension is local only: placeholder plus a modest fifteen-minute
-  refresh so reset and updated ages can advance. The extension never fetches. What it draws is
-  republished by the app process, on a foreground refresh and on a background app refresh the app
-  asks for no sooner than every thirty minutes.
+- Timeline policy inside the extension is local only: a placeholder plus a modest fifteen-minute
+  refresh so reset and updated ages advance. The extension never fetches. What it draws is
+  republished by the app process, on a foreground refresh and on a `BGAppRefreshTask`
+  (`io.gotry.quota.refresh`) the app asks for no sooner than every thirty minutes.
 - Each item carries the freshness facts the collecting device reported — whether the reading was
-  available and when it stops describing current quota — not a stale verdict. The extension re-draws
-  on its own timeline, so it applies the shared rule at the instant it renders, exactly as the app
-  does. A published verdict would freeze at publish time and keep claiming a sleeping device's
-  counters are current. The state it carries is the one its source reported, so the widget can name
-  why a reading is not current rather than only that it is not. That shape is snapshot version 2; a
-  file written by version 1 is rejected by the version gate and the app republishes.
+  available and when it stops describing current quota — rather than a verdict. The extension
+  re-draws on its own timeline and applies the shared rule at the instant it renders, exactly as the
+  app does; a published verdict would freeze at publish time and keep claiming a sleeping device's
+  counters are current. That shape is snapshot version 2, and a version 1 file is rejected by the
+  version gate so the app republishes.
 - Missing, corrupt, or oversize snapshot files degrade to a safe no-data presentation. Logout,
   expired session, and absence of a trusted summary clear the published file and reload timelines.
 - `widgetURL` opens `io.gotry.quota:/overview` so taps return to the app Overview.
