@@ -18,6 +18,14 @@ test("the newest reading counts even when the device last called earlier", () =>
   assert.equal(result.tone, "available");
 });
 
+test("the verdict carries the instant it came from, so the row states one age", () => {
+  assert.equal(
+    deviceActivity(device("2026-08-14T08:00:00Z", "2026-08-15T08:00:00Z"), now).since,
+    "2026-08-15T08:00:00Z",
+  );
+  assert.equal(deviceActivity(device(null), now).since, null);
+});
+
 test("a quiet day is idle and a longer silence stops reporting", () => {
   assert.equal(deviceActivity(device("2026-08-15T02:00:00Z"), now).label, "Idle");
   assert.equal(deviceActivity(device("2026-08-10T02:00:00Z"), now).label, "Not reporting");
