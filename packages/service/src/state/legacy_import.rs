@@ -157,12 +157,10 @@ mod tests {
             "CREATE TABLE installation(id INTEGER PRIMARY KEY, installation_id TEXT NOT NULL, payload_json TEXT);
              CREATE TABLE session(id INTEGER PRIMARY KEY, payload_json TEXT NOT NULL, epoch INTEGER NOT NULL);
              CREATE TABLE usage_upload_context(id INTEGER PRIMARY KEY, account_id TEXT NOT NULL, device_id TEXT NOT NULL, generation INTEGER NOT NULL, aggregation_timezone TEXT NOT NULL, lower_bound TEXT NOT NULL);
-             CREATE TABLE usage_outbox(submission_id TEXT PRIMARY KEY, account_id TEXT NOT NULL, device_id TEXT NOT NULL, generation INTEGER NOT NULL, sequence INTEGER NOT NULL, payload_json TEXT NOT NULL);
              CREATE TABLE provider_browser_sessions(provider TEXT PRIMARY KEY, cookie_header TEXT NOT NULL, account_fingerprint TEXT NOT NULL, account_label TEXT, updated_at TEXT NOT NULL);
              CREATE TABLE metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);
              INSERT INTO installation VALUES (1, 'released-installation', '{\"schema_version\":1}');
              INSERT INTO usage_upload_context VALUES (1, 'account', 'device', 3, 'UTC', '2026-08-01T00:00:00Z');
-             INSERT INTO usage_outbox VALUES ('submission', 'account', 'device', 3, 0, '{}');
              INSERT INTO provider_browser_sessions VALUES ('cursor', 'wos-session=secret', 'abc', 'ad***@example.com', '2026-08-01T00:00:00Z');
              INSERT INTO metadata VALUES ('usage_upload_enabled', '0');",
         )

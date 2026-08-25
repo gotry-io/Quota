@@ -3520,8 +3520,6 @@ fn diagnostic_attempt_code_key(value: DiagnosticAttemptCode) -> &'static str {
         DiagnosticAttemptCode::PartialSource => "partial_source",
         DiagnosticAttemptCode::MalformedData => "malformed_data",
         DiagnosticAttemptCode::TruncatedActiveSource => "truncated_active_source",
-        DiagnosticAttemptCode::InvalidUsageBatch => "invalid_usage_batch",
-        DiagnosticAttemptCode::UnrepresentableHour => "unrepresentable_hour",
         DiagnosticAttemptCode::DeviceDeleted => "device_deleted",
         DiagnosticAttemptCode::UploadDisabled => "upload_disabled",
         DiagnosticAttemptCode::SignedOut => "signed_out",
@@ -3544,8 +3542,6 @@ fn parse_diagnostic_attempt_code(value: &str) -> Result<DiagnosticAttemptCode, r
         "partial_source" => Ok(DiagnosticAttemptCode::PartialSource),
         "malformed_data" => Ok(DiagnosticAttemptCode::MalformedData),
         "truncated_active_source" => Ok(DiagnosticAttemptCode::TruncatedActiveSource),
-        "invalid_usage_batch" => Ok(DiagnosticAttemptCode::InvalidUsageBatch),
-        "unrepresentable_hour" => Ok(DiagnosticAttemptCode::UnrepresentableHour),
         "device_deleted" => Ok(DiagnosticAttemptCode::DeviceDeleted),
         "upload_disabled" => Ok(DiagnosticAttemptCode::UploadDisabled),
         "signed_out" => Ok(DiagnosticAttemptCode::SignedOut),
@@ -4794,16 +4790,12 @@ mod tests {
              CREATE TABLE usage_upload_context(id INTEGER PRIMARY KEY, account_id TEXT NOT NULL,
                 device_id TEXT NOT NULL, generation INTEGER NOT NULL,
                 aggregation_timezone TEXT NOT NULL, lower_bound TEXT NOT NULL);
-             CREATE TABLE usage_outbox(submission_id TEXT PRIMARY KEY, account_id TEXT NOT NULL,
-                device_id TEXT NOT NULL, generation INTEGER NOT NULL, sequence INTEGER NOT NULL,
-                payload_json TEXT NOT NULL);
              CREATE TABLE provider_browser_sessions(provider TEXT PRIMARY KEY,
                 cookie_header TEXT NOT NULL, account_fingerprint TEXT NOT NULL,
                 account_label TEXT, updated_at TEXT NOT NULL);
              CREATE TABLE metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);
              INSERT INTO installation VALUES (1, 'released-installation', NULL);
              INSERT INTO session VALUES (1, '{\"status\":\"active\"}', 4);
-             INSERT INTO usage_outbox VALUES ('staged', 'account', 'device', 1, 0, '{}');
              INSERT INTO metadata VALUES ('usage_upload_enabled', '0');",
         )
         .expect("released rows");

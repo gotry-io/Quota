@@ -34,6 +34,10 @@ use crate::usage::{
     self, CoverageReasonCode, CoverageStatus, DatedUsageRow, UsageAgent, UsageScanOptions,
 };
 
+/// How many recomputed hours one refresh hands to the outbox. Four requests' worth: enough to
+/// keep a steady device empty, small enough that a first sign-in does not stage a year at once.
+const MAX_STAGED_HOURS_PER_REFRESH: usize = usage::MAX_USAGE_HOURS_PER_UPLOAD * 4;
+
 fn plural(value: i64, singular: &str) -> String {
     format!("{value} {singular}{}", if value == 1 { "" } else { "s" })
 }
@@ -173,8 +177,6 @@ fn diagnostic_attempt_code_wire(value: DiagnosticAttemptCode) -> &'static str {
         DiagnosticAttemptCode::PartialSource => "partial_source",
         DiagnosticAttemptCode::MalformedData => "malformed_data",
         DiagnosticAttemptCode::TruncatedActiveSource => "truncated_active_source",
-        DiagnosticAttemptCode::InvalidUsageBatch => "invalid_usage_batch",
-        DiagnosticAttemptCode::UnrepresentableHour => "unrepresentable_hour",
         DiagnosticAttemptCode::DeviceDeleted => "device_deleted",
         DiagnosticAttemptCode::UploadDisabled => "upload_disabled",
         DiagnosticAttemptCode::SignedOut => "signed_out",
@@ -1539,6 +1541,12 @@ impl NativeBackend {
             .map_err(|_| BackendError::unavailable())?;
         let mut entries = Vec::new();
         for hour in dirty {
+            // Identity is the file this device cannot rebuild, so it holds a bounded queue
+            // rather than a year of history at once. What is left over stays dirty and is
+            // staged by the next refresh, oldest hour first.
+            if entries.len() >= MAX_STAGED_HOURS_PER_REFRESH {
+                break;
+            }
             let Ok(start) = DateTime::parse_from_rfc3339(&hour.bucket_start_utc) else {
                 continue;
             };

@@ -3050,8 +3050,6 @@ mod tests {
             "account_id": "account_1",
             "device_id": "device_1",
             "device_generation": 1,
-            "next_snapshot_sequence": 0,
-            "next_usage_sequence": 0,
             "usage_deleted_before": null,
             "usage_sync_revision": 0,
             "account_session": valid_token(),

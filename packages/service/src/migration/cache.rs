@@ -179,7 +179,7 @@ fn migration_v1(tx: &rusqlite::Transaction<'_>, revision_floor: u64) -> Result<(
                 'network_error', 'unavailable', 'invalid_response', 'invalid_state',
                 'provider_error', 'access_denied', 'client_upgrade_required',
                 'partial_source', 'malformed_data',
-                'truncated_active_source', 'invalid_usage_batch', 'unrepresentable_hour',
+                'truncated_active_source',
                 'device_deleted', 'upload_disabled', 'signed_out'
             ))
          );

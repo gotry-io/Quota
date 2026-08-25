@@ -634,8 +634,6 @@ pub enum DiagnosticAttemptCode {
     PartialSource,
     MalformedData,
     TruncatedActiveSource,
-    InvalidUsageBatch,
-    UnrepresentableHour,
     DeviceDeleted,
     UploadDisabled,
     SignedOut,
