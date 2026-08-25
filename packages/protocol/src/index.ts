@@ -5,18 +5,22 @@ import {
   LOCAL_PROVIDER_IDS,
   type LocalProviderId,
   LocalProviderIdSchema,
+  PROVIDER_DISPLAY_NAMES,
   PROVIDER_IDS,
   type ProviderId,
   ProviderIdSchema,
+  providerDisplayName,
 } from "./provider-ids.generated.ts";
 
 export {
   LOCAL_PROVIDER_IDS,
   type LocalProviderId,
   LocalProviderIdSchema,
+  PROVIDER_DISPLAY_NAMES,
   PROVIDER_IDS,
   type ProviderId,
   ProviderIdSchema,
+  providerDisplayName,
 };
 
 /**
@@ -270,6 +274,20 @@ export type QuotaCollectionReport = z.infer<typeof QuotaCollectionReportSchema>;
 
 export const PlatformSchema = z.enum(["macos", "linux", "windows"]);
 export type Platform = z.infer<typeof PlatformSchema>;
+
+/** A platform this build has never heard of is named as what it is, not as a raw enum member. */
+export function platformDisplayName(platform: string): string {
+  switch (platform) {
+    case "macos":
+      return "macOS";
+    case "linux":
+      return "Linux";
+    case "windows":
+      return "Windows";
+    default:
+      return "Unknown";
+  }
+}
 
 export const AccountSchema = z
   .object({
@@ -534,6 +552,20 @@ export const BILLING_AGENTS = ["codex", "claude_code", "grok", "opencode", "pi",
 export const BillingAgentSchema = z.enum(BILLING_AGENTS);
 export type BillingAgent = z.infer<typeof BillingAgentSchema>;
 
+const AGENT_DISPLAY_NAMES: Readonly<Record<BillingAgent, string>> = {
+  codex: "Codex",
+  claude_code: "Claude Code",
+  grok: "Grok",
+  opencode: "OpenCode",
+  pi: "Pi",
+  cursor: "Cursor",
+};
+
+/** An agent this build has never heard of is named as what it is. */
+export function agentDisplayName(agent: string): string {
+  return AGENT_DISPLAY_NAMES[agent as BillingAgent] ?? "Unknown";
+}
+
 export const InferenceProviderSchema = z.enum([
   "openai",
   "azure_openai",
@@ -547,6 +579,24 @@ export const InferenceProviderSchema = z.enum([
   "unknown",
 ]);
 export type InferenceProvider = z.infer<typeof InferenceProviderSchema>;
+
+const INFERENCE_PROVIDER_DISPLAY_NAMES: Readonly<Record<InferenceProvider, string>> = {
+  openai: "OpenAI",
+  azure_openai: "Azure OpenAI",
+  anthropic: "Anthropic",
+  aws_bedrock: "AWS Bedrock",
+  google_vertex: "Google Vertex AI",
+  openrouter: "OpenRouter",
+  xai: "xAI",
+  moonshot: "Moonshot AI",
+  deepseek: "DeepSeek",
+  unknown: "Unknown Provider",
+};
+
+/** The words the Apple clients already say for the company that ran the inference. */
+export function inferenceProviderDisplayName(provider: string): string {
+  return INFERENCE_PROVIDER_DISPLAY_NAMES[provider as InferenceProvider] ?? "Unknown Provider";
+}
 
 export const MAXIMUM_MODEL_CATALOG_MODELS = 512;
 export const MAXIMUM_MODEL_CATALOG_ALIASES_PER_MODEL = 32;

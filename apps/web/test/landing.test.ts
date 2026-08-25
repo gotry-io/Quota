@@ -11,6 +11,7 @@ const layout = readFileSync(join(root, "../src/routes/+layout.svelte"), "utf8");
 const header = readFileSync(join(root, "../src/lib/components/Header.svelte"), "utf8");
 const theme = readFileSync(join(root, "../src/lib/components/ThemeToggle.svelte"), "utf8");
 const styles = readFileSync(join(root, "../src/app.css"), "utf8");
+const dashboard = readFileSync(join(root, "../src/routes/my/+page.svelte"), "utf8");
 
 test("homepage introduces QuotaBar and both install paths", () => {
   assert.match(landing, /Know what you have left/);
@@ -45,4 +46,32 @@ test("homepage introduces QuotaBar and both install paths", () => {
   assert.doesNotMatch(html, /\/u\//);
   assert.doesNotMatch(html, /__quotaAccountRequest/);
   assert.doesNotMatch(html, /data-session/);
+});
+
+test("the hero shows what is left, not what a month cost", () => {
+  assert.match(landing, /class="provider-list"/);
+  assert.match(landing, /class="quota-track"/);
+  assert.match(landing, /Resets Thu 4:03 PM · Updated 3m ago/);
+  assert.doesNotMatch(landing, /August Usage/);
+  assert.doesNotMatch(landing, /metric-preview/);
+});
+
+test("no surface explains itself in implementation words", () => {
+  for (const source of [landing, dashboard]) {
+    assert.doesNotMatch(source, /coverage/i);
+    assert.doesNotMatch(source, /UTC-hour/i);
+    assert.doesNotMatch(source, /fingerprint/i);
+    assert.doesNotMatch(source, /revision/i);
+    assert.doesNotMatch(source, /Rust/);
+  }
+});
+
+test("the dashboard leads with subscriptions and one usage headline", () => {
+  assert.ok(dashboard.indexOf('id="quota-title"') < dashboard.indexOf('id="usage-title"'));
+  assert.match(dashboard, /<h1 id="dashboard-title">Quota<\/h1>/);
+  assert.match(dashboard, /id="token-total"/);
+  assert.match(dashboard, /id="cost-total"/);
+  assert.doesNotMatch(dashboard, /id="input-total"/);
+  assert.match(dashboard, /providerDisplayName\(subscription\.provider\)/);
+  assert.doesNotMatch(dashboard, /titleCase/);
 });

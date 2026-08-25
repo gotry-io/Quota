@@ -3,6 +3,8 @@ import type { AccountDeviceRead } from "@gotry-io/quota-protocol";
 export type DeviceActivityPresentation = {
   label: string;
   tone: "available" | "offline" | "unavailable";
+  /** The instant the label is derived from, so the row states one age rather than a list. */
+  since: string | null;
 };
 
 const activeWithinMilliseconds = 30 * 60 * 1000;
@@ -19,17 +21,19 @@ export function deviceActivity(
 ): DeviceActivityPresentation {
   const instants = [device.last_seen_at, device.last_observed_at]
     .filter((value): value is string => value !== null)
-    .map((value) => Date.parse(value))
-    .filter((value) => Number.isFinite(value));
+    .filter((value) => Number.isFinite(Date.parse(value)));
   if (instants.length === 0) {
-    return { label: "Not reporting", tone: "unavailable" };
+    return { label: "Not reporting", tone: "unavailable", since: null };
   }
-  const age = now.getTime() - Math.max(...instants);
+  const since = instants.reduce((newest, value) =>
+    Date.parse(value) > Date.parse(newest) ? value : newest,
+  );
+  const age = now.getTime() - Date.parse(since);
   if (age < activeWithinMilliseconds) {
-    return { label: "Active", tone: "available" };
+    return { label: "Active", tone: "available", since };
   }
   if (age < idleWithinMilliseconds) {
-    return { label: "Idle", tone: "offline" };
+    return { label: "Idle", tone: "offline", since };
   }
-  return { label: "Not reporting", tone: "unavailable" };
+  return { label: "Not reporting", tone: "unavailable", since };
 }

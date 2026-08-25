@@ -432,16 +432,6 @@ h1 {
   font-weight: 600;
 }
 
-.preview-settings {
-  width: 18px;
-  height: 18px;
-  fill: none;
-  stroke: var(--body);
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 1.5;
-}
-
 .provider-meta,
 .reset-time {
   margin-bottom: 0;
@@ -755,7 +745,6 @@ footer {
   padding: 7px 16px;
 }
 
-.coverage-tag,
 .count-pill,
 .status-pill {
   display: inline-flex;
@@ -767,58 +756,8 @@ footer {
   font-weight: 500;
 }
 
-.coverage-tag,
 .count-pill {
   padding: 4px 9px;
-}
-
-.metric-preview {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  border-bottom: 1px solid var(--hairline);
-}
-
-.metric-preview > div {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 28px 16px;
-}
-
-.metric-preview > div + div {
-  border-left: 1px solid var(--hairline);
-}
-
-.metric-preview span,
-.preview-breakdown span {
-  color: var(--body);
-  font-size: 11px;
-}
-
-.metric-preview strong {
-  font-size: 28px;
-  font-weight: 500;
-  letter-spacing: -0.03em;
-}
-
-.preview-breakdown {
-  padding: 8px 16px;
-}
-
-.preview-breakdown > div {
-  display: flex;
-  justify-content: space-between;
-  padding-block: 10px;
-  border-bottom: 1px solid var(--hairline);
-}
-
-.preview-breakdown > div:last-child {
-  border-bottom: 0;
-}
-
-.preview-breakdown strong {
-  font-size: 12px;
-  font-weight: 500;
 }
 
 .route-loading {
@@ -919,6 +858,11 @@ footer {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 16px;
+}
+
+/* Tokens and cost are the headline; the input/output split rides under the token figure. */
+.summary-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .summary-grid article,
@@ -1064,21 +1008,14 @@ footer {
   padding: 3px 8px;
 }
 
-.status-active {
-  border-color: var(--brand-mint);
-  color: var(--brand-emerald);
-  background: var(--brand-surface);
-}
-
 .status-available {
   border-color: var(--brand-mint);
   color: var(--brand-emerald);
   background: var(--brand-surface);
 }
 
-.status-stale,
-.status-auth_required,
-.status-signed_out {
+.status-offline,
+.status-unavailable {
   color: var(--body);
   background: var(--surface-soft);
 }

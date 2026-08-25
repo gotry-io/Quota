@@ -32,7 +32,7 @@ struct QuotaObservationFreshnessTests {
   @Test(
     arguments: [
       (QuotaObservationState.available, "Available"),
-      (.stale, "Stale"),
+      (.stale, "Not current"),
       (.signInNeeded, "Sign-in needed"),
       (.unavailable, "Unavailable"),
       (.unsupported, "Unsupported"),

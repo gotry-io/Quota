@@ -52,26 +52,48 @@ async function copyBrew(): Promise<void> {
     </div>
 
     <figure class="product-preview account-preview">
-      <figcaption class="visually-hidden">Quota account summary preview</figcaption>
+      <figcaption class="visually-hidden">Quota remaining-quota preview</figcaption>
       <div class="preview-header">
         <div>
-          <p class="preview-title">August Usage</p>
-          <p class="provider-meta">3 devices · calculated API-equivalent cost</p>
+          <p class="preview-title">Quota</p>
+          <p class="provider-meta">What is left, on every machine you sign in from</p>
         </div>
-        <span class="coverage-tag">Complete</span>
       </div>
-      <div class="metric-preview">
-        <div><span>Tokens</span><strong>42.8M</strong></div>
-        <div><span>Estimated</span><strong>$68.42</strong></div>
-      </div>
-      <div class="preview-breakdown">
-        <div><span>Studio Mac</span><strong>22.1M</strong></div>
-        <div><span>Build server</span><strong>14.6M</strong></div>
-        <div><span>Laptop</span><strong>6.1M</strong></div>
+      <div class="provider-list">
+        <div class="provider-row">
+          <div class="provider-title-line">
+            <span>Codex</span>
+            <span class="source-tag">Pro</span>
+          </div>
+          <div class="quota-window">
+            <p class="quota-window-heading"><span>5 hour</span><strong>68%</strong></p>
+            <div class="quota-track"><span style="width: 68%"></span></div>
+            <p class="reset-time">Resets Thu 4:03 PM · Updated 3m ago</p>
+          </div>
+        </div>
+        <div class="provider-row">
+          <div class="provider-title-line">
+            <span>Claude Code</span>
+            <span class="source-tag">Max</span>
+          </div>
+          <div class="quota-window">
+            <p class="quota-window-heading"><span>Weekly</span><strong>31%</strong></p>
+            <div class="quota-track"><span style="width: 31%"></span></div>
+            <p class="reset-time">Resets Sat 9:00 AM · Updated 3m ago</p>
+          </div>
+        </div>
+        <div class="provider-row">
+          <div class="provider-title-line">
+            <span>OpenRouter</span>
+          </div>
+          <div class="quota-window">
+            <p class="quota-window-heading"><span>Balance</span><strong>$12.50</strong></p>
+            <p class="reset-time">No reset time reported · Updated 3m ago</p>
+          </div>
+        </div>
       </div>
       <div class="preview-footer">
-        <span>Unknown prices stay unpriced</span>
-        <span>UTC-hour facts</span>
+        <span>Today · $4.18 · 1.2M tokens</span>
       </div>
     </figure>
   </section>
@@ -114,9 +136,9 @@ async function copyBrew(): Promise<void> {
       <p class="eyebrow">Direct by design</p>
       <h2 id="architecture-title">Account to device. Nothing in between.</h2>
       <p>
-        QuotaBar's private Rust service owns installation identity, login, collection, state, and
-        upload. The Swift UI renders only its safe typed output. The managed service stores
-        normalized snapshots and sparse hourly facts—not provider credentials or raw logs.
+        QuotaBar reads your provider sessions and agent logs on your Mac and uploads only the
+        numbers: what quota is left and how many tokens you spent. Your account stores those
+        totals—never provider credentials, prompts, paths, or raw logs.
       </p>
       <a class="text-link" href="https://github.com/gotry-io/Quota">Read the source →</a>
     </div>
@@ -129,12 +151,12 @@ async function copyBrew(): Promise<void> {
       <span class="flow-arrow" aria-hidden="true">↓</span>
       <div class="flow-node flow-node-dark">
         <span class="diagram-tag diagram-tag-dark">QuotaBar</span><strong>Collect · persist · sync</strong
-        ><span>Private Rust service and device-scoped upload</span>
+        ><span>Your Mac reads the providers and sends only totals</span>
       </div>
       <span class="flow-arrow" aria-hidden="true">↓</span>
       <div class="flow-node">
         <span class="diagram-tag">Account</span><strong>Web + QuotaBar</strong><span
-          >Normalized totals, devices, coverage, and cost</span
+          >Remaining quota, every device, and what it cost</span
         >
       </div>
     </div>

@@ -21,16 +21,79 @@ export function formatCost(cost: CostView): string {
   return `${cost.status === "partial" ? "≥ " : ""}$${amount}`;
 }
 
-export function costCoverage(cost: CostView): string {
+/** How the cost was arrived at, and whether every item in it could be priced. */
+export function costBasisLabel(cost: CostView): string {
   if (cost.status === "unavailable") return "Unpriced";
   const basis = cost.basis === "calculated" ? "estimated" : cost.basis;
   return cost.status === "complete" ? `${basis} · complete` : `${basis} · priced subset only`;
 }
 
+/** A future instant, such as when a window refills. Past instants use the freshness copy below. */
 export function formatDate(value: string): string {
   return new Intl.DateTimeFormat(WEB_LOCALE, { dateStyle: "medium", timeStyle: "short" }).format(
     new Date(value),
   );
+}
+
+/**
+ * How old a reading is, in the words every Quota client uses.
+ *
+ * One rule, one voice: the website, QuotaBar, and the iOS app all state age relative to now
+ * rather than as a calendar date, because an absolute instant makes the reader do the
+ * subtraction before they learn the only thing they wanted to know.
+ * `packages/protocol/fixtures/freshness-copy-conformance.json` is the shared statement of these
+ * thresholds and phrases; this file and `packages/apple-shared` both answer it.
+ */
+export const NO_RESET_TIME_COPY = "No reset time reported";
+export const NOT_CHECKED_COPY = "Not checked";
+export const NO_READINGS_COPY = "no readings yet";
+
+/** The bare compact duration: the largest whole unit that fits, with no words around it. */
+export function compactAge(instant: string | number | Date, now: Date = new Date()): string {
+  const seconds = Math.max(0, Math.floor((now.getTime() - new Date(instant).getTime()) / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3_600) return `${Math.floor(seconds / 60)}m`;
+  if (seconds < 86_400) return `${Math.floor(seconds / 3_600)}h`;
+  if (seconds < 604_800) return `${Math.floor(seconds / 86_400)}d`;
+  if (seconds < 31_536_000) return `${Math.floor(seconds / 604_800)}w`;
+  return `${Math.floor(seconds / 31_536_000)}y`;
+}
+
+/**
+ * The relative phrase: `just now`, `3m ago`, `2d ago`. Anything under a minute is an instant
+ * rather than a ticking second count, because a number that changes while it is being read is
+ * noise, not information.
+ */
+export function relativeAge(instant: string | number | Date, now: Date = new Date()): string {
+  if (now.getTime() - new Date(instant).getTime() < 60_000) return "just now";
+  return `${compactAge(instant, now)} ago`;
+}
+
+/** The whole line for a reading that still describes current quota. */
+export function updatedCopy(instant: string | number | Date | null, now?: Date): string {
+  if (instant === null) return NOT_CHECKED_COPY;
+  return `Updated ${relativeAge(instant, now)}`;
+}
+
+/** The whole line for a reading that no longer does, naming why rather than only that it does not. */
+export function notCurrentCopy(
+  reason: string,
+  instant: string | number | Date,
+  now?: Date,
+): string {
+  return `${reason} — last reading ${relativeAge(instant, now)}`;
+}
+
+/** The one line a surface shows under an observation. */
+export function observationFreshnessCopy(status: string, observedAt: string, now?: Date): string {
+  if (status === "available") return updatedCopy(observedAt, now);
+  return notCurrentCopy(observedSnapshotStatusLabel(status), observedAt, now);
+}
+
+/** The age half of a device row: `Active · last reading 5m ago`. */
+export function lastReadingCopy(instant: string | null, now?: Date): string {
+  if (instant === null) return NO_READINGS_COPY;
+  return `last reading ${relativeAge(instant, now)}`;
 }
 
 export function formatShortDate(value: string): string {
@@ -43,25 +106,6 @@ export function formatShortDate(value: string): string {
 
 export function formatPercent(value: number): string {
   return `${new Intl.NumberFormat(WEB_LOCALE, { maximumFractionDigits: 0 }).format(value)}%`;
-}
-
-export function titleCase(value: string): string {
-  return value.replaceAll("_", " ").replace(/\b\w/g, (character) => character.toUpperCase());
-}
-
-export function agentDisplayName(agent: string): string {
-  switch (agent) {
-    case "claude_code":
-      return "Claude Code";
-    case "opencode":
-      return "OpenCode";
-    case "pi":
-      return "Pi";
-    case "cursor":
-      return "Cursor";
-    default:
-      return titleCase(agent);
-  }
 }
 
 export function formatQuotaRemaining(
@@ -114,7 +158,7 @@ export function observedSnapshotStatusLabel(status: string): string {
     case "available":
       return "Available";
     case "stale":
-      return "Stale";
+      return "Not current";
     case "auth_required":
       return "Sign-in needed";
     case "unavailable":

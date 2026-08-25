@@ -5,6 +5,12 @@ import type {
   UsageActivityDayRead,
   UsagePeriodRead,
 } from "@gotry-io/quota-protocol";
+import {
+  agentDisplayName,
+  inferenceProviderDisplayName,
+  platformDisplayName,
+  providerDisplayName,
+} from "@gotry-io/quota-protocol";
 import type { AccountSummaryDocumentResult } from "$lib/server/document-port";
 import {
   accountActivityRange,
@@ -18,13 +24,11 @@ import {
 import QuotaWindows from "$lib/components/QuotaWindows.svelte";
 import UsageActivity from "$lib/components/UsageActivity.svelte";
 import {
-  agentDisplayName,
-  costCoverage,
+  costBasisLabel,
   formatCost,
   formatCount,
-  formatDate,
-  observedSnapshotStatusLabel,
-  titleCase,
+  lastReadingCopy,
+  observationFreshnessCopy,
 } from "$lib/format";
 import { deviceActivity } from "$lib/device-activity";
 import { observedSnapshotStatus } from "@gotry-io/quota-model";
@@ -187,20 +191,20 @@ function reportingDevice(subscription: AccountSummaryRead["subscriptions"][numbe
           <article class="quota-card">
             <div class="quota-card-heading">
               <div class="quota-card-identity">
-                <p class="quota-card-provider">{titleCase(subscription.provider)}</p>
+                <p class="quota-card-provider">{providerDisplayName(subscription.provider)}</p>
                 <p class="quota-card-account">
                   {[snapshot.account.label, planDisplayName(snapshot.account.plan)]
                     .filter(Boolean)
                     .join(" · ") || "Account"}
                 </p>
               </div>
-              <span class="status-pill status-{quotaStatus}"
-                >{observedSnapshotStatusLabel(quotaStatus)}</span
-              >
             </div>
             <QuotaWindows windows={snapshot.windows} provider={subscription.provider} />
             <p class="quota-card-meta">
-              {reportingDevice(subscription)} · {formatDate(snapshot.observed_at)}
+              {reportingDevice(subscription)} · {observationFreshnessCopy(
+                quotaStatus,
+                snapshot.observed_at,
+              )}
             </p>
             {#if alsoReporting}
               <p class="quota-card-meta">Also reporting: {alsoReporting}</p>
@@ -231,19 +235,18 @@ function reportingDevice(subscription: AccountSummaryRead["subscriptions"][numbe
     </div>
     <div class="summary-grid">
       <article
-        ><span>Input tokens</span><strong id="input-total"
-          >{period ? formatCount(period.totals.input_tokens) : "—"}</strong
-        ></article
-      >
-      <article
-        ><span>Output tokens</span><strong id="output-total"
-          >{period ? formatCount(period.totals.output_tokens) : "—"}</strong
+        ><span>Tokens</span><strong id="token-total"
+          >{period ? formatCount(period.totals.total_tokens) : "—"}</strong
+        ><small id="token-split"
+          >{period
+            ? `${formatCount(period.totals.input_tokens)} in · ${formatCount(period.totals.output_tokens)} out`
+            : ""}</small
         ></article
       >
       <article
         ><span>API-equivalent cost</span><strong id="cost-total"
           >{period ? formatCost(period.cost) : "—"}</strong
-        >{#if period}<small id="cost-coverage">{costCoverage(period.cost)}</small>{/if}</article
+        >{#if period}<small id="cost-basis">{costBasisLabel(period.cost)}</small>{/if}</article
       >
     </div>
     {#if period?.partial}
@@ -269,7 +272,7 @@ function reportingDevice(subscription: AccountSummaryRead["subscriptions"][numbe
               {#each modelRows as row (row.key)}
                 <tr>
                   <td>{agentDisplayName(row.agent)}</td>
-                  <td>{titleCase(row.provider)}</td>
+                  <td>{inferenceProviderDisplayName(row.provider)}</td>
                   <td>{row.model}</td>
                   <td>{formatCount(row.totals.input_tokens)}</td>
                   <td>{formatCount(row.totals.output_tokens)}</td>
@@ -320,15 +323,7 @@ function reportingDevice(subscription: AccountSummaryRead["subscriptions"][numbe
               <span class="status-pill status-{activity.tone}">{activity.label}</span>
             </div>
             <p>
-              {titleCase(device.platform)}
-              {#if device.last_seen_at}
-                · last seen {formatDate(device.last_seen_at)}
-              {:else}
-                · never reported
-              {/if}
-              {#if device.last_observed_at}
-                · last reading {formatDate(device.last_observed_at)}
-              {/if}
+              {platformDisplayName(device.platform)} · {lastReadingCopy(activity.since)}
             </p>
             <button
               class="text-button danger-button"
