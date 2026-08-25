@@ -409,7 +409,8 @@ QuotaRelay mounts OAuth and Device control at `/oauth/v2` and `/api/v2`, the man
 Usage data contract at `/api/v6`, Better Auth at `/api/auth/v2`, and the health routes. It
 authenticates each route with the minimum account, device, or browser scope and performs
 Device/Account deletion, rotation/revocation, and hour replacement with its daily rollup in storage
-transactions. It serves every stored agent and channel without an opt-in query.
+transactions. An Account read carries every stored agent and channel with no opt-in query; only the
+released pricing-catalog route still accepts the `usage_agents=all` marker its clients send.
 
 Quota Web is a SvelteKit app. Hashed `/_app/immutable/*` CSS and JS stay asset-first. Document
 navigations run the existing Relay Worker first: `apps/relay/src/cloudflare.ts` stays Wrangler

@@ -16,7 +16,13 @@ import {
 import { accountEntryAction, DASHBOARD_PATH } from "$lib/routes";
 
 export type { AccountActivityResult };
-export { accountActivityPath, accountActivityRange, accountSummaryPath, ACTIVITY_DAYS };
+export {
+  accountActivityPath,
+  accountActivityRange,
+  accountSummaryPath,
+  ACTIVITY_DAYS,
+  browserTimezone,
+};
 
 const jsonRequest = {
   credentials: "same-origin",
