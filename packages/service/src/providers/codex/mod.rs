@@ -107,13 +107,10 @@ fn collect_local(context: &CollectionContext) -> Result<QuotaSnapshot, ProviderE
             let direct_auth = error.category == ErrorCategory::AuthRequired;
             match collect_rpc(&identity, context) {
                 Ok(snapshot) => return Ok(snapshot),
-                Err(fallback)
-                    if direct_auth
-                        && matches!(
-                            fallback.category,
-                            ErrorCategory::Unavailable | ErrorCategory::Unsupported
-                        ) =>
-                {
+                // Reading this account directly already proved it needs a new sign-in. A
+                // fallback that also fails cannot disprove that, whatever it calls its own
+                // failure, and only the sign-in the reader is told to do will fix either one.
+                Err(_) if direct_auth => {
                     return Err(ProviderError::new(ErrorCategory::AuthRequired, SOURCE_API));
                 }
                 Err(fallback) => return Err(fallback),
@@ -863,6 +860,9 @@ fn rpc_error_category(value: &Value) -> ErrorCategory {
     } else if message.contains("authentication required")
         || message.contains("not authenticated")
         || message.contains("login")
+        || message.contains("unauthorized")
+        || message.contains("token_expired")
+        || message.contains("invalid_token")
     {
         ErrorCategory::AuthRequired
     } else {
@@ -1206,5 +1206,26 @@ mod tests {
             })),
             ErrorCategory::Error
         );
+    }
+
+    /// An expired sign-in says so in the words the upstream service uses, not in the words
+    /// this classifier happened to be taught first.  A reader told to retry never retries
+    /// their way back in: only `auth_required` asks them to sign in again.
+    #[test]
+    fn an_expired_sign_in_is_recognised_however_the_upstream_words_it() {
+        for message in [
+            "failed to fetch codex rate limits: GET https://chatgpt.com/backend-api/wham/usage \
+             failed: 401 Unauthorized; body: {\"error\":{\"code\":\"token_expired\"}}",
+            "request failed: 401 Unauthorized",
+            "{\"code\": \"invalid_token\"}",
+        ] {
+            assert_eq!(
+                rpc_error_category(&serde_json::json!({
+                    "error": {"code": -32603, "message": message}
+                })),
+                ErrorCategory::AuthRequired,
+                "{message}"
+            );
+        }
     }
 }
