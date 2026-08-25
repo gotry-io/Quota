@@ -5,14 +5,18 @@ import {
   PROTOCOL_VERSION,
 } from "@gotry-io/quota-protocol";
 import {
-  type AccountUsageDayResult,
-  accountUsageDayPath,
-  parseAccountUsageDayResponse,
-} from "./account-usage-day.ts";
+  type AccountActivityResult,
+  accountActivityPath,
+  accountActivityRange,
+  accountSummaryPath,
+  ACTIVITY_DAYS,
+  browserTimezone,
+  parseAccountActivityResponse,
+} from "./account-reads.ts";
 import { accountEntryAction, DASHBOARD_PATH } from "$lib/routes";
 
-export type { AccountUsageDayResult };
-export { accountUsageDayPath, parseAccountUsageDayResponse };
+export type { AccountActivityResult };
+export { accountActivityPath, accountActivityRange, accountSummaryPath, ACTIVITY_DAYS };
 
 const jsonRequest = {
   credentials: "same-origin",
@@ -56,35 +60,19 @@ export async function signOut(): Promise<void> {
   window.location.assign("/");
 }
 
-export async function fetchAccountUsageDay(
-  date: string,
-  init?: { signal?: AbortSignal },
-): Promise<AccountUsageDayResult> {
-  try {
-    const response = await fetch(accountUsageDayPath(date), {
-      ...jsonRequest,
-      ...(init?.signal ? { signal: init.signal } : {}),
-    });
-    if (response.status === 401) return { status: "unauthorized" };
-    if (!response.ok) return { status: "error" };
-    return parseAccountUsageDayResponse(response.status, await response.json());
-  } catch (error) {
-    if (isAbortError(error)) return { status: "aborted" };
-    return { status: "error" };
-  }
-}
-
-function isAbortError(error: unknown): boolean {
-  return error instanceof Error && error.name === "AbortError";
+export async function fetchAccountActivity(range: {
+  from: string;
+  to: string;
+}): Promise<AccountActivityResult> {
+  const response = await fetch(accountActivityPath(range), jsonRequest);
+  if (!response.ok) return parseAccountActivityResponse(response.status, null);
+  return parseAccountActivityResponse(response.status, await response.json());
 }
 
 export async function fetchAccountSummary(): Promise<
   { status: "ok"; summary: AccountSummaryRead } | { status: "unauthorized" } | { status: "error" }
 > {
-  const response = await fetch(
-    "/api/v5/account/summary?cost_mode=auto&usage_agents=all",
-    jsonRequest,
-  );
+  const response = await fetch(accountSummaryPath(browserTimezone()), jsonRequest);
   if (response.status === 401) return { status: "unauthorized" };
   if (!response.ok) return { status: "error" };
   const parsed = AccountSummaryReadSchema.safeParse(await response.json());

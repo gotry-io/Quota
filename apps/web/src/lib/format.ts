@@ -98,13 +98,6 @@ export function formatAbsoluteRemaining(window: {
   return `${formatCount(window.remaining_value)}${window.value_unit === "credits" ? " credits" : ""}`;
 }
 
-export function safeAdd(...values: number[]): number {
-  return Math.min(
-    Number.MAX_SAFE_INTEGER,
-    values.reduce((total, value) => total + value, 0),
-  );
-}
-
 export function activityLevel(value: number, maximum: number): number {
   if (value <= 0 || maximum <= 0) return 0;
   return Math.min(4, Math.ceil((value / maximum) * 4));

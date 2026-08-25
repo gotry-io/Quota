@@ -1322,29 +1322,6 @@ button.usage-activity-cell[aria-pressed="true"] {
   visibility: visible;
 }
 
-.usage-day-details {
-  margin-top: 16px;
-  padding: 20px;
-  border: 1px solid var(--hairline);
-  border-radius: 12px;
-}
-
-.usage-day-heading {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 16px;
-}
-
-.usage-day-heading h3 {
-  margin: 0;
-  font-size: 20px;
-  font-weight: 500;
-}
-
-.usage-day-status,
-.usage-day-coverage,
 .usage-day-note {
   margin: 0 0 12px;
   color: var(--body);
@@ -1352,37 +1329,15 @@ button.usage-activity-cell[aria-pressed="true"] {
   line-height: 1.5;
 }
 
-.usage-day-metrics {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
-  margin-bottom: 16px;
-}
-
-.usage-day-metrics > div {
+.period-tabs {
   display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.usage-day-metrics span,
-.usage-day-metrics small {
-  color: var(--body);
-  font-size: 11px;
-}
-
-.usage-day-metrics strong {
-  font-size: 18px;
-  font-weight: 500;
-  font-variant-numeric: tabular-nums;
-  overflow-wrap: anywhere;
-}
-
-.usage-day-splits {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  flex-wrap: wrap;
   gap: 12px;
+}
+
+.period-tabs button[aria-pressed="true"] {
+  color: var(--title);
+  text-decoration: underline;
 }
 
 table {
@@ -1544,9 +1499,7 @@ button:focus-visible {
 
   .summary-grid,
   .device-grid,
-  .quota-grid,
-  .usage-day-metrics,
-  .usage-day-splits {
+  .quota-grid {
     grid-template-columns: 1fr;
   }
 
