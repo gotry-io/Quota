@@ -21,6 +21,7 @@ Read the relevant source before changing that area:
 | Managed-data v6: hour-versioned Usage, daily rollups, resolved subscriptions | `docs/decisions/0024-hour-versioned-usage-and-daily-rollups.md` |
 | Read-only iOS account client | `docs/decisions/0013-readonly-ios-account-client.md` |
 | Non-secret iOS widget snapshot | `docs/decisions/0014-nonsecret-ios-widget-snapshot.md` |
+| Freshness, provider-name, and Devices copy shared by every client | `apps/menubar/DESIGN.md` (Shared product vocabulary) |
 | Website visual tokens and marketing UI | `apps/web/DESIGN.md` |
 | QuotaBar menu-panel visual tokens and UI behavior | `apps/menubar/DESIGN.md` |
 | Quota iOS visual tokens and UI behavior | `apps/ios/DESIGN.md` |

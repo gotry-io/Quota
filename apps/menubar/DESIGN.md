@@ -21,6 +21,35 @@ Core rules:
 5. Every action remains keyboard reachable, VoiceOver labelled, and usable with Reduce Motion and
    large text.
 
+## Shared product vocabulary
+
+These rules apply to every Quota client, not only the menu panel. `apps/web/DESIGN.md` and
+`apps/ios/DESIGN.md` cite this section rather than restating it.
+
+- **Freshness is relative age, everywhere.** A current reading reads **Updated 3m ago**. A reading
+  that no longer describes current quota names why and when it was last taken:
+  **Not current — last reading 2d ago**, or **Sign-in needed**, **Unavailable**, **Unsupported**,
+  **Can’t refresh** in place of *Not current* when the source itself reported that. Anything under a
+  minute is **just now**, because a number that changes while it is being read is noise. Nothing
+  shows a clock time or a calendar date for a past reading, and nothing shows a bare age with no
+  words around it.
+- The exact phrases and thresholds are `packages/protocol/fixtures/freshness-copy-conformance.json`.
+  `packages/apple-shared` (`FreshnessCopy`) and `apps/web/src/lib/format.ts` both answer that file,
+  so a phrase one of them changes cannot drift from the other. Change the fixture, not a surface.
+- **A window with no reported refill instant reads “No reset time reported.”** One phrase; a future
+  reset instant still prints as a date or a countdown, because that is not an age.
+- **Provider names come from the catalog.** `display_name` in `packages/provider/catalog.json` is
+  the only place a provider is named for a person. No surface keeps a second table and none derives
+  a name from an identifier.
+- **A device row states one verdict and the one age it came from**: **Active** under thirty minutes,
+  **Idle** up to a day, **Not reporting** beyond that, and `last reading 5m ago` from the instant
+  that decided it. Never a list of report, refresh, and sync timestamps.
+- **User-facing copy uses product words.** Nothing on screen names coverage, UTC hours, generations,
+  revisions, fingerprints, sequences, protocol versions, or the private service's implementation.
+  Counting how many readings came from this Mac and how many from the account is implementation
+  detail; whether the numbers are still current is not. **This Mac** and **Account** remain valid as
+  the two Usage sources a person picks between.
+
 ## Window and layout tokens
 
 | Token | Value | Purpose |
@@ -111,10 +140,10 @@ The header shows:
   disabled. If the bounded UI wait ends first, keep the prior completed report on screen.
 - Settings root: Back, **Settings**, and an overflow menu containing **Quit QuotaBar**.
 
-The footer is a single quiet button showing the sync-completion clock as locale-shortened time only
-(`15:40` / `3:40 PM`), or **—** before any sync. VoiceOver still says **Last checked** plus that
-time. It is not the age of every provider observation. Selecting it runs one sync; clicks while a
-sync is active are ignored.
+The footer is a single quiet button showing when the last sync finished, in the shared freshness
+words (**Updated 3m ago**), or **Not checked** before any sync. It is the age of the last sync, not
+of every provider observation. Selecting it runs one sync; clicks while a sync is active are
+ignored.
 
 Navigation transitions move horizontally by direction and combine with opacity. Reduce Motion uses
 opacity only. A page change clears transient focus/menu state. Escape dismisses a transient menu;
@@ -156,8 +185,9 @@ Each quota observation shows:
 - percent-only windows as `71%`;
 - balance-only windows as `$12.34` (or the unit amount) under a **Balance** title;
 - one meter per quota window when a percent is meaningful;
-- reset time, stale state, and selected source display name as quiet metadata. Reset copy uses
-  weekday and time within six days, otherwise month and day; it does not imply the window period;
+- reset time and the selected source display name as quiet metadata, with the shared freshness
+  line opposite the source. Reset copy uses weekday and time within six days, otherwise month and
+  day; it does not imply the window period;
 - **Local** for signed-out local collection or **Device** for an account observation.
 
 Cursor's Other Models percentage and its included-usage dollar balance are related provider data but
@@ -172,10 +202,11 @@ A local collection failure is about this Mac, so an account device's reading fil
 hiding it: the row shows both. A provider this Mac never set up reports no discovered source and
 stays quiet once the account covers it, because there is nothing here to recover.
 
-An account device's reading names why it is not current rather than only that it is not: **Sign-in
-needed**, **Unavailable**, **Unsupported**, **Can’t refresh** for a state its own device reported,
-and **Stale** for a reading that merely aged past `valid_until`. The numbers stay on screen with
-their age, because they remain the last known reading.
+An account device's reading names why it is not current rather than only that it is not, in the
+shared freshness words: **Sign-in needed**, **Unavailable**, **Unsupported**, **Can’t refresh** for
+a state its own device reported, and **Not current** for a reading that merely aged past
+`valid_until`. The numbers stay on screen with their age, because they remain the last known
+reading.
 
 Empty Overview recovery says to sign in to a provider CLI or enable an agent in Settings. A failed
 current sync keeps last-known content visible and adds one inline warning.
@@ -256,11 +287,10 @@ published page state. Reduce Motion skips the transition and publishes updates i
 
 ### Devices
 
-Devices is read-only in QuotaBar. Show account device display name, platform, compact last-seen age,
-and compact last-reading age when that device has sent one. The trailing label is derived from the
-newer of those two instants: **Active** under thirty minutes, **Idle** up to a day, **Not
-reporting** beyond that, and never a claim that a sleeping or closed app is broken. Signed-out
-remains explicit. Never display raw Device IDs or request a provider login for
+Devices is read-only in QuotaBar. Each row is the device display name, its platform, and the one
+activity line from the shared vocabulary — a trailing **Active** / **Idle** / **Not reporting**
+verdict beside `last reading 5m ago`, or `no readings yet`. Never a claim that a sleeping or closed
+app is broken. Signed-out remains explicit. Never display raw Device IDs or request a provider login for
 another Device. Empty and signed-out states point back to the Account action in Settings using the
 shared centered Empty state. An unavailable account with no device content uses the centered Error
 state and Retry; a refresh warning with cached device content uses an inline notice. Device deletion
@@ -304,7 +334,7 @@ Model rows have no icons or disclosure controls and use regular secondary text. 
 at most the first five models in the existing cost/tokens order. If the same provider/model pair
 appears through more than one client, append the client name only to disambiguate those rows.
 
-Date text, cost metadata, pricing revision, and coverage are not separate default sections. Complete
+Dates, cost metadata, and how the prices were sourced are not separate default sections. Complete
 data shows no diagnostic copy. Partial collection produces one compact warning. An unavailable
 summary cost uses `— unpriced`, while model rows omit unavailable cost entirely; neither state adds
 another alert. Technical detail remains available through Support.
