@@ -62,11 +62,10 @@ extension QuotaCollectionSource {
   /// reads as a provider rather than as nothing.
   var displayName: String {
     switch sourceID {
-    case "anthropic_oauth_usage_api", "chatgpt_usage_api", "grok_billing_api": "OAuth"
+    case "anthropic_oauth_usage_api", "chatgpt_usage_api", "grok_billing_api", "grok_billing_rpc":
+      "OAuth"
     case "codex_pat_usage_api": "Access token"
-    case "browser_session", "claude_web_usage_api", "chatgpt_web_usage_api",
-      "grok_web_billing_api", "kimi_web_billing_api", "cursor_dashboard_api":
-      "Browser session"
+    case "browser_session", "cursor_dashboard_api": "Browser session"
     case "cursor_app_auth": "Cursor app session"
     case "kimi_code_cli_credential": "Kimi Code token"
     case "kimi_code_usages_api", "openrouter_api", "deepseek_balance_api", "litellm_budget_api":

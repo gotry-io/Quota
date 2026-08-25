@@ -600,17 +600,17 @@ func decodesCollectionReportAndCalculatesRemainingQuota() throws {
           {"source_id": "chatgpt_usage_api", "outcome": "success", "category": "success"}
         ]
       }, {
-        "provider": "claude",
+        "provider": "cursor",
         "outcome": "auth_required",
         "snapshots": [],
-        "message": "Open Claude Code to refresh the sign-in.",
+        "message": "Sign in to Cursor again.",
         "sources": [
           {
-            "source_id": "anthropic_oauth_usage_api",
+            "source_id": "cursor_app_auth",
             "outcome": "auth_required",
             "category": "auth_required"
           },
-          {"source_id": "claude_web_usage_api", "outcome": "auth_required",
+          {"source_id": "browser_session", "outcome": "auth_required",
            "category": "auth_required"}
         ]
       }]
@@ -625,7 +625,7 @@ func decodesCollectionReportAndCalculatesRemainingQuota() throws {
   #expect(report.results.last?.outcome == .authRequired)
   // Every rung is named, and the last one to fail is the one the reader is sent to.
   #expect(report.results.last?.sources.map(\.sourceID) == [
-    "anthropic_oauth_usage_api", "claude_web_usage_api",
+    "cursor_app_auth", "browser_session",
   ])
   #expect(report.results.last?.failingSource?.displayName == "Browser session")
   #expect(report.results.first?.failingSource == nil)

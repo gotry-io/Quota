@@ -30,13 +30,13 @@ func unsupportedDefaultBrowserRequestsAChoiceBeforeOpening() async throws {
 @Test @MainActor
 func multipleCookieHeadersRequireAccountSelection() async throws {
   let first = BrowserSessionCookieCandidate(
-    cookieHeader: "sso=one",
+    cookieHeader: "wos-session=one",
     headerFingerprint: "header-a",
     browserName: "Chrome",
     profileName: "Personal"
   )
   let second = BrowserSessionCookieCandidate(
-    cookieHeader: "sso=two",
+    cookieHeader: "wos-session=two",
     headerFingerprint: "header-b",
     browserName: "Chrome",
     profileName: "Work"
@@ -48,7 +48,7 @@ func multipleCookieHeadersRequireAccountSelection() async throws {
     browserSessionImporter: FlowImporter(candidates: [first, second]),
     browserApplicationRouter: FlowRouter(defaultApplication: safari)
   )
-  model.startProviderBrowserSessionLogin(.grok)
+  model.startProviderBrowserSessionLogin(.cursor)
   try await waitUntil {
     if case .account(_, let choices) = model.browserSessionPopup {
       return choices.count == 2

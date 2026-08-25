@@ -147,6 +147,11 @@ struct BrowserSessionImporter: BrowserSessionImporting, Sendable {
     return (record.name, record.value, host.lowercased())
   }
 
+  /// One candidate per allowlisted name per host.
+  ///
+  /// Every name the catalog declares names a whole session on its own, so two of them are two
+  /// sign-ins to choose between, never two halves of one. Hosts are never combined either: a
+  /// cookie set on `cursor.com` and one set on `authenticator.cursor.sh` are separate readings.
   static func groupedCandidates(
     records: [BrowserCookieRecord],
     browserName: String,
@@ -171,59 +176,11 @@ struct BrowserSessionImporter: BrowserSessionImporting, Sendable {
       seenByHost[pair.host] = seenNames
       byHost[pair.host, default: []].append((pair.name, pair.value))
     }
-    var candidates: [BrowserSessionCookieCandidate] = []
-    for host in byHost.keys.sorted() {
-      let hostPairs = byHost[host] ?? []
-      let context = hostPairs.filter { isOptionalContextCookie($0.name) }
-      let sessionPairs = hostPairs.filter { !isOptionalContextCookie($0.name) }
-      var families: [String: [(name: String, value: String)]] = [:]
-      var standalones: [(name: String, value: String)] = []
-      for pair in sessionPairs {
-        if let family = complementaryFamily(for: pair.name) {
-          families[family, default: []].append(pair)
-        } else {
-          standalones.append(pair)
-        }
-      }
-      for family in families.keys.sorted() {
-        guard
-          let candidate = candidate(
-            pairs: (families[family] ?? []) + context,
-            browserName: browserName,
-            profileName: profileName
-          )
-        else { continue }
-        candidates.append(candidate)
-      }
-      for pair in standalones {
-        guard
-          let candidate = candidate(
-            pairs: [pair] + context,
-            browserName: browserName,
-            profileName: profileName
-          )
-        else { continue }
-        candidates.append(candidate)
+    return byHost.keys.sorted().flatMap { host in
+      (byHost[host] ?? []).sorted { $0.name < $1.name }.compactMap { pair in
+        candidate(pairs: [pair], browserName: browserName, profileName: profileName)
       }
     }
-    return candidates
-  }
-
-  static func complementaryFamily(for name: String) -> String? {
-    if name == "sso" || name == "sso-rw" {
-      return "sso"
-    }
-    guard
-      let separator = name.lastIndex(of: "."),
-      separator < name.index(before: name.endIndex)
-    else { return nil }
-    let suffix = name[name.index(after: separator)...]
-    guard !suffix.isEmpty, suffix.allSatisfy(\.isNumber) else { return nil }
-    return String(name[..<separator])
-  }
-
-  static func isOptionalContextCookie(_ name: String) -> Bool {
-    name == "_account" || name == "lastActiveOrg"
   }
 
   static func sanitizedProfileName(_ value: String) -> String {

@@ -1,83 +1,42 @@
-use crate::catalog::ProviderId;
+//! grok.com's own gRPC-web billing RPC, called with the local OAuth access token.
+//!
+//! This is the last rung of Grok's ladder: it needs no credential the proxy did not already
+//! have, and it answers when `cli-chat-proxy.grok.com` cannot be reached at all.
+
 use std::time::Duration;
 
 use super::super::common::{
-    CollectionContext, ErrorCategory, HTTP_TIMEOUT, HttpClient, ProviderError, QuotaAccount,
-    QuotaSnapshot, QuotaWindow, VALIDATION_TIMEOUT, ValidatedBrowserSession, account_identity,
-    clamp_percent, cookie_named_value,
+    CollectionContext, ErrorCategory, HTTP_TIMEOUT, HttpClient, ProviderError, QuotaWindow,
+    clamp_percent,
 };
 
-pub const WEB_SOURCE: &str = "grok_web_billing_api";
-const WEB_BILLING_URL: &str = "https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig";
+pub const SOURCE: &str = "grok_billing_rpc";
+const BILLING_RPC_URL: &str = "https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig";
 const GRPC_EMPTY_FRAME: &[u8] = &[0x00, 0x00, 0x00, 0x00, 0x00];
 
-pub fn validate_browser_session(
-    cookie_header: &str,
-    context: &CollectionContext,
-) -> Result<ValidatedBrowserSession, ProviderError> {
-    sso_token(cookie_header).ok_or_else(|| ProviderError::new(ErrorCategory::Error, WEB_SOURCE))?;
-    let _ = fetch_web_billing(WebAuth::Cookie(cookie_header), context, VALIDATION_TIMEOUT)?;
-    let (account_fingerprint, _) = account_identity("grok", "user_id", None);
-    Ok(ValidatedBrowserSession {
-        cookie_header: cookie_header.to_owned(),
-        account_fingerprint,
-        account_label: Some("Grok".to_owned()),
-    })
-}
-
-pub fn collect(context: &CollectionContext) -> Result<QuotaSnapshot, ProviderError> {
-    let cookie_header = context
-        .browser_session(ProviderId::Grok)
-        .ok_or_else(|| ProviderError::new(ErrorCategory::AuthRequired, WEB_SOURCE))?;
-    sso_token(cookie_header).ok_or_else(|| ProviderError::new(ErrorCategory::Error, WEB_SOURCE))?;
-    let billing = fetch_web_billing(WebAuth::Cookie(cookie_header), context, HTTP_TIMEOUT)?;
-    let (fingerprint, scope) = account_identity("grok", "user_id", None);
-    Ok(QuotaSnapshot {
-        provider: ProviderId::Grok,
-        account: QuotaAccount {
-            fingerprint,
-            fingerprint_scope: scope,
-            label: Some("Grok".to_owned()),
-            plan: None,
-        },
-        windows: vec![billing_window(&billing, context.observed_unix())],
-        status: "available",
-        observed_at: context.observed_at(),
-    })
-}
-
 /// The billing-cycle window from grok.com's gRPC-web billing RPC using the local
-/// OAuth access token instead of browser cookies. CodexBar's last Automatic step.
+/// OAuth access token. CodexBar's last Automatic step.
 pub(super) fn bearer_billing_window(
     access_token: &str,
     context: &CollectionContext,
 ) -> Result<QuotaWindow, ProviderError> {
     let bearer = format!("Bearer {access_token}");
-    let billing = fetch_web_billing(WebAuth::Bearer(&bearer), context, HTTP_TIMEOUT)?;
+    let billing = fetch_billing(&bearer, context, HTTP_TIMEOUT)?;
     Ok(billing_window(&billing, context.observed_unix()))
 }
 
-enum WebAuth<'a> {
-    Cookie(&'a str),
-    Bearer(&'a str),
-}
-
-fn fetch_web_billing(
-    auth: WebAuth<'_>,
+fn fetch_billing(
+    bearer: &str,
     context: &CollectionContext,
     timeout: Duration,
-) -> Result<WebBilling, ProviderError> {
+) -> Result<Billing, ProviderError> {
     if context.cancelled() {
-        return Err(ProviderError::new(ErrorCategory::Unavailable, WEB_SOURCE));
+        return Err(ProviderError::new(ErrorCategory::Unavailable, SOURCE));
     }
     let client = HttpClient::with_timeout(timeout)?;
     let user_agent = context.user_agent();
-    let auth_header = match auth {
-        WebAuth::Cookie(header) => ("Cookie", header),
-        WebAuth::Bearer(header) => ("Authorization", header),
-    };
     let headers = [
-        auth_header,
+        ("Authorization", bearer),
         ("Origin", "https://grok.com"),
         ("Referer", "https://grok.com/?_s=usage"),
         ("Accept", "*/*"),
@@ -86,21 +45,12 @@ fn fetch_web_billing(
         ("x-user-agent", "connect-es/2.1.1"),
         ("User-Agent", user_agent.as_str()),
     ];
-    let (_, body) = client.post_bytes(WEB_BILLING_URL, &headers, GRPC_EMPTY_FRAME, WEB_SOURCE)?;
+    let (_, body) = client.post_bytes(BILLING_RPC_URL, &headers, GRPC_EMPTY_FRAME, SOURCE)?;
     parse_grpc_web_billing(&body, context.observed_unix())
 }
 
-fn sso_token(header: &str) -> Option<&str> {
-    cookie_named_value(header, "sso")
-        .or_else(|| cookie_named_value(header, "sso-rw"))
-        .map(str::trim)
-        .filter(|value| {
-            !value.is_empty() && value.len() <= 8_192 && !value.chars().any(char::is_control)
-        })
-}
-
 #[derive(Debug)]
-struct WebBilling {
+struct Billing {
     used_percent: f64,
     resets_at: Option<i64>,
 }
@@ -108,7 +58,7 @@ struct WebBilling {
 /// The RPC exposes only the reset instant, not the cadence. A reset 20–45 days out
 /// reads as monthly; anything nearer is the weekly credit pool, even late in the
 /// week (CodexBar's untyped-window rule), and no reset at all stays generic.
-fn billing_window(billing: &WebBilling, now: i64) -> QuotaWindow {
+fn billing_window(billing: &Billing, now: i64) -> QuotaWindow {
     let delta = billing.resets_at.and_then(|end| end.checked_sub(now));
     let title = match delta {
         Some(seconds) if (20 * 86_400..=45 * 86_400).contains(&seconds) => "Monthly",
@@ -129,7 +79,7 @@ fn billing_window(billing: &WebBilling, now: i64) -> QuotaWindow {
     }
 }
 
-fn parse_grpc_web_billing(data: &[u8], now: i64) -> Result<WebBilling, ProviderError> {
+fn parse_grpc_web_billing(data: &[u8], now: i64) -> Result<Billing, ProviderError> {
     let trailers = grpc_web_trailer_fields(data);
     if let Some(status) = trailers
         .get("grpc-status")
@@ -147,7 +97,7 @@ fn parse_grpc_web_billing(data: &[u8], now: i64) -> Result<WebBilling, ProviderE
         payloads.push(data.to_vec());
     }
     if payloads.is_empty() {
-        return Err(ProviderError::new(ErrorCategory::Error, WEB_SOURCE));
+        return Err(ProviderError::new(ErrorCategory::Error, SOURCE));
     }
     let mut scan = ProtobufScan::default();
     for payload in &payloads {
@@ -194,9 +144,9 @@ fn parse_grpc_web_billing(data: &[u8], now: i64) -> Result<WebBilling, ProviderE
     let percent = match parsed_percent {
         Some(value) => value,
         None if reset.is_some() && has_usage_period && scan.fixed32.is_empty() => 0.0,
-        None => return Err(ProviderError::new(ErrorCategory::Error, WEB_SOURCE)),
+        None => return Err(ProviderError::new(ErrorCategory::Error, SOURCE)),
     };
-    Ok(WebBilling {
+    Ok(Billing {
         used_percent: percent,
         resets_at: reset,
     })
@@ -211,15 +161,15 @@ fn grpc_status_error(status: i32, message: &str) -> ProviderError {
                 || lower.contains("no-credentials")
                 || lower.contains("no credentials")))
     {
-        return ProviderError::new(ErrorCategory::AuthRequired, WEB_SOURCE);
+        return ProviderError::new(ErrorCategory::AuthRequired, SOURCE);
     }
     if status == 9 && lower.contains("no personal team") {
-        return ProviderError::new(ErrorCategory::Unsupported, WEB_SOURCE);
+        return ProviderError::new(ErrorCategory::Unsupported, SOURCE);
     }
     if status == 4 || status == 14 {
-        return ProviderError::new(ErrorCategory::Unavailable, WEB_SOURCE);
+        return ProviderError::new(ErrorCategory::Unavailable, SOURCE);
     }
-    ProviderError::new(ErrorCategory::Error, WEB_SOURCE)
+    ProviderError::new(ErrorCategory::Error, SOURCE)
 }
 
 fn grpc_web_data_frames(data: &[u8]) -> Vec<Vec<u8>> {
@@ -404,18 +354,6 @@ fn read_varint(data: &[u8], index: &mut usize) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn browser_session_catalog_and_sso_rules() {
-        let spec = ProviderId::Grok
-            .metadata()
-            .browser_session
-            .expect("grok browser session");
-        assert_eq!(spec.cookie_names, &["sso", "sso-rw"]);
-        assert_eq!(sso_token("sso=session-value"), Some("session-value"));
-        assert_eq!(sso_token("sso-rw=alt"), Some("alt"));
-        assert!(sso_token("sessionKey=sk-ant-ok").is_none());
-    }
 
     #[test]
     fn parses_grpc_web_percent_and_auth_trailer() {
