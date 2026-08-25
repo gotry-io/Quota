@@ -55,10 +55,7 @@ export default {
         state,
         async getAccountSummary(headers) {
           try {
-            const url = new URL(
-              "/api/v5/account/summary?cost_mode=auto&usage_agents=all",
-              request.url,
-            );
+            const url = new URL("/api/v6/account/summary", request.url);
             // The document request's headers carry the session, and nothing else here should
             // travel with them: a conditional header meant for a page the browser holds would
             // make this internal read answer 304, which is not a summary.

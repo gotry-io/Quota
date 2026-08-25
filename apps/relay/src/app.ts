@@ -1,11 +1,13 @@
-import { validateModelCatalog, validatePricingCatalog } from "@gotry-io/quota-model";
 import {
-  AccountDevicesResponseSchema,
-  AccountQuotaResponseSchema,
+  mergeQuotaObservations,
+  quotaSubscriptionKey,
+  validateModelCatalog,
+  validatePricingCatalog,
+} from "@gotry-io/quota-model";
+import {
   AccountResponseSchema,
   AccountSummarySchema,
-  AccountUsageResponseSchema,
-  BILLING_AGENTS,
+  AccountUsageActivityResponseSchema,
   DeleteDeviceResponseSchema,
   DeviceAuthorizationDecisionRequestSchema,
   DeviceAuthorizationRequestSchema,
@@ -13,6 +15,7 @@ import {
   DeviceProfileUpdateRequestSchema,
   DeviceProfileUpdateResponseSchema,
   DeviceSyncResponseSchema,
+  IanaTimezoneSchema,
   IosLoginExchangeRequestSchema,
   IosOAuthTokenResponseSchema,
   IosSessionRefreshRequestSchema,
@@ -33,11 +36,9 @@ import {
   type RelayErrorEnvelope,
   SessionRefreshRequestSchema,
   SessionRefreshResponseSchema,
-  type UsageCostMode,
-  UsageCostModeSchema,
   UsageDateRangeSchema,
-  UsageSubmissionSchema,
   UsageUploadResponseSchema,
+  UsageUploadSchema,
 } from "@gotry-io/quota-protocol";
 import type {
   AccountMaintenanceInput,
@@ -45,7 +46,9 @@ import type {
   AccountScope,
   AccountState,
   DevicePrincipal,
+  DeviceRecord,
   DeviceScope,
+  StoredQuotaSnapshot,
   UsageState,
 } from "@gotry-io/relay-core";
 import { type Context, Hono } from "hono";
@@ -61,13 +64,18 @@ import {
 import { managedServiceInfo } from "./config.ts";
 import { PRICING_CATALOG, PRICING_CATALOG_ETAG } from "./pricing-catalog.ts";
 import { bearerToken, canonicalRequestDigest, type SecretHasher } from "./security.ts";
-import { buildUsageSummary, UsageSummaryLimitError } from "./usage-summary.ts";
+import {
+  buildAccountUsage,
+  buildActivityDays,
+  type UsageDateWindow,
+  UsageSummaryLimitError,
+} from "./usage-summary.ts";
 
 const maximumCredentialBodyBytes = 64 * 1024;
 const maximumSnapshotBodyBytes = 256 * 1024;
 const maximumAccountDevices = 256;
 const maximumAccountSnapshots = 8_192;
-const maximumAccountUsageSummaryRows = 100_000;
+const maximumAccountDailyRows = 100_000;
 const recentAuthenticationMilliseconds = 10 * 60 * 1000;
 const activeDeviceMilliseconds = 15 * 60 * 1000;
 const expiredSessionRetentionMilliseconds = 7 * 24 * 60 * 60 * 1000;
@@ -79,15 +87,6 @@ const expiredSessionRetentionMilliseconds = 7 * 24 * 60 * 60 * 1000;
  * and still bounds what an account accumulates from a provider it no longer collects.
  */
 const quotaSnapshotRetentionMilliseconds = 7 * 24 * 60 * 60 * 1000;
-/**
- * How long an accepted Usage receipt stays available to recognize a retry.
- *
- * A client drains its outbox continuously and reuses the submission ID only while that entry
- * is still pending, so a retry a week later is not a retry any more. Past this window the
- * device's own sequence is the check, and a stale submission fails closed with a conflict
- * rather than being written twice.
- */
-const usageReceiptRetentionMilliseconds = 7 * 24 * 60 * 60 * 1000;
 const maintenanceBatchLimit = 100;
 
 function requireValidPricingCatalog(value: PricingCatalog): PricingCatalog {
@@ -140,9 +139,6 @@ export function accountMaintenanceInput(checkedAt: Date): AccountMaintenanceInpu
     snapshot_observed_before: new Date(
       checkedAt.getTime() - quotaSnapshotRetentionMilliseconds,
     ).toISOString(),
-    usage_receipt_accepted_before: new Date(
-      checkedAt.getTime() - usageReceiptRetentionMilliseconds,
-    ).toISOString(),
     limit: maintenanceBatchLimit,
   };
 }
@@ -174,8 +170,8 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     "/api/v2/account",
     "/api/v2/account/*",
     "/api/v2/device/*",
-    "/api/v5/account/*",
-    "/api/v5/device/*",
+    "/api/v6/account/*",
+    "/api/v6/device/*",
   ]) {
     app.use(path, async (context, next) => {
       context.header("Cache-Control", "no-store");
@@ -186,11 +182,11 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     app.use(path, bodyLimit({ maxSize: maximumCredentialBodyBytes, onError: requestBodyTooLarge }));
   }
   app.use(
-    "/api/v5/device/snapshots",
+    "/api/v6/device/snapshots",
     bodyLimit({ maxSize: maximumSnapshotBodyBytes, onError: requestBodyTooLarge }),
   );
   app.use(
-    "/api/v5/device/usage",
+    "/api/v6/device/usage",
     bodyLimit({ maxSize: MAXIMUM_USAGE_SUBMISSION_BYTES, onError: requestBodyTooLarge }),
   );
   app.use(
@@ -524,111 +520,99 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     );
   });
 
-  app.get("/api/v2/account/devices", async (context) => {
-    const principal = await accountReader(context, options, now());
-    if (principal instanceof Response) {
-      return principal;
-    }
-    const devices = await options.state.listAccountDevices(principal.account_id);
-    if (devices.length > maximumAccountDevices) {
-      return resultLimit(context);
-    }
-    return context.json(
-      AccountDevicesResponseSchema.parse({
-        protocol_version: PROTOCOL_VERSION,
-        devices: devices.map((device) => publicDevice(device, now())),
-      }),
-    );
-  });
-
-  app.get("/api/v5/account/snapshots", async (context) => {
-    const principal = await accountReader(context, options, now());
-    if (principal instanceof Response) return principal;
-    const stored = await options.state.listLatestSnapshots(principal.account_id);
-    if (stored.length > maximumAccountSnapshots) return resultLimit(context);
-    const quota = stored.map(publicObservation);
-    return context.json(
-      AccountQuotaResponseSchema.parse({
-        protocol_version: MANAGED_DATA_PROTOCOL_VERSION,
-        quota,
-      }),
-    );
-  });
-
-  app.get("/api/v5/account/summary", async (context) => {
+  app.get("/api/v6/account/summary", async (context) => {
     const checkedAt = now();
     const principal = await accountReader(context, options, checkedAt);
     if (principal instanceof Response) return principal;
-    const request = parseAccountUsageRequest(context, checkedAt, true);
-    if (request instanceof Response) return request;
+    if (!hasOnlyQueryKeys(context, ["tz"])) return invalidRequest(context);
+    const timezone = requestedTimezone(context);
+    if (timezone === null) return invalidRequest(context);
+    // The calendar the caller keeps decides which days `today` and the trailing windows name,
+    // so it decides when this answer stops being the one they already hold.
+    const localDate = localDateIn(timezone, checkedAt);
     const conditional = await answerConditionally(context, principal, options, {
       catalogRevision: catalog.revision,
       modelCatalogRevision: modelCatalog.revision,
       checkedAt,
+      rolloverKey: localDate,
     });
     if (conditional) return conditional;
-    const selected = await runAccountUsageQuery(
-      context,
-      principal,
-      options,
-      catalog,
-      modelCatalog,
-      request,
-    );
-    if (selected instanceof Response) return selected;
-    const [account, devices, stored] = await Promise.all([
+    const [account, devices, stored, daily] = await Promise.all([
       options.state.getAccount(principal.account_id),
       options.state.listAccountDevices(principal.account_id),
       options.state.listLatestSnapshots(principal.account_id),
+      options.usageState.queryDailyUsage(principal.account_id, { limit: maximumAccountDailyRows }),
     ]);
     if (!account) return unauthorized(context);
-    if (devices.length > maximumAccountDevices || stored.length > maximumAccountSnapshots) {
+    if (
+      devices.length > maximumAccountDevices ||
+      stored.length > maximumAccountSnapshots ||
+      daily.truncated
+    ) {
       return resultLimit(context);
     }
-    const quota = stored.map(publicObservation);
-    const response = {
-      protocol_version: MANAGED_DATA_PROTOCOL_VERSION,
-      account: publicAccount(account),
-      devices: devices.map((device) => publicDevice(device, checkedAt)),
-      quota,
-      usage: selected.summary,
-    };
-    return context.json(AccountSummarySchema.parse(response));
+    const lastObserved = newestObservationPerDevice(stored);
+    try {
+      return context.json(
+        AccountSummarySchema.parse({
+          protocol_version: MANAGED_DATA_PROTOCOL_VERSION,
+          account: publicAccount(account),
+          devices: devices.map((device) => publicDevice(device, lastObserved)),
+          subscriptions: resolvedSubscriptions(stored, checkedAt),
+          usage: buildAccountUsage({
+            rows: daily.rows,
+            catalog,
+            modelCatalog,
+            today: trailingDays(localDate, 1),
+            last7Days: trailingDays(localDate, 7),
+            last30Days: trailingDays(localDate, 30),
+          }),
+          pricing_revision: catalog.revision,
+          model_catalog_revision: modelCatalog.revision,
+        }),
+      );
+    } catch (error) {
+      if (error instanceof UsageSummaryLimitError) return resultLimit(context);
+      throw error;
+    }
   });
 
-  for (const path of ["/api/v5/account/usage", "/api/v5/account/usage/summary"]) {
-    app.get(path, async (context) => {
-      const checkedAt = now();
-      const principal = await accountReader(context, options, checkedAt);
-      if (principal instanceof Response) {
-        return principal;
-      }
-      const request = parseAccountUsageRequest(context, checkedAt, false);
-      if (request instanceof Response) return request;
-      const conditional = await answerConditionally(context, principal, options, {
-        catalogRevision: catalog.revision,
-        modelCatalogRevision: modelCatalog.revision,
-        checkedAt,
-      });
-      if (conditional) return conditional;
-      const selected = await runAccountUsageQuery(
-        context,
-        principal,
-        options,
-        catalog,
-        modelCatalog,
-        request,
-      );
-      return selected instanceof Response
-        ? selected
-        : context.json(
-            AccountUsageResponseSchema.parse({
-              protocol_version: MANAGED_DATA_PROTOCOL_VERSION,
-              usage: selected.summary,
-            }),
-          );
+  app.get("/api/v6/account/usage/activity", async (context) => {
+    const checkedAt = now();
+    const principal = await accountReader(context, options, checkedAt);
+    if (principal instanceof Response) return principal;
+    if (!hasOnlyQueryKeys(context, ["from", "to"])) return invalidRequest(context);
+    const range = UsageDateRangeSchema.safeParse({
+      from: context.req.query("from"),
+      to: context.req.query("to"),
     });
-  }
+    if (!range.success) return invalidRequest(context);
+    // The range is pinned by the request, so nothing about this answer turns over on its own.
+    const conditional = await answerConditionally(context, principal, options, {
+      catalogRevision: catalog.revision,
+      modelCatalogRevision: modelCatalog.revision,
+      checkedAt,
+      rolloverKey: null,
+    });
+    if (conditional) return conditional;
+    const daily = await options.usageState.queryDailyUsage(principal.account_id, {
+      from: range.data.from,
+      to: range.data.to,
+      limit: maximumAccountDailyRows,
+    });
+    if (daily.truncated) return resultLimit(context);
+    try {
+      return context.json(
+        AccountUsageActivityResponseSchema.parse({
+          protocol_version: MANAGED_DATA_PROTOCOL_VERSION,
+          days: buildActivityDays({ rows: daily.rows, catalog }),
+        }),
+      );
+    } catch (error) {
+      if (error instanceof UsageSummaryLimitError) return resultLimit(context);
+      throw error;
+    }
+  });
 
   app.delete("/api/v2/account/devices/:device_id", async (context) => {
     const principal = await authorizeAccount(context, options, "account:manage", now());
@@ -689,8 +673,6 @@ export function createRelayApp(options: RelayAppOptions): Hono {
         account_id: principal.account_id,
         device_id: principal.device_id,
         device_generation: control.generation,
-        next_snapshot_sequence: control.next_snapshot_sequence,
-        next_usage_sequence: control.next_usage_sequence,
         usage_deleted_before: control.usage_deleted_before,
         usage_sync_revision: control.usage_sync_revision,
       }),
@@ -752,7 +734,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     );
   });
 
-  app.put("/api/v5/device/snapshots", async (context) => {
+  app.put("/api/v6/device/snapshots", async (context) => {
     const principal = await deviceWriter(context, options, "quota:write:self", now());
     if (principal instanceof Response) {
       return principal;
@@ -761,95 +743,43 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     if (envelope instanceof Response) {
       return envelope;
     }
-    if (envelope.device_id !== principal.device_id) {
-      return forbidden(context);
-    }
-    const outcome = await options.state.recordSnapshot(principal, envelope, now().toISOString());
-    if (outcome === "sequence_conflict") {
-      return relayError(
-        context,
-        409,
-        "sequence_conflict",
-        "The snapshot sequence was not accepted.",
-      );
-    }
-    if (outcome === "stale_device") {
+    const written = await options.state.recordSnapshot(principal, envelope, now().toISOString());
+    if (written.outcome === "stale_device") {
       return relayError(context, 409, "stale_generation", "The device generation is stale.");
-    }
-    const control = await options.state.getDeviceSyncControl(
-      principal.device_id,
-      principal.generation,
-    );
-    if (!control) {
-      return unauthorized(context);
     }
     return context.json(
       QuotaSnapshotUploadResponseSchema.parse({
         protocol_version: MANAGED_DATA_PROTOCOL_VERSION,
-        outcome,
         device_id: principal.device_id,
         device_generation: principal.generation,
-        accepted_sequence: envelope.sequence,
-        next_snapshot_sequence: control.next_snapshot_sequence,
+        accepted: written.accepted,
+        ignored: written.ignored,
       }),
     );
   });
 
-  app.put("/api/v5/device/usage", async (context) => {
+  app.put("/api/v6/device/usage", async (context) => {
     const principal = await deviceWriter(context, options, "usage:write:self", now());
     if (principal instanceof Response) {
       return principal;
     }
-    const submission = await parseJSON(context, UsageSubmissionSchema);
-    if (submission instanceof Response) {
-      return submission;
+    const upload = await parseJSON(context, UsageUploadSchema);
+    if (upload instanceof Response) {
+      return upload;
     }
-    if (submission.device_id !== principal.device_id) {
-      return forbidden(context);
+    const written = await options.usageState.recordUsage(principal, upload, now().toISOString());
+    if (written.outcome === "stale_device") {
+      return relayError(context, 409, "stale_generation", "The device generation is stale.");
     }
-    const outcome = await options.usageState.recordUsage(
-      principal,
-      submission,
-      now().toISOString(),
+    return context.json(
+      UsageUploadResponseSchema.parse({
+        protocol_version: MANAGED_DATA_PROTOCOL_VERSION,
+        device_id: principal.device_id,
+        device_generation: principal.generation,
+        accepted: written.accepted,
+        ignored: written.ignored,
+      }),
     );
-    const control = await options.state.getDeviceSyncControl(
-      principal.device_id,
-      principal.generation,
-    );
-    if (!control) {
-      return unauthorized(context);
-    }
-    const wireOutcome =
-      outcome.outcome === "stale_device"
-        ? "stale_generation"
-        : outcome.outcome === "deleted_range"
-          ? "deleted"
-          : outcome.outcome;
-    const body = UsageUploadResponseSchema.parse({
-      protocol_version: MANAGED_DATA_PROTOCOL_VERSION,
-      outcome: wireOutcome,
-      device_id: principal.device_id,
-      device_generation: principal.generation,
-      accepted_sequence:
-        outcome.outcome === "accepted" || outcome.outcome === "duplicate"
-          ? submission.sequence
-          : null,
-      next_sequence:
-        "next_sequence" in outcome ? outcome.next_sequence : control.next_usage_sequence,
-      usage_sync_revision:
-        "usage_sync_revision" in outcome
-          ? outcome.usage_sync_revision
-          : control.usage_sync_revision,
-      deleted_before: outcome.outcome === "deleted_range" ? control.usage_deleted_before : null,
-      ...(outcome.outcome === "rejected" ? { rejection_reason: outcome.rejection_reason } : {}),
-    });
-    const status =
-      outcome.outcome === "sequence_conflict" ||
-      outcome.outcome === "stale_device" ||
-      outcome.outcome === "deleted_range"
-        ? 409
-        : 200;
-    return context.json(body, status);
   });
 
   app.get("/api/v2/pricing/catalog", (context) => {
@@ -908,70 +838,26 @@ export function createRelayApp(options: RelayAppOptions): Hono {
   return app;
 }
 
-interface AccountUsageRequest {
-  range: { from: string; to: string } | null;
-  mode: UsageCostMode;
-  deviceId: string | undefined;
-  defaultTo: string;
-}
-
 /**
- * Everything about an Account Usage read that can be decided from the request alone.
+ * Stamps an Account read with its validator and answers a matching conditional request.
  *
- * It runs before the conditional answer so a request naming a query key this route does not
- * serve is still refused rather than answered from a cache validator.
- */
-function parseAccountUsageRequest(
-  context: Context,
-  checkedAt: Date,
-  allByDefault: boolean,
-): AccountUsageRequest | Response {
-  if (!hasOnlyQueryKeys(context, ["from", "to", "device_id", "cost_mode", "usage_agents"])) {
-    return invalidRequest(context);
-  }
-  const requestedAgents = context.req.query("usage_agents");
-  if (requestedAgents !== undefined && requestedAgents !== "all") {
-    return invalidRequest(context);
-  }
-  const defaultTo = checkedAt.toISOString().slice(0, 10);
-  const defaultFrom = new Date(checkedAt.getTime() - 29 * 24 * 60 * 60 * 1000)
-    .toISOString()
-    .slice(0, 10);
-  const requestedFrom = context.req.query("from");
-  const requestedTo = context.req.query("to");
-  const allDates = allByDefault && requestedFrom === undefined && requestedTo === undefined;
-  const range = allDates
-    ? null
-    : UsageDateRangeSchema.safeParse({
-        from: requestedFrom ?? defaultFrom,
-        to: requestedTo ?? defaultTo,
-      });
-  const mode = UsageCostModeSchema.safeParse(context.req.query("cost_mode") ?? "calculate");
-  if (range?.success === false || !mode.success) {
-    return invalidRequest(context);
-  }
-  return {
-    range: range?.success ? range.data : null,
-    mode: mode.data,
-    deviceId: context.req.query("device_id"),
-    defaultTo,
-  };
-}
-
-/**
- * Stamps the Account read with its validator and answers a matching conditional request.
- *
- * A client polls these two routes on a timer and the answer is almost always the one it
- * already holds. Comparing three aggregates is far cheaper than folding every retained Usage
- * fact again, so the validator is computed first and a match returns before any Usage query
- * runs. `no-cache` rather than `no-store`: a browser may keep the body as long as it asks
- * before showing it, which is what makes the conditional request possible at all.
+ * A client polls these routes on a timer and the answer is almost always the one it already
+ * holds. Comparing a handful of aggregates is far cheaper than folding every retained day
+ * again, so the validator is computed first and a match returns before any Usage query runs.
+ * `no-cache` rather than `no-store`: a browser may keep the body as long as it asks before
+ * showing it, which is what makes the conditional request possible at all.
  */
 async function answerConditionally(
   context: Context,
   principal: AccountPrincipal,
   options: RelayAppOptions,
-  input: { catalogRevision: string; modelCatalogRevision: string; checkedAt: Date },
+  input: {
+    catalogRevision: string;
+    modelCatalogRevision: string;
+    checkedAt: Date;
+    /** What makes this answer turn over with no write behind it, or null when nothing does. */
+    rolloverKey: string | null;
+  },
 ): Promise<Response | null> {
   const url = new URL(context.req.url);
   const stamp = await options.state.accountVersionStamp(
@@ -980,20 +866,15 @@ async function answerConditionally(
   );
   const entity = await canonicalRequestDigest({
     // Two routes answer the same query string with different bodies, so the path is part of
-    // the identity. A range the caller did not pin rolls over at UTC midnight with no write
-    // behind it, so the day it was computed for is too. The Account is in the digest because
-    // two empty Accounts have the same stamp, and a client that switched between them must
-    // not be told its held body still applies.
+    // the identity. The Account is in the digest because two empty Accounts have the same
+    // stamp, and a client that switched between them must not be told its held body applies.
     account: principal.account_id,
     path: url.pathname,
     query: url.search,
     stamp,
     pricing_revision: input.catalogRevision,
     model_catalog_revision: input.modelCatalogRevision,
-    utc_date:
-      url.searchParams.has("from") && url.searchParams.has("to")
-        ? null
-        : input.checkedAt.toISOString().slice(0, 10),
+    rollover: input.rolloverKey,
   });
   const etag = `"${entity}"`;
   context.header("ETag", etag);
@@ -1001,73 +882,58 @@ async function answerConditionally(
   return context.req.header("If-None-Match") === etag ? context.body(null, 304) : null;
 }
 
-async function runAccountUsageQuery(
-  context: Context,
-  principal: AccountPrincipal,
-  options: RelayAppOptions,
-  catalog: PricingCatalog,
-  modelCatalog: ModelCatalog,
-  request: AccountUsageRequest,
-) {
-  const deviceId = request.deviceId;
-  if (deviceId && !(await options.state.accountOwnsVisibleDevice(principal.account_id, deviceId))) {
-    return notFound(context);
-  }
-  const result = await options.usageState.queryAccountUsage(principal.account_id, {
-    ...(deviceId ? { device_id: deviceId } : {}),
-    agents: BILLING_AGENTS,
-    ...(request.range
-      ? {
-          from: request.range.from,
-          to: request.range.to,
-          ...usageDateUtcBounds(request.range),
-        }
-      : {}),
-    limit: maximumAccountUsageSummaryRows,
-  });
-  if (result.truncated) {
-    return resultLimit(context);
-  }
-  try {
-    return {
-      summary: buildUsageSummary(
-        result,
-        request.range ?? retainedUsageRange(result.rows, request.defaultTo),
-        request.mode,
-        catalog,
-        false,
-        modelCatalog,
-        true,
-      ),
-    };
-  } catch (error) {
-    if (error instanceof UsageSummaryLimitError) {
-      return resultLimit(context);
+/** The `tz` a read was asked for, `UTC` when it named none, or null when it named nonsense. */
+function requestedTimezone(context: Context): string | null {
+  const requested = context.req.query("tz");
+  if (requested === undefined) return "UTC";
+  const parsed = IanaTimezoneSchema.safeParse(requested);
+  return parsed.success ? parsed.data : null;
+}
+
+function localDateIn(timezone: string, instant: Date): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(instant);
+}
+
+/** The window of `days` UTC dates ending on `lastDate`, inclusive at both ends. */
+function trailingDays(lastDate: string, days: number): UsageDateWindow {
+  const from = new Date(Date.parse(`${lastDate}T00:00:00Z`) - (days - 1) * 86_400_000);
+  return { from: from.toISOString().slice(0, 10), to: lastDate };
+}
+
+/**
+ * The subscriptions behind this Account's observations, resolved once here.
+ *
+ * Relay keeps one observation per reporting device. Collapsing them is one rule, and it used to
+ * be restated by every client that read them, which is how one account collected on three Macs
+ * reached the dashboard as three cards. See ADR 0003.
+ */
+function resolvedSubscriptions(stored: readonly StoredQuotaSnapshot[], checkedAt: Date) {
+  return mergeQuotaObservations(stored, checkedAt).map((subscription) => ({
+    key: quotaSubscriptionKey(subscription.identity),
+    provider: subscription.snapshot.provider,
+    snapshot: subscription.snapshot,
+    sources: subscription.sources.map((source) => ({
+      device_id: source.device_id,
+      observed_at: source.observed_at,
+    })),
+  }));
+}
+
+/** When each device's newest stored reading was taken. */
+function newestObservationPerDevice(stored: readonly StoredQuotaSnapshot[]): Map<string, string> {
+  const newest = new Map<string, string>();
+  for (const observation of stored) {
+    const current = newest.get(observation.device_id);
+    if (current === undefined || observation.snapshot.observed_at > current) {
+      newest.set(observation.device_id, observation.snapshot.observed_at);
     }
-    throw error;
   }
-}
-
-function retainedUsageRange(
-  rows: readonly { usage_date: string }[],
-  currentDate: string,
-): { from: string; to: string } {
-  if (rows.length === 0) return { from: currentDate, to: currentDate };
-  const dates = rows.map((row) => row.usage_date).sort();
-  return { from: dates[0] ?? currentDate, to: dates.at(-1) ?? currentDate };
-}
-
-function usageDateUtcBounds(range: { from: string; to: string }): {
-  start_at: string;
-  end_at: string;
-} {
-  const maximumIanaOffsetHours = 14;
-  const start = Date.parse(`${range.from}T00:00:00Z`) - maximumIanaOffsetHours * 3_600_000;
-  const end = Date.parse(`${range.to}T00:00:00Z`) + (24 + maximumIanaOffsetHours) * 3_600_000;
-  return {
-    start_at: new Date(start).toISOString().replace(".000Z", "Z"),
-    end_at: new Date(end).toISOString().replace(".000Z", "Z"),
-  };
+  return newest;
 }
 
 async function accountReader(
@@ -1186,45 +1052,21 @@ function publicAccount(account: { id: string; display_label: string | null; crea
   };
 }
 
-function publicDevice(
-  device: {
-    id: string;
-    display_name: string | null;
-    platform: string | null;
-    generation: number;
-    created_at: string;
-    last_login_at: string;
-    last_seen_at: string | null;
-    signed_out_at: string | null;
-  },
-  checkedAt: Date,
-) {
-  const status = device.signed_out_at
-    ? "signed_out"
-    : device.last_seen_at &&
-        checkedAt.getTime() - Date.parse(device.last_seen_at) <= activeDeviceMilliseconds
-      ? "active"
-      : "offline";
+/**
+ * A device as an Account reads it.
+ *
+ * The two instants Relay witnessed — when the device last called, and when the newest reading it
+ * sent was taken — are what a reader needs; how recently it spoke is derived from them rather
+ * than reported as a status.
+ */
+function publicDevice(device: DeviceRecord, lastObserved: ReadonlyMap<string, string>) {
   return {
-    device_id: device.id,
+    id: device.id,
     display_name: device.display_name ?? "Quota client",
     platform: device.platform ?? "linux",
-    device_generation: device.generation,
-    status,
-    created_at: device.created_at,
-    last_login_at: device.last_login_at,
     last_seen_at: device.last_seen_at,
-    signed_out_at: device.signed_out_at,
+    last_observed_at: lastObserved.get(device.id) ?? null,
   };
-}
-
-/**
- * The observation as an Account reads it: which device reported, and what it read. The
- * sequence, capture, and write instants are how Relay keeps the row, not something a
- * reader has ever needed.
- */
-function publicObservation(stored: { device_id: string; snapshot: unknown }) {
-  return { device_id: stored.device_id, snapshot: stored.snapshot };
 }
 
 function iosOAuthTokenResponse(
@@ -1252,8 +1094,6 @@ function oauthTokenResponse(
     account_id: issued.account_id,
     device_id: issued.device_id,
     device_generation: issued.device_generation,
-    next_snapshot_sequence: issued.next_snapshot_sequence,
-    next_usage_sequence: issued.next_usage_sequence,
     usage_deleted_before: issued.usage_deleted_before,
     usage_sync_revision: issued.usage_sync_revision,
     account_session: {

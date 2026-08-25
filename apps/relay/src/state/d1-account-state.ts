@@ -1,4 +1,8 @@
-import { IOS_OAUTH_CLIENT_ID, QuotaSnapshotSchema } from "@gotry-io/quota-protocol";
+import {
+  IOS_OAUTH_CLIENT_ID,
+  type ProviderId,
+  QuotaSnapshotSchema,
+} from "@gotry-io/quota-protocol";
 import {
   ACCOUNT_SCOPES,
   type AccountLoginGrantConsumeResult,
@@ -27,10 +31,9 @@ import {
   type RateLimitResult,
   type RefreshSessionInput,
   type RevokeRefreshSessionInput,
-  type SnapshotWriteOutcome,
+  type SnapshotWriteResult,
   type StoredQuotaSnapshot,
 } from "@gotry-io/relay-core";
-import { canonicalRequestDigest } from "../security.ts";
 import {
   decodeAccountScopes,
   decodeDeviceScopes,
@@ -60,16 +63,7 @@ interface DevicePrincipalRow {
 
 interface SnapshotRow {
   device_id: string;
-  sequence: number;
-  captured_at: string;
   snapshot_json: string;
-  updated_at: string;
-}
-
-interface SnapshotControlRow {
-  generation: number;
-  last_sequence: number;
-  last_snapshot_digest: string | null;
 }
 
 export class D1AccountState implements AccountState {
@@ -136,14 +130,6 @@ export class D1AccountState implements AccountState {
            )`,
         )
         .bind(input.snapshot_observed_before, input.limit),
-      this.database
-        .prepare(
-          `DELETE FROM usage_submissions WHERE rowid IN (
-             SELECT rowid FROM usage_submissions WHERE accepted_at < ?1
-             ORDER BY accepted_at ASC, rowid ASC LIMIT ?2
-           )`,
-        )
-        .bind(input.usage_receipt_accepted_before, input.limit),
     ]);
   }
 
@@ -395,8 +381,8 @@ export class D1AccountState implements AccountState {
              last_seen_at = excluded.last_seen_at,
              signed_out_at = NULL,
              deleted_at = NULL
-           RETURNING id, account_id, display_name, platform, generation, last_sequence,
-                     last_usage_sequence, usage_sync_revision, created_at, last_login_at,
+           RETURNING id, account_id, display_name, platform, generation,
+                     usage_sync_revision, created_at, last_login_at,
                      last_seen_at, signed_out_at, deleted_at, deleted_before`,
           )
           .bind(
@@ -843,8 +829,7 @@ export class D1AccountState implements AccountState {
   ): Promise<DeviceSyncControl | null> {
     const row = await this.database
       .prepare(
-        `SELECT id AS device_id, generation, last_sequence + 1 AS next_snapshot_sequence,
-                last_usage_sequence + 1 AS next_usage_sequence,
+        `SELECT id AS device_id, generation,
                 deleted_before AS usage_deleted_before, usage_sync_revision
          FROM devices
          WHERE id = ?1 AND generation = ?2 AND signed_out_at IS NULL AND deleted_at IS NULL`,
@@ -932,8 +917,7 @@ export class D1AccountState implements AccountState {
       this.database
         .prepare(
           `UPDATE devices
-           SET generation = generation + 1, last_sequence = -1, last_snapshot_digest = NULL,
-               last_usage_sequence = -1, usage_sync_revision = usage_sync_revision + 1,
+           SET generation = generation + 1, usage_sync_revision = usage_sync_revision + 1,
                display_name = NULL, platform = NULL, last_seen_at = NULL,
                signed_out_at = ?3, deleted_at = ?3, deleted_before = ?3
            WHERE account_id = ?1 AND id = ?2 AND deleted_at IS NULL
@@ -970,21 +954,7 @@ export class D1AccountState implements AccountState {
         .bind(accountId, deviceId),
       this.database
         .prepare(
-          `DELETE FROM usage_coverage WHERE device_id = ?2 AND EXISTS (
-             SELECT 1 FROM devices WHERE id = ?2 AND account_id = ?1
-           )`,
-        )
-        .bind(accountId, deviceId),
-      this.database
-        .prepare(
-          `DELETE FROM usage_submissions WHERE device_id = ?2 AND EXISTS (
-             SELECT 1 FROM devices WHERE id = ?2 AND account_id = ?1
-           )`,
-        )
-        .bind(accountId, deviceId),
-      this.database
-        .prepare(
-          `DELETE FROM usage_submission_parts WHERE device_id = ?2 AND EXISTS (
+          `DELETE FROM usage_daily WHERE device_id = ?2 AND EXISTS (
              SELECT 1 FROM devices WHERE id = ?2 AND account_id = ?1
            )`,
         )
@@ -996,120 +966,138 @@ export class D1AccountState implements AccountState {
     return resultRow<DeleteDeviceResult>(results[0]);
   }
 
+  /**
+   * Store this device's readings and drop the fingerprints it no longer sees.
+   *
+   * A reading is placed by `(provider, fingerprint)` and ordered by the instant it was observed,
+   * so a re-sent envelope changes nothing and a reading older than the stored one cannot
+   * overwrite it. The envelope states the fingerprints this device currently sees for each
+   * provider it names, so a subscription it has stopped observing stops speaking for it here
+   * rather than waiting out retention.
+   */
   async recordSnapshot(
     principal: DevicePrincipal,
     envelope: QuotaSnapshotSubmission,
     receivedAt: string,
-  ): Promise<SnapshotWriteOutcome> {
-    const digest = await canonicalRequestDigest(envelope);
+  ): Promise<SnapshotWriteResult> {
     const control = await this.database
       .prepare(
-        `SELECT generation, last_sequence, last_snapshot_digest
+        `SELECT generation
          FROM devices
          WHERE id = ?1 AND account_id = ?2 AND signed_out_at IS NULL AND deleted_at IS NULL`,
       )
       .bind(principal.device_id, principal.account_id)
-      .first<SnapshotControlRow>();
+      .first<{ generation: number }>();
     if (
       !control ||
       control.generation !== principal.generation ||
       envelope.generation !== principal.generation
     ) {
-      return "stale_device";
+      return { outcome: "stale_device" };
     }
-    if (envelope.sequence === control.last_sequence) {
-      return digest === control.last_snapshot_digest ? "duplicate" : "sequence_conflict";
-    }
-    if (envelope.sequence !== control.last_sequence + 1) {
-      return "sequence_conflict";
-    }
-    const statements = [
-      this.database
-        .prepare(
-          `UPDATE devices
-           SET last_sequence = ?3, last_seen_at = ?4, last_snapshot_digest = ?5
-           WHERE id = ?1 AND generation = ?2 AND deleted_at IS NULL AND signed_out_at IS NULL
-             AND last_sequence = ?3 - 1`,
-        )
-        .bind(principal.device_id, principal.generation, envelope.sequence, receivedAt, digest),
-      ...envelope.snapshots.map((snapshot) =>
+
+    const stored = await this.database
+      .prepare(
+        `SELECT provider, account_fingerprint AS fingerprint, observed_at
+         FROM quota_snapshots WHERE device_id = ?1`,
+      )
+      .bind(principal.device_id)
+      .all<{ provider: string; fingerprint: string; observed_at: string }>();
+    const observed = new Map(
+      stored.results.map((row) => [`${row.provider}\u0000${row.fingerprint}`, row.observed_at]),
+    );
+
+    const accepted = new Set<ProviderId>();
+    const ignored = new Set<ProviderId>();
+    const statements: D1PreparedStatement[] = [];
+    for (const snapshot of envelope.snapshots) {
+      const current = observed.get(`${snapshot.provider}\u0000${snapshot.account.fingerprint}`);
+      if (current !== undefined && Date.parse(snapshot.observed_at) <= Date.parse(current)) {
+        ignored.add(snapshot.provider);
+        continue;
+      }
+      accepted.add(snapshot.provider);
+      statements.push(
         this.database
           .prepare(
             `INSERT INTO quota_snapshots (
-               device_id, provider, account_fingerprint, sequence, captured_at,
-               observed_at, snapshot_json, updated_at
+               device_id, provider, account_fingerprint, observed_at, snapshot_json, updated_at
              )
-             SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8
+             SELECT ?1, ?2, ?3, ?4, ?5, ?6
              WHERE EXISTS (
                SELECT 1 FROM devices
-               WHERE id = ?1 AND last_sequence = ?4 AND last_snapshot_digest = ?9
+               WHERE id = ?1 AND account_id = ?7 AND generation = ?8
+                 AND signed_out_at IS NULL AND deleted_at IS NULL
              )
              ON CONFLICT(device_id, provider, account_fingerprint) DO UPDATE SET
-               sequence = excluded.sequence,
-               captured_at = excluded.captured_at,
                observed_at = excluded.observed_at,
                snapshot_json = excluded.snapshot_json,
-               updated_at = excluded.updated_at`,
+               updated_at = excluded.updated_at
+             WHERE excluded.observed_at > quota_snapshots.observed_at`,
           )
           .bind(
             principal.device_id,
             snapshot.provider,
             snapshot.account.fingerprint,
-            envelope.sequence,
-            envelope.captured_at,
             snapshot.observed_at,
             JSON.stringify(snapshot),
             receivedAt,
-            digest,
+            principal.account_id,
+            principal.generation,
           ),
-      ),
-    ];
-    const results = await this.database.batch(statements);
-    if (resultChanged(results[0])) {
-      return "accepted";
+      );
     }
-    const concurrent = await this.database
-      .prepare(
-        `SELECT last_sequence, last_snapshot_digest
-         FROM devices WHERE id = ?1 AND generation = ?2 AND deleted_at IS NULL`,
-      )
-      .bind(principal.device_id, principal.generation)
-      .first<Pick<SnapshotControlRow, "last_sequence" | "last_snapshot_digest">>();
-    return concurrent?.last_sequence === envelope.sequence &&
-      concurrent.last_snapshot_digest === digest
-      ? "duplicate"
-      : "sequence_conflict";
+    for (const provider of new Set(envelope.snapshots.map((snapshot) => snapshot.provider))) {
+      const fingerprints = envelope.snapshots
+        .filter((snapshot) => snapshot.provider === provider)
+        .map((snapshot) => snapshot.account.fingerprint);
+      statements.push(
+        this.database
+          .prepare(
+            `DELETE FROM quota_snapshots
+             WHERE device_id = ?1 AND provider = ?2
+               AND account_fingerprint NOT IN (SELECT value FROM json_each(?3))`,
+          )
+          .bind(principal.device_id, provider, JSON.stringify(fingerprints)),
+      );
+    }
+    statements.push(
+      this.database
+        .prepare(
+          `UPDATE devices SET last_seen_at = ?3
+           WHERE id = ?1 AND account_id = ?4 AND generation = ?2
+             AND signed_out_at IS NULL AND deleted_at IS NULL`,
+        )
+        .bind(principal.device_id, principal.generation, receivedAt, principal.account_id),
+    );
+    await this.database.batch(statements);
+    return {
+      outcome: "written",
+      accepted: [...accepted].sort(),
+      ignored: [...ignored].filter((provider) => !accepted.has(provider)).sort(),
+    };
   }
 
   async listLatestSnapshots(accountId: string): Promise<StoredQuotaSnapshot[]> {
     const rows = await this.database
       .prepare(
-        `SELECT snapshots.device_id, snapshots.sequence, snapshots.captured_at,
-                snapshots.snapshot_json, snapshots.updated_at
+        `SELECT snapshots.device_id, snapshots.snapshot_json
          FROM quota_snapshots AS snapshots
          INNER JOIN devices ON devices.id = snapshots.device_id
          WHERE devices.account_id = ?1 AND devices.deleted_at IS NULL
-         ORDER BY snapshots.updated_at DESC, snapshots.device_id ASC,
-                  snapshots.provider ASC, snapshots.account_fingerprint ASC
+         ORDER BY snapshots.device_id ASC, snapshots.provider ASC,
+                  snapshots.account_fingerprint ASC
          LIMIT 8193`,
       )
       .bind(accountId)
       .all<SnapshotRow>();
     // A stored reading this build cannot read is one reading, not the account. Dropping it
-    // keeps every other subscription — and the public profile — answerable while a device
-    // that still writes a retired shape is replaced or its rows age out.
+    // keeps every other subscription answerable while a device that still writes a retired
+    // shape is replaced or its rows age out.
     return rows.results.flatMap((row) => {
       const snapshot = QuotaSnapshotSchema.safeParse(JSON.parse(row.snapshot_json));
       if (!snapshot.success) return [];
-      return [
-        {
-          device_id: row.device_id,
-          sequence: row.sequence,
-          captured_at: row.captured_at,
-          snapshot: snapshot.data,
-          updated_at: row.updated_at,
-        },
-      ];
+      return [{ device_id: row.device_id, snapshot: snapshot.data }];
     });
   }
 
@@ -1175,8 +1163,8 @@ const loginGrantSelect = `SELECT id, grant_kind, client_id, account_id, installa
   device_display_name, platform, pkce_challenge, redirect_uri, client_state, expires_at,
   approved_at, denied_at, consumed_at FROM login_grants`;
 
-const deviceSelect = `SELECT id, account_id, display_name, platform, generation, last_sequence,
-  last_usage_sequence, usage_sync_revision, created_at, last_login_at, last_seen_at,
+const deviceSelect = `SELECT id, account_id, display_name, platform, generation,
+  usage_sync_revision, created_at, last_login_at, last_seen_at,
   signed_out_at, deleted_at, deleted_before FROM devices`;
 
 function accountPrincipal(row: AccountPrincipalRow): AccountPrincipal {

@@ -1,63 +1,56 @@
 import type {
   BillingAgent,
   UsageCostMode as ProtocolUsageCostMode,
-  UsageCoverage as ProtocolUsageCoverage,
-  UsageHourlyFact as ProtocolUsageHourlyFact,
-  UsageCoverageVerdict,
-  UsageSubmission as ProtocolUsageSubmission,
+  UsageRow as ProtocolUsageRow,
+  UsageUpload as ProtocolUsageUpload,
 } from "@gotry-io/quota-protocol";
 import type { DevicePrincipal } from "./account.ts";
 
 export type UsageAgent = BillingAgent;
-export type UsageCoverage = ProtocolUsageCoverage;
-export type UsageHourlyFact = ProtocolUsageHourlyFact;
-export type UsageSubmission = ProtocolUsageSubmission;
-
-export type UsageWriteResult =
-  | {
-      outcome: "accepted" | "duplicate";
-      usage_sync_revision: number;
-      next_sequence: number;
-    }
-  | {
-      outcome: "rejected";
-      rejection_reason: "duplicate_fact_identity";
-      usage_sync_revision: number;
-      next_sequence: number;
-    }
-  | {
-      outcome: "partial" | "sequence_conflict" | "stale_device" | "deleted_range";
-    };
-
+export type UsageRow = ProtocolUsageRow;
+export type UsageUpload = ProtocolUsageUpload;
 export type UsageCostMode = ProtocolUsageCostMode;
 
-export interface UsageQuery {
-  device_id?: string;
-  agents?: readonly UsageAgent[];
-  start_at?: string;
-  end_at?: string;
+/**
+ * What one upload did to the hours it named.
+ *
+ * Every named hour lands in exactly one list. `ignored` covers both an hour a newer scan already
+ * replaced and an hour before this device's deletion watermark, because the device's next move is
+ * the same either way: stop sending it.
+ */
+export type UsageWriteResult =
+  | { outcome: "stale_device" }
+  | { outcome: "written"; accepted: string[]; ignored: string[] };
+
+/**
+ * One identity's Usage rolled up to a UTC day, which is the only grain a managed read folds.
+ *
+ * `partial_hours` counts the hours behind this row whose scan came up short, so a period reports
+ * `partial` without the read reaching back into `usage_hourly`.
+ */
+export interface StoredUsageDailyRow extends UsageRow {
+  device_id: string;
+  date: string;
+  partial_hours: number;
+}
+
+export interface UsageDailyQuery {
+  /** Inclusive UTC dates. Both absent asks for every retained day. */
   from?: string;
   to?: string;
   limit: number;
 }
 
-export interface StoredUsageHourlyFact extends UsageHourlyFact {
-  device_id: string;
-  aggregation_timezone: string;
-}
-
-export interface UsageQueryResult {
-  rows: StoredUsageHourlyFact[];
-  /** How completely the queried range was scanned, decided over every window it spans. */
-  coverage: UsageCoverageVerdict;
+export interface UsageDailyResult {
+  rows: StoredUsageDailyRow[];
   truncated: boolean;
 }
 
 export interface UsageState {
   recordUsage(
     principal: DevicePrincipal,
-    submission: UsageSubmission,
+    upload: UsageUpload,
     receivedAt: string,
   ): Promise<UsageWriteResult>;
-  queryAccountUsage(accountId: string, query: UsageQuery): Promise<UsageQueryResult>;
+  queryDailyUsage(accountId: string, query: UsageDailyQuery): Promise<UsageDailyResult>;
 }

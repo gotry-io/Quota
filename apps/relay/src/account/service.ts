@@ -76,8 +76,6 @@ export interface NativeTokenResponse {
   account_id: string;
   device_id: string;
   device_generation: number;
-  next_snapshot_sequence: number;
-  next_usage_sequence: number;
   usage_deleted_before: string | null;
   usage_sync_revision: number;
   account_access_token: string;
@@ -436,8 +434,6 @@ export class AccountService {
       account_id: result.account_id,
       device_id: result.device.id,
       device_generation: result.device.generation,
-      next_snapshot_sequence: result.device.last_sequence + 1,
-      next_usage_sequence: result.device.last_usage_sequence + 1,
       usage_deleted_before: result.device.deleted_before,
       usage_sync_revision: result.device.usage_sync_revision,
       account_access_token: accountCredentials.access_token,

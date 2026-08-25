@@ -1,4 +1,4 @@
-import type { QuotaSnapshot, QuotaSnapshotEnvelope } from "@gotry-io/quota-protocol";
+import type { ProviderId, QuotaSnapshot, QuotaSnapshotEnvelope } from "@gotry-io/quota-protocol";
 
 export const ACCOUNT_SCOPES = ["account:read", "account:manage", "session:revoke:self"] as const;
 export type AccountScope = (typeof ACCOUNT_SCOPES)[number];
@@ -27,8 +27,6 @@ export interface DeviceRecord {
   display_name: string | null;
   platform: string | null;
   generation: number;
-  last_sequence: number;
-  last_usage_sequence: number;
   usage_sync_revision: number;
   created_at: string;
   last_login_at: string;
@@ -240,16 +238,6 @@ export interface AccountMaintenanceInput {
    * this; this is when Relay stops keeping it at all.
    */
   snapshot_observed_before: string;
-  /**
-   * Usage receipts accepted before this instant are deleted.
-   *
-   * A receipt exists so a retried upload is recognized as the one already stored rather than
-   * accepted twice. Nothing reads it afterwards: the coverage and fact rows it guarded are
-   * written in the same transaction, and the device's own `last_usage_sequence` is what a
-   * later upload is checked against. Keeping receipts past the window in which a client could
-   * still be retrying only grows the table.
-   */
-  usage_receipt_accepted_before: string;
   limit: number;
 }
 
@@ -257,19 +245,23 @@ export type QuotaSnapshotSubmission = QuotaSnapshotEnvelope;
 
 export interface StoredQuotaSnapshot {
   device_id: string;
-  sequence: number;
-  captured_at: string;
   snapshot: QuotaSnapshot;
-  updated_at: string;
 }
 
-export type SnapshotWriteOutcome = "accepted" | "duplicate" | "sequence_conflict" | "stale_device";
+/**
+ * What one snapshot upload did to the providers it named.
+ *
+ * A provider is accepted when at least one of its readings was newer than the one already stored.
+ * Either way the envelope states the fingerprints this device now sees for that provider, so the
+ * ones it no longer names are dropped.
+ */
+export type SnapshotWriteResult =
+  | { outcome: "stale_device" }
+  | { outcome: "written"; accepted: ProviderId[]; ignored: ProviderId[] };
 
 export interface DeviceSyncControl {
   device_id: string;
   generation: number;
-  next_snapshot_sequence: number;
-  next_usage_sequence: number;
   usage_deleted_before: string | null;
   usage_sync_revision: number;
 }
@@ -334,7 +326,7 @@ export interface AccountState {
     principal: DevicePrincipal,
     envelope: QuotaSnapshotSubmission,
     receivedAt: string,
-  ): Promise<SnapshotWriteOutcome>;
+  ): Promise<SnapshotWriteResult>;
   listLatestSnapshots(accountId: string): Promise<StoredQuotaSnapshot[]>;
   consumeRateLimit(input: RateLimitInput): Promise<RateLimitResult>;
 }

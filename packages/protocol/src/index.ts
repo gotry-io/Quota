@@ -30,24 +30,32 @@ export {
 /** OAuth, Device authorization and control, Account metadata, and the catalogs. */
 export const PROTOCOL_VERSION = 2 as const;
 /** Quota, Usage, and Account summary between a Device and Relay. */
-export const MANAGED_DATA_PROTOCOL_VERSION = 5 as const;
+export const MANAGED_DATA_PROTOCOL_VERSION = 6 as const;
 export const MAXIMUM_SNAPSHOTS_PER_ENVELOPE = 32;
 export const MAXIMUM_WINDOWS_PER_SNAPSHOT = 16;
-export const MAXIMUM_USAGE_ROWS_PER_SUBMISSION = 2_048;
-export const MAXIMUM_USAGE_COVERAGE_HOURS = 24 * 31;
 /**
- * No agent this Account accepts existed before this instant, so a window reaching back past it
- * was computed from a missing lower bound rather than scanned.  Six such windows, each a
- * 31-hour-limit chunk marching forward from the Unix epoch, reached production this way.
+ * A Usage upload replaces whole hours, so what bounds it is hours and rows inside an hour
+ * rather than a span and a row total. A scan that finds more distinct rows in one hour than
+ * this folds the overflow into the `other` model before uploading; Relay refuses more.
+ */
+export const MAXIMUM_USAGE_HOURS_PER_UPLOAD = 256;
+export const MAXIMUM_USAGE_ROWS_PER_HOUR = 512;
+export const MAXIMUM_USAGE_SUBMISSION_BYTES = 1_048_576;
+/**
+ * No agent this Account accepts existed before this instant, so an hour reaching back past it
+ * was computed from a missing lower bound rather than scanned.
  */
 export const EARLIEST_USAGE_INSTANT = "2020-01-01T00:00:00Z";
+/** One activity read answers at most this many days. */
+export const MAXIMUM_USAGE_ACTIVITY_DAYS = 400;
+/** One period's agent tree carries at most this many model leaves. */
+export const MAXIMUM_USAGE_PERIOD_LEAVES = 200;
+/** The model that every leaf past {@link MAXIMUM_USAGE_PERIOD_LEAVES} folds into. */
+export const USAGE_OTHER_MODEL = "other";
 export const MAXIMUM_USAGE_BREAKDOWNS = 1_000;
-export const MAXIMUM_USAGE_READ_ROWS = 1_000;
 export const MAXIMUM_USAGE_COVERAGE_ITEMS = 2_048;
 export const MAXIMUM_UNPRICED_ITEMS = 100;
 export const MAXIMUM_PRICING_ENTRIES = 4_096;
-export const MAXIMUM_USAGE_SUBMISSION_BYTES = 1_048_576;
-export const MAXIMUM_USAGE_MULTIPART_PARTS = 64;
 
 const MAXIMUM_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
 const OPAQUE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
@@ -157,14 +165,17 @@ const LocalQuotaSnapshotSchema = QuotaSnapshotSchema.extend({
   provider: LocalProviderIdSchema,
 });
 
-/** The only supported remote quota upload envelope. */
+/**
+ * The only supported remote quota upload envelope.
+ *
+ * The device token names the device and its generation, so the body restates neither an id a
+ * caller could get wrong nor a sequence Relay would have to keep for it: a reading is placed
+ * by `(provider, fingerprint)` and ordered by the instant it was observed.
+ */
 export const QuotaSnapshotEnvelopeSchema = z
   .object({
     protocol_version: z.literal(MANAGED_DATA_PROTOCOL_VERSION),
-    device_id: OpaqueIdSchema,
     generation: SafePositiveIntegerSchema,
-    sequence: SafeNonnegativeIntegerSchema,
-    captured_at: Rfc3339InstantSchema,
     snapshots: z.array(QuotaSnapshotSchema).max(MAXIMUM_SNAPSHOTS_PER_ENVELOPE),
   })
   .strict();
@@ -269,36 +280,22 @@ export const AccountSchema = z
   .strict();
 export type Account = z.infer<typeof AccountSchema>;
 
-function validateDeviceSignOut(
-  device: { status: string; signed_out_at: string | null },
-  context: z.RefinementCtx,
-) {
-  if ((device.status === "signed_out") !== (device.signed_out_at !== null)) {
-    context.addIssue({
-      code: "custom",
-      path: ["signed_out_at"],
-      message: "signed_out status and signed_out_at must agree.",
-    });
-  }
-}
-
-export const DeviceStatusSchema = z.enum(["active", "offline", "signed_out"]);
-export type DeviceStatus = z.infer<typeof DeviceStatusSchema>;
-
+/**
+ * A device as an Account reads it: the two instants Relay witnessed.
+ *
+ * `last_seen_at` is when the device last called; `last_observed_at` is when the newest reading
+ * it sent was taken. How recently a device spoke is derived from those by whoever reads them,
+ * so nothing here is a status one device asserted about another.
+ */
 export const AccountDeviceSchema = z
   .object({
-    device_id: OpaqueIdSchema,
+    id: OpaqueIdSchema,
     display_name: DisplayNameSchema,
     platform: PlatformSchema,
-    device_generation: SafePositiveIntegerSchema,
-    status: DeviceStatusSchema,
-    created_at: Rfc3339InstantSchema,
-    last_login_at: Rfc3339InstantSchema,
     last_seen_at: Rfc3339InstantSchema.nullable(),
-    signed_out_at: Rfc3339InstantSchema.nullable(),
+    last_observed_at: Rfc3339InstantSchema.nullable(),
   })
-  .strict()
-  .superRefine(validateDeviceSignOut);
+  .strict();
 export type AccountDevice = z.infer<typeof AccountDeviceSchema>;
 
 export const AccountResponseSchema = z
@@ -308,14 +305,6 @@ export const AccountResponseSchema = z
   })
   .strict();
 export type AccountResponse = z.infer<typeof AccountResponseSchema>;
-
-export const AccountDevicesResponseSchema = z
-  .object({
-    protocol_version: z.literal(PROTOCOL_VERSION),
-    devices: z.array(AccountDeviceSchema).max(256),
-  })
-  .strict();
-export type AccountDevicesResponse = z.infer<typeof AccountDevicesResponseSchema>;
 
 const NativeClientSchema = z.literal("quotacli");
 const InstallationIdSchema = z.string().uuid();
@@ -424,8 +413,6 @@ export const OAuthTokenResponseSchema = z
     account_id: OpaqueIdSchema,
     device_id: OpaqueIdSchema,
     device_generation: SafePositiveIntegerSchema,
-    next_snapshot_sequence: SafeNonnegativeIntegerSchema,
-    next_usage_sequence: SafeNonnegativeIntegerSchema,
     usage_deleted_before: Rfc3339InstantSchema.nullable(),
     usage_sync_revision: SafeNonnegativeIntegerSchema,
     account_session: SessionTokenSchema,
@@ -500,8 +487,6 @@ export const DeviceSyncResponseSchema = z
     account_id: OpaqueIdSchema,
     device_id: OpaqueIdSchema,
     device_generation: SafePositiveIntegerSchema,
-    next_snapshot_sequence: SafeNonnegativeIntegerSchema,
-    next_usage_sequence: SafeNonnegativeIntegerSchema,
     usage_deleted_before: Rfc3339InstantSchema.nullable(),
     usage_sync_revision: SafeNonnegativeIntegerSchema,
   })
@@ -651,175 +636,144 @@ export type CoverageStatus = z.infer<typeof CoverageStatusSchema>;
 /**
  * One agent's contiguous UTC-hour window and how completely it was scanned.
  *
- * A submission is bounded so one upload cannot claim an unbounded span; the private local
- * report covers whatever range the app asked for, so it carries the order rule alone.
+ * Only the private local report still states coverage. A managed upload replaces whole hours
+ * and says of each one whether the scan behind it was complete, so a window has nothing left
+ * to say there.
  */
-const coverageFields = {
-  agent: BillingAgentSchema,
-  start_at: UtcHourSchema,
-  end_at: UtcHourSchema,
-  status: CoverageStatusSchema,
-};
-
-/** A submission is bounded so one upload cannot claim an unbounded span. */
-export const UsageCoverageSchema = z
-  .object(coverageFields)
-  .strict()
-  .superRefine(validateCoverageRange);
-
-/** The private local report covers whatever range the app asked for. */
 const LocalUsageCoverageSchema = z
-  .object(coverageFields)
+  .object({
+    agent: BillingAgentSchema,
+    start_at: UtcHourSchema,
+    end_at: UtcHourSchema,
+    status: CoverageStatusSchema,
+  })
   .strict()
   .superRefine(validateCoverageOrder);
-export type UsageCoverage = z.infer<typeof UsageCoverageSchema>;
 
-const UsageHourlyFactWireSchema = z
+/**
+ * One row of Usage, identified by what it measures rather than by when.
+ *
+ * The hour is carried by the upload that replaces it, so a row names no instant, no local
+ * date, and no aggregation timezone: those made the same measurement look like two rows
+ * whenever a device moved.
+ */
+const usageRowFields = {
+  agent: BillingAgentSchema,
+  billing_channel: BillingChannelSchema,
+  channel_source: ChannelSourceSchema,
+  model: ModelSchema,
+  context_bucket: ContextBucketSchema,
+  service_tier: BillingDimensionSchema,
+  speed: BillingDimensionSchema,
+  inference_geo: BillingDimensionSchema,
+  input_tokens: SafeNonnegativeIntegerSchema,
+  cache_read_tokens: SafeNonnegativeIntegerSchema,
+  cache_write_5m_tokens: SafeNonnegativeIntegerSchema,
+  cache_write_1h_tokens: SafeNonnegativeIntegerSchema,
+  cache_write_inferred_tokens: SafeNonnegativeIntegerSchema,
+  output_tokens: SafeNonnegativeIntegerSchema,
+  reasoning_tokens: SafeNonnegativeIntegerSchema,
+  requests: SafePositiveIntegerSchema,
+  web_search_requests: SafeNonnegativeIntegerSchema,
+  web_fetch_requests: SafeNonnegativeIntegerSchema,
+  source_cost_microusd: z.string().max(32).regex(NONNEGATIVE_INTEGER_PATTERN).optional(),
+  source_cost_covered_requests: SafeNonnegativeIntegerSchema,
+} as const;
+
+function validateUsageRow(
+  row: { billing_channel: string; channel_source: string } & Parameters<
+    typeof validateUsageCounts
+  >[0],
+  context: z.RefinementCtx,
+): void {
+  validateUsageCounts(row, context);
+  if ((row.billing_channel === "unknown") !== (row.channel_source === "unknown")) {
+    context.addIssue({
+      code: "custom",
+      path: ["channel_source"],
+      message: "Unknown billing channel and channel source must be used together.",
+    });
+  }
+}
+
+// `model` is provider-owned opaque text. The literal "unknown" is a valid explicit model.
+export const UsageRowSchema = z.object(usageRowFields).strict().superRefine(validateUsageRow);
+export type UsageRow = z.infer<typeof UsageRowSchema>;
+
+/**
+ * A stored row projected for costing: the same measurement plus the UTC date it was rolled
+ * into. Pricing entries and model aliases carry effective dates, so a price cannot be
+ * resolved without one, and the daily rollup is where a stored row keeps its date.
+ */
+export const DatedUsageRowSchema = z
+  .object({ ...usageRowFields, date: UsageDateSchema })
+  .strict()
+  .superRefine(validateUsageRow);
+export type DatedUsageRow = z.infer<typeof DatedUsageRowSchema>;
+
+/**
+ * One scanned UTC hour and every row the scan found in it.
+ *
+ * `scan_version` orders the scans of one hour, so an upload replaces an hour only when it
+ * carries a strictly newer reading of it; a re-sent or overtaken hour is ignored rather than
+ * merged, which is what makes a retry safe without a submission id, a sequence, or a receipt.
+ * `partial` says the scan behind this hour came up short, which the reads report and which
+ * costs nothing to carry.
+ */
+export const UsageHourSchema = z
   .object({
     bucket_start_utc: UtcHourSchema,
-    usage_date: UsageDateSchema,
-    usage_hour: z.number().int().min(0).max(23),
-    agent: BillingAgentSchema,
-    billing_channel: BillingChannelSchema,
-    channel_source: ChannelSourceSchema,
-    model: ModelSchema,
-    context_bucket: ContextBucketSchema,
-    service_tier: BillingDimensionSchema,
-    speed: BillingDimensionSchema,
-    inference_geo: BillingDimensionSchema,
-    input_tokens: SafeNonnegativeIntegerSchema,
-    cache_read_tokens: SafeNonnegativeIntegerSchema,
-    cache_write_5m_tokens: SafeNonnegativeIntegerSchema,
-    cache_write_1h_tokens: SafeNonnegativeIntegerSchema,
-    cache_write_inferred_tokens: SafeNonnegativeIntegerSchema,
-    output_tokens: SafeNonnegativeIntegerSchema,
-    reasoning_tokens: SafeNonnegativeIntegerSchema,
-    requests: SafePositiveIntegerSchema,
-    web_search_requests: SafeNonnegativeIntegerSchema,
-    web_fetch_requests: SafeNonnegativeIntegerSchema,
-    source_cost_microusd: z.string().max(32).regex(NONNEGATIVE_INTEGER_PATTERN).optional(),
-    source_cost_covered_requests: SafeNonnegativeIntegerSchema,
+    scan_version: SafeNonnegativeIntegerSchema,
+    partial: z.boolean(),
+    rows: z.array(UsageRowSchema).max(MAXIMUM_USAGE_ROWS_PER_HOUR),
   })
   .strict()
-  .superRefine((fact, context) => {
-    validateUsageCounts(fact, context);
-    if ((fact.billing_channel === "unknown") !== (fact.channel_source === "unknown")) {
+  .superRefine((hour, context) => {
+    if (Date.parse(hour.bucket_start_utc) < Date.parse(EARLIEST_USAGE_INSTANT)) {
       context.addIssue({
         code: "custom",
-        path: ["channel_source"],
-        message: "Unknown billing channel and channel source must be used together.",
+        path: ["bucket_start_utc"],
+        message: `An hour may not begin before ${EARLIEST_USAGE_INSTANT}.`,
       });
-    }
-  });
-// `model` is provider-owned opaque text. The literal "unknown" is a valid explicit model.
-export const UsageHourlyFactSchema = UsageHourlyFactWireSchema;
-export type UsageHourlyFact = z.infer<typeof UsageHourlyFactSchema>;
-
-export const UsageSubmissionWriteModeSchema = z.literal("merge_partial");
-export type UsageSubmissionWriteMode = z.infer<typeof UsageSubmissionWriteModeSchema>;
-
-export const UsageSubmissionMultipartSchema = z
-  .object({
-    batch_id: OpaqueIdSchema,
-    part_index: SafeNonnegativeIntegerSchema,
-    part_count: SafePositiveIntegerSchema.max(MAXIMUM_USAGE_MULTIPART_PARTS),
-  })
-  .strict()
-  .superRefine((part, context) => {
-    if (part.part_count < 2) {
-      context.addIssue({
-        code: "custom",
-        path: ["part_count"],
-        message: "Multipart submissions must contain at least two parts.",
-      });
-    }
-    if (part.part_index >= part.part_count) {
-      context.addIssue({
-        code: "custom",
-        path: ["part_index"],
-        message: "Multipart part index must be less than part count.",
-      });
-    }
-  });
-export type UsageSubmissionMultipart = z.infer<typeof UsageSubmissionMultipartSchema>;
-
-export const UsageSubmissionSchema = z
-  .object({
-    protocol_version: z.literal(MANAGED_DATA_PROTOCOL_VERSION),
-    submission_id: OpaqueIdSchema,
-    device_id: OpaqueIdSchema,
-    generation: SafePositiveIntegerSchema,
-    sequence: SafeNonnegativeIntegerSchema,
-    parser_revision: OpaqueIdSchema,
-    aggregation_timezone: IanaTimezoneSchema,
-    coverage: UsageCoverageSchema,
-    rows: z.array(UsageHourlyFactWireSchema).max(MAXIMUM_USAGE_ROWS_PER_SUBMISSION),
-    write_mode: UsageSubmissionWriteModeSchema.optional(),
-    multipart: UsageSubmissionMultipartSchema.optional(),
-  })
-  .strict()
-  .superRefine((submission, context) => {
-    const start = Date.parse(submission.coverage.start_at);
-    const end = Date.parse(submission.coverage.end_at);
-    let localFormatter: Intl.DateTimeFormat | null = null;
-    try {
-      localFormatter = new Intl.DateTimeFormat("en", {
-        timeZone: submission.aggregation_timezone,
-        year: "numeric",
-        month: "2-digit",
-        day: "2-digit",
-        hour: "2-digit",
-        hourCycle: "h23",
-      });
-    } catch {
-      // IanaTimezoneSchema reports the boundary error.
     }
     const identities = new Set<string>();
-    if (submission.write_mode && submission.coverage.status !== "partial") {
-      context.addIssue({
-        code: "custom",
-        path: ["coverage", "status"],
-        message: "merge_partial submissions require partial coverage.",
-      });
-    }
-    for (const [index, row] of submission.rows.entries()) {
-      if (row.agent !== submission.coverage.agent) {
-        context.addIssue({
-          code: "custom",
-          path: ["rows", index, "agent"],
-          message: "Row agent must match coverage agent.",
-        });
-      }
-      const bucket = Date.parse(row.bucket_start_utc);
-      if (bucket < start || bucket >= end) {
-        context.addIssue({
-          code: "custom",
-          path: ["rows", index, "bucket_start_utc"],
-          message: "Row bucket must fall inside coverage.",
-        });
-      }
-      if (
-        localFormatter &&
-        !localProjectionMatches(localFormatter, bucket, row.usage_date, row.usage_hour)
-      ) {
-        context.addIssue({
-          code: "custom",
-          path: ["rows", index, "usage_date"],
-          message: "Row local date/hour must be possible in the aggregation timezone.",
-        });
-      }
-      const identity = usageHourlyFactIdentity(row);
+    for (const [index, row] of hour.rows.entries()) {
+      const identity = usageRowIdentity(row);
       if (identities.has(identity)) {
         context.addIssue({
           code: "custom",
           path: ["rows", index],
-          message: "Hourly fact identities must be unique within a submission.",
+          message: "Row identities must be unique within an hour.",
         });
       }
       identities.add(identity);
     }
   });
-export type UsageSubmission = z.infer<typeof UsageSubmissionSchema>;
+export type UsageHour = z.infer<typeof UsageHourSchema>;
+
+/** One agent's rescanned hours. The device token names the device and its generation. */
+export const UsageUploadSchema = z
+  .object({
+    protocol_version: z.literal(MANAGED_DATA_PROTOCOL_VERSION),
+    generation: SafePositiveIntegerSchema,
+    agent: BillingAgentSchema,
+    hours: z.array(UsageHourSchema).max(MAXIMUM_USAGE_HOURS_PER_UPLOAD),
+  })
+  .strict()
+  .superRefine((upload, context) => {
+    const buckets = new Set<string>();
+    for (const [index, hour] of upload.hours.entries()) {
+      if (buckets.has(hour.bucket_start_utc)) {
+        context.addIssue({
+          code: "custom",
+          path: ["hours", index, "bucket_start_utc"],
+          message: "An upload may name each hour once.",
+        });
+      }
+      buckets.add(hour.bucket_start_utc);
+    }
+  });
+export type UsageUpload = z.infer<typeof UsageUploadSchema>;
 
 export const UsageCostModeSchema = z.enum(["calculate", "auto", "reported"]);
 export type UsageCostMode = z.infer<typeof UsageCostModeSchema>;
@@ -881,25 +835,6 @@ export const UsageCostOutcomeSchema = z
   .strict()
   .superRefine(validateCostOutcome);
 export type UsageCostOutcome = z.infer<typeof UsageCostOutcomeSchema>;
-
-export const UsageTokenTotalsSchema = z
-  .object({
-    input_tokens: SafeNonnegativeIntegerSchema,
-    cache_read_tokens: SafeNonnegativeIntegerSchema,
-    cache_write_5m_tokens: SafeNonnegativeIntegerSchema,
-    cache_write_1h_tokens: SafeNonnegativeIntegerSchema,
-    cache_write_inferred_tokens: SafeNonnegativeIntegerSchema,
-    output_tokens: SafeNonnegativeIntegerSchema,
-    reasoning_tokens: SafeNonnegativeIntegerSchema,
-    requests: SafeNonnegativeIntegerSchema,
-    web_search_requests: SafeNonnegativeIntegerSchema,
-    web_fetch_requests: SafeNonnegativeIntegerSchema,
-    source_cost_microusd: z.string().max(32).regex(NONNEGATIVE_INTEGER_PATTERN).nullable(),
-    source_cost_covered_requests: SafeNonnegativeIntegerSchema,
-  })
-  .strict()
-  .superRefine(validateUsageCounts);
-export type UsageTokenTotals = z.infer<typeof UsageTokenTotalsSchema>;
 
 export const UsageSummaryTotalsSchema = z
   .object({
@@ -978,62 +913,9 @@ export const LocalUsagePeriodSummarySchema = z
   .strict();
 export type LocalUsagePeriodSummary = z.infer<typeof LocalUsagePeriodSummarySchema>;
 
-export const UsageBreakdownDimensionSchema = z.enum([
-  "device",
-  "agent",
-  "model",
-  "billing_channel",
-  "usage_date",
-  "bucket_start_utc",
-]);
-export type UsageBreakdownDimension = z.infer<typeof UsageBreakdownDimensionSchema>;
-
-const UsageBreakdownOtherDimensionSchema = z.enum([
-  "device",
-  "agent",
-  "billing_channel",
-  "usage_date",
-  "bucket_start_utc",
-]);
-const UsageBreakdownFields = {
-  totals: UsageTokenTotalsSchema,
-  cost: UsageCostOutcomeSchema,
-};
-
-export const UsageBreakdownSchema = z.discriminatedUnion("dimension", [
-  z
-    .object({
-      dimension: z.literal("model"),
-      key: ModelSchema,
-      ...UsageBreakdownFields,
-    })
-    .strict(),
-  z
-    .object({
-      dimension: UsageBreakdownOtherDimensionSchema,
-      key: z.string().min(1).max(128),
-      ...UsageBreakdownFields,
-    })
-    .strict(),
-]);
-export type UsageBreakdown = z.infer<typeof UsageBreakdownSchema>;
-
 /**
- * How completely a read's range was scanned.
- *
- * Every reader of a managed read has only ever asked whether anything was missed, so the
- * answer travels instead of the windows it was derived from: `none` when no window covers
- * the range at all, `partial` when any window that does was scanned incompletely, `complete`
- * otherwise.
- *
- * The verdict describes the scanning, not the calendar. A stretch of the range no window
- * touches leaves the verdict alone, because a device that was not running has no usage to
- * miss; a scan that was attempted and came up short records a `partial` window, and that is
- * what `partial` reports.
+ * The dates an activity read may ask for. `to` names the last day it wants, inclusive.
  */
-export const UsageCoverageVerdictSchema = z.enum(["none", "complete", "partial"]);
-export type UsageCoverageVerdict = z.infer<typeof UsageCoverageVerdictSchema>;
-
 export const UsageDateRangeSchema = z
   .object({
     from: UsageDateSchema,
@@ -1046,22 +928,15 @@ export const UsageDateRangeSchema = z
     if (from > to) {
       context.addIssue({ code: "custom", path: ["to"], message: "to must not precede from." });
     }
+    if ((to - from) / 86_400_000 + 1 > MAXIMUM_USAGE_ACTIVITY_DAYS) {
+      context.addIssue({
+        code: "custom",
+        path: ["to"],
+        message: `A range may span at most ${MAXIMUM_USAGE_ACTIVITY_DAYS} days.`,
+      });
+    }
   });
 export type UsageDateRange = z.infer<typeof UsageDateRangeSchema>;
-
-export const AccountUsageSummarySchema = z
-  .object({
-    range: UsageDateRangeSchema,
-    totals: UsageTokenTotalsSchema,
-    cost: UsageCostOutcomeSchema,
-    model_catalog_revision: OpaqueIdSchema.optional(),
-    coverage: UsageCoverageVerdictSchema,
-    breakdowns: z.array(UsageBreakdownSchema).max(MAXIMUM_USAGE_BREAKDOWNS),
-    agents: z.array(LocalUsageAgentSummarySchema).max(BillingAgentSchema.options.length).optional(),
-    breakdowns_truncated: z.literal(true).optional(),
-  })
-  .strict();
-export type AccountUsageSummary = z.infer<typeof AccountUsageSummarySchema>;
 
 export const LocalUsageReportStatusSchema = z.enum(["complete", "partial", "unavailable"]);
 export type LocalUsageReportStatus = z.infer<typeof LocalUsageReportStatusSchema>;
@@ -1110,40 +985,121 @@ export const LocalUsageReportSchema = z
   });
 export type LocalUsageReport = z.infer<typeof LocalUsageReportSchema>;
 
-export const AccountUsageResponseSchema = z
+/** One model's share of a period. Totals and cost live at the leaf and at the period. */
+export const UsageModelUsageSchema = z
   .object({
-    protocol_version: z.literal(MANAGED_DATA_PROTOCOL_VERSION),
-    usage: AccountUsageSummarySchema,
+    model: ModelSchema,
+    totals: UsageSummaryTotalsSchema,
+    cost: UsageCostOutcomeSchema,
   })
   .strict();
-export type AccountUsageResponse = z.infer<typeof AccountUsageResponseSchema>;
+export type UsageModelUsage = z.infer<typeof UsageModelUsageSchema>;
 
-export const AccountQuotaObservationSchema = z
+export const UsageProviderUsageSchema = z
+  .object({
+    provider: InferenceProviderSchema,
+    models: z.array(UsageModelUsageSchema).max(MAXIMUM_USAGE_PERIOD_LEAVES),
+  })
+  .strict();
+export type UsageProviderUsage = z.infer<typeof UsageProviderUsageSchema>;
+
+export const UsageAgentUsageSchema = z
+  .object({
+    agent: BillingAgentSchema,
+    providers: z.array(UsageProviderUsageSchema).max(InferenceProviderSchema.options.length),
+  })
+  .strict();
+export type UsageAgentUsage = z.infer<typeof UsageAgentUsageSchema>;
+
+/**
+ * One period of Usage: its totals, its cost, whether any hour behind it was scanned
+ * incompletely, and the agent tree that makes up the difference.
+ */
+export const UsagePeriodSchema = z
+  .object({
+    totals: UsageSummaryTotalsSchema,
+    cost: UsageCostOutcomeSchema,
+    partial: z.boolean(),
+    agents: z.array(UsageAgentUsageSchema).max(BillingAgentSchema.options.length),
+  })
+  .strict();
+export type UsagePeriod = z.infer<typeof UsagePeriodSchema>;
+
+/**
+ * The four periods an Account read answers.
+ *
+ * A day is a UTC day, because that is the grain the daily rollup keeps. The `tz` a caller
+ * names decides which calendar days `today` and the trailing windows cover, not where a day
+ * begins.
+ */
+export const AccountUsageSchema = z
+  .object({
+    today: UsagePeriodSchema,
+    last_7_days: UsagePeriodSchema,
+    last_30_days: UsagePeriodSchema,
+    all: UsagePeriodSchema,
+  })
+  .strict();
+export type AccountUsage = z.infer<typeof AccountUsageSchema>;
+
+/** One device that reported a subscription, kept whether or not its reading is the one shown. */
+export const QuotaSubscriptionSourceSchema = z
   .object({
     device_id: OpaqueIdSchema,
-    snapshot: QuotaSnapshotSchema,
+    observed_at: Rfc3339InstantSchema,
   })
   .strict();
-export type AccountQuotaObservation = z.infer<typeof AccountQuotaObservationSchema>;
+export type QuotaSubscriptionSource = z.infer<typeof QuotaSubscriptionSourceSchema>;
 
-export const AccountQuotaResponseSchema = z
+/**
+ * One subscription, already resolved.
+ *
+ * Relay keeps one observation per reporting device and resolves them once, so an account
+ * collected on three Macs reaches every reader as one row with three sources rather than as
+ * three cards each client had to collapse for itself. See
+ * [ADR 0003](../../../docs/decisions/0003-observation-preserving-subscription-merge.md).
+ */
+export const QuotaSubscriptionSchema = z
   .object({
-    protocol_version: z.literal(MANAGED_DATA_PROTOCOL_VERSION),
-    quota: z.array(AccountQuotaObservationSchema).max(8_192),
+    key: z.string().min(1).max(512),
+    provider: ProviderIdSchema,
+    snapshot: QuotaSnapshotSchema,
+    sources: z.array(QuotaSubscriptionSourceSchema).max(256),
   })
   .strict();
-export type AccountQuotaResponse = z.infer<typeof AccountQuotaResponseSchema>;
+export type QuotaSubscription = z.infer<typeof QuotaSubscriptionSchema>;
 
 export const AccountSummarySchema = z
   .object({
     protocol_version: z.literal(MANAGED_DATA_PROTOCOL_VERSION),
     account: AccountSchema,
     devices: z.array(AccountDeviceSchema).max(256),
-    quota: z.array(AccountQuotaObservationSchema).max(8_192),
-    usage: AccountUsageSummarySchema,
+    subscriptions: z.array(QuotaSubscriptionSchema).max(1_024),
+    usage: AccountUsageSchema,
+    pricing_revision: OpaqueIdSchema,
+    model_catalog_revision: OpaqueIdSchema,
   })
   .strict();
 export type AccountSummary = z.infer<typeof AccountSummarySchema>;
+
+/** One UTC day of the activity chart. */
+export const UsageActivityDaySchema = z
+  .object({
+    date: UsageDateSchema,
+    totals: UsageSummaryTotalsSchema,
+    cost: UsageCostOutcomeSchema,
+    partial: z.boolean(),
+  })
+  .strict();
+export type UsageActivityDay = z.infer<typeof UsageActivityDaySchema>;
+
+export const AccountUsageActivityResponseSchema = z
+  .object({
+    protocol_version: z.literal(MANAGED_DATA_PROTOCOL_VERSION),
+    days: z.array(UsageActivityDaySchema).max(MAXIMUM_USAGE_ACTIVITY_DAYS),
+  })
+  .strict();
+export type AccountUsageActivityResponse = z.infer<typeof AccountUsageActivityResponseSchema>;
 
 /**
  * What a client takes from a managed read.
@@ -1174,18 +1130,10 @@ const QuotaSnapshotReadSchema = QuotaSnapshotSchema.extend({
 }).loose();
 export type QuotaSnapshotRead = z.infer<typeof QuotaSnapshotReadSchema>;
 
-const AccountQuotaObservationReadSchema = AccountQuotaObservationSchema.extend({
-  snapshot: QuotaSnapshotReadSchema,
-}).loose();
-export type AccountQuotaObservationRead = z.infer<typeof AccountQuotaObservationReadSchema>;
-
-const AccountDeviceReadSchema = z
-  .looseObject({
-    ...AccountDeviceSchema.shape,
-    platform: ReadEnumSchema,
-    status: ReadEnumSchema,
-  })
-  .superRefine(validateDeviceSignOut);
+const AccountDeviceReadSchema = z.looseObject({
+  ...AccountDeviceSchema.shape,
+  platform: ReadEnumSchema,
+});
 export type AccountDeviceRead = z.infer<typeof AccountDeviceReadSchema>;
 
 const UsageUnpricedItemReadSchema = UsageUnpricedItemSchema.extend({
@@ -1201,7 +1149,6 @@ const UsageCostOutcomeReadSchema = z
   })
   .superRefine(validateCostOutcome);
 
-const UsageTokenTotalsReadSchema = UsageTokenTotalsSchema.loose();
 const UsageSummaryTotalsReadSchema = UsageSummaryTotalsSchema.loose();
 
 const LocalUsageModelSummaryReadSchema = LocalUsageModelSummarySchema.extend({
@@ -1222,104 +1169,103 @@ const LocalUsageAgentSummaryReadSchema = LocalUsageAgentSummarySchema.extend({
   cost: UsageCostOutcomeReadSchema,
   providers: z.array(LocalUsageProviderSummaryReadSchema).max(MAXIMUM_USAGE_BREAKDOWNS),
 }).loose();
+export type LocalUsageAgentSummaryRead = z.infer<typeof LocalUsageAgentSummaryReadSchema>;
 
-/**
- * A reader takes a breakdown by whatever dimension it names, so it cannot discriminate on that
- * name the way the producer's union does. `key` is bounded text under either branch.
- */
-const UsageBreakdownReadSchema = z.looseObject({
-  dimension: ReadEnumSchema,
-  key: z.string().min(1).max(128),
-  totals: UsageTokenTotalsReadSchema,
+const UsageModelUsageReadSchema = UsageModelUsageSchema.extend({
+  totals: UsageSummaryTotalsReadSchema,
   cost: UsageCostOutcomeReadSchema,
-});
-export type UsageBreakdownRead = z.infer<typeof UsageBreakdownReadSchema>;
+}).loose();
+export type UsageModelUsageRead = z.infer<typeof UsageModelUsageReadSchema>;
 
-const AccountUsageSummaryReadSchema = AccountUsageSummarySchema.extend({
-  range: UsageDateRangeSchema.loose(),
-  totals: UsageTokenTotalsReadSchema,
+const UsageProviderUsageReadSchema = UsageProviderUsageSchema.extend({
+  provider: ReadEnumSchema,
+  models: z.array(UsageModelUsageReadSchema).max(MAXIMUM_USAGE_PERIOD_LEAVES),
+}).loose();
+export type UsageProviderUsageRead = z.infer<typeof UsageProviderUsageReadSchema>;
+
+const UsageAgentUsageReadSchema = UsageAgentUsageSchema.extend({
+  agent: ReadEnumSchema,
+  providers: z.array(UsageProviderUsageReadSchema).max(MAXIMUM_USAGE_PERIOD_LEAVES),
+}).loose();
+export type UsageAgentUsageRead = z.infer<typeof UsageAgentUsageReadSchema>;
+
+const UsagePeriodReadSchema = UsagePeriodSchema.extend({
+  totals: UsageSummaryTotalsReadSchema,
   cost: UsageCostOutcomeReadSchema,
-  coverage: ReadEnumSchema,
-  breakdowns: z.array(UsageBreakdownReadSchema).max(MAXIMUM_USAGE_BREAKDOWNS),
-  agents: z.array(LocalUsageAgentSummaryReadSchema).max(MAXIMUM_USAGE_BREAKDOWNS).optional(),
+  agents: z.array(UsageAgentUsageReadSchema).max(MAXIMUM_USAGE_PERIOD_LEAVES),
 }).loose();
-export type AccountUsageSummaryRead = z.infer<typeof AccountUsageSummaryReadSchema>;
+export type UsagePeriodRead = z.infer<typeof UsagePeriodReadSchema>;
 
-export const AccountUsageResponseReadSchema = AccountUsageResponseSchema.extend({
-  usage: AccountUsageSummaryReadSchema,
+const AccountUsageReadSchema = AccountUsageSchema.extend({
+  today: UsagePeriodReadSchema,
+  last_7_days: UsagePeriodReadSchema,
+  last_30_days: UsagePeriodReadSchema,
+  all: UsagePeriodReadSchema,
 }).loose();
+export type AccountUsageRead = z.infer<typeof AccountUsageReadSchema>;
+
+const QuotaSubscriptionReadSchema = QuotaSubscriptionSchema.extend({
+  provider: ReadEnumSchema,
+  snapshot: QuotaSnapshotReadSchema,
+  sources: z.array(QuotaSubscriptionSourceSchema.loose()).max(256),
+}).loose();
+export type QuotaSubscriptionRead = z.infer<typeof QuotaSubscriptionReadSchema>;
 
 export const AccountSummaryReadSchema = AccountSummarySchema.extend({
   account: AccountSchema.loose(),
   devices: z.array(AccountDeviceReadSchema).max(256),
-  quota: z.array(AccountQuotaObservationReadSchema).max(8_192),
-  usage: AccountUsageSummaryReadSchema,
+  subscriptions: z.array(QuotaSubscriptionReadSchema).max(1_024),
+  usage: AccountUsageReadSchema,
 }).loose();
 export type AccountSummaryRead = z.infer<typeof AccountSummaryReadSchema>;
 
+const UsageActivityDayReadSchema = UsageActivityDaySchema.extend({
+  totals: UsageSummaryTotalsReadSchema,
+  cost: UsageCostOutcomeReadSchema,
+}).loose();
+export type UsageActivityDayRead = z.infer<typeof UsageActivityDayReadSchema>;
+
+export const AccountUsageActivityResponseReadSchema = AccountUsageActivityResponseSchema.extend({
+  days: z.array(UsageActivityDayReadSchema).max(MAXIMUM_USAGE_ACTIVITY_DAYS),
+}).loose();
+export type AccountUsageActivityResponseRead = z.infer<
+  typeof AccountUsageActivityResponseReadSchema
+>;
+
+/**
+ * What Relay answers a snapshot upload with.
+ *
+ * A provider is `accepted` when at least one of its readings was newer than the one already
+ * stored and `ignored` when none was, which is everything a device needs to know: there is no
+ * sequence to advance and no receipt to reconcile.
+ */
 export const QuotaSnapshotUploadResponseSchema = z
   .object({
     protocol_version: z.literal(MANAGED_DATA_PROTOCOL_VERSION),
-    outcome: z.enum(["accepted", "duplicate"]),
     device_id: OpaqueIdSchema,
     device_generation: SafePositiveIntegerSchema,
-    accepted_sequence: SafeNonnegativeIntegerSchema,
-    next_snapshot_sequence: SafeNonnegativeIntegerSchema,
+    accepted: z.array(ProviderIdSchema).max(MAXIMUM_SNAPSHOTS_PER_ENVELOPE),
+    ignored: z.array(ProviderIdSchema).max(MAXIMUM_SNAPSHOTS_PER_ENVELOPE),
   })
   .strict();
 export type QuotaSnapshotUploadResponse = z.infer<typeof QuotaSnapshotUploadResponseSchema>;
 
-export const UsageUploadOutcomeSchema = z.enum([
-  "accepted",
-  "duplicate",
-  "rejected",
-  "partial",
-  "sequence_conflict",
-  "stale_generation",
-  "deleted",
-]);
-export type UsageUploadOutcome = z.infer<typeof UsageUploadOutcomeSchema>;
-
-export const UsageUploadRejectionReasonSchema = z.literal("duplicate_fact_identity");
-export type UsageUploadRejectionReason = z.infer<typeof UsageUploadRejectionReasonSchema>;
-
+/**
+ * What Relay answers a Usage upload with.
+ *
+ * Every named hour comes back in exactly one list. `accepted` means this scan replaced the
+ * hour; `ignored` means it did not and never will, because a newer scan already stands or the
+ * hour precedes this device's deletion watermark. Either way the device is done with it.
+ */
 export const UsageUploadResponseSchema = z
   .object({
     protocol_version: z.literal(MANAGED_DATA_PROTOCOL_VERSION),
-    outcome: UsageUploadOutcomeSchema,
     device_id: OpaqueIdSchema,
     device_generation: SafePositiveIntegerSchema,
-    accepted_sequence: SafeNonnegativeIntegerSchema.nullable(),
-    next_sequence: SafeNonnegativeIntegerSchema,
-    usage_sync_revision: SafeNonnegativeIntegerSchema,
-    deleted_before: Rfc3339InstantSchema.nullable(),
-    rejection_reason: UsageUploadRejectionReasonSchema.optional(),
+    accepted: z.array(UtcHourSchema).max(MAXIMUM_USAGE_HOURS_PER_UPLOAD),
+    ignored: z.array(UtcHourSchema).max(MAXIMUM_USAGE_HOURS_PER_UPLOAD),
   })
-  .strict()
-  .superRefine((response, context) => {
-    const accepted = response.outcome === "accepted" || response.outcome === "duplicate";
-    if (accepted !== (response.accepted_sequence !== null)) {
-      context.addIssue({
-        code: "custom",
-        path: ["accepted_sequence"],
-        message: "accepted_sequence is present only for accepted or duplicate uploads.",
-      });
-    }
-    if ((response.outcome === "deleted") !== (response.deleted_before !== null)) {
-      context.addIssue({
-        code: "custom",
-        path: ["deleted_before"],
-        message: "deleted_before is present only for a deleted device.",
-      });
-    }
-    if ((response.outcome === "rejected") !== (response.rejection_reason !== undefined)) {
-      context.addIssue({
-        code: "custom",
-        path: ["rejection_reason"],
-        message: "rejection_reason is present only for rejected uploads.",
-      });
-    }
-  });
+  .strict();
 export type UsageUploadResponse = z.infer<typeof UsageUploadResponseSchema>;
 
 export const DecimalAmountSchema = z.string().min(1).max(32).regex(DECIMAL_PATTERN);
@@ -1407,7 +1353,6 @@ export const RelayErrorCodeSchema = z.enum([
   "expired_token",
   "invalid_grant",
   "rate_limited",
-  "sequence_conflict",
   "stale_generation",
   "device_deleted",
   "client_upgrade_required",
@@ -1474,63 +1419,27 @@ function isLoopbackRedirectUri(value: string): boolean {
   }
 }
 
-function localProjectionMatches(
-  formatter: Intl.DateTimeFormat,
-  bucketStart: number,
-  usageDate: string,
-  usageHour: number,
-): boolean {
-  return [bucketStart, bucketStart + 3_600_000 - 1].some((instant) => {
-    const parts = Object.fromEntries(
-      formatter
-        .formatToParts(instant)
-        .filter((part) => part.type !== "literal")
-        .map((part) => [part.type, part.value]),
-    );
-    return (
-      `${parts.year}-${parts.month}-${parts.day}` === usageDate && Number(parts.hour) === usageHour
-    );
-  });
-}
-
-function usageHourlyFactIdentity(fact: z.infer<typeof UsageHourlyFactSchema>): string {
+/** What makes two rows in one hour the same measurement. */
+export function usageRowIdentity(row: {
+  agent: string;
+  billing_channel: string;
+  channel_source: string;
+  model: string;
+  context_bucket: string;
+  service_tier: string;
+  speed: string;
+  inference_geo: string;
+}): string {
   return JSON.stringify([
-    fact.bucket_start_utc,
-    fact.usage_date,
-    fact.usage_hour,
-    fact.agent,
-    fact.billing_channel,
-    fact.channel_source,
-    fact.model,
-    fact.context_bucket,
-    fact.service_tier,
-    fact.speed,
-    fact.inference_geo,
+    row.agent,
+    row.billing_channel,
+    row.channel_source,
+    row.model,
+    row.context_bucket,
+    row.service_tier,
+    row.speed,
+    row.inference_geo,
   ]);
-}
-
-function validateCoverageRange(
-  coverage: { start_at: string; end_at: string },
-  context: z.RefinementCtx,
-): void {
-  validateCoverageOrder(coverage, context);
-  const start = Date.parse(coverage.start_at);
-  const end = Date.parse(coverage.end_at);
-  if (start < Date.parse(EARLIEST_USAGE_INSTANT)) {
-    context.addIssue({
-      code: "custom",
-      path: ["start_at"],
-      message: `Coverage may not begin before ${EARLIEST_USAGE_INSTANT}.`,
-    });
-  }
-  if (end <= start) return;
-  if ((end - start) / 3_600_000 > MAXIMUM_USAGE_COVERAGE_HOURS) {
-    context.addIssue({
-      code: "custom",
-      path: ["end_at"],
-      message: `Coverage may span at most ${MAXIMUM_USAGE_COVERAGE_HOURS} hours.`,
-    });
-  }
 }
 
 function validateCoverageOrder(
