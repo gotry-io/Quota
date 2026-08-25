@@ -21,9 +21,8 @@ use crate::protocol::{
     DiagnosticAttemptOutcome, DiagnosticAttemptTrigger, DiagnosticAttention, DiagnosticClient,
     DiagnosticDataState, DiagnosticOperation, DiagnosticRecovery, DiagnosticReport,
     DiagnosticSourceState, DiagnosticStatus, DiagnosticSummary, DiagnosticSurface, ErrorCode,
-    IpcError, LOCAL_COLLECTION_PROTOCOL, LOCAL_USAGE_PROTOCOL, MANAGED_DATA_PROTOCOL,
-    MAXIMUM_DIAGNOSTIC_SOURCES, QuotaOverviewIdentity, QuotaOverviewItem, QuotaOverviewSource,
-    RecoveryAction, UsagePeriod, UsageSource,
+    IpcError, MANAGED_DATA_PROTOCOL, MAXIMUM_DIAGNOSTIC_SOURCES, QuotaOverviewIdentity,
+    QuotaOverviewItem, QuotaOverviewSource, RecoveryAction, UsagePeriod, UsageSource,
 };
 use crate::providers::common::{ErrorCategory, ProviderError, ProviderSession};
 use crate::providers::{self, CollectionContext};
@@ -1136,7 +1135,6 @@ impl NativeBackend {
             return Err(BackendError::cancelled());
         }
         Ok(json!({
-            "protocol_version": LOCAL_COLLECTION_PROTOCOL,
             "captured_at": captured_at,
             "results": results
         }))
@@ -1354,7 +1352,6 @@ impl NativeBackend {
         let today = usage_period_range(UsagePeriod::Today, &usage.timezone, generated_at)?.0;
         let (from, to) = usage_date_range(rows, &today);
         Ok(json!({
-            "protocol_version": LOCAL_USAGE_PROTOCOL,
             "generated_at": usage.generated_at,
             "aggregation_timezone": usage.timezone,
             "range": {"from": from, "to": to},
@@ -3384,10 +3381,7 @@ mod tests {
         let report = backend
             .collect_quota(Arc::new(AtomicBool::new(false)))
             .expect("local quota report");
-        assert_eq!(
-            report.get("protocol_version").and_then(Value::as_i64),
-            Some(crate::protocol::LOCAL_COLLECTION_PROTOCOL)
-        );
+        assert!(report.get("protocol_version").is_none());
         for result in report
             .get("results")
             .and_then(Value::as_array)

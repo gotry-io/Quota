@@ -659,7 +659,6 @@ func decodesCollectionReportAndCalculatesRemainingQuota() throws {
   let data = Data(
     #"""
     {
-      "protocol_version": 4,
       "captured_at": "2026-08-02T01:00:00Z",
       "results": [{
         "provider": "codex",
@@ -706,7 +705,6 @@ func decodesCollectionReportAndCalculatesRemainingQuota() throws {
 
   let report = try QuotaWireCodec.makeDecoder().decode(QuotaCollectionReport.self, from: data)
 
-  #expect(report.protocolVersion == QuotaProtocol.localCollection)
   #expect(report.results.first?.snapshots.first?.windows.first?.remainingPercent == 84)
   #expect(report.results.first?.snapshots.first?.account.fingerprintScope == .source)
   #expect(report.results.last?.outcome == .authRequired)
@@ -723,7 +721,6 @@ func rejectsCollectionResultWithoutSnapshots() {
   let data = Data(
     #"""
     {
-      "protocol_version": 4,
       "captured_at": "2026-08-02T01:00:00Z",
       "results": [{
         "provider": "claude",

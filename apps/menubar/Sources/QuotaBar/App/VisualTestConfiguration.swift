@@ -300,7 +300,6 @@
   private func signedOutVisualState(at date: Date) -> MenuBarVisualState {
     MenuBarVisualState(
       report: QuotaCollectionReport(
-        protocolVersion: 2,
         capturedAt: date,
         results: [
           failureResult(
@@ -399,7 +398,6 @@
 
   private func contentReport(at date: Date) -> QuotaCollectionReport {
     QuotaCollectionReport(
-      protocolVersion: 2,
       capturedAt: date,
       results: [
         successResult(

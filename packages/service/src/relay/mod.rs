@@ -9,10 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::protocol::{
-    AccountComponentValue, AuthStatus, CONTROL_PROTOCOL, LOCAL_COLLECTION_PROTOCOL,
-    MANAGED_DATA_PROTOCOL,
-};
+use crate::protocol::{AccountComponentValue, AuthStatus, CONTROL_PROTOCOL, MANAGED_DATA_PROTOCOL};
 use crate::service::{BackendError, LoginOutcome};
 use crate::state::StateStore;
 use base64::Engine;
@@ -2608,9 +2605,6 @@ fn snapshot_payload_from_quota_report<'a>(
     republished: &[Value],
 ) -> Result<(&'a str, Vec<Value>), BackendError> {
     let object = report.as_object().ok_or_else(BackendError::unavailable)?;
-    if object.get("protocol_version").and_then(Value::as_i64) != Some(LOCAL_COLLECTION_PROTOCOL) {
-        return Err(BackendError::unavailable());
-    }
     let captured_at = object
         .get("captured_at")
         .and_then(Value::as_str)
@@ -3670,7 +3664,6 @@ mod tests {
     fn quota_report_snapshot_extraction_is_strict() {
         let snapshot = valid_snapshot();
         let report = serde_json::json!({
-            "protocol_version": LOCAL_COLLECTION_PROTOCOL,
             "captured_at": "2026-08-10T00:00:00Z",
             "results": [{"snapshots": [snapshot.clone()]}]
         });
@@ -3683,7 +3676,6 @@ mod tests {
         cursor["provider"] = serde_json::json!("cursor");
         let (_, mixed) = snapshot_payload_from_quota_report(
             &serde_json::json!({
-                "protocol_version": LOCAL_COLLECTION_PROTOCOL,
                 "captured_at": "2026-08-10T00:00:00Z",
                 "results": [{"snapshots": [snapshot.clone(), cursor.clone()]}]
             }),
@@ -3693,7 +3685,6 @@ mod tests {
         assert_eq!(mixed, [snapshot.clone(), cursor.clone()]);
         let (_, cursor_only) = snapshot_payload_from_quota_report(
             &serde_json::json!({
-                "protocol_version": LOCAL_COLLECTION_PROTOCOL,
                 "captured_at": "2026-08-10T00:00:00Z",
                 "results": [{"snapshots": [cursor.clone()]}]
             }),
@@ -3706,7 +3697,6 @@ mod tests {
         assert!(
             snapshot_payload_from_quota_report(
                 &serde_json::json!({
-                    "protocol_version": LOCAL_COLLECTION_PROTOCOL,
                     "captured_at": "2026-08-10T00:00:00Z",
                     "results": [{"snapshots": [unknown]}]
                 }),
@@ -3719,7 +3709,6 @@ mod tests {
         assert!(
             snapshot_payload_from_quota_report(
                 &serde_json::json!({
-                    "protocol_version": LOCAL_COLLECTION_PROTOCOL,
                     "captured_at": "2026-08-10T00:00:00Z",
                     "snapshots": []
                 }),
@@ -3730,7 +3719,6 @@ mod tests {
         assert!(
             snapshot_payload_from_quota_report(
                 &serde_json::json!({
-                    "protocol_version": LOCAL_COLLECTION_PROTOCOL,
                     "captured_at": "2026-08-10T00:00:00Z",
                     "results": [{}]
                 }),

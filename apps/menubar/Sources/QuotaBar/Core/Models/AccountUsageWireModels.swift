@@ -408,7 +408,6 @@ struct LocalUsageCoverage: Codable, Equatable, Sendable {
 }
 
 struct LocalUsageReport: Codable, Equatable, Sendable {
-  let protocolVersion: Int
   let generatedAt: Date
   let aggregationTimezone: String?
   let range: UsageDateRange
@@ -417,7 +416,6 @@ struct LocalUsageReport: Codable, Equatable, Sendable {
   let coverage: [LocalUsageCoverage]
 
   init(
-    protocolVersion: Int = 3,
     generatedAt: Date,
     aggregationTimezone: String?,
     range: UsageDateRange,
@@ -425,7 +423,6 @@ struct LocalUsageReport: Codable, Equatable, Sendable {
     modelCatalogRevision: String? = nil,
     coverage: [LocalUsageCoverage]
   ) {
-    self.protocolVersion = protocolVersion
     self.generatedAt = generatedAt
     self.aggregationTimezone = aggregationTimezone
     self.range = range
@@ -436,11 +433,9 @@ struct LocalUsageReport: Codable, Equatable, Sendable {
 
   init(from decoder: Decoder) throws {
     try decoder.rejectUnknownWireKeys([
-      "protocolVersion", "generatedAt", "aggregationTimezone", "range", "status",
-      "modelCatalogRevision", "coverage",
+      "generatedAt", "aggregationTimezone", "range", "status", "modelCatalogRevision", "coverage",
     ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
-    protocolVersion = try container.decode(Int.self, forKey: .protocolVersion)
     generatedAt = try container.decode(Date.self, forKey: .generatedAt)
     aggregationTimezone = try container.decode(String?.self, forKey: .aggregationTimezone)
     range = try container.decode(UsageDateRange.self, forKey: .range)
@@ -461,8 +456,7 @@ struct LocalUsageReport: Codable, Equatable, Sendable {
       && aggregationTimezone == nil
       && modelCatalogRevision == nil
       && coverage.isEmpty
-    guard protocolVersion == QuotaProtocol.localUsage,
-      range.isValid,
+    guard range.isValid,
       coverage.count <= 2_048,
       coverage.allSatisfy(\.isOrdered),
       validAvailable || validUnavailable
@@ -477,7 +471,6 @@ struct LocalUsageReport: Codable, Equatable, Sendable {
 
   func encode(to encoder: Encoder) throws {
     var container = encoder.container(keyedBy: CodingKeys.self)
-    try container.encode(protocolVersion, forKey: .protocolVersion)
     try container.encode(generatedAt, forKey: .generatedAt)
     try container.encode(aggregationTimezone, forKey: .aggregationTimezone)
     try container.encode(range, forKey: .range)
@@ -487,7 +480,6 @@ struct LocalUsageReport: Codable, Equatable, Sendable {
   }
 
   private enum CodingKeys: String, CodingKey {
-    case protocolVersion
     case generatedAt
     case aggregationTimezone
     case range

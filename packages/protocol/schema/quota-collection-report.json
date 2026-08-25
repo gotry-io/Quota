@@ -5,10 +5,6 @@
   "$comment": "Success snapshots must use the same provider as their collection result.",
   "type": "object",
   "properties": {
-    "protocol_version": {
-      "type": "number",
-      "const": 4
-    },
     "captured_at": {
       "$ref": "#/$defs/__schema0"
     },
@@ -20,7 +16,7 @@
       }
     }
   },
-  "required": ["protocol_version", "captured_at", "results"],
+  "required": ["captured_at", "results"],
   "additionalProperties": false,
   "$defs": {
     "__schema0": {

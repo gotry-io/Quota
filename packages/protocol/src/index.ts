@@ -23,15 +23,14 @@ export {
  * Each contract carries its own version, because each evolves on its own terms. Sharing a
  * number couples two contracts that have nothing to say to each other: bumping one would
  * force the other to move with it.
+ *
+ * The private local reports name no version of their own. They only ever travel nested inside an
+ * IPC state that carries `ipc_version`, and both ends of that pipe ship in the same build.
  */
 /** OAuth, Device authorization and control, Account metadata, and the catalogs. */
 export const PROTOCOL_VERSION = 2 as const;
 /** Quota, Usage, and Account summary between a Device and Relay. */
 export const MANAGED_DATA_PROTOCOL_VERSION = 5 as const;
-/** The private local Usage report the service hands its own app. */
-export const LOCAL_USAGE_PROTOCOL_VERSION = 3 as const;
-/** The private local quota collection report the service hands its own app. */
-export const LOCAL_COLLECTION_PROTOCOL_VERSION = 4 as const;
 export const MAXIMUM_SNAPSHOTS_PER_ENVELOPE = 32;
 export const MAXIMUM_WINDOWS_PER_SNAPSHOT = 16;
 export const MAXIMUM_USAGE_ROWS_PER_SUBMISSION = 2_048;
@@ -250,7 +249,6 @@ export type QuotaCollectionResult = z.infer<typeof QuotaCollectionResultSchema>;
 
 export const QuotaCollectionReportSchema = z
   .object({
-    protocol_version: z.literal(LOCAL_COLLECTION_PROTOCOL_VERSION),
     captured_at: Rfc3339InstantSchema,
     results: z.array(QuotaCollectionResultSchema).max(LOCAL_PROVIDER_IDS.length),
   })
@@ -1063,7 +1061,6 @@ export type LocalUsageReportStatus = z.infer<typeof LocalUsageReportStatusSchema
 
 export const LocalUsageReportSchema = z
   .object({
-    protocol_version: z.literal(LOCAL_USAGE_PROTOCOL_VERSION),
     generated_at: Rfc3339InstantSchema,
     aggregation_timezone: IanaTimezoneSchema.nullable(),
     range: UsageDateRangeSchema,

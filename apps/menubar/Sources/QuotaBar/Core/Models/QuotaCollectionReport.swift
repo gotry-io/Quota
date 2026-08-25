@@ -138,12 +138,10 @@ extension QuotaCollectionResult {
 }
 
 struct QuotaCollectionReport: Codable, Equatable, Sendable {
-  let protocolVersion: Int
   let capturedAt: Date
   let results: [QuotaCollectionResult]
 
   private enum CodingKeys: String, CodingKey {
-    case protocolVersion
     case capturedAt
     case results
   }
@@ -151,18 +149,15 @@ struct QuotaCollectionReport: Codable, Equatable, Sendable {
 
 extension QuotaCollectionReport {
   init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys(["protocolVersion", "capturedAt", "results"])
+    try decoder.rejectUnknownWireKeys(["capturedAt", "results"])
     let container = try decoder.container(keyedBy: CodingKeys.self)
-    protocolVersion = try container.decode(Int.self, forKey: .protocolVersion)
     capturedAt = try container.decode(Date.self, forKey: .capturedAt)
     results = try container.decode([QuotaCollectionResult].self, forKey: .results)
-    guard protocolVersion == QuotaProtocol.localCollection,
-      results.count <= ProviderID.allCases.count
-    else {
+    guard results.count <= ProviderID.allCases.count else {
       throw DecodingError.dataCorruptedError(
-        forKey: .protocolVersion,
+        forKey: .results,
         in: container,
-        debugDescription: "Unsupported quota report schema version."
+        debugDescription: "A quota report cannot name more providers than exist."
       )
     }
   }

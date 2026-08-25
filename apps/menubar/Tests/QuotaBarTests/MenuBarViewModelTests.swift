@@ -20,7 +20,6 @@ func consumesServiceMergedOverviewWithoutReprocessingObservations() async throws
     observedAt: now
   )
   let report = QuotaCollectionReport(
-    protocolVersion: 2,
     capturedAt: now,
     results: [
       QuotaCollectionResult(
@@ -259,7 +258,6 @@ func anotherDeviceReadingDoesNotHideThisMacsOwnCollectionFailure() async throws 
       usagePeriods: emptyUsagePeriods(),
       quota: component(
         value: QuotaCollectionReport(
-          protocolVersion: 2,
           capturedAt: now,
           results: [
             QuotaCollectionResult(

@@ -19,8 +19,6 @@ import {
   IosOAuthTokenResponseSchema,
   IosSessionRefreshRequestSchema,
   LOCAL_PROVIDER_IDS,
-  LOCAL_COLLECTION_PROTOCOL_VERSION,
-  LOCAL_USAGE_PROTOCOL_VERSION,
   LocalProviderIdSchema,
   LocalUsageReportSchema,
   MANAGED_DATA_PROTOCOL_VERSION,
@@ -182,9 +180,8 @@ describe("quota protocol", () => {
     ).toBe(true);
   });
 
-  it("keeps local collection reports versioned, strict, and provider-consistent", () => {
+  it("keeps local collection reports strict and provider-consistent", () => {
     const report = {
-      protocol_version: LOCAL_COLLECTION_PROTOCOL_VERSION,
       captured_at: "2026-08-02T12:00:00Z",
       results: [
         {
@@ -696,7 +693,6 @@ describe("quota protocol", () => {
     // The private local report states whatever range the app asked for and is not bounded here.
     expect(
       LocalUsageReportSchema.safeParse({
-        protocol_version: LOCAL_USAGE_PROTOCOL_VERSION,
         generated_at: "2026-08-02T12:30:00Z",
         aggregation_timezone: "UTC",
         range: { from: "1970-01-01", to: "1970-02-01" },
@@ -716,7 +712,6 @@ describe("quota protocol", () => {
 
   it("keeps local Usage available independently from an account", () => {
     const report = {
-      protocol_version: 3,
       generated_at: "2026-08-02T12:30:00Z",
       aggregation_timezone: "Asia/Singapore",
       range: { from: "2026-07-04", to: "2026-08-02" },
@@ -731,7 +726,6 @@ describe("quota protocol", () => {
         },
       ],
     };
-    expect(LOCAL_USAGE_PROTOCOL_VERSION).toBe(3);
     const parsed = LocalUsageReportSchema.parse(report);
     expect(parsed.model_catalog_revision).toBe("model_2026_08_02");
     expect(LocalUsageReportSchema.safeParse({ ...report, status: "complete" }).success).toBe(false);

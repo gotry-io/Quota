@@ -201,9 +201,9 @@ see [ADR 0020](decisions/0020-coverage-is-a-verdict.md).
 Bounded Usage detail responses may still explicitly mark truncated breakdown or unpriced-model
 detail; exact totals remain usable and clients surface that degradation.
 
-The local Usage report is a private v3 presentation contract, versioned independently of managed data
-and account summaries. It carries collection status, coverage, timezone, and the
-model-catalog revision. State snapshots separately carry the precomputed Today, 7 Days, 30 Days, and
+The local Usage report is a private presentation contract carried inside the IPC state, so it names
+no version of its own and moves with `ipc_version`. It carries collection status, coverage,
+timezone, and the model-catalog revision. State snapshots separately carry the precomputed Today, 7 Days, 30 Days, and
 All summaries, each with exact totals, cost, and `agents[].providers[].models[]` detail. `total_tokens` is input plus output;
 cache-read and cache-write tokens are named input subsets; reasoning is an output subset; and
 `messages` is the sum of normalized usage-bearing model output facts. It is not a session count, and
