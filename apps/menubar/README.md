@@ -32,14 +32,19 @@ does not depend on QuotaRelay or QuotaAccount, because the local service owns Re
 The service persists the Usage upload preference so it applies before
 its startup refresh. Quitting the app closes stdin and stops the service and all synchronization.
 
-For catalog browser-session providers, QuotaBar pins login and Cookie discovery to one supported
-browser application. SweetCookieKit 0.5.2 enumerates that browser's profiles with logging disabled
-and returns only exact-host/name allowlist candidates in memory. Swift sends one minimal Cookie
-header at a time to Rust for validation/commit; it never calls provider APIs or persists the header.
-Cursor prefers a signed-in Cursor.app session and uses the same allowlisted browser acquisition as
-a fallback; Codex, Claude, Grok, and Kimi reuse that browser path when their official credentials
-are missing or rejected. QuotaBar 0.0.13 uploads its quota and Usage through managed-data v3;
-released v2 clients remain isolated from Cursor. Browser cookies stay local.
+Cursor is the only provider QuotaBar reads a browser session for, because it is the only one with
+no CLI sign-in and no API key. Before the first cookie read, a confirmation popup names the browser
+about to be read, the permission macOS will ask for (Full Disk Access for Safari, the "Chrome Safe
+Storage" Keychain item for a Chrome-family browser), the exact hosts and cookie names, the local
+service database the accepted session is kept in until disconnected, and that nothing is uploaded.
+Declining reads nothing. On confirmation, QuotaBar pins login and Cookie discovery to that one
+browser application; SweetCookieKit 0.5.2 enumerates its profiles with logging disabled and returns
+only exact-host/name allowlist candidates in memory. Swift sends one minimal Cookie header at a
+time to Rust for validation/commit; it never calls provider APIs or persists the header. A store
+macOS refuses ends the attempt and is shown as its own state — with the grant to change, not "no
+session found" — and reaches the Support page as the `browser_access_denied` source. Cursor prefers
+a signed-in Cursor.app session and uses the browser session as its fallback. Browser cookies stay
+local.
 
 Each background refresh precomputes Today, 7 Days, 30 Days, and All for This Mac and, when enabled,
 the signed-in Account. The four values are persisted and returned by `get_state`; Swift only selects

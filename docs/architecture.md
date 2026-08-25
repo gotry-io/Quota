@@ -173,12 +173,13 @@ migrations are explicit and append-only.
 
 Catalog browser-session capability contains an HTTPS login URL, exact Cookie hosts/names, a
 browser-priority prefix, and `exclusive` when Settings should omit an official CLI sign-in command.
-Cursor still prefers a signed-in Cursor.app session from local desktop state before that stored
-browser session. QuotaBar
-pins login and discovery to one selected supported browser;
-SweetCookieKit only acquires allowlisted Cookie candidates in Swift memory. Rust owns syntax and
-account validation, durable state, provider networking, and routine refresh. Linux QuotaCLI does
-not implement browser acquisition.
+Cursor is the only provider that declares it. Cursor still prefers a signed-in Cursor.app session
+from local desktop state before that stored browser session. QuotaBar pins login and discovery to
+one selected supported browser and asks for consent before opening its cookie store;
+SweetCookieKit only acquires allowlisted Cookie candidates in Swift memory. A refused store is
+reported as its own outcome rather than as an absent session. Rust owns syntax and account
+validation, durable state, provider networking, and routine refresh. Linux QuotaCLI does not
+implement browser acquisition.
 
 The local provider catalog is broader than the managed Account. Catalog `account_sync` declares
 whether a provider synchronizes, and the generated managed provider enum is exactly that set. The
