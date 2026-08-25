@@ -5,6 +5,7 @@ import {
 } from "@gotry-io/quota-protocol";
 import {
   ACCOUNT_SCOPES,
+  type AccountClientKind,
   type AccountLoginGrantConsumeResult,
   type AccountMaintenanceInput,
   type AccountPrincipal,
@@ -17,6 +18,7 @@ import {
   type ConsumeAccountLoginGrantInput,
   type ConsumeLoginGrantInput,
   type CreateLoginGrantInput,
+  type CreateWebSessionInput,
   DEVICE_SCOPES,
   type DeleteDeviceResult,
   type DeviceGrantDecisionOutcome,
@@ -48,6 +50,7 @@ interface AccountPrincipalRow {
   family_id: string;
   account_id: string;
   device_id: string | null;
+  client_kind: string;
   scopes_json: string;
   authenticated_at: string;
 }
@@ -111,14 +114,6 @@ export class D1AccountState implements AccountState {
           `DELETE FROM rate_limit_counters WHERE rowid IN (
              SELECT rowid FROM rate_limit_counters WHERE window_expires_at <= ?1
              ORDER BY window_expires_at ASC, rowid ASC LIMIT ?2
-           )`,
-        )
-        .bind(input.grant_expired_before, input.limit),
-      this.database
-        .prepare(
-          `DELETE FROM auth_session_store WHERE key_hash IN (
-             SELECT key_hash FROM auth_session_store WHERE expires_at <= ?1
-             ORDER BY expires_at ASC, key_hash ASC LIMIT ?2
            )`,
         )
         .bind(input.grant_expired_before, input.limit),
@@ -417,11 +412,11 @@ export class D1AccountState implements AccountState {
         this.database
           .prepare(
             `INSERT INTO account_sessions (
-             id, family_id, account_id, device_id, access_token_hash, refresh_token_hash,
+             id, family_id, account_id, device_id, client_kind, access_token_hash, refresh_token_hash,
              scopes_json, authenticated_at, expires_at, refresh_expires_at,
              last_used_at, created_at
            )
-           SELECT ?1, ?2, grants.account_id, devices.id, ?3, ?4, ?5, ?6, ?7, ?8, ?6, ?6
+           SELECT ?1, ?2, grants.account_id, devices.id, 'cli', ?3, ?4, ?5, ?6, ?7, ?8, ?6, ?6
            FROM login_grants AS grants
            INNER JOIN devices ON devices.account_id = grants.account_id
              AND devices.installation_id_hash = ?9
@@ -532,11 +527,11 @@ export class D1AccountState implements AccountState {
         this.database
           .prepare(
             `INSERT INTO account_sessions (
-             id, family_id, account_id, device_id, access_token_hash, refresh_token_hash,
+             id, family_id, account_id, device_id, client_kind, access_token_hash, refresh_token_hash,
              scopes_json, authenticated_at, expires_at, refresh_expires_at,
              last_used_at, created_at
            )
-           SELECT ?1, ?2, grants.account_id, NULL, ?3, ?4, ?5, ?6, ?7, ?8, ?6, ?6
+           SELECT ?1, ?2, grants.account_id, NULL, 'ios', ?3, ?4, ?5, ?6, ?7, ?8, ?6, ?6
            FROM login_grants AS grants
            WHERE grants.id = ?9 AND grants.consume_nonce_hash = ?10
              AND grants.client_id = ?11 AND grants.installation_id_hash IS NULL`,
@@ -582,13 +577,56 @@ export class D1AccountState implements AccountState {
     return { outcome: "not_approved" };
   }
 
+  /**
+   * Sign one browser in: find or create the Account behind this GitHub subject, then open its
+   * session.
+   *
+   * The session is its own family. Nothing rotates into or out of a browser session — the cookie is
+   * the whole credential — so revoking the family revokes exactly this cookie and no other client.
+   */
+  async createWebSession(input: CreateWebSessionInput): Promise<AccountRecord> {
+    const results = await this.database.batch([
+      this.database
+        .prepare(
+          `INSERT INTO accounts (id, identity_subject, display_label, created_at, updated_at)
+           VALUES (?1, ?1, ?2, ?3, ?3)
+           ON CONFLICT(id) DO UPDATE SET
+             display_label = excluded.display_label,
+             updated_at = excluded.updated_at
+           RETURNING id, identity_subject, display_label, created_at, updated_at`,
+        )
+        .bind(input.account_id, input.display_label, input.authenticated_at),
+      this.database
+        .prepare(
+          `INSERT INTO account_sessions (
+             id, family_id, account_id, device_id, client_kind,
+             access_token_hash, refresh_token_hash, scopes_json,
+             authenticated_at, expires_at, refresh_expires_at, last_used_at, created_at
+           ) VALUES (?1, ?1, ?2, NULL, 'web', ?3, NULL, ?4, ?5, ?6, ?6, ?5, ?5)`,
+        )
+        .bind(
+          input.session_id,
+          input.account_id,
+          input.access_token_hash,
+          encodeScopes(ACCOUNT_SCOPES, ACCOUNT_SCOPES),
+          input.authenticated_at,
+          input.expires_at,
+        ),
+    ]);
+    const account = resultRow<AccountRecord>(results[0]);
+    if (!account) {
+      throw new Error("Web sign-in did not resolve an account");
+    }
+    return account;
+  }
+
   async authorizeAccountSession(
     accessTokenHash: string,
     checkedAt: string,
   ): Promise<AccountPrincipal | null> {
     const row = await this.database
       .prepare(
-        `SELECT id, family_id, account_id, device_id, scopes_json, authenticated_at
+        `SELECT id, family_id, account_id, device_id, client_kind, scopes_json, authenticated_at
          FROM account_sessions
          WHERE access_token_hash = ?1 AND revoked_at IS NULL AND expires_at > ?2`,
       )
@@ -646,7 +684,7 @@ export class D1AccountState implements AccountState {
          SET access_token_hash = ?2, refresh_token_hash = ?3, expires_at = ?4,
              refresh_expires_at = ?5, last_used_at = ?6
          WHERE refresh_token_hash = ?1 AND revoked_at IS NULL AND refresh_expires_at > ?6
-         RETURNING id, family_id, account_id, device_id, scopes_json, authenticated_at`,
+         RETURNING id, family_id, account_id, device_id, client_kind, scopes_json, authenticated_at`,
       )
       .bind(
         input.refresh_token_hash,
@@ -668,7 +706,7 @@ export class D1AccountState implements AccountState {
              refresh_expires_at = ?5, last_used_at = ?6
          WHERE refresh_token_hash = ?1 AND revoked_at IS NULL AND refresh_expires_at > ?6
            AND device_id IS NULL
-         RETURNING id, family_id, account_id, device_id, scopes_json, authenticated_at`,
+         RETURNING id, family_id, account_id, device_id, client_kind, scopes_json, authenticated_at`,
       )
       .bind(
         input.refresh_token_hash,
@@ -967,6 +1005,37 @@ export class D1AccountState implements AccountState {
   }
 
   /**
+   * Delete an Account and everything Relay keeps for it, in one batch.
+   *
+   * Children go first so the batch holds whether or not this connection enforces foreign keys, and
+   * the Account row is deleted last and reports whether there was one to delete. Nothing survives
+   * as a tombstone: a deleted Account's next sign-in is a new Account, because the GitHub subject
+   * behind it only ever named a row that is gone.
+   */
+  async deleteAccountData(accountId: string): Promise<boolean> {
+    const ownedDevices = "SELECT id FROM devices WHERE account_id = ?1";
+    const results = await this.database.batch([
+      this.database
+        .prepare(`DELETE FROM usage_daily WHERE device_id IN (${ownedDevices})`)
+        .bind(accountId),
+      this.database
+        .prepare(`DELETE FROM usage_hourly WHERE device_id IN (${ownedDevices})`)
+        .bind(accountId),
+      this.database
+        .prepare(`DELETE FROM quota_snapshots WHERE device_id IN (${ownedDevices})`)
+        .bind(accountId),
+      this.database
+        .prepare(`DELETE FROM device_sessions WHERE device_id IN (${ownedDevices})`)
+        .bind(accountId),
+      this.database.prepare("DELETE FROM account_sessions WHERE account_id = ?1").bind(accountId),
+      this.database.prepare("DELETE FROM login_grants WHERE account_id = ?1").bind(accountId),
+      this.database.prepare("DELETE FROM devices WHERE account_id = ?1").bind(accountId),
+      this.database.prepare("DELETE FROM accounts WHERE id = ?1 RETURNING id").bind(accountId),
+    ]);
+    return resultRow<{ id: string }>(results[results.length - 1]) !== null;
+  }
+
+  /**
    * Store this device's readings and drop the fingerprints it no longer sees.
    *
    * A reading is placed by `(provider, fingerprint)` and ordered by the instant it was observed,
@@ -1174,10 +1243,17 @@ function accountPrincipal(row: AccountPrincipalRow): AccountPrincipal {
     family_id: row.family_id,
     account_id: row.account_id,
     device_id: row.device_id,
-    client_kind: row.device_id === null ? "ios" : "cli",
+    client_kind: accountClientKind(row.client_kind),
     scopes: decodeAccountScopes(row.scopes_json),
     authenticated_at: row.authenticated_at,
   };
+}
+
+function accountClientKind(value: string): AccountClientKind {
+  if (value !== "web" && value !== "cli" && value !== "ios") {
+    throw new Error("Persisted session names an unknown client kind");
+  }
+  return value;
 }
 
 function devicePrincipal(row: DevicePrincipalRow): DevicePrincipal {

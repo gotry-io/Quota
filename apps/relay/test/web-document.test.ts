@@ -1,8 +1,8 @@
 import { applyD1Migrations, env } from "cloudflare:test";
 import type { D1Migration } from "@cloudflare/vitest-pool-workers";
 import { beforeEach, describe, expect, inject, it } from "vitest";
-import { memoizeWebAccountAuthSession } from "../src/account/better-auth.ts";
-import { createWebDocumentPort, hasWebSessionCookie } from "../src/account/web-document-port.ts";
+import { createWebDocumentPort } from "../src/account/web-document-port.ts";
+import { memoizeWebSessionAuthorization } from "../src/account/web-session.ts";
 import { isRelayApiPath } from "../src/relay-paths.ts";
 import { D1AccountState } from "../src/state/d1-account-state.ts";
 import {
@@ -11,6 +11,7 @@ import {
   runDocumentSsr,
   withPrivateNoStore,
 } from "../src/web-document-ssr.ts";
+import { SignedInWebSessionStub, signedOutWebSessions } from "./web-session-stub.ts";
 
 declare module "vitest" {
   export interface ProvidedContext {
@@ -48,14 +49,6 @@ describe("document routing helpers", () => {
 });
 
 describe("web document port", () => {
-  it("detects the Better Auth session cookie without reading its value", () => {
-    expect(hasWebSessionCookie(null)).toBe(false);
-    expect(hasWebSessionCookie("theme=dark")).toBe(false);
-    expect(hasWebSessionCookie("quota.session_token=secret")).toBe(true);
-    expect(hasWebSessionCookie("__Secure-quota.session_token=secret")).toBe(true);
-    expect(hasWebSessionCookie("quota.session_token_backup=secret")).toBe(false);
-  });
-
   it("returns a viewer only when the session and domain account both exist", async () => {
     const state = new D1AccountState(env.DB);
     await env.DB.prepare(
@@ -63,42 +56,43 @@ describe("web document port", () => {
     )
       .bind("account_1", "octocat", now.toISOString())
       .run();
+    expect(
+      await createWebDocumentPort({ state, webSessions: signedOutWebSessions }).getViewer(
+        new Headers(),
+      ),
+    ).toBeNull();
+
     const port = createWebDocumentPort({
       state,
-      webAuth: {
-        handler: async () => new Response(null, { status: 404 }),
-        beginGitHubSignIn: async () => new Response(null, { status: 404 }),
-        getSession: async () => ({
-          user: { id: "account_1", name: "octocat" },
-          session: { id: "session_1", createdAt: now, expiresAt: now },
-        }),
-      },
+      webSessions: new SignedInWebSessionStub("account_1", now),
+      now: () => now,
     });
-    expect(await port.getViewer(new Headers())).toBeNull();
-    const viewer = await port.getViewer(
-      new Headers({ Cookie: "__Secure-quota.session_token=secret" }),
-    );
-    expect(viewer).toEqual({ displayLabel: "octocat" });
+    expect(await port.getViewer(new Headers({ Cookie: "quota_session=secret" }))).toEqual({
+      displayLabel: "octocat",
+    });
+
+    const orphaned = createWebDocumentPort({
+      state,
+      webSessions: new SignedInWebSessionStub("account_gone", now),
+      now: () => now,
+    });
+    expect(await orphaned.getViewer(new Headers({ Cookie: "quota_session=secret" }))).toBeNull();
   });
 });
 
 describe("web document session", () => {
-  it("reuses one Better Auth session read across document and streamed data", async () => {
+  it("reuses one session read across document and streamed data", async () => {
     let calls = 0;
-    const auth = memoizeWebAccountAuthSession({
-      handler: async () => new Response(null, { status: 404 }),
-      beginGitHubSignIn: async () => new Response(null, { status: 404 }),
-      getSession: async () => {
+    const sessions = memoizeWebSessionAuthorization({
+      ...signedOutWebSessions,
+      async authorize() {
         calls += 1;
-        return {
-          user: { id: "account_1", name: "octocat" },
-          session: { id: "session_1", createdAt: now, expiresAt: now },
-        };
+        return null;
       },
     });
 
-    const first = auth.getSession(new Headers({ Cookie: "quota.session_token=one" }));
-    const second = auth.getSession(new Headers({ Cookie: "quota.session_token=one" }));
+    const first = sessions.authorize(new Headers({ Cookie: "quota_session=one" }), now);
+    const second = sessions.authorize(new Headers({ Cookie: "quota_session=one" }), now);
     expect(await first).toEqual(await second);
     expect(calls).toBe(1);
   });
@@ -115,9 +109,7 @@ describe("document SSR observability", () => {
     });
     expect(await memoized.hasViewer()).toBe(false);
     expect(await memoized.port.getViewer(new Headers())).toEqual({ displayLabel: "octocat" });
-    expect(
-      await memoized.port.getViewer(new Headers({ Cookie: "quota.session_token=secret" })),
-    ).toEqual({
+    expect(await memoized.port.getViewer(new Headers({ Cookie: "quota_session=secret" }))).toEqual({
       displayLabel: "octocat",
     });
     expect(calls).toBe(1);

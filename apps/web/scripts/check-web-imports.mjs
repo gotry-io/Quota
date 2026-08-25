@@ -9,8 +9,7 @@ const forbidden = [
   /platform\.env/,
   /D1Database/,
   /createRelayApp/,
-  /createWebAccountAuth/,
-  /better-auth/,
+  /GitHubWebSessions/,
   /usage-summary/,
 ];
 

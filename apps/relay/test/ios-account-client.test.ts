@@ -10,12 +10,12 @@ import {
   SessionRefreshResponseSchema,
 } from "@gotry-io/quota-protocol";
 import { beforeEach, describe, expect, inject, it } from "vitest";
-import type { WebAccountAuth } from "../src/account/better-auth.ts";
 import { AccountService } from "../src/account/service.ts";
 import { createRelayApp } from "../src/app.ts";
 import { SecretHasher } from "../src/security.ts";
 import { D1AccountState } from "../src/state/d1-account-state.ts";
 import { D1UsageState } from "../src/state/d1-usage-state.ts";
+import { SignedInWebSessionStub } from "./web-session-stub.ts";
 
 declare global {
   namespace Cloudflare {
@@ -607,28 +607,13 @@ async function createHarness(): Promise<TestHarness> {
     .run();
   const state = new D1AccountState(env.DB);
   const hasher = new SecretHasher(secret);
-  let callbackURL = "";
   const checked = { at: now };
-  const webAuth: WebAccountAuth = {
-    handler: async () => new Response(null, { status: 404 }),
-    beginGitHubSignIn: async (_headers, callback) => {
-      callbackURL = callback;
-      return Response.redirect("https://github.com/login/oauth/authorize", 302);
-    },
-    getSession: async () => ({
-      user: { id: accountId, name: "iOS Tester" },
-      session: {
-        id: "ios_web_session",
-        createdAt: now,
-        expiresAt: new Date(now.getTime() + 60_000),
-      },
-    }),
-  };
+  const webSessions = new SignedInWebSessionStub(accountId, now);
   const app = createRelayApp({
     state,
     usageState: new D1UsageState(env.DB),
     accountService: new AccountService(state, hasher, secret),
-    webAuth,
+    webSessions,
     hasher,
     now: () => checked.at,
   });
@@ -636,7 +621,7 @@ async function createHarness(): Promise<TestHarness> {
     app,
     accountId,
     get callbackURL() {
-      return callbackURL;
+      return `https://quota.gotry.io${webSessions.returnTo}`;
     },
     get checkedAt() {
       return checked.at;

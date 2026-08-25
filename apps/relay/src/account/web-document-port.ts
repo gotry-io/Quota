@@ -4,29 +4,23 @@ import type {
   WebDocumentPort,
   WebDocumentViewer,
 } from "../../../web/src/lib/server/document-port.ts";
-import type { WebAccountAuth } from "./better-auth.ts";
-
-const sessionCookiePattern = /(?:^|;\s*)(?:__Secure-)?quota\.session_token=/;
-
-export function hasWebSessionCookie(cookieHeader: string | null): boolean {
-  return cookieHeader !== null && sessionCookiePattern.test(cookieHeader);
-}
+import type { WebSessionPort } from "./web-session.ts";
 
 export function createWebDocumentPort(input: {
-  webAuth: WebAccountAuth;
+  webSessions: WebSessionPort;
   state: Pick<AccountState, "getAccount">;
+  now?: () => Date;
   getAccountSummary?: (headers: Headers) => Promise<AccountSummaryDocumentResult>;
 }): WebDocumentPort {
   const getAccountSummary = input.getAccountSummary;
+  const now = input.now ?? (() => new Date());
   return {
     async getViewer(headers: Headers): Promise<WebDocumentViewer | null> {
-      if (!hasWebSessionCookie(headers.get("Cookie"))) return null;
-      const session = await input.webAuth.getSession(headers);
-      if (!session) return null;
-      const account = await input.state.getAccount(session.user.id);
+      const principal = await input.webSessions.authorize(headers, now());
+      if (!principal) return null;
+      const account = await input.state.getAccount(principal.account_id);
       if (!account) return null;
-      const label = account.display_label?.trim() || session.user.name.trim();
-      return { displayLabel: label || "Account" };
+      return { displayLabel: account.display_label?.trim() || "Account" };
     },
     ...(getAccountSummary
       ? {
