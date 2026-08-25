@@ -754,37 +754,6 @@ impl StateStore {
         })
     }
 
-    pub fn write_sync_diagnostic(&self, value: &Value) -> Result<(), StateError> {
-        let raw = serde_json::to_string(value)?;
-        if raw.len() > 64 * 1024 {
-            return Err(StateError::InvalidState);
-        }
-        self.with_cache_mut(|conn| {
-            conn.execute(
-                "INSERT INTO sync_diagnostics(id, payload_json, updated_at)
-             VALUES (1, ?1, ?2)
-             ON CONFLICT(id) DO UPDATE SET payload_json = excluded.payload_json,
-             updated_at = excluded.updated_at",
-                params![raw, now_rfc3339()],
-            )?;
-            Ok(())
-        })
-    }
-
-    pub fn sync_diagnostic(&self) -> Result<Option<(Value, String)>, StateError> {
-        self.with_cache(|conn| {
-            let raw: Option<(String, String)> = conn
-                .query_row(
-                    "SELECT payload_json, updated_at FROM sync_diagnostics WHERE id = 1",
-                    [],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                )
-                .optional()?;
-            raw.map(|(value, updated_at)| Ok((serde_json::from_str(&value)?, updated_at)))
-                .transpose()
-        })
-    }
-
     pub fn write_diagnostic_snapshot(&self, report: &DiagnosticReport) -> Result<(), StateError> {
         let raw = serde_json::to_string(report)?;
         if raw.len() > crate::protocol::MAXIMUM_LINE_BYTES {

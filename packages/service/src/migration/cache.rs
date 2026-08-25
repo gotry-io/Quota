@@ -99,11 +99,6 @@ fn migration_v1(tx: &rusqlite::Transaction<'_>, revision_floor: u64) -> Result<(
             payload_json TEXT NOT NULL,
             updated_at TEXT NOT NULL
          );
-         CREATE TABLE sync_diagnostics (
-            id INTEGER PRIMARY KEY CHECK (id = 1),
-            payload_json TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-         );
          CREATE TABLE model_catalog_cache (
             id INTEGER PRIMARY KEY CHECK (id = 1),
             payload_json TEXT NOT NULL,
