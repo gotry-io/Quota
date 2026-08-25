@@ -47,8 +47,9 @@ The Worker requires these secrets:
 - `QUOTA_INSTALLATION_KEY`
 - `QUOTA_SESSION_HASH_KEY`
 
-An earlier `BETTER_AUTH_SECRET` is no longer read by anything and can be removed from a local
-`.env` and from the deployed Worker's secrets.
+That is the whole list. The extra signing secret the retired browser-auth framework required is
+not read by anything now and can be deleted from a local `.env` and from the deployed Worker; it is
+named in [ADR 0025](../../docs/decisions/0025-one-session-system.md).
 
 Register the GitHub OAuth App callback as
 `https://quota.gotry.io/api/auth/github/callback`. QuotaRelay owns the browser sign-in itself:
