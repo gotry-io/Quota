@@ -807,16 +807,13 @@ pub(crate) fn validate_usage_submission(value: &Value) -> Result<(), RelayError>
     let agent = coverage
         .get("agent")
         .and_then(Value::as_str)
-        .filter(|value| {
-            matches!(
-                *value,
-                "codex" | "claude_code" | "grok" | "opencode" | "pi" | "cursor"
-            )
-        })
+        .filter(|value| valid_billing_agent(Some(value)))
         .ok_or(RelayError::InvalidResponse)?;
     let start = parse_utc_hour(coverage.get("start_at"))?;
     let end = parse_utc_hour(coverage.get("end_at"))?;
-    if end <= start || end - start > chrono::Duration::hours(crate::usage::MAX_USAGE_COVERAGE_HOURS)
+    if start < earliest_usage_instant()
+        || end <= start
+        || end - start > chrono::Duration::hours(crate::usage::MAX_USAGE_COVERAGE_HOURS)
     {
         return Err(RelayError::InvalidResponse);
     }
@@ -903,6 +900,15 @@ pub(crate) fn validate_usage_submission(value: &Value) -> Result<(), RelayError>
     }
     let _ = timezone;
     Ok(())
+}
+
+/// The contract's lower bound on a coverage window, as the parser returns instants.
+///
+/// A submission this device cannot upload blocks the outbox behind it, so the bound is checked
+/// here as well as at Relay rather than left for the rejection to teach us.
+fn earliest_usage_instant() -> chrono::DateTime<chrono::FixedOffset> {
+    chrono::DateTime::parse_from_rfc3339(crate::usage::EARLIEST_USAGE_INSTANT)
+        .expect("EARLIEST_USAGE_INSTANT is a valid RFC 3339 instant")
 }
 
 fn parse_utc_hour(

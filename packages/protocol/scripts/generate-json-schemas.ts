@@ -1,4 +1,6 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
@@ -124,14 +126,24 @@ const outputs = [
   },
   {
     filename: "model-catalog-v1.json",
-    title: "Quota report-time model catalog v1",
+    title: "Quota report-time model catalog v2",
     schema: ModelCatalogSchema,
     comment:
       "The catalog source is packages/protocol/catalog/model-catalog.json; quota-model additionally rejects duplicate IDs and overlapping aliases.",
   },
 ] as const;
 
-mkdirSync(directory, { recursive: true });
+const checkOnly = process.argv.slice(2).includes("--check");
+if (process.argv.slice(2).some((argument) => argument !== "--check")) {
+  throw new Error("Usage: generate-json-schemas.ts [--check]");
+}
+
+// The published documents are formatted after generation, so --check reproduces the whole
+// pipeline into a scratch directory and compares. A schema that has drifted from the runtime
+// definition it is generated from is not a document anyone can validate against.
+const target = checkOnly ? mkdtempSync(join(tmpdir(), "quota-schema-")) : directory;
+
+mkdirSync(target, { recursive: true });
 for (const output of outputs) {
   const generated = z.toJSONSchema(output.schema, {
     target: "draft-2020-12",
@@ -145,5 +157,30 @@ for (const output of outputs) {
     $comment: output.comment,
     ...generated,
   };
-  writeFileSync(join(directory, output.filename), `${JSON.stringify(document, null, 2)}\n`);
+  writeFileSync(join(target, output.filename), `${JSON.stringify(document, null, 2)}\n`);
+}
+
+if (checkOnly) {
+  const formatted = spawnSync("pnpm", ["exec", "biome", "format", "--write", target], {
+    cwd: join(dirname(fileURLToPath(import.meta.url)), "../../.."),
+    encoding: "utf8",
+  });
+  if (formatted.status !== 0) {
+    rmSync(target, { recursive: true, force: true });
+    throw new Error(`Could not format the generated schemas: ${formatted.stderr}`);
+  }
+  const stale = outputs.filter(
+    (output) =>
+      readFileSync(join(target, output.filename), "utf8") !==
+      readFileSync(join(directory, output.filename), "utf8"),
+  );
+  rmSync(target, { recursive: true, force: true });
+  if (stale.length > 0) {
+    throw new Error(
+      `Published JSON Schemas are out of date: ${stale
+        .map((output) => output.filename)
+        .join(", ")}. Run pnpm --filter @gotry-io/quota-protocol generate:schema.`,
+    );
+  }
+  console.log(`packages/protocol/schema is current (${outputs.length} documents)`);
 }

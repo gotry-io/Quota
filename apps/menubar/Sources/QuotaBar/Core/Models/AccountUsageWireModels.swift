@@ -29,8 +29,12 @@ struct UsageCoverage: Codable, Equatable, Sendable {
     case status
   }
 
+  /// A submission is bounded at both ends: it may not claim more than the wire's span, and it
+  /// may not reach back before any agent this Account accepts existed.
   var isValid: Bool {
-    guard let start = Self.utcHour(startAt), let end = Self.utcHour(endAt), end > start else {
+    guard let start = Self.utcHour(startAt), let end = Self.utcHour(endAt), end > start,
+      let earliest = Self.utcHour(QuotaProtocol.earliestUsageInstant), start >= earliest
+    else {
       return false
     }
     return end.timeIntervalSince(start) <= 744 * 3_600
@@ -326,7 +330,8 @@ struct LocalUsagePeriodSummary: Codable, Equatable, Sendable {
   }
 
   var isValid: Bool {
-    totals.isValid && cost.isValid && agents.count <= 6 && agents.allSatisfy(\.isValid)
+    totals.isValid && cost.isValid && agents.count <= BillingAgent.allCases.count
+      && agents.allSatisfy(\.isValid)
       && modelsTruncated != false
   }
 

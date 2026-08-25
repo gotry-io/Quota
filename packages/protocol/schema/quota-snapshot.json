@@ -7,7 +7,7 @@
   "properties": {
     "protocol_version": {
       "type": "number",
-      "const": 4
+      "const": 5
     },
     "device_id": {
       "type": "string",

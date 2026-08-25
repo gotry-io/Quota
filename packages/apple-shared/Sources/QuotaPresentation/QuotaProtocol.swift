@@ -14,4 +14,8 @@ public enum QuotaProtocol {
   public static let localUsage = 3
   /// The private local quota collection report the service hands its own app.
   public static let localCollection = 2
+
+  /// No agent this Account accepts existed before this instant, so a coverage window reaching
+  /// back past it was computed from a missing lower bound rather than scanned.
+  public static let earliestUsageInstant = "2020-01-01T00:00:00Z"
 }

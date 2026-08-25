@@ -25,9 +25,6 @@
     },
     "coverage": {
       "$ref": "#/$defs/__schema7"
-    },
-    "coverage_truncated": {
-      "$ref": "#/$defs/__schema12"
     }
   },
   "required": [
@@ -135,10 +132,6 @@
     "__schema11": {
       "type": "string",
       "enum": ["complete", "partial"]
-    },
-    "__schema12": {
-      "type": "boolean",
-      "const": true
     }
   }
 }

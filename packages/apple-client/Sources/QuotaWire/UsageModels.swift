@@ -1,6 +1,6 @@
 import Foundation
 
-public enum BillingAgent: String, Codable, Sendable {
+public enum BillingAgent: String, CaseIterable, Codable, Sendable {
   case codex
   case claudeCode = "claude_code"
   case grok
@@ -22,7 +22,7 @@ public enum BillingChannel: String, Codable, Sendable {
   case unknown
 }
 
-public enum InferenceProvider: String, Codable, Sendable {
+public enum InferenceProvider: String, CaseIterable, Codable, Sendable {
   case openai
   case azureOpenAI = "azure_openai"
   case anthropic
@@ -570,7 +570,8 @@ public struct LocalUsageAgentSummary: Codable, Equatable, Sendable {
   }
 
   public var isValid: Bool {
-    totals.isValid && cost.isValid && providers.count <= 8 && providers.allSatisfy(\.isValid)
+    totals.isValid && cost.isValid && providers.count <= InferenceProvider.allCases.count
+      && providers.allSatisfy(\.isValid)
   }
 
   public init(from decoder: Decoder) throws {
@@ -760,7 +761,7 @@ public struct AccountUsageSummary: Codable, Equatable, Sendable {
       && cost.isValid
       && modelCatalogRevision.map(WireValidation.isOpaqueID) != false
       && breakdowns.count <= 1_000
-      && agents.map { $0.count <= 6 } != false
+      && agents.map { $0.count <= BillingAgent.allCases.count } != false
   }
 
   private enum CodingKeys: String, CodingKey {

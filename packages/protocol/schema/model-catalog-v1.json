@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://quota.gotry.io/schema/model-catalog-v1.json",
-  "title": "Quota report-time model catalog v1",
+  "title": "Quota report-time model catalog v2",
   "$comment": "The catalog source is packages/protocol/catalog/model-catalog.json; quota-model additionally rejects duplicate IDs and overlapping aliases.",
   "type": "object",
   "properties": {
     "schema_version": {
       "type": "number",
-      "const": 1
+      "const": 2
     },
     "revision": {
       "type": "string",
