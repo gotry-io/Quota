@@ -1,25 +1,37 @@
 //! Persistent stdin/stdout NDJSON transport.
 
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
+use std::thread;
 
 use serde_json::from_slice;
 
 use crate::protocol::{
-    ErrorCode, IpcError, IpcEvent, IpcRequest, IpcResponse, MAXIMUM_LINE_BYTES,
-    MAXIMUM_REQUEST_ID_BYTES, RecoveryAction,
+    ErrorCode, IpcError, IpcEvent, IpcReadyEvent, IpcRequest, IpcResponse, MAXIMUM_LINE_BYTES,
+    MAXIMUM_REQUEST_ID_BYTES, Operation, RecoveryAction,
 };
 use crate::service::LocalService;
 
 pub struct JsonLineWriter {
-    output: Mutex<BufWriter<io::Stdout>>,
+    output: Mutex<Box<dyn Write + Send>>,
 }
 
 impl JsonLineWriter {
     pub fn stdout() -> Arc<Self> {
+        Self::to(BufWriter::new(io::stdout()))
+    }
+
+    fn to(output: impl Write + Send + 'static) -> Arc<Self> {
         Arc::new(Self {
-            output: Mutex::new(BufWriter::new(io::stdout())),
+            output: Mutex::new(Box::new(output)),
         })
+    }
+
+    /// Says that the local state is open and requests will be read.  QuotaBar holds every
+    /// request until it arrives, so it must precede the first response on this stream.
+    pub fn ready(&self) {
+        self.write_json(&IpcReadyEvent::ready());
     }
 
     pub fn response(&self, response: &IpcResponse) {
@@ -61,14 +73,35 @@ impl crate::service::EventSink for JsonLineWriter {
 /// Runs until stdin EOF or a `shutdown` operation.  EOF is the parent-lifetime signal: no new
 /// work is accepted after it, and the service cancels background tasks before returning.
 pub fn run_stdio(service: LocalService, writer: Arc<JsonLineWriter>) -> io::Result<()> {
-    let stdin = io::stdin();
-    let mut input = BufReader::new(stdin);
-    loop {
-        let frame = read_frame(&mut input)?;
-        let Some(frame) = frame else {
-            service.shutdown();
-            break;
-        };
+    run_requests(&mut BufReader::new(io::stdin()), service, writer)
+}
+
+/// Reads frames on this thread and runs every operation but `ping` on one worker thread.
+///
+/// Operations are still serialized, so nothing about the service becomes concurrent.  The split
+/// exists so that a request that blocks the worker — a provider round trip, a state lock held by
+/// a refresh — cannot also stop the helper from saying that it is alive.
+fn run_requests<R: BufRead>(
+    input: &mut R,
+    service: LocalService,
+    writer: Arc<JsonLineWriter>,
+) -> io::Result<()> {
+    writer.ready();
+    let (sender, receiver) = mpsc::channel::<IpcRequest>();
+    let worker = thread::Builder::new()
+        .name("quota-ipc-worker".to_owned())
+        .spawn({
+            let service = service.clone();
+            let writer = writer.clone();
+            move || {
+                for request in receiver {
+                    let response = service.handle(request);
+                    writer.response(&response);
+                }
+            }
+        })?;
+    let mut closed_by_request = false;
+    while let Some(frame) = read_frame(input)? {
         let line = match frame {
             Ok(line) => line,
             Err(FrameError::TooLong) => {
@@ -88,30 +121,48 @@ pub fn run_stdio(service: LocalService, writer: Arc<JsonLineWriter>) -> io::Resu
                 continue;
             }
         };
-        let response = service.handle(request);
-        let should_shutdown = service.is_shutdown();
-        writer.response(&response);
-        if should_shutdown {
+        if matches!(request.operation, Operation::Ping) {
+            writer.response(&service.handle(request));
+            continue;
+        }
+        closed_by_request = matches!(request.operation, Operation::Shutdown);
+        if sender.send(request).is_err() {
+            break;
+        }
+        if closed_by_request {
             break;
         }
     }
+    if !closed_by_request {
+        service.shutdown();
+    }
+    drop(sender);
+    let _ = worker.join();
     service.shutdown();
     Ok(())
 }
 
 /// Keeps the IPC contract usable when the private entry point cannot initialize its local state.
-/// The request id is the only caller-provided value copied into the response; all failure details
-/// are a fixed, redacted recovery pair.
+/// It announces itself like a healthy open, because it does answer requests; every one of them
+/// gets the same fixed, redacted recovery pair.  The request id is the only caller-provided value
+/// copied into a response.
 pub fn run_stdio_startup_error(writer: Arc<JsonLineWriter>, error: IpcError) -> io::Result<()> {
-    let stdin = io::stdin();
-    let mut input = BufReader::new(stdin);
-    let frame = read_frame(&mut input)?;
-    let Some(frame) = frame else { return Ok(()) };
-    let request_id = match frame {
-        Ok(line) => startup_request_id(&line),
-        Err(FrameError::TooLong) => "invalid".to_owned(),
-    };
-    writer.response(&IpcResponse::error(&request_id, error));
+    respond_startup_error(&mut BufReader::new(io::stdin()), &writer, &error)
+}
+
+fn respond_startup_error<R: BufRead>(
+    input: &mut R,
+    writer: &JsonLineWriter,
+    error: &IpcError,
+) -> io::Result<()> {
+    writer.ready();
+    while let Some(frame) = read_frame(input)? {
+        let request_id = match frame {
+            Ok(line) => startup_request_id(&line),
+            Err(FrameError::TooLong) => "invalid".to_owned(),
+        };
+        writer.response(&IpcResponse::error(&request_id, error.clone()));
+    }
     Ok(())
 }
 
@@ -181,7 +232,164 @@ fn read_frame<R: BufRead>(input: &mut R) -> io::Result<Option<Result<Vec<u8>, Fr
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::DiagnosticReport;
+    use crate::service::{BackendError, LocalBackend, LoginOutcome, RefreshOutcome};
+    use crate::state::StateStore;
     use std::io::Cursor;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::{Duration, Instant};
+    use uuid::Uuid;
+
+    /// Collects the helper's stdout where the test — and a backend standing in for a long
+    /// operation — can read it while the transport is still running.
+    #[derive(Clone, Default)]
+    struct SharedOutput(Arc<Mutex<Vec<u8>>>);
+
+    impl SharedOutput {
+        fn lines(&self) -> Vec<String> {
+            String::from_utf8(self.0.lock().expect("output").clone())
+                .expect("utf8")
+                .lines()
+                .map(str::to_owned)
+                .collect()
+        }
+    }
+
+    impl Write for SharedOutput {
+        fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+            self.0.lock().expect("output").extend_from_slice(buffer);
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Holds the worker inside one operation until the ping it is blocking has been answered.
+    struct BlockingDiagnoseBackend {
+        output: SharedOutput,
+        answered_ping: Arc<AtomicBool>,
+    }
+
+    impl LocalBackend for BlockingDiagnoseBackend {
+        fn refresh(&self, _: Arc<AtomicBool>) -> RefreshOutcome {
+            RefreshOutcome {
+                quota: Err(BackendError::unavailable()),
+                usage: Err(BackendError::unavailable()),
+                account: Err(BackendError::unavailable()),
+                pricing: Err(BackendError::unavailable()),
+                overview: None,
+            }
+        }
+
+        fn diagnose(&self) -> Result<DiagnosticReport, BackendError> {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while Instant::now() < deadline {
+                if self
+                    .output
+                    .lines()
+                    .iter()
+                    .any(|line| line.contains("\"ok\":true"))
+                {
+                    self.answered_ping.store(true, Ordering::Release);
+                    break;
+                }
+                thread::sleep(Duration::from_millis(5));
+            }
+            Err(BackendError::unavailable())
+        }
+
+        fn login(&self, _: &str, _: Arc<AtomicBool>) -> Result<LoginOutcome, BackendError> {
+            Err(BackendError::unavailable())
+        }
+
+        fn logout(&self, _: &serde_json::Value) -> Result<(), BackendError> {
+            Err(BackendError::unavailable())
+        }
+
+        fn validate_provider_browser_session(
+            &self,
+            _: crate::catalog::ProviderId,
+            _: &str,
+        ) -> Result<crate::providers::ValidatedBrowserSession, BackendError> {
+            Err(BackendError::unavailable())
+        }
+    }
+
+    fn request_line(request_id: &str, operation: &str) -> String {
+        format!(
+            "{{\"type\":\"request\",\"request_id\":\"{request_id}\",\"operation\":\"{operation}\",\"payload\":{{}}}}\n"
+        )
+    }
+
+    #[test]
+    fn ready_precedes_every_response_and_ping_answers_during_a_long_operation() {
+        let root = std::env::temp_dir().join(format!("quota-ipc-{}", Uuid::new_v4()));
+        let state = Arc::new(StateStore::open(root.clone()).expect("state"));
+        let output = SharedOutput::default();
+        let writer = JsonLineWriter::to(output.clone());
+        let answered_ping = Arc::new(AtomicBool::new(false));
+        let service = LocalService::new(
+            state,
+            writer.clone(),
+            Arc::new(BlockingDiagnoseBackend {
+                output: output.clone(),
+                answered_ping: answered_ping.clone(),
+            }),
+        );
+
+        // `shutdown` closes the stream instead of EOF: EOF is the parent-lifetime signal and
+        // would cancel the queued operation before the worker could start it.
+        let input = format!(
+            "{}{}{}",
+            request_line("slow", "diagnose"),
+            request_line("alive", "ping"),
+            request_line("bye", "shutdown")
+        );
+        run_requests(&mut Cursor::new(input.into_bytes()), service, writer).expect("transport");
+        let _ = std::fs::remove_dir_all(&root);
+
+        let lines = output.lines();
+        assert_eq!(
+            lines[0], r#"{"type":"event","event":"ready","ipc_version":1}"#,
+            "ready must be the first line on the stream"
+        );
+        assert!(
+            answered_ping.load(Ordering::Acquire),
+            "ping was not answered while diagnose held the worker"
+        );
+        assert!(lines[1].contains(r#""request_id":"alive""#));
+        assert!(lines[1].contains(r#""ok":true"#));
+        assert!(lines[2].contains(r#""request_id":"slow""#));
+    }
+
+    #[test]
+    fn startup_failure_announces_itself_and_answers_every_request() {
+        let output = SharedOutput::default();
+        let writer = JsonLineWriter::to(output.clone());
+        let input = format!(
+            "{}{}",
+            request_line("r1", "get_state"),
+            request_line("r2", "ping")
+        );
+
+        respond_startup_error(
+            &mut Cursor::new(input.into_bytes()),
+            &writer,
+            &IpcError::new(ErrorCode::ClientUpgradeRequired, RecoveryAction::Upgrade),
+        )
+        .expect("transport");
+
+        let lines = output.lines();
+        assert_eq!(
+            lines[0],
+            r#"{"type":"event","event":"ready","ipc_version":1}"#
+        );
+        assert!(lines[1].contains(r#""request_id":"r1""#));
+        assert!(lines[1].contains(r#""code":"client_upgrade_required""#));
+        assert!(lines[2].contains(r#""request_id":"r2""#));
+    }
 
     #[test]
     fn writer_does_not_change_wire_types() {

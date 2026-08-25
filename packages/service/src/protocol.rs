@@ -15,6 +15,7 @@ pub const MAXIMUM_REQUEST_ID_BYTES: usize = 128;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Operation {
+    Ping,
     GetState,
     Diagnose,
     RecheckDiagnostics,
@@ -220,7 +221,28 @@ pub enum EventMessageType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EventName {
+    Ready,
     StateChanged,
+}
+
+/// Announces that the helper finished opening its local state and will now read requests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct IpcReadyEvent {
+    #[serde(rename = "type")]
+    pub message_type: EventMessageType,
+    pub event: EventName,
+    pub ipc_version: u32,
+}
+
+impl IpcReadyEvent {
+    pub const fn ready() -> Self {
+        Self {
+            message_type: EventMessageType::Event,
+            event: EventName::Ready,
+            ipc_version: IPC_VERSION,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -282,6 +304,13 @@ pub struct RefreshResult {
 #[derive(Debug, Clone, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct EmptyResult {}
+
+/// Liveness answer.  It carries no state, because the point is that the helper could answer.
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PingResult {
+    pub ok: bool,
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(deny_unknown_fields)]

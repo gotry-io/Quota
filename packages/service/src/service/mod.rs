@@ -260,13 +260,17 @@ impl LocalService {
                 IpcError::new(ErrorCode::InvalidRequest, RecoveryAction::None),
             );
         }
-        if self.is_shutdown() && !matches!(request.operation, Operation::Shutdown) {
+        // `ping` is answered while shutting down too: it reports that this process is still
+        // there to answer, which stays true until the loop leaves.
+        if self.is_shutdown() && !matches!(request.operation, Operation::Shutdown | Operation::Ping)
+        {
             return IpcResponse::error(
                 &request.request_id,
                 IpcError::new(ErrorCode::Unavailable, RecoveryAction::Retry),
             );
         }
         let result: Result<Value, IpcError> = match request.operation {
+            Operation::Ping => Self::ping(&request).map(as_json),
             Operation::GetState => self.get_state(&request).map(as_json),
             Operation::Diagnose => self.diagnose(&request).map(as_json),
             Operation::RecheckDiagnostics => self.recheck_diagnostics(&request).map(as_json),
@@ -316,6 +320,13 @@ impl LocalService {
             *signal = true;
             self.inner.scheduler_wakeup.notify_all();
         }
+    }
+
+    /// Takes no lock and touches no state, so the stdin thread can answer it while a long
+    /// operation holds the worker.
+    fn ping(request: &IpcRequest) -> Result<PingResult, IpcError> {
+        request.decode_payload::<EmptyPayload>()?;
+        Ok(PingResult { ok: true })
     }
 
     fn get_state(&self, request: &IpcRequest) -> Result<StateSnapshot, IpcError> {
