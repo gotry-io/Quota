@@ -1093,7 +1093,13 @@ export type UsageBreakdown = z.infer<typeof UsageBreakdownSchema>;
  *
  * Every reader of a managed read has only ever asked whether anything was missed, so the
  * answer travels instead of the windows it was derived from: `none` when no window covers
- * the range at all, `partial` when any window was scanned incompletely, `complete` otherwise.
+ * the range at all, `partial` when any window that does was scanned incompletely, `complete`
+ * otherwise.
+ *
+ * The verdict describes the scanning, not the calendar. A stretch of the range no window
+ * touches leaves the verdict alone, because a device that was not running has no usage to
+ * miss; a scan that was attempted and came up short records a `partial` window, and that is
+ * what `partial` reports.
  */
 export const UsageCoverageVerdictSchema = z.enum(["none", "complete", "partial"]);
 export type UsageCoverageVerdict = z.infer<typeof UsageCoverageVerdictSchema>;

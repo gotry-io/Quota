@@ -51,6 +51,12 @@ so every client is held to it. D1 migration 0014 deletes what is already stored.
 chart is a year of daily totals, so the range is what it asks for. That is a real reader; the
 coverage rows were not.
 
+**Report a gap in the range as `partial`.** The verdict describes the scanning, not the
+calendar, and every consumer read it that way before this change too. A device that was asleep
+has no usage to miss, so treating every hour it did not run as incomplete would leave the flag
+on for every account forever; a scan that was attempted and came up short already records a
+`partial` window, which is what `partial` reports.
+
 **Merge adjacent windows on write.** The stored windows are never coalesced, so they grow with
 every upload — 971 rows over eleven months here. With the read no longer scanning them this is
 storage, not latency, and the upload path carries the sequence and idempotency guarantees that
