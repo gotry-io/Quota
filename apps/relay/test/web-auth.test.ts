@@ -51,6 +51,7 @@ describe("browser sign-in through GitHub", () => {
 
     const started = await relay.app.request(`${origin}/api/auth/github/start`);
     expect(started.status).toBe(302);
+    expect(started.headers.get("cache-control")).toBe("no-store");
     const authorize = new URL(started.headers.get("location") ?? "");
     expect(`${authorize.origin}${authorize.pathname}`).toBe(
       "https://github.com/login/oauth/authorize",
@@ -77,6 +78,7 @@ describe("browser sign-in through GitHub", () => {
     );
     expect(callback.status).toBe(302);
     expect(callback.headers.get("location")).toBe("/my");
+    expect(callback.headers.get("cache-control")).toBe("no-store");
     const cookies = setCookies(callback);
     const session = cookies.get("quota_session");
     expect(session?.attributes).toContain("HttpOnly");
@@ -135,6 +137,7 @@ describe("browser sign-in through GitHub", () => {
       },
     });
     expect(signedOut.status).toBe(200);
+    expect(signedOut.headers.get("cache-control")).toBe("no-store");
     expect(setCookies(signedOut).get("quota_session")?.attributes).toContain("Max-Age=0");
     expect(
       (await relay.app.request(`${origin}/api/v2/account`, { headers: { Cookie: sessionCookie } }))
