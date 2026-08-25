@@ -8,9 +8,9 @@ use std::time::Duration;
 
 pub const LOCAL_FILE_LIMIT: usize = 1_048_576;
 
-/// Run a provider-owned helper without allowing it to retain an unbounded
-/// stdout buffer or to outlive the collection request. Stderr is discarded;
-/// helpers are never allowed to use it as an implicit data channel.
+/// Run the one helper collection still starts — the macOS Keychain lookup — without
+/// allowing it to retain an unbounded stdout buffer or to outlive the collection
+/// request. Stderr is discarded; it is never an implicit data channel.
 pub fn run_bounded_command(
     mut command: Command,
     timeout: Duration,
@@ -126,24 +126,6 @@ pub(super) fn read_bounded_file_inner(
     (bytes.len() <= limit).then_some(bytes)
 }
 
-pub fn is_executable_file(path: &Path) -> bool {
-    let Ok(metadata) = fs::metadata(path) else {
-        return false;
-    };
-    if !metadata.is_file() {
-        return false;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        metadata.permissions().mode() & 0o111 != 0
-    }
-    #[cfg(not(unix))]
-    {
-        true
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -175,21 +157,6 @@ mod tests {
                     .is_none()
             );
             assert!(cancelled.load(Ordering::Acquire));
-        }
-    }
-
-    #[test]
-    fn executable_resolution_requires_execute_permission() {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let path = temp_path("provider-cli");
-            fs::write(&path, b"#!/bin/sh\nexit 0\n").unwrap();
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
-            assert!(!is_executable_file(&path));
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
-            assert!(is_executable_file(&path));
-            let _ = fs::remove_file(path);
         }
     }
 
