@@ -55,5 +55,7 @@ date intervals preserve known historical changes. Unknown models and missing com
 unpriced; wildcard dimension matches and the inferred-cache approximation remain explicit in the
 calculation assumptions.
 
-Readiness probes and the hourly Worker schedule run the bounded credential cleanup defined in
-[`docs/security.md`](../../docs/security.md).
+Readiness probes and the hourly Worker schedule run the bounded credential, Usage-receipt, and
+quota-observation cleanup defined in [`docs/security.md`](../../docs/security.md). An unhandled
+request failure writes one `relay_request_failed` line carrying only the path, the status, and the
+error's class name.

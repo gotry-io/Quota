@@ -254,6 +254,16 @@ export interface AccountMaintenanceInput {
    * this; this is when Relay stops keeping it at all.
    */
   snapshot_observed_before: string;
+  /**
+   * Usage receipts accepted before this instant are deleted.
+   *
+   * A receipt exists so a retried upload is recognized as the one already stored rather than
+   * accepted twice. Nothing reads it afterwards: the coverage and fact rows it guarded are
+   * written in the same transaction, and the device's own `last_usage_sequence` is what a
+   * later upload is checked against. Keeping receipts past the window in which a client could
+   * still be retrying only grows the table.
+   */
+  usage_receipt_accepted_before: string;
   limit: number;
 }
 

@@ -275,12 +275,16 @@ data requirements. Architecture and product behavior are defined in
   response, never in D1.
 - Retained business data is limited to Account/Device lifecycle metadata, each Device's latest
   bounded health snapshot, normalized quota observations, sparse hourly Usage facts, complete
-  coverage, idempotency receipts, and bounded rate limits. Device/Account deletion cascades health;
+  coverage, idempotency receipts, and bounded rate limits. A Usage receipt is retained for seven
+  days, long enough to recognize a retry a client could still be holding; past that the Device's own
+  upload sequence is the check and a stale submission fails closed. Device/Account deletion cascades health;
   Relay retains no health history. Calculated cost is derived from the canonical catalog; it is not
   persisted as an invoice.
 - Rate limits use fixed-window counters keyed by hashes of action and subject. Managed anonymous
   network subjects may use only Cloudflare's trusted connecting-IP metadata. Readiness probes and
-  the hourly Worker schedule delete at most 100 expired rows from each credential table per run.
+  the hourly Worker schedule delete at most 100 expired rows from each credential, receipt, and
+  observation table per run; consuming a limit collects at most 100 expired counters inline. Every
+  such delete addresses whole rows, so expiring one fixed window never resets a subject's live one.
   Expired login grants, Better Auth encrypted sessions, and rate-limit counters are eligible
   immediately. Expired or revoked native account/device sessions remain for seven days so logout
   retries stay diagnosable without allowing those credentials to authenticate.

@@ -1060,6 +1060,73 @@ describe("managed Relay on real Workers and D1", () => {
     expect(remaining.results.map((row) => row.provider)).toEqual(["codex"]);
   });
 
+  it("keeps a Usage receipt only while a client could still be retrying it", async () => {
+    const receipt = (submissionID: string, sequence: number, acceptedAt: string) =>
+      env.DB.prepare(
+        `INSERT INTO usage_submissions (
+           device_id, submission_id, generation, sequence, request_digest,
+           usage_sync_revision, agent, start_at, end_at, accepted_at
+         ) VALUES ('device_receipts', ?1, 1, ?2, 'digest', 1, 'codex', ?3, ?3, ?3)`,
+      ).bind(submissionID, sequence, acceptedAt);
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_receipts', 'subject_receipts', ?1, ?1)",
+      ).bind(now.toISOString()),
+      env.DB.prepare(
+        `INSERT INTO devices (
+           id, account_id, installation_id_hash, generation, created_at, last_login_at
+         ) VALUES ('device_receipts', 'account_receipts', 'installation_receipts', 1, ?1, ?1)`,
+      ).bind(now.toISOString()),
+      // Yesterday's upload: an outbox entry stuck behind a bad network is still this one.
+      receipt("submission_recent", 1, "2026-08-09T00:00:00.000Z"),
+      // A month old: the device's own sequence has moved on, and no client reuses that ID.
+      receipt("submission_ancient", 0, "2026-07-10T00:00:00.000Z"),
+    ]);
+
+    await new D1AccountState(env.DB).performMaintenance(accountMaintenanceInput(now));
+
+    const kept = await env.DB.prepare(
+      "SELECT submission_id FROM usage_submissions WHERE device_id = 'device_receipts'",
+    ).all<{ submission_id: string }>();
+    expect(kept.results.map((row) => row.submission_id)).toEqual(["submission_recent"]);
+  });
+
+  it("expires one rate-limit window without resetting that subject's live one", async () => {
+    const state = new D1AccountState(env.DB);
+    const counter = (startedAt: string, expiresAt: string) =>
+      env.DB.prepare(
+        `INSERT INTO rate_limit_counters (key_hash, window_started_at, window_expires_at, request_count)
+         VALUES ('subject_hash', ?1, ?2, 5)`,
+      ).bind(startedAt, expiresAt);
+    await env.DB.batch([
+      counter("2026-08-09T23:00:00.000Z", "2026-08-09T23:10:00.000Z"),
+      counter("2026-08-10T00:00:00.000Z", "2026-08-10T00:10:00.000Z"),
+    ]);
+
+    // Consuming the live window also collects expired rows; the live counter must survive, or
+    // an exhausted subject buys a fresh allowance by making one more request.
+    const result = await state.consumeRateLimit({
+      key_hash: "subject_hash",
+      window_started_at: "2026-08-10T00:00:00.000Z",
+      window_expires_at: "2026-08-10T00:10:00.000Z",
+      checked_at: now.toISOString(),
+      limit: 10,
+    });
+    expect(result.allowed).toBe(true);
+    const exhausted = await state.consumeRateLimit({
+      key_hash: "subject_hash",
+      window_started_at: "2026-08-10T00:00:00.000Z",
+      window_expires_at: "2026-08-10T00:10:00.000Z",
+      checked_at: now.toISOString(),
+      limit: 6,
+    });
+    expect(exhausted.allowed).toBe(false);
+    const rows = await env.DB.prepare(
+      "SELECT window_started_at FROM rate_limit_counters ORDER BY window_started_at",
+    ).all<{ window_started_at: string }>();
+    expect(rows.results.map((row) => row.window_started_at)).toEqual(["2026-08-10T00:00:00.000Z"]);
+  });
+
   it("uses Better Auth's standard GitHub redirect and stores no provider token", async () => {
     const auth = createWebAccountAuth({
       database: env.DB,

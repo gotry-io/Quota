@@ -137,11 +137,13 @@ export class D1AccountState implements AccountState {
            )`,
         )
         .bind(input.session_expired_before, input.session_revoked_before, input.limit),
+      // By rowid, not by key_hash: a counter is one (key_hash, window_started_at) row, and a
+      // subject whose previous window expired usually has a live one under the same hash.
       this.database
         .prepare(
-          `DELETE FROM rate_limit_counters WHERE key_hash IN (
-             SELECT key_hash FROM rate_limit_counters WHERE window_expires_at <= ?1
-             ORDER BY window_expires_at ASC, key_hash ASC LIMIT ?2
+          `DELETE FROM rate_limit_counters WHERE rowid IN (
+             SELECT rowid FROM rate_limit_counters WHERE window_expires_at <= ?1
+             ORDER BY window_expires_at ASC, rowid ASC LIMIT ?2
            )`,
         )
         .bind(input.grant_expired_before, input.limit),
@@ -161,6 +163,14 @@ export class D1AccountState implements AccountState {
            )`,
         )
         .bind(input.snapshot_observed_before, input.limit),
+      this.database
+        .prepare(
+          `DELETE FROM usage_submissions WHERE rowid IN (
+             SELECT rowid FROM usage_submissions WHERE accepted_at < ?1
+             ORDER BY accepted_at ASC, rowid ASC LIMIT ?2
+           )`,
+        )
+        .bind(input.usage_receipt_accepted_before, input.limit),
     ]);
   }
 
@@ -1284,9 +1294,17 @@ export class D1AccountState implements AccountState {
   async consumeRateLimit(input: RateLimitInput): Promise<RateLimitResult> {
     validateRateLimitInput(input);
     const results = await this.database.batch<RateLimitRow>([
+      // Bounded like every other cleanup: this runs inside the request being limited, and an
+      // unbounded delete over a table one burst can fill makes a rate-limited caller slow for
+      // everybody. Expired rows this run does not reach are collected by the next.
       this.database
-        .prepare("DELETE FROM rate_limit_counters WHERE window_expires_at <= ?1")
-        .bind(input.checked_at),
+        .prepare(
+          `DELETE FROM rate_limit_counters WHERE rowid IN (
+             SELECT rowid FROM rate_limit_counters WHERE window_expires_at <= ?1
+             ORDER BY window_expires_at ASC, rowid ASC LIMIT ?2
+           )`,
+        )
+        .bind(input.checked_at, rateLimitCleanupBatchLimit),
       this.database
         .prepare(
           `INSERT INTO rate_limit_counters (
@@ -1379,3 +1397,5 @@ function stampCount(value: unknown): number {
 function stampInstant(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
+
+const rateLimitCleanupBatchLimit = 100;

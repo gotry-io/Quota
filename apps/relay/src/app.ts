@@ -82,6 +82,15 @@ const expiredSessionRetentionMilliseconds = 7 * 24 * 60 * 60 * 1000;
  * and still bounds what an account accumulates from a provider it no longer collects.
  */
 const quotaSnapshotRetentionMilliseconds = 7 * 24 * 60 * 60 * 1000;
+/**
+ * How long an accepted Usage receipt stays available to recognize a retry.
+ *
+ * A client drains its outbox continuously and reuses the submission ID only while that entry
+ * is still pending, so a retry a week later is not a retry any more. Past this window the
+ * device's own sequence is the check, and a stale submission fails closed with a conflict
+ * rather than being written twice.
+ */
+const usageReceiptRetentionMilliseconds = 7 * 24 * 60 * 60 * 1000;
 const maintenanceBatchLimit = 100;
 
 function requireValidPricingCatalog(value: PricingCatalog): PricingCatalog {
@@ -133,6 +142,9 @@ export function accountMaintenanceInput(checkedAt: Date): AccountMaintenanceInpu
     session_revoked_before: retainedAfter,
     snapshot_observed_before: new Date(
       checkedAt.getTime() - quotaSnapshotRetentionMilliseconds,
+    ).toISOString(),
+    usage_receipt_accepted_before: new Date(
+      checkedAt.getTime() - usageReceiptRetentionMilliseconds,
     ).toISOString(),
     limit: maintenanceBatchLimit,
   };
@@ -948,9 +960,20 @@ export function createRelayApp(options: RelayAppOptions): Hono {
         )
       : notFound(context),
   );
-  app.onError((_error, context) =>
-    relayError(context, 500, "internal_error", "QuotaRelay could not complete the request."),
-  );
+  // An unhandled failure is invisible unless it is written down, and a 500 that says nothing
+  // about which route produced it cannot be acted on. The error's own name is the most it may
+  // carry: its message can quote a request body, a bound parameter, or a token.
+  app.onError((error, context) => {
+    console.error(
+      JSON.stringify({
+        event: "relay_request_failed",
+        path: new URL(context.req.url).pathname,
+        status: 500,
+        error: error instanceof Error ? error.name : "Error",
+      }),
+    );
+    return relayError(context, 500, "internal_error", "QuotaRelay could not complete the request.");
+  });
   return app;
 }
 
