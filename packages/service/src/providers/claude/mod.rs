@@ -219,7 +219,13 @@ fn read_keychain(context: &CollectionContext) -> KeychainRead {
         context.cancel.as_ref(),
         1_048_576,
     ) else {
-        return if keychain_entry_exists(context) {
+        // A refresh that was cancelled proves nothing about access, and the probe below shares
+        // its cancellation, so ask first rather than read a stopped command as a refusal.
+        let cancelled = context
+            .cancel
+            .as_ref()
+            .is_some_and(|cancel| cancel.load(std::sync::atomic::Ordering::Acquire));
+        return if !cancelled && keychain_entry_exists(context) {
             KeychainRead::Refused
         } else {
             KeychainRead::Absent

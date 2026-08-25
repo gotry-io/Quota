@@ -568,7 +568,9 @@ fn migration_v10(tx: &Transaction<'_>) -> Result<(), StateError> {
 ///
 /// The attempt table names its codes in a CHECK, which SQLite cannot alter, so the table is
 /// rebuilt.  History is copied across, because it is the record a reader consults to see how
-/// long something has been failing.
+/// long something has been failing — but only as far as it can be: a row an image should never
+/// have held would otherwise fail the whole copy, and a device that cannot open its state is a
+/// worse outcome than a device missing a line of history it could not read anyway.
 fn migration_v11(tx: &Transaction<'_>) -> Result<(), StateError> {
     tx.execute_batch(
         "ALTER TABLE diagnostic_attempts RENAME TO diagnostic_attempts_v10;
@@ -613,7 +615,7 @@ fn migration_v11(tx: &Transaction<'_>) -> Result<(), StateError> {
             start_revision INTEGER NOT NULL CHECK (start_revision >= 0),
             end_revision INTEGER CHECK (end_revision IS NULL OR end_revision >= 0)
          );
-         INSERT INTO diagnostic_attempts
+         INSERT OR IGNORE INTO diagnostic_attempts
             SELECT id, parent_refresh_id, kind, trigger, source, subject, mode, started_at,
                    completed_at, duration_ms, outcome, code, recovery, metrics_json,
                    start_revision, end_revision
@@ -1344,6 +1346,48 @@ mod tests {
             })
             .expect("after rebuild");
         assert_eq!(total, 3);
+    }
+
+    /// Rebuilding the table must not be able to strand a device.  An image holding a row it
+    /// should never have held gives up that row, not the ladder: a service that cannot open
+    /// its state is worse than a missing line of history nothing could read anyway.
+    #[test]
+    fn a_row_the_table_should_never_have_held_does_not_strand_the_ladder() {
+        let mut conn = Connection::open_in_memory().expect("memory");
+        apply(&mut conn).expect("fresh");
+        conn.execute("DELETE FROM schema_migrations WHERE version = 11", [])
+            .expect("rewind");
+        conn.execute_batch("PRAGMA ignore_check_constraints = ON")
+            .expect("simulate an image that already holds one");
+        conn.execute(
+            "INSERT INTO diagnostic_attempts(
+                kind, trigger, source, mode, started_at, outcome, code, recovery, start_revision
+             ) VALUES ('quota_collection', 'scheduled', 'this_device', 'required',
+                       '2026-08-25T00:00:00Z', 'failed', 'not_a_code', 'retry', 1)",
+            [],
+        )
+        .expect("unreadable row");
+        conn.execute(
+            "INSERT INTO diagnostic_attempts(
+                kind, trigger, source, mode, started_at, outcome, code, recovery, start_revision
+             ) VALUES ('quota_collection', 'scheduled', 'this_device', 'required',
+                       '2026-08-25T00:00:01Z', 'failed', 'provider_error', 'retry', 1)",
+            [],
+        )
+        .expect("readable row");
+        conn.execute_batch("PRAGMA ignore_check_constraints = OFF")
+            .expect("restore");
+
+        apply(&mut conn).expect("the ladder still completes");
+
+        let codes: Vec<String> = conn
+            .prepare("SELECT code FROM diagnostic_attempts ORDER BY started_at")
+            .expect("query")
+            .query_map([], |row| row.get(0))
+            .expect("rows")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("values");
+        assert_eq!(codes, vec!["provider_error".to_string()]);
     }
 
     fn usage_submission(protocol_version: u64, submission_id: &str, agent: &str) -> Value {
