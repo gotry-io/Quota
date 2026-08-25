@@ -79,6 +79,11 @@ protocol LocalServiceServing: Sendable {
   func commitProviderBrowserSession(
     _ provider: ProviderID, cookieHeader: String
   ) async throws -> LocalServiceProviderBrowserSession
+  /// The other answer a sign-in attempt can end with: macOS refused the cookie store, so there
+  /// is no session to commit and the service records why.
+  func reportProviderBrowserAccessDenied(
+    _ provider: ProviderID, browserName: String, reason: BrowserAccessDenialReason
+  ) async throws -> LocalServiceProviderBrowserSession
   func removeProviderBrowserSession(
     _ provider: ProviderID
   ) async throws -> LocalServiceProviderBrowserSession
@@ -241,9 +246,27 @@ actor LocalServiceClient: LocalServiceServing {
   ) async throws -> LocalServiceProviderBrowserSession {
     let session: LocalServiceProviderBrowserSession = try await request(
       operation: "commit_provider_browser_session",
-      payload: ProviderBrowserSessionPayload(provider: provider.rawValue, cookieHeader: cookieHeader)
+      payload: CommitProviderBrowserSessionPayload(
+        provider: provider.rawValue, cookieHeader: cookieHeader, accessDenied: nil)
     )
     guard session.isValid, session.configured else { throw LocalServiceClientError.invalidMessage }
+    return session
+  }
+
+  func reportProviderBrowserAccessDenied(
+    _ provider: ProviderID, browserName: String, reason: BrowserAccessDenialReason
+  ) async throws -> LocalServiceProviderBrowserSession {
+    let session: LocalServiceProviderBrowserSession = try await request(
+      operation: "commit_provider_browser_session",
+      payload: CommitProviderBrowserSessionPayload(
+        provider: provider.rawValue,
+        cookieHeader: nil,
+        // The browser's display name is all that travels: the store's path stays on this side.
+        accessDenied: BrowserAccessDeniedPayload(
+          browser: browserName, reason: reason.rawValue)
+      )
+    )
+    guard session.isValid else { throw LocalServiceClientError.invalidMessage }
     return session
   }
 
@@ -744,4 +767,18 @@ private struct SetProviderConfigPayload: Encodable {
 private struct ProviderBrowserSessionPayload: Encodable {
   let provider: String
   let cookieHeader: String
+}
+
+/// One sign-in attempt's answer: the session a browser released, or the reason it released
+/// nothing. Exactly one of the two is present, and the service refuses a payload that names
+/// both or neither.
+private struct CommitProviderBrowserSessionPayload: Encodable {
+  let provider: String
+  let cookieHeader: String?
+  let accessDenied: BrowserAccessDeniedPayload?
+}
+
+private struct BrowserAccessDeniedPayload: Encodable {
+  let browser: String
+  let reason: String
 }

@@ -16,12 +16,13 @@ use crate::catalog::ProviderId;
 use crate::observation::snapshot_is_current;
 use crate::pricing;
 use crate::protocol::{
-    DIAGNOSTIC_SCHEMA_VERSION, DiagnosticAttemptCode, DiagnosticAttemptKind,
-    DiagnosticAttemptOutcome, DiagnosticAttemptTrigger, DiagnosticAttention, DiagnosticClient,
-    DiagnosticDataState, DiagnosticOperation, DiagnosticRecovery, DiagnosticReport,
-    DiagnosticSourceState, DiagnosticStatus, DiagnosticSummary, DiagnosticSurface, ErrorCode,
-    IpcError, MANAGED_DATA_PROTOCOL, MAXIMUM_DIAGNOSTIC_SOURCES, QuotaOverviewIdentity,
-    QuotaOverviewItem, QuotaOverviewSource, RecoveryAction, UsagePeriod, UsageSource,
+    BrowserAccessDenialReason, DIAGNOSTIC_SCHEMA_VERSION, DiagnosticAttemptCode,
+    DiagnosticAttemptKind, DiagnosticAttemptOutcome, DiagnosticAttemptTrigger, DiagnosticAttention,
+    DiagnosticClient, DiagnosticDataState, DiagnosticOperation, DiagnosticRecovery,
+    DiagnosticReport, DiagnosticSourceState, DiagnosticStatus, DiagnosticSummary,
+    DiagnosticSurface, ErrorCode, IpcError, MANAGED_DATA_PROTOCOL, MAXIMUM_DIAGNOSTIC_SOURCES,
+    QuotaOverviewIdentity, QuotaOverviewItem, QuotaOverviewSource, RecoveryAction, UsagePeriod,
+    UsageSource,
 };
 use crate::providers::common::{ErrorCategory, ProviderError, ProviderSession};
 use crate::providers::{self, CollectionContext};
@@ -517,6 +518,26 @@ impl NativeBackend {
                     recovery,
                 });
             }
+        }
+
+        // A browser cookie store macOS refused this Mac. It is not a provider failure and no
+        // refresh will clear it: it stands until a permission is granted, so it gets its own
+        // row rather than being folded into the provider's collection outcome.
+        for (provider, denial) in self
+            .state
+            .browser_access_denials()
+            .map_err(|_| BackendError::unavailable())?
+        {
+            sources.push(DiagnosticSourceState {
+                subject: format!("provider:{provider}"),
+                source_id: Some(providers::BROWSER_SESSION_SOURCE.to_owned()),
+                status: DiagnosticStatus::Blocked,
+                last_attempt_at: Some(denial.denied_at.clone()),
+                last_success_at: None,
+                code: Some("browser_access_denied".into()),
+                message: browser_access_denied_message(&denial),
+                recovery: DiagnosticRecovery::CheckAccess,
+            });
         }
 
         let (config_present, config_readable) = self.state.provider_config_status();
@@ -1963,6 +1984,28 @@ fn collect_discovered_provider(
     }
 }
 
+/// What a refused cookie store means, and what releases it.
+///
+/// Naming the browser matters: the reader has several, and the grant is per browser, not per
+/// provider. The store's path is never part of this, only the browser's name.
+fn browser_access_denied_message(denial: &crate::state::BrowserAccessDenial) -> String {
+    let browser = &denial.browser;
+    match denial.reason {
+        BrowserAccessDenialReason::FullDiskAccess => format!(
+            "QuotaBar could not read {browser}'s cookies. Grant Full Disk Access in System \
+             Settings › Privacy & Security, then try again."
+        ),
+        BrowserAccessDenialReason::KeychainRefused => format!(
+            "QuotaBar could not read {browser}'s cookies. macOS did not release the \"Chrome \
+             Safe Storage\" Keychain item, so allow it when asked, then try again."
+        ),
+        BrowserAccessDenialReason::StoreUnreadable => format!(
+            "QuotaBar could not read {browser}'s cookies. Its cookie store could not be opened. \
+             Quit {browser} and try again, or choose another browser."
+        ),
+    }
+}
+
 /// What restores collection after a sign-in stops being accepted.
 ///
 /// The source that failed decides it.  A stored browser session is re-added in this app,
@@ -3135,6 +3178,68 @@ mod tests {
         assert_eq!(state.model_catalog().expect("catalog"), Some(value));
         server.join().expect("server");
         drop(backend);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    /// A browser store macOS refused is not "no session found". It is a permission the reader
+    /// has to grant, no refresh clears it, and the Support page has to say which browser and
+    /// which grant — so it travels the browser-session commit and lands as its own source row.
+    #[test]
+    fn a_commit_that_names_a_refusal_becomes_a_browser_access_denied_source() {
+        let root = std::env::temp_dir().join(format!("quota-denied-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        let relay = Arc::new(RelayClient::new().expect("relay"));
+        let mut backend = NativeBackend::new(state.clone(), relay, "QuotaTest", "test");
+        backend.home = root.join("home");
+        backend.environment.clear();
+        let backend = Arc::new(backend);
+        let service = crate::service::LocalService::new(
+            state.clone(),
+            crate::ipc::JsonLineWriter::stdout(),
+            backend.clone(),
+        );
+
+        let denied = service.handle(
+            serde_json::from_value(serde_json::json!({
+                "type": "request",
+                "request_id": "denied",
+                "operation": "commit_provider_browser_session",
+                "payload": {
+                    "provider": "cursor",
+                    "access_denied": {"browser": "Safari", "reason": "full_disk_access"}
+                }
+            }))
+            .expect("denial request"),
+        );
+        assert!(denied.error.is_none());
+        // No session was stored: a refusal is the absence of one, not a worse one.
+        assert!(
+            state
+                .provider_browser_session("cursor")
+                .expect("read")
+                .is_none()
+        );
+
+        let report = backend.complete_diagnostic_report().expect("diagnostics");
+        let source = report
+            .sources
+            .iter()
+            .find(|source| source.code.as_deref() == Some("browser_access_denied"))
+            .expect("refusal row");
+        assert_eq!(source.subject, "provider:cursor");
+        assert_eq!(source.source_id.as_deref(), Some("browser_session"));
+        assert_eq!(source.status, DiagnosticStatus::Blocked);
+        assert_eq!(source.recovery, DiagnosticRecovery::CheckAccess);
+        assert!(source.message.contains("Safari"));
+        assert!(source.message.contains("Full Disk Access"));
+        // The store's path never reaches a report a person copies out of the app.
+        assert!(!source.message.contains(&root.display().to_string()));
+
+        service.shutdown();
+        drop(service);
+        drop(backend);
+        drop(state);
         fs::remove_dir_all(root).expect("cleanup");
     }
 

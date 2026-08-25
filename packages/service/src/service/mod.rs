@@ -90,6 +90,23 @@ fn provider_mask_label(provider: &str) -> &'static str {
         .unwrap_or("API")
 }
 
+/// A provider the catalog says has a browser session at all. Every other id is a request this
+/// service will not answer, whatever the payload carries.
+fn browser_session_provider(provider: &str) -> Result<crate::catalog::ProviderId, IpcError> {
+    crate::catalog::ProviderId::parse(provider)
+        .filter(|provider| provider.metadata().browser_session.is_some())
+        .ok_or_else(|| IpcError::new(ErrorCode::InvalidRequest, RecoveryAction::None))
+}
+
+/// The browser's display name, kept short and free of control characters. It is the only part
+/// of a refusal that came from outside this process, and it is rendered to a person.
+fn bounded_browser_name(value: &str) -> Result<String, IpcError> {
+    let value = value.trim();
+    (!value.is_empty() && value.len() <= 64 && !value.chars().any(char::is_control))
+        .then(|| value.to_owned())
+        .ok_or_else(|| IpcError::new(ErrorCode::InvalidRequest, RecoveryAction::None))
+}
+
 /// Adapter boundary for the provider, usage, pricing, and Relay implementations.  It lives here
 /// so those modules can be developed independently without making the IPC layer know their types.
 pub trait LocalBackend: Send + Sync {
@@ -585,11 +602,34 @@ impl LocalService {
         })
     }
 
+    /// Ends one sign-in attempt, whichever way it went.
+    ///
+    /// A session is validated again and stored. A refusal stores no session and records why the
+    /// store could not be read, so the Support page can say so instead of leaving the reader to
+    /// conclude they are not signed in.
     fn commit_provider_browser_session(
         &self,
         request: &IpcRequest,
     ) -> Result<ProviderBrowserSessionView, IpcError> {
-        let (provider, validated) = self.validated_provider_browser_session(request)?;
+        let payload: CommitProviderBrowserSessionPayload = request.decode_payload()?;
+        let provider = browser_session_provider(&payload.provider)?;
+        match (payload.cookie_header.as_deref(), payload.access_denied) {
+            (Some(cookie_header), None) => self.commit_browser_session(provider, cookie_header),
+            (None, Some(denial)) => self.record_browser_access_denial(provider, denial),
+            // Naming both, or neither, is not an attempt this service can answer.
+            _ => Err(IpcError::new(
+                ErrorCode::InvalidRequest,
+                RecoveryAction::None,
+            )),
+        }
+    }
+
+    fn commit_browser_session(
+        &self,
+        provider: crate::catalog::ProviderId,
+        cookie_header: &str,
+    ) -> Result<ProviderBrowserSessionView, IpcError> {
+        let validated = self.validate_browser_session(provider, cookie_header)?;
         self.inner
             .state
             .set_provider_browser_session(
@@ -601,6 +641,11 @@ impl LocalService {
                 },
             )
             .map_err(state_error)?;
+        // A stored session is proof the store was readable, so any refusal on record is stale.
+        let _ = self
+            .inner
+            .state
+            .clear_browser_access_denial(provider.as_str());
         self.emit(vec![ComponentName::Providers]);
         let _ = self.request_refresh_with_trigger(DiagnosticAttemptTrigger::SettingsChange);
         Ok(ProviderBrowserSessionView {
@@ -608,6 +653,37 @@ impl LocalService {
             configured: true,
             account_fingerprint: Some(validated.account_fingerprint),
             account_label: validated.account_label,
+        })
+    }
+
+    fn record_browser_access_denial(
+        &self,
+        provider: crate::catalog::ProviderId,
+        denial: crate::protocol::ProviderBrowserAccessDenial,
+    ) -> Result<ProviderBrowserSessionView, IpcError> {
+        let browser = bounded_browser_name(&denial.browser)?;
+        self.inner
+            .state
+            .set_browser_access_denial(
+                provider.as_str(),
+                &crate::state::BrowserAccessDenial {
+                    browser,
+                    reason: denial.reason,
+                    denied_at: crate::state::now_rfc3339(),
+                },
+            )
+            .map_err(state_error)?;
+        self.emit(vec![ComponentName::Providers]);
+        let stored = self
+            .inner
+            .state
+            .provider_browser_session(provider.as_str())
+            .map_err(state_error)?;
+        Ok(ProviderBrowserSessionView {
+            provider: provider.as_str().to_owned(),
+            configured: stored.is_some(),
+            account_fingerprint: stored.as_ref().map(|s| s.account_fingerprint.clone()),
+            account_label: stored.and_then(|s| s.account_label),
         })
     }
 
@@ -622,20 +698,23 @@ impl LocalService {
         IpcError,
     > {
         let payload: ProviderBrowserSessionPayload = request.decode_payload()?;
-        let provider = crate::catalog::ProviderId::parse(&payload.provider)
-            .filter(|provider| provider.metadata().browser_session.is_some())
-            .ok_or_else(|| IpcError::new(ErrorCode::InvalidRequest, RecoveryAction::None))?;
-        let cookie_header = crate::providers::common::normalize_browser_cookie_header(
-            provider,
-            &payload.cookie_header,
-        )
-        .map_err(|_| IpcError::new(ErrorCode::InvalidRequest, RecoveryAction::None))?;
-        let validated = self
-            .inner
+        let provider = browser_session_provider(&payload.provider)?;
+        let validated = self.validate_browser_session(provider, &payload.cookie_header)?;
+        Ok((provider, validated))
+    }
+
+    fn validate_browser_session(
+        &self,
+        provider: crate::catalog::ProviderId,
+        cookie_header: &str,
+    ) -> Result<crate::providers::ValidatedBrowserSession, IpcError> {
+        let cookie_header =
+            crate::providers::common::normalize_browser_cookie_header(provider, cookie_header)
+                .map_err(|_| IpcError::new(ErrorCode::InvalidRequest, RecoveryAction::None))?;
+        self.inner
             .backend
             .validate_provider_browser_session(provider, &cookie_header)
-            .map_err(|error| error.error)?;
-        Ok((provider, validated))
+            .map_err(|error| error.error)
     }
 
     fn remove_provider_browser_session(
@@ -643,13 +722,16 @@ impl LocalService {
         request: &IpcRequest,
     ) -> Result<ProviderBrowserSessionView, IpcError> {
         let payload: ProviderPayload = request.decode_payload()?;
-        let provider = crate::catalog::ProviderId::parse(&payload.provider)
-            .filter(|provider| provider.metadata().browser_session.is_some())
-            .ok_or_else(|| IpcError::new(ErrorCode::InvalidRequest, RecoveryAction::None))?;
+        let provider = browser_session_provider(&payload.provider)?;
         self.inner
             .state
             .remove_provider_browser_session(provider.as_str())
             .map_err(state_error)?;
+        // Nothing is being read here any more, so a refusal recorded against it says nothing.
+        let _ = self
+            .inner
+            .state
+            .clear_browser_access_denial(provider.as_str());
         self.emit(vec![ComponentName::Providers]);
         let _ = self.request_refresh_with_trigger(DiagnosticAttemptTrigger::SettingsChange);
         Ok(ProviderBrowserSessionView {
@@ -1651,6 +1733,17 @@ mod tests {
             "wos-session=old-secret"
         );
 
+        // A refusal recorded before this attempt is answered by the session it stored.
+        state
+            .set_browser_access_denial(
+                "cursor",
+                &crate::state::BrowserAccessDenial {
+                    browser: "Safari".into(),
+                    reason: BrowserAccessDenialReason::FullDiskAccess,
+                    denied_at: crate::state::now_rfc3339(),
+                },
+            )
+            .expect("denial");
         let committed = service.handle(browser_session_request(
             "commit_provider_browser_session",
             "wos-session=new-secret",
@@ -1663,6 +1756,26 @@ mod tests {
                 .expect("new stored")
                 .cookie_header,
             "wos-session=new-secret"
+        );
+        assert!(state.browser_access_denials().expect("denials").is_empty());
+
+        // Naming both a session and a refusal is not an attempt this service can answer.
+        let ambiguous = service.handle(
+            serde_json::from_value(serde_json::json!({
+                "type": "request",
+                "request_id": "ambiguous",
+                "operation": "commit_provider_browser_session",
+                "payload": {
+                    "provider": "cursor",
+                    "cookie_header": "wos-session=new-secret",
+                    "access_denied": {"browser": "Safari", "reason": "full_disk_access"}
+                }
+            }))
+            .expect("ambiguous request"),
+        );
+        assert_eq!(
+            ambiguous.error.map(|error| error.code),
+            Some(ErrorCode::InvalidRequest)
         );
         service.shutdown();
 

@@ -570,6 +570,12 @@ private struct StubLocalService: LocalServiceServing {
     throw LocalServiceClientError.serviceMissing
   }
 
+  func reportProviderBrowserAccessDenied(
+    _ provider: ProviderID, browserName: String, reason: BrowserAccessDenialReason
+  ) async throws -> LocalServiceProviderBrowserSession {
+    throw LocalServiceClientError.serviceMissing
+  }
+
   func removeProviderBrowserSession(
     _ provider: ProviderID
   ) async throws -> LocalServiceProviderBrowserSession {

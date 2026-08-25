@@ -83,6 +83,8 @@ struct BrowserSessionAccountChoice: Identifiable, Equatable, Sendable {
 
 enum ProviderBrowserSessionPopup: Equatable, Sendable {
   case browser(provider: ProviderID, choices: [BrowserApplicationChoice])
+  /// Asked before the first cookie is read, once the browser to be read is known.
+  case consent(provider: ProviderID, choice: BrowserApplicationChoice)
   case account(provider: ProviderID, choices: [BrowserSessionAccountChoice])
   case confirmDisconnect(provider: ProviderID)
 }
@@ -132,6 +134,9 @@ final class MenuBarViewModel {
   private(set) var providerBrowserSessions: [ProviderID: LocalServiceProviderBrowserSession] = [:]
   private(set) var browserSessionPopup: ProviderBrowserSessionPopup?
   private(set) var browserSessionErrorMessages: [ProviderID: String] = [:]
+  /// A read macOS refused, which is a different state from finding no session: it stands until
+  /// the reader changes a permission, and the Support page carries it too.
+  private(set) var browserSessionAccessDenials: [ProviderID: BrowserAccessDenial] = [:]
   private(set) var browserSessionWaitingProvider: ProviderID?
   private(set) var canCancelBrowserSessionLogin = false
   private(set) var browserSessionActivityText: String?
@@ -488,6 +493,8 @@ final class MenuBarViewModel {
     await reloadState()
   }
 
+  /// Nothing is read until the browser is known and the reader has agreed to that browser
+  /// being read. The consent popup is the gate: declining it leaves every cookie store shut.
   func startProviderBrowserSessionLogin(_ provider: ProviderID) {
     guard
       browserSessionTask == nil,
@@ -495,12 +502,13 @@ final class MenuBarViewModel {
       let loginURL = URL(string: spec.loginURL)
     else { return }
     browserSessionErrorMessages[provider] = nil
+    browserSessionAccessDenials[provider] = nil
     let browsers = BrowserSessionImporter.orderedBrowsers(for: spec)
     if let applicationURL = browserApplicationRouter.defaultApplication(for: loginURL),
       let choice = BrowserApplicationCatalog.choice(
         for: applicationURL, allowed: browsers)
     {
-      beginBrowserSessionPolling(provider, choice: choice)
+      browserSessionPopup = .consent(provider: provider, choice: choice)
       return
     }
     var seen = Set<String>()
@@ -527,6 +535,12 @@ final class MenuBarViewModel {
       popupProvider == provider,
       let choice = choices.first(where: { $0.id == id })
     else { return }
+    browserSessionPopup = .consent(provider: provider, choice: choice)
+  }
+
+  /// The only path to a cookie read. Cancelling the consent popup takes the other one.
+  func confirmProviderBrowserSessionConsent() {
+    guard case .consent(let provider, let choice) = browserSessionPopup else { return }
     browserSessionPopup = nil
     beginBrowserSessionPolling(provider, choice: choice)
   }
@@ -610,8 +624,17 @@ final class MenuBarViewModel {
       let deadline = Date().addingTimeInterval(120)
       var seenHeaders = Set<String>()
       while !Task.isCancelled, Date() < deadline {
-        let candidates = await browserSessionImporter.candidates(
+        let outcome = await browserSessionImporter.read(
           spec: spec, browser: choice.browser, now: Date(), deadline: deadline)
+        // A refusal is not "keep waiting": it stands until the reader changes a permission,
+        // and polling for another two minutes only delays saying so.
+        if case .accessDenied(let denial) = outcome {
+          guard !Task.isCancelled else { return }
+          await recordBrowserAccessDenial(provider, denial: denial)
+          return
+        }
+        let candidates: [BrowserSessionCookieCandidate] =
+          if case .found(let found) = outcome { found } else { [] }
         var accounts: [String: BrowserSessionAccountChoice] = [:]
         for candidate in candidates where !Task.isCancelled && Date() < deadline {
           guard seenHeaders.insert(candidate.headerFingerprint).inserted else { continue }
@@ -660,6 +683,23 @@ final class MenuBarViewModel {
     }
   }
 
+  /// Shows the refusal here, and tells the service so the Support page carries it too. A
+  /// permission this Mac was refused is a local fact, and the report is where a person looks
+  /// for local facts.
+  private func recordBrowserAccessDenial(
+    _ provider: ProviderID,
+    denial: BrowserAccessDenial
+  ) async {
+    browserSessionAccessDenials[provider] = denial
+    browserSessionErrorMessages[provider] = denial.message
+    guard let client else { return }
+    _ = try? await client.reportProviderBrowserAccessDenied(
+      provider,
+      browserName: denial.browserName,
+      reason: denial.reason
+    )
+  }
+
   private func startBrowserSessionCommit(_ choice: BrowserSessionAccountChoice) {
     guard browserSessionTask == nil else { return }
     canCancelBrowserSessionLogin = false
@@ -686,6 +726,9 @@ final class MenuBarViewModel {
       _ = try await client.commitProviderBrowserSession(
         choice.provider, cookieHeader: choice.cookieHeader)
       guard !Task.isCancelled else { return }
+      // A committed session is proof the store was readable, so any refusal on record is stale.
+      browserSessionAccessDenials[choice.provider] = nil
+      browserSessionErrorMessages[choice.provider] = nil
       await reloadState()
     } catch is CancellationError {
       return
