@@ -11,11 +11,14 @@ struct DecodingTests {
   func aReadKeepsWhatItNamesAndIgnoresTheRest() throws {
     var device = Fixtures.accountDevice()
     device["health"] = NSNull()
-    var observation = Fixtures.quotaObservation()
-    var snapshot = observation["snapshot"] as! [String: Any]
+    var subscription = Fixtures.quotaSubscription()
+    var snapshot = subscription["snapshot"] as! [String: Any]
     snapshot["valid_until"] = "2026-12-31T00:00:00Z"
-    observation["snapshot"] = snapshot
-    let data = try Fixtures.accountSummaryJSON(quota: [observation], devices: [device])
+    subscription["snapshot"] = snapshot
+    let data = try Fixtures.accountSummaryJSON(
+      subscriptions: [subscription],
+      devices: [device]
+    )
 
     var root = try JSONSerialization.jsonObject(with: data) as! [String: Any]
     root["generated_at"] = "2026-08-24T09:05:00Z"
@@ -27,19 +30,22 @@ struct DecodingTests {
       from: try JSONSerialization.data(withJSONObject: root)
     )
 
-    #expect(tolerated.devices.first?.deviceID == Fixtures.accountDevice()["device_id"] as? String)
-    #expect(tolerated.quota.first?.snapshot.provider == .codex)
+    #expect(tolerated.devices.first?.id == Fixtures.accountDevice()["id"] as? String)
+    #expect(tolerated.subscriptions.first?.snapshot.provider == .codex)
   }
 
   @Test
   func decodesAccountSummary() throws {
-    let data = try Fixtures.accountSummaryJSON(quota: [Fixtures.quotaObservation()])
+    let data = try Fixtures.accountSummaryJSON(subscriptions: [Fixtures.quotaSubscription()])
     let summary = try WireCodec.decode(AccountSummary.self, from: data)
     #expect(summary.protocolVersion == WireCodec.managedDataProtocolVersion)
     #expect(summary.account.displayLabel == "octocat")
-    #expect(summary.quota.first?.snapshot.provider == .codex)
-    #expect(summary.quota.first?.snapshot.windows.first?.usedPercent == 29)
-    #expect(summary.usage.cost.amountMicrousd == "3138")
+    #expect(summary.subscriptions.first?.key == "codex|fp_codex_01|global|")
+    #expect(summary.subscriptions.first?.snapshot.provider == .codex)
+    #expect(summary.subscriptions.first?.snapshot.windows.first?.usedPercent == 29)
+    #expect(summary.subscriptions.first?.sources.first?.deviceID == "device_01")
+    #expect(summary.usage.today.cost.amountMicrousd == "3138")
+    #expect(summary.devices.isEmpty)
   }
 
   /// A marker stated as `false` is a malformed value rather than a member this build has not
@@ -47,44 +53,51 @@ struct DecodingTests {
   /// case: it reads as itself and is shown as the text it arrived as.
   @Test
   func rejectsFalseTruncationMarkersAndReadsUnknownProviders() throws {
-    let falseMarker = try Fixtures.accountSummaryJSON(extraUsage: ["breakdowns_truncated": false])
+    var cost = Fixtures.completeCost()
+    cost["unpriced_truncated"] = false
+    let falseMarker = try Fixtures.accountSummaryJSON(
+      usage: Fixtures.accountUsage(today: Fixtures.usagePeriod(cost: cost))
+    )
     #expect(throws: DecodingError.self) {
       _ = try WireCodec.decode(AccountSummary.self, from: falseMarker)
     }
 
-    var snapshot = Fixtures.quotaObservation()
-    var nested = snapshot["snapshot"] as! [String: Any]
+    var subscription = Fixtures.quotaSubscription()
+    var nested = subscription["snapshot"] as! [String: Any]
     nested["provider"] = "a_provider_from_2027"
-    snapshot["snapshot"] = nested
-    let unknownProvider = try Fixtures.accountSummaryJSON(quota: [snapshot])
+    subscription["snapshot"] = nested
+    subscription["provider"] = "a_provider_from_2027"
+    let unknownProvider = try Fixtures.accountSummaryJSON(subscriptions: [subscription])
     let summary = try WireCodec.decode(AccountSummary.self, from: unknownProvider)
-    #expect(summary.quota.first?.snapshot.provider == .unknown("a_provider_from_2027"))
-    #expect(summary.quota.first?.snapshot.provider.displayName == "a_provider_from_2027")
+    #expect(summary.subscriptions.first?.snapshot.provider == .unknown("a_provider_from_2027"))
+    #expect(
+      summary.subscriptions.first?.snapshot.provider.displayName == "a_provider_from_2027")
     #expect(!ProviderID.allCases.contains(.unknown("a_provider_from_2027")))
-    #expect(summary.quota.first?.snapshot.windows.first?.usedPercent == 29)
+    #expect(summary.subscriptions.first?.snapshot.windows.first?.usedPercent == 29)
   }
 
   @Test
-  func acceptsCurrentManagedDataAndRejectsReleasedV2Summary() throws {
-    var cursor = Fixtures.quotaObservation()
+  func acceptsCurrentManagedDataAndRejectsARetiredVersion() throws {
+    var cursor = Fixtures.quotaSubscription()
     var snapshot = cursor["snapshot"] as! [String: Any]
     snapshot["provider"] = "cursor"
     cursor["snapshot"] = snapshot
-    let current = try Fixtures.accountSummaryJSON(quota: [cursor])
+    cursor["provider"] = "cursor"
+    let current = try Fixtures.accountSummaryJSON(subscriptions: [cursor])
     let summary = try WireCodec.decode(AccountSummary.self, from: current)
-    #expect(summary.quota.first?.snapshot.provider == .cursor)
+    #expect(summary.subscriptions.first?.snapshot.provider == .cursor)
 
-    var releasedV2 = try JSONSerialization.jsonObject(with: current) as! [String: Any]
-    releasedV2["protocol_version"] = 2
-    let releasedV2Data = try JSONSerialization.data(withJSONObject: releasedV2)
+    var retired = try JSONSerialization.jsonObject(with: current) as! [String: Any]
+    retired["protocol_version"] = 5
+    let retiredData = try JSONSerialization.data(withJSONObject: retired)
     #expect(throws: DecodingError.self) {
-      _ = try WireCodec.decode(AccountSummary.self, from: releasedV2Data)
+      _ = try WireCodec.decode(AccountSummary.self, from: retiredData)
     }
   }
 
   @Test
   func decodesAgentGroupsAndIgnoresFieldsMeantForAnotherClient() throws {
-    let structured: [String: Any] = [
+    let totals: [String: Any] = [
       "total_tokens": 1200,
       "input_tokens": 1000,
       "output_tokens": 200,
@@ -93,35 +106,24 @@ struct DecodingTests {
       "reasoning_tokens": 50,
       "messages": 1,
     ]
-    let cost = Fixtures.completeCost()
-    let data = try Fixtures.accountSummaryJSON(
-      extraUsage: [
-        "model_catalog_revision": "catalog_1",
-        "agents": [
+    let agents: [[String: Any]] = [
+      [
+        "agent": "codex",
+        "providers": [
           [
-            "agent": "codex",
-            "totals": structured,
-            "cost": cost,
-            "providers": [
-              [
-                "provider": "openai",
-                "totals": structured,
-                "cost": cost,
-                "models": [
-                  [
-                    "model": "gpt-5.6-sol",
-                    "totals": structured,
-                    "cost": cost,
-                  ]
-                ],
-              ]
-            ],
+            "provider": "openai",
+            "models": [["model": "gpt-5.6-sol", "totals": totals, "cost": Fixtures.completeCost()]],
           ]
         ],
       ]
+    ]
+    let data = try Fixtures.accountSummaryJSON(
+      usage: Fixtures.accountUsage(today: Fixtures.usagePeriod(agents: agents))
     )
     let summary = try WireCodec.decode(AccountSummary.self, from: data)
-    #expect(summary.usage.agents?.first?.providers.first?.models.first?.model == "gpt-5.6-sol")
+    #expect(
+      summary.usage.today.agents.first?.providers.first?.models.first?.model == "gpt-5.6-sol")
+    #expect(summary.usage.last7Days.agents.isEmpty)
 
     // A response shaped for a different client carries keys this one does not read. It reads
     // the session it came for and leaves the rest alone.

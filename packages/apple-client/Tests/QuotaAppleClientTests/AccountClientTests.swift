@@ -210,11 +210,11 @@ struct AccountClientTests {
 
     let first = await client.fetchTodaySummary()
     #expect(first.fromCache == false)
-    #expect(first.summary?.usage.totals.inputTokens == 1000)
+    #expect(first.summary?.usage.today.totals.inputTokens == 1000)
 
     let second = await client.fetchTodaySummary()
     #expect(second.fromCache == true)
-    #expect(second.summary?.usage.totals.inputTokens == 1000)
+    #expect(second.summary?.usage.today.totals.inputTokens == 1000)
     #expect(second.error == .relay(.unavailable))
 
     await client.logout()

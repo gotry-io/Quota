@@ -78,12 +78,11 @@ final class AppModel {
   }
 
   /// One card per provider, and inside it one row per subscription rather than per
-  /// reporting device: an account collected on three Macs is one subscription, not three.
+  /// reporting device: an account collected on three Macs is one subscription, not three,
+  /// and Relay has already resolved it that way.
   var providerCards: [ProviderQuotaCardModel] {
     guard let summary else { return [] }
-    let grouped = Dictionary(grouping: AccountQuotaSubscriptions.resolve(summary.quota)) {
-      $0.reading.provider
-    }
+    let grouped = Dictionary(grouping: summary.subscriptions) { $0.snapshot.provider }
     return ProviderID.allCases.compactMap { provider in
       guard let subscriptions = grouped[provider], !subscriptions.isEmpty else { return nil }
       return ProviderQuotaCardModel(provider: provider, subscriptions: subscriptions)
@@ -235,5 +234,5 @@ final class AppModel {
 struct ProviderQuotaCardModel: Identifiable, Equatable {
   var id: ProviderID { provider }
   let provider: ProviderID
-  let subscriptions: [QuotaSubscription<QuotaSnapshot>]
+  let subscriptions: [QuotaSubscription]
 }

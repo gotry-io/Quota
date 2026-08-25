@@ -17,11 +17,9 @@ enum AccountDeviceActivity: String, Equatable, Sendable {
   case active = "Active"
   case idle = "Idle"
   case notReporting = "Not reporting"
-  case signedOut = "Signed out"
 
-  static func status(for device: AccountDevice, lastReadingAt: Date?, now: Date) -> Self {
-    if device.status == .signedOut { return .signedOut }
-    guard let newest = [device.lastSeenAt, lastReadingAt].compactMap({ $0 }).max() else {
+  static func status(for device: AccountDevice, now: Date) -> Self {
+    guard let newest = [device.lastSeenAt, device.lastObservedAt].compactMap({ $0 }).max() else {
       return .notReporting
     }
     let age = now.timeIntervalSince(newest)
@@ -95,26 +93,20 @@ struct AccountDevicesView: View {
           } else {
             VStack(alignment: .leading, spacing: 0) {
               ForEach(summary.devices) { device in
-                let reading = lastReadingAt(device, in: summary)
                 SettingsListRow(
                   title: device.displayName,
-                  subtitle: deviceSubtitle(device, lastReadingAt: reading, now: now),
+                  subtitle: deviceSubtitle(device, now: now),
                   systemImage: device.platform == .macos ? "desktopcomputer" : "terminal",
                   height: QuotaDesign.Layout.settingsListRowHeight
                 ) {
-                  Text(
-                    AccountDeviceActivity.status(
-                      for: device, lastReadingAt: reading, now: now
-                    ).rawValue
-                  )
-                  .quotaListSecondaryStyle()
+                  Text(AccountDeviceActivity.status(for: device, now: now).rawValue)
+                    .quotaListSecondaryStyle()
                 }
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(device.displayName)
                 .accessibilityValue(
-                  AccountDeviceActivity.status(for: device, lastReadingAt: reading, now: now)
-                    .rawValue
-                    + ". " + deviceSubtitle(device, lastReadingAt: reading, now: now)
+                  AccountDeviceActivity.status(for: device, now: now).rawValue
+                    + ". " + deviceSubtitle(device, now: now)
                 )
               }
             }
@@ -133,16 +125,7 @@ struct AccountDevicesView: View {
       : "Sign in from Settings to view account devices."
   }
 
-  private func lastReadingAt(_ device: AccountDevice, in summary: AccountSummary) -> Date? {
-    summary.quota
-      .filter { $0.deviceID == device.deviceID }
-      .map(\.snapshot.observedAt)
-      .max()
-  }
-
-  private func deviceSubtitle(
-    _ device: AccountDevice, lastReadingAt: Date?, now: Date
-  ) -> String {
+  private func deviceSubtitle(_ device: AccountDevice, now: Date) -> String {
     let platform =
       switch device.platform {
       case .macos: "macOS"
@@ -151,13 +134,13 @@ struct AccountDevicesView: View {
       case .unknown: "Unknown"
       }
     var parts = [platform]
-    if let activity = device.lastSeenAt ?? device.signedOutAt {
-      parts.append("Last seen \(CompactAgeFormat.string(since: activity, now: now)) ago")
+    if let lastSeenAt = device.lastSeenAt {
+      parts.append("Last seen \(CompactAgeFormat.string(since: lastSeenAt, now: now)) ago")
     } else {
       parts.append("Never reported")
     }
-    if let lastReadingAt {
-      parts.append("Last reading \(CompactAgeFormat.string(since: lastReadingAt, now: now)) ago")
+    if let lastObservedAt = device.lastObservedAt {
+      parts.append("Last reading \(CompactAgeFormat.string(since: lastObservedAt, now: now)) ago")
     }
     return parts.joined(separator: " · ")
   }
@@ -524,16 +507,6 @@ private struct PresentedUsageTotals: Equatable {
     messages = totals.messages
   }
 
-  init(_ totals: UsageTokenTotals) {
-    totalTokens = totals.inputTokens + totals.outputTokens
-    inputTokens = totals.inputTokens
-    outputTokens = totals.outputTokens
-    cacheReadInputTokens = totals.cacheReadTokens
-    cacheWriteInputTokens =
-      totals.cacheWrite5mTokens + totals.cacheWrite1hTokens + totals.cacheWriteInferredTokens
-    reasoningTokens = totals.reasoningTokens
-    messages = totals.requests
-  }
 }
 
 private struct PresentedUsageModel: Equatable {

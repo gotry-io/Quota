@@ -44,13 +44,6 @@ public struct QuotaUserAccount: Codable, Equatable, Sendable {
   }
 }
 
-public enum AccountDeviceStatus: String, Codable, Sendable, TolerantWireEnum {
-  case active
-  case offline
-  case signedOut = "signed_out"
-  case unknown
-}
-
 public enum AccountDevicePlatform: String, Codable, Sendable, TolerantWireEnum {
   case macos
   case linux
@@ -58,141 +51,168 @@ public enum AccountDevicePlatform: String, Codable, Sendable, TolerantWireEnum {
   case unknown
 }
 
+/// A device as an Account reads it: the two instants Relay witnessed.
+///
+/// `lastSeenAt` is when the device last called; `lastObservedAt` is when the newest reading it
+/// sent was taken. How recently a device spoke is derived from those by whoever reads them, so
+/// nothing here is a status one device asserted about another.
 public struct AccountDevice: Codable, Equatable, Identifiable, Sendable {
-  public let deviceID: String
+  public let id: String
   public let displayName: String
   public let platform: AccountDevicePlatform
-  public let deviceGeneration: Int
-  public let status: AccountDeviceStatus
-  public let createdAt: Date
-  public let lastLoginAt: Date
   public let lastSeenAt: Date?
-  public let signedOutAt: Date?
-
-  public var id: String { deviceID }
+  public let lastObservedAt: Date?
 
   public init(
-    deviceID: String,
+    id: String,
     displayName: String,
     platform: AccountDevicePlatform,
-    deviceGeneration: Int,
-    status: AccountDeviceStatus,
-    createdAt: Date,
-    lastLoginAt: Date,
     lastSeenAt: Date?,
-    signedOutAt: Date?
+    lastObservedAt: Date?
   ) {
-    self.deviceID = deviceID
+    self.id = id
     self.displayName = displayName
     self.platform = platform
-    self.deviceGeneration = deviceGeneration
-    self.status = status
-    self.createdAt = createdAt
-    self.lastLoginAt = lastLoginAt
     self.lastSeenAt = lastSeenAt
-    self.signedOutAt = signedOutAt
+    self.lastObservedAt = lastObservedAt
   }
 
   public init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
-    deviceID = try container.decode(String.self, forKey: .deviceID)
+    id = try container.decode(String.self, forKey: .id)
     displayName = try container.decode(String.self, forKey: .displayName)
     platform = try container.decode(AccountDevicePlatform.self, forKey: .platform)
-    deviceGeneration = try container.decode(Int.self, forKey: .deviceGeneration)
-    status = try container.decode(AccountDeviceStatus.self, forKey: .status)
-    createdAt = try container.decode(Date.self, forKey: .createdAt)
-    lastLoginAt = try container.decode(Date.self, forKey: .lastLoginAt)
     lastSeenAt = try container.decode(Date?.self, forKey: .lastSeenAt)
-    signedOutAt = try container.decode(Date?.self, forKey: .signedOutAt)
+    lastObservedAt = try container.decode(Date?.self, forKey: .lastObservedAt)
     guard isValid else {
       throw DecodingError.dataCorruptedError(
-        forKey: .deviceID,
+        forKey: .id,
         in: container,
         debugDescription: "Invalid account device."
       )
     }
   }
 
-  public func encode(to encoder: Encoder) throws {
-    var container = encoder.container(keyedBy: CodingKeys.self)
-    try container.encode(deviceID, forKey: .deviceID)
-    try container.encode(displayName, forKey: .displayName)
-    try container.encode(platform, forKey: .platform)
-    try container.encode(deviceGeneration, forKey: .deviceGeneration)
-    try container.encode(status, forKey: .status)
-    try container.encode(createdAt, forKey: .createdAt)
-    try container.encode(lastLoginAt, forKey: .lastLoginAt)
-    try container.encode(lastSeenAt, forKey: .lastSeenAt)
-    try container.encode(signedOutAt, forKey: .signedOutAt)
-  }
-
   public var isValid: Bool {
-    WireValidation.isOpaqueID(deviceID)
-      && WireValidation.isTrimmedText(displayName, maximum: 128)
-      && WireValidation.isSafePositive(deviceGeneration)
-      && (status == .signedOut) == (signedOutAt != nil)
+    WireValidation.isOpaqueID(id) && WireValidation.isTrimmedText(displayName, maximum: 128)
   }
 
   private enum CodingKeys: String, CodingKey {
-    case deviceID = "deviceId"
+    case id
     case displayName
-    case platform
-    case deviceGeneration
-    case status
-    case createdAt
-    case lastLoginAt
     case lastSeenAt
-    case signedOutAt
+    case lastObservedAt
+    case platform
   }
 }
 
-public struct AccountQuotaObservation: Codable, Equatable, Sendable {
+/// One device that reported a subscription, kept whether or not its reading is the one shown.
+public struct QuotaSubscriptionSource: Codable, Equatable, Sendable {
   public let deviceID: String
-  public let snapshot: QuotaSnapshot
+  public let observedAt: Date
 
-  public init(deviceID: String, snapshot: QuotaSnapshot) {
+  public init(deviceID: String, observedAt: Date) {
     self.deviceID = deviceID
-    self.snapshot = snapshot
+    self.observedAt = observedAt
   }
 
   public init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     deviceID = try container.decode(String.self, forKey: .deviceID)
-    snapshot = try container.decode(QuotaSnapshot.self, forKey: .snapshot)
-    guard isValid else {
+    observedAt = try container.decode(Date.self, forKey: .observedAt)
+    guard WireValidation.isOpaqueID(deviceID) else {
       throw DecodingError.dataCorruptedError(
-        forKey: .deviceID, in: container, debugDescription: "Invalid quota observation.")
+        forKey: .deviceID,
+        in: container,
+        debugDescription: "Invalid subscription source."
+      )
     }
   }
 
-  /// A managed observation names a device. The provider is carried by `ProviderID`, whose
-  /// cases are exactly the providers this Account accepts.
-  public var isValid: Bool { WireValidation.isOpaqueID(deviceID) }
-
   private enum CodingKeys: String, CodingKey {
     case deviceID = "deviceId"
-    case snapshot
+    case observedAt
   }
 }
 
+/// One subscription, already resolved.
+///
+/// Relay keeps one observation per reporting device and resolves them once, so an account
+/// collected on three Macs reaches every reader as one row with three sources rather than as
+/// three cards each client had to collapse for itself.
+public struct QuotaSubscription: Codable, Equatable, Identifiable, Sendable {
+  public let key: String
+  public let provider: ProviderID
+  public let snapshot: QuotaSnapshot
+  public let sources: [QuotaSubscriptionSource]
+
+  public var id: String { key }
+
+  public init(
+    key: String,
+    provider: ProviderID,
+    snapshot: QuotaSnapshot,
+    sources: [QuotaSubscriptionSource]
+  ) {
+    self.key = key
+    self.provider = provider
+    self.snapshot = snapshot
+    self.sources = sources
+  }
+
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    key = try container.decode(String.self, forKey: .key)
+    provider = try container.decode(ProviderID.self, forKey: .provider)
+    snapshot = try container.decode(QuotaSnapshot.self, forKey: .snapshot)
+    sources = try container.decode([QuotaSubscriptionSource].self, forKey: .sources)
+    guard isValid else {
+      throw DecodingError.dataCorruptedError(
+        forKey: .key,
+        in: container,
+        debugDescription: "Invalid subscription."
+      )
+    }
+  }
+
+  public var isValid: Bool {
+    !key.isEmpty && key.utf8.count <= 512 && sources.count <= 256
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case key
+    case provider
+    case snapshot
+    case sources
+  }
+}
+
+/// What an Account read answers: who the account is, what reported to it, what it is using,
+/// and the catalog revisions the numbers were priced against.
 public struct AccountSummary: Codable, Equatable, Sendable {
   public let protocolVersion: Int
   public let account: QuotaUserAccount
   public let devices: [AccountDevice]
-  public let quota: [AccountQuotaObservation]
-  public let usage: AccountUsageSummary
+  public let subscriptions: [QuotaSubscription]
+  public let usage: AccountUsage
+  public let pricingRevision: String
+  public let modelCatalogRevision: String
 
   public init(
     account: QuotaUserAccount,
     devices: [AccountDevice],
-    quota: [AccountQuotaObservation],
-    usage: AccountUsageSummary
+    subscriptions: [QuotaSubscription],
+    usage: AccountUsage,
+    pricingRevision: String,
+    modelCatalogRevision: String
   ) {
     protocolVersion = WireCodec.managedDataProtocolVersion
     self.account = account
     self.devices = devices
-    self.quota = quota
+    self.subscriptions = subscriptions
     self.usage = usage
+    self.pricingRevision = pricingRevision
+    self.modelCatalogRevision = modelCatalogRevision
   }
 
   public init(from decoder: Decoder) throws {
@@ -200,14 +220,19 @@ public struct AccountSummary: Codable, Equatable, Sendable {
     protocolVersion = try container.decode(Int.self, forKey: .protocolVersion)
     account = try container.decode(QuotaUserAccount.self, forKey: .account)
     devices = try container.decode([AccountDevice].self, forKey: .devices)
-    quota = try container.decode([AccountQuotaObservation].self, forKey: .quota)
-    usage = try container.decode(AccountUsageSummary.self, forKey: .usage)
+    subscriptions = try container.decode([QuotaSubscription].self, forKey: .subscriptions)
+    usage = try container.decode(AccountUsage.self, forKey: .usage)
+    pricingRevision = try container.decode(String.self, forKey: .pricingRevision)
+    modelCatalogRevision = try container.decode(String.self, forKey: .modelCatalogRevision)
     guard protocolVersion == WireCodec.managedDataProtocolVersion,
       account.isValid,
       devices.count <= 256,
       devices.allSatisfy(\.isValid),
-      quota.count <= 8_192,
-      usage.isValid
+      subscriptions.count <= 1_024,
+      subscriptions.allSatisfy(\.isValid),
+      usage.isValid,
+      WireValidation.isOpaqueID(pricingRevision),
+      WireValidation.isOpaqueID(modelCatalogRevision)
     else {
       throw DecodingError.dataCorruptedError(
         forKey: .protocolVersion,
@@ -221,8 +246,10 @@ public struct AccountSummary: Codable, Equatable, Sendable {
     case protocolVersion
     case account
     case devices
-    case quota
+    case subscriptions
     case usage
+    case pricingRevision
+    case modelCatalogRevision
   }
 }
 

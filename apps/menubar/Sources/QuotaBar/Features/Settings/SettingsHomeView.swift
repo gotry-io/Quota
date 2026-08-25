@@ -235,7 +235,7 @@ struct SettingsHomeView: View {
   private var usageSummary: String {
     let totalTokens: Int?
     if model.accountState == .signedIn, model.usageUploadEnabled {
-      totalTokens = model.accountSummary.map { UsageSummaryTotals($0.usage.totals).totalTokens }
+      totalTokens = model.accountSummary?.usage.all.totals.totalTokens
     } else if model.localUsage?.status != .unavailable {
       totalTokens = model.usageDetail(source: .local, period: .all)?.usage.totals.totalTokens
     } else {

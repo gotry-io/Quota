@@ -158,7 +158,9 @@ final class MenuBarViewModel {
     guard let devices = accountSummary?.devices else {
       return accountState == .signedIn ? "Unavailable" : "Sign in"
     }
-    let active = devices.filter { $0.status == .active }.count
+    let now = Date()
+    let active = devices.filter { AccountDeviceActivity.status(for: $0, now: now) == .active }
+      .count
     return active == devices.count ? "\(devices.count)" : "\(active)/\(devices.count) active"
   }
 
@@ -228,28 +230,51 @@ final class MenuBarViewModel {
       localUsage = visualTestState.localUsage
       accountSummary = visualTestState.accountSummary
       if let usage = visualTestState.accountSummary?.usage {
-        let detail = LocalServiceUsageDetail(
-          range: usage.range,
-          usage: LocalUsagePeriodSummary(
-            totals: UsageSummaryTotals(usage.totals),
-            cost: usage.cost,
-            agents: usage.agents ?? [],
-            modelsTruncated: usage.breakdownsTruncated
-          ),
-          incomplete: usage.coverage == .partial,
-          detailsTruncated: usage.hasTruncatedDetails
-        )
         let values = LocalServiceUsagePeriodValues(
-          today: detail,
-          last7Days: detail,
-          last30Days: detail,
-          all: detail
+          today: Self.periodDetail(usage.today),
+          last7Days: Self.periodDetail(usage.last7Days),
+          last30Days: Self.periodDetail(usage.last30Days),
+          all: Self.periodDetail(usage.all)
         )
         usagePeriods = LocalServiceUsagePeriodCache(local: values, account: values)
       }
       authStatus = visualTestState.authStatus
       overview = visualTestState.overview
       cache = visualTestState.cache
+    }
+
+    /// The managed period, in the shape the panel already reads. A managed tree states totals
+    /// and cost only at the leaf, so what a fixture shows above them is folded here.
+    private static func periodDetail(_ period: QuotaWire.UsagePeriod)
+      -> LocalServiceUsageDetail
+    {
+      let agents = period.agents.map { agent in
+        LocalUsageAgentSummary(
+          agent: agent.agent,
+          totals: period.totals,
+          cost: period.cost,
+          providers: agent.providers.map { provider in
+            LocalUsageProviderSummary(
+              provider: provider.provider,
+              totals: period.totals,
+              cost: period.cost,
+              models: provider.models.map {
+                LocalUsageModelSummary(model: $0.model, totals: $0.totals, cost: $0.cost)
+              }
+            )
+          }
+        )
+      }
+      return LocalServiceUsageDetail(
+        range: UsageDateRange(from: "2026-08-10", to: "2026-08-10"),
+        usage: LocalUsagePeriodSummary(
+          totals: period.totals,
+          cost: period.cost,
+          agents: agents
+        ),
+        incomplete: period.partial,
+        detailsTruncated: period.hasTruncatedDetails
+      )
     }
   #endif
 

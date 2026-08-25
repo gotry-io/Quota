@@ -74,8 +74,8 @@ enum VisualFixture: String, CaseIterable, Sendable {
   enum VisualFixtureContent {
     static func summary(at date: Date) -> AccountSummary {
       let deviceID = "device_visual_fixture_01"
-      let observations = [
-        observation(
+      let subscriptions = [
+        subscription(
           provider: .codex,
           deviceID: deviceID,
           fingerprint: "visual_codex",
@@ -97,7 +97,7 @@ enum VisualFixture: String, CaseIterable, Sendable {
           ],
           observedAt: date.addingTimeInterval(-90),
         ),
-        observation(
+        subscription(
           provider: .claude,
           deviceID: deviceID,
           fingerprint: "visual_claude",
@@ -113,7 +113,7 @@ enum VisualFixture: String, CaseIterable, Sendable {
           ],
           observedAt: date.addingTimeInterval(-120),
         ),
-        observation(
+        subscription(
           provider: .grok,
           deviceID: deviceID,
           fingerprint: "visual_grok",
@@ -139,19 +139,17 @@ enum VisualFixture: String, CaseIterable, Sendable {
         ),
         devices: [
           AccountDevice(
-            deviceID: deviceID,
+            id: deviceID,
             displayName: "Studio Mac",
             platform: .macos,
-            deviceGeneration: 3,
-            status: .active,
-            createdAt: date.addingTimeInterval(-30 * 86_400),
-            lastLoginAt: date.addingTimeInterval(-5 * 86_400),
             lastSeenAt: date.addingTimeInterval(-45),
-            signedOutAt: nil
+            lastObservedAt: date.addingTimeInterval(-90)
           )
         ],
-        quota: observations,
-        usage: usageSummary(at: date)
+        subscriptions: subscriptions,
+        usage: usage(),
+        pricingRevision: "pricing_visual_fixture",
+        modelCatalogRevision: "models_visual_fixture"
       )
     }
 
@@ -163,28 +161,23 @@ enum VisualFixture: String, CaseIterable, Sendable {
           createdAt: date.addingTimeInterval(-30 * 86_400)
         ),
         devices: [],
-        quota: [],
-        usage: emptyUsageSummary(at: date)
+        subscriptions: [],
+        usage: emptyUsage(),
+        pricingRevision: "pricing_visual_fixture",
+        modelCatalogRevision: "models_visual_fixture"
       )
     }
 
-    private static func usageSummary(at date: Date) -> AccountUsageSummary {
-      let day = calendarDay(date)
-      return AccountUsageSummary(
-        range: UsageDateRange(from: day, to: day),
-        totals: UsageTokenTotals(
+    private static func usage() -> AccountUsage {
+      let period = UsagePeriod(
+        totals: UsageSummaryTotals(
+          totalTokens: 1_704_620,
           inputTokens: 1_420_500,
-          cacheReadTokens: 480_000,
-          cacheWrite5mTokens: 20_000,
-          cacheWrite1hTokens: 0,
-          cacheWriteInferredTokens: 0,
           outputTokens: 284_120,
+          cacheReadInputTokens: 480_000,
+          cacheWriteInputTokens: 20_000,
           reasoningTokens: 92_400,
-          requests: 164,
-          webSearchRequests: 8,
-          webFetchRequests: 3,
-          sourceCostMicrousd: nil,
-          sourceCostCoveredRequests: 0
+          messages: 164
         ),
         cost: UsageCostOutcome(
           mode: .calculate,
@@ -198,28 +191,27 @@ enum VisualFixture: String, CaseIterable, Sendable {
           assumptions: [.agentDefaultChannel],
           unpriced: []
         ),
-        coverage: .complete,
-        breakdowns: []
+        partial: false,
+        agents: []
+      )
+      return AccountUsage(
+        today: period,
+        last7Days: period,
+        last30Days: period,
+        all: period
       )
     }
 
-    private static func emptyUsageSummary(at date: Date) -> AccountUsageSummary {
-      let day = calendarDay(date)
-      return AccountUsageSummary(
-        range: UsageDateRange(from: day, to: day),
-        totals: UsageTokenTotals(
+    private static func emptyUsage() -> AccountUsage {
+      let period = UsagePeriod(
+        totals: UsageSummaryTotals(
+          totalTokens: 0,
           inputTokens: 0,
-          cacheReadTokens: 0,
-          cacheWrite5mTokens: 0,
-          cacheWrite1hTokens: 0,
-          cacheWriteInferredTokens: 0,
           outputTokens: 0,
+          cacheReadInputTokens: 0,
+          cacheWriteInputTokens: 0,
           reasoningTokens: 0,
-          requests: 0,
-          webSearchRequests: 0,
-          webFetchRequests: 0,
-          sourceCostMicrousd: nil,
-          sourceCostCoveredRequests: 0
+          messages: 0
         ),
         cost: UsageCostOutcome(
           mode: .calculate,
@@ -233,12 +225,18 @@ enum VisualFixture: String, CaseIterable, Sendable {
           assumptions: [],
           unpriced: []
         ),
-        coverage: .complete,
-        breakdowns: []
+        partial: false,
+        agents: []
+      )
+      return AccountUsage(
+        today: period,
+        last7Days: period,
+        last30Days: period,
+        all: period
       )
     }
 
-    private static func observation(
+    private static func subscription(
       provider: ProviderID,
       deviceID: String,
       fingerprint: String,
@@ -246,9 +244,10 @@ enum VisualFixture: String, CaseIterable, Sendable {
       plan: String?,
       windows: [QuotaWindow],
       observedAt: Date
-    ) -> AccountQuotaObservation {
-      AccountQuotaObservation(
-        deviceID: deviceID,
+    ) -> QuotaSubscription {
+      QuotaSubscription(
+        key: "\(provider.rawValue)|\(fingerprint)|global|",
+        provider: provider,
         snapshot: QuotaSnapshot(
           provider: provider,
           account: QuotaAccount(
@@ -260,7 +259,8 @@ enum VisualFixture: String, CaseIterable, Sendable {
           windows: windows,
           status: .available,
           observedAt: observedAt
-        )
+        ),
+        sources: [QuotaSubscriptionSource(deviceID: deviceID, observedAt: observedAt)]
       )
     }
 
@@ -279,14 +279,6 @@ enum VisualFixture: String, CaseIterable, Sendable {
       )
     }
 
-    private static func calendarDay(_ date: Date) -> String {
-      let formatter = DateFormatter()
-      formatter.calendar = Calendar(identifier: .iso8601)
-      formatter.locale = Locale(identifier: "en_US_POSIX")
-      formatter.timeZone = TimeZone(secondsFromGMT: 0)
-      formatter.dateFormat = "yyyy-MM-dd"
-      return formatter.string(from: date)
-    }
   }
 
   extension AppModel {

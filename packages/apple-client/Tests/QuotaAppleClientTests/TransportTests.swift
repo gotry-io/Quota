@@ -63,7 +63,7 @@ struct TransportTests {
 
   @Test
   func relayClientPreservesTransportTooLargeAndTimeout() async throws {
-    let summary = URL(string: "https://quota.gotry.io/api/v5/account/summary")!
+    let summary = URL(string: "https://quota.gotry.io/api/v6/account/summary")!
     ScriptedURLProtocol.use(
       .init(
         body: Data(repeating: 0x61, count: WireCodec.maximumResponseBytes + 1),
@@ -76,8 +76,7 @@ struct TransportTests {
     )
     await #expect(throws: RelayClientError.responseTooLarge) {
       _ = try await client.fetchAccountSummary(
-        from: "2026-08-14",
-        to: "2026-08-14",
+        timeZone: "UTC",
         accessToken: Fixtures.accessToken
       )
     }
@@ -88,8 +87,7 @@ struct TransportTests {
     )
     await #expect(throws: RelayClientError.timeout) {
       _ = try await timeoutClient.fetchAccountSummary(
-        from: "2026-08-14",
-        to: "2026-08-14",
+        timeZone: "UTC",
         accessToken: Fixtures.accessToken
       )
     }

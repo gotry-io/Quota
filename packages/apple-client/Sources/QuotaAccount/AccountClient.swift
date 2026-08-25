@@ -182,11 +182,10 @@ public actor AccountClient {
       throw AccountClientError.notSignedIn
     }
     let held = cached?.summary.account.accountID == session.accountID ? cached : nil
-    let today = todayDate()
+    let timeZone = calendar.timeZone.identifier
     do {
       let read = try await relay.fetchAccountSummary(
-        from: today,
-        to: today,
+        timeZone: timeZone,
         accessToken: session.accessToken,
         etag: held?.etag
       )
@@ -194,8 +193,7 @@ public actor AccountClient {
     } catch RelayClientError.unauthorized where allowRefresh {
       let refreshed = try await refreshSessionAfterUnauthorized()
       let read = try await relay.fetchAccountSummary(
-        from: today,
-        to: today,
+        timeZone: timeZone,
         accessToken: refreshed.accessToken,
         etag: held?.etag
       )

@@ -30,34 +30,19 @@ enum Fixtures {
     return formatter.date(from: value)!
   }
 
-  static func emptyUsage(from: String = "2026-08-14", to: String = "2026-08-14") -> [String: Any] {
-    [
-      "range": ["from": from, "to": to],
-      "totals": tokenTotals(),
-      "cost": completeCost(),
-      "coverage": "complete",
-      "breakdowns": [],
-    ]
-  }
-
-  static func tokenTotals(
+  static func summaryTotals(
     input: Int = 1000,
     output: Int = 200,
     cacheRead: Int = 100
   ) -> [String: Any] {
     [
+      "total_tokens": input + output,
       "input_tokens": input,
-      "cache_read_tokens": cacheRead,
-      "cache_write_5m_tokens": 0,
-      "cache_write_1h_tokens": 0,
-      "cache_write_inferred_tokens": 0,
       "output_tokens": output,
+      "cache_read_input_tokens": cacheRead,
+      "cache_write_input_tokens": 0,
       "reasoning_tokens": 50,
-      "requests": 1,
-      "web_search_requests": 0,
-      "web_fetch_requests": 0,
-      "source_cost_microusd": NSNull(),
-      "source_cost_covered_requests": 0,
+      "messages": 1,
     ]
   }
 
@@ -76,27 +61,48 @@ enum Fixtures {
     ]
   }
 
+  static func usagePeriod(
+    totals: [String: Any]? = nil,
+    cost: [String: Any]? = nil,
+    partial: Bool = false,
+    agents: [[String: Any]] = []
+  ) -> [String: Any] {
+    [
+      "totals": totals ?? summaryTotals(),
+      "cost": cost ?? completeCost(),
+      "partial": partial,
+      "agents": agents,
+    ]
+  }
+
+  static func accountUsage(today: [String: Any]? = nil) -> [String: Any] {
+    [
+      "today": today ?? usagePeriod(),
+      "last_7_days": usagePeriod(),
+      "last_30_days": usagePeriod(),
+      "all": usagePeriod(),
+    ]
+  }
+
   static func accountSummaryJSON(
     accountID: String = "account_01",
     extraRoot: [String: Any] = [:],
-    extraUsage: [String: Any] = [:],
-    quota: [[String: Any]] = [],
+    usage: [String: Any]? = nil,
+    subscriptions: [[String: Any]] = [],
     devices: [[String: Any]] = []
   ) throws -> Data {
-    var usage = emptyUsage()
-    for (key, value) in extraUsage {
-      usage[key] = value
-    }
     var object: [String: Any] = [
-      "protocol_version": 5,
+      "protocol_version": 6,
       "account": [
         "account_id": accountID,
         "display_label": "octocat",
         "created_at": "2026-07-01T00:00:00Z",
       ],
       "devices": devices,
-      "quota": quota,
-      "usage": usage,
+      "subscriptions": subscriptions,
+      "usage": usage ?? accountUsage(),
+      "pricing_revision": "pricing_1",
+      "model_catalog_revision": "models_1",
     ]
     for (key, value) in extraRoot {
       object[key] = value
@@ -104,9 +110,10 @@ enum Fixtures {
     return try JSONSerialization.data(withJSONObject: object)
   }
 
-  static func quotaObservation() -> [String: Any] {
+  static func quotaSubscription() -> [String: Any] {
     [
-      "device_id": "device_01",
+      "key": "codex|fp_codex_01|global|",
+      "provider": "codex",
       "snapshot": [
         "provider": "codex",
         "account": [
@@ -126,20 +133,17 @@ enum Fixtures {
         "status": "available",
         "observed_at": "2026-08-14T15:00:00Z",
       ],
+      "sources": [["device_id": "device_01", "observed_at": "2026-08-14T15:00:00Z"]],
     ]
   }
 
   static func accountDevice() -> [String: Any] {
     [
-      "device_id": "device_01",
+      "id": "device_01",
       "display_name": "Studio Mac",
       "platform": "macos",
-      "device_generation": 1,
-      "status": "active",
-      "created_at": "2026-08-01T00:00:00Z",
-      "last_login_at": "2026-08-14T15:00:00Z",
       "last_seen_at": "2026-08-14T15:00:05Z",
-      "signed_out_at": NSNull(),
+      "last_observed_at": "2026-08-14T15:00:00Z",
     ]
   }
 

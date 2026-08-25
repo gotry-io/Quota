@@ -11,47 +11,35 @@ struct AppModelTests {
   @Test
   func remoteDeviceActivityUsesTheNewerOfLastSeenAndLastReading() {
     let now = Fixtures.date("2026-08-15T08:10:00Z")
-    func device(
-      lastSeenAt: Date?,
-      status: AccountDeviceStatus = .active
-    ) -> AccountDevice {
+    func device(lastSeenAt: Date?, lastObservedAt: Date? = nil) -> AccountDevice {
       AccountDevice(
-        deviceID: "device_01",
+        id: "device_01",
         displayName: "Studio Mac",
         platform: .macos,
-        deviceGeneration: 1,
-        status: status,
-        createdAt: now.addingTimeInterval(-86_400),
-        lastLoginAt: now.addingTimeInterval(-600),
         lastSeenAt: lastSeenAt,
-        signedOutAt: status == .signedOut ? now.addingTimeInterval(-60) : nil
+        lastObservedAt: lastObservedAt
       )
     }
 
     #expect(
       RemoteDeviceActivity.status(
-        for: device(lastSeenAt: now.addingTimeInterval(-300)), lastReadingAt: nil, now: now)
-        == .active)
+        for: device(lastSeenAt: now.addingTimeInterval(-300)), now: now) == .active)
     // A device that has not called in a day can still have sent a reading minutes ago.
     #expect(
       RemoteDeviceActivity.status(
-        for: device(lastSeenAt: now.addingTimeInterval(-86_400)),
-        lastReadingAt: now.addingTimeInterval(-120), now: now) == .active)
+        for: device(
+          lastSeenAt: now.addingTimeInterval(-86_400),
+          lastObservedAt: now.addingTimeInterval(-120)
+        ),
+        now: now) == .active)
     #expect(
       RemoteDeviceActivity.status(
-        for: device(lastSeenAt: now.addingTimeInterval(-3 * 3_600)), lastReadingAt: nil, now: now)
-        == .idle)
+        for: device(lastSeenAt: now.addingTimeInterval(-3 * 3_600)), now: now) == .idle)
     #expect(
       RemoteDeviceActivity.status(
-        for: device(lastSeenAt: now.addingTimeInterval(-3 * 86_400)), lastReadingAt: nil, now: now)
-        == .notReporting)
+        for: device(lastSeenAt: now.addingTimeInterval(-3 * 86_400)), now: now) == .notReporting)
     #expect(
-      RemoteDeviceActivity.status(for: device(lastSeenAt: nil), lastReadingAt: nil, now: now)
-        == .notReporting)
-    #expect(
-      RemoteDeviceActivity.status(
-        for: device(lastSeenAt: now.addingTimeInterval(-60), status: .signedOut),
-        lastReadingAt: nil, now: now) == .signedOut)
+      RemoteDeviceActivity.status(for: device(lastSeenAt: nil), now: now) == .notReporting)
   }
 
   @Test
@@ -393,48 +381,50 @@ private enum Fixtures {
   }
 
   static func accountSummaryJSON(accountID: String = "account_01") throws -> Data {
-    try JSONSerialization.data(
+    let period: [String: Any] = [
+      "totals": [
+        "total_tokens": 1200,
+        "input_tokens": 1000,
+        "output_tokens": 200,
+        "cache_read_input_tokens": 100,
+        "cache_write_input_tokens": 0,
+        "reasoning_tokens": 50,
+        "messages": 1,
+      ] as [String: Any],
+      "cost": [
+        "mode": "calculate",
+        "basis": "calculated",
+        "status": "complete",
+        "amount_microusd": "3138",
+        "catalog_revision": "pricing_1",
+        "calculated_rows": 1,
+        "reported_rows": 0,
+        "unpriced_rows": 0,
+        "assumptions": ["agent_default_channel"],
+        "unpriced": [],
+      ] as [String: Any],
+      "partial": false,
+      "agents": [],
+    ]
+    return try JSONSerialization.data(
       withJSONObject: [
-        "protocol_version": 5,
+        "protocol_version": 6,
         "account": [
           "account_id": accountID,
           "display_label": "octocat",
           "created_at": "2026-07-01T00:00:00Z",
         ],
         "devices": [],
-        "quota": [],
+        "subscriptions": [],
         "usage": [
-          "range": ["from": "2026-08-14", "to": "2026-08-14"],
-          "totals": [
-            "input_tokens": 1000,
-            "cache_read_tokens": 100,
-            "cache_write_5m_tokens": 0,
-            "cache_write_1h_tokens": 0,
-            "cache_write_inferred_tokens": 0,
-            "output_tokens": 200,
-            "reasoning_tokens": 50,
-            "requests": 1,
-            "web_search_requests": 0,
-            "web_fetch_requests": 0,
-            "source_cost_microusd": NSNull(),
-            "source_cost_covered_requests": 0,
-          ],
-          "cost": [
-            "mode": "calculate",
-            "basis": "calculated",
-            "status": "complete",
-            "amount_microusd": "3138",
-            "catalog_revision": "pricing_1",
-            "calculated_rows": 1,
-            "reported_rows": 0,
-            "unpriced_rows": 0,
-            "assumptions": ["agent_default_channel"],
-            "unpriced": [],
-          ],
-          "coverage": "complete",
-          "breakdowns": [],
+          "today": period,
+          "last_7_days": period,
+          "last_30_days": period,
+          "all": period,
         ],
-      ]
+        "pricing_revision": "pricing_1",
+        "model_catalog_revision": "models_1",
+      ] as [String: Any]
     )
   }
 }

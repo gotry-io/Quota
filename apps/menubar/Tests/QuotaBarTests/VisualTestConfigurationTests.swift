@@ -76,11 +76,12 @@
     #expect(model.accountState == .signedIn)
     #expect(model.accountDisplayLabel == "octocat")
     #expect(model.accountSummary?.devices.map(\.displayName) == ["Studio Mac", "Travel Mac"])
-    #expect(model.accountSummary?.usage.cost.status == .partial)
-    #expect(model.accountSummary?.usage.coverage == .partial)
+    #expect(model.accountSummary?.usage.today.cost.status == .partial)
+    #expect(model.accountSummary?.usage.today.partial == true)
     #expect(
-      model.accountSummary?.usage.breakdowns.filter { $0.dimension == .model }.map(\.key)
-        == ["gpt-5", "claude-sonnet-4"]
+      model.accountSummary?.usage.today.agents.flatMap { agent in
+        agent.providers.flatMap { $0.models.map(\.model) }
+      } == ["gpt-5", "claude-sonnet-4"]
     )
     #expect(model.accountReportingProviders() == [.codex, .claude, .grok])
     #expect(

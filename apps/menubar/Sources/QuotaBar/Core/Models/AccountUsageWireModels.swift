@@ -16,60 +16,12 @@ enum ContextBucket: String, Codable, Sendable {
   case gt272k = "gt_272k"
 }
 
-struct UsageCoverage: Codable, Equatable, Sendable {
-  let agent: BillingAgent
-  let startAt: String
-  let endAt: String
-  let status: CoverageStatus
-
-  private enum CodingKeys: String, CodingKey {
-    case agent
-    case startAt
-    case endAt
-    case status
-  }
-
-  /// A submission is bounded at both ends: it may not claim more than the wire's span, and it
-  /// may not reach back before any agent this Account accepts existed.
-  var isValid: Bool {
-    guard let start = Self.utcHour(startAt), let end = Self.utcHour(endAt), end > start,
-      let earliest = Self.utcHour(QuotaProtocol.earliestUsageInstant), start >= earliest
-    else {
-      return false
-    }
-    return end.timeIntervalSince(start) <= 744 * 3_600
-  }
-
-  var isOrdered: Bool {
-    guard let start = Self.utcHour(startAt), let end = Self.utcHour(endAt) else { return false }
-    return end > start
-  }
-
-  static func utcHour(_ value: String) -> Date? {
-    guard value.count == 20, value.hasSuffix(":00:00Z") else { return nil }
-    let formatter = ISO8601DateFormatter()
-    guard let instant = formatter.date(from: value), formatter.string(from: instant) == value else {
-      return nil
-    }
-    return instant
-  }
-}
-
-extension UsageCoverage {
-  init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys(["agent", "startAt", "endAt", "status"])
-    let container = try decoder.container(keyedBy: CodingKeys.self)
-    agent = try container.decode(BillingAgent.self, forKey: .agent)
-    startAt = try container.decode(String.self, forKey: .startAt)
-    endAt = try container.decode(String.self, forKey: .endAt)
-    status = try container.decode(CoverageStatus.self, forKey: .status)
-  }
-}
-
-struct UsageHourlyFact: Codable, Equatable, Sendable {
-  let bucketStartUTC: String
-  let usageDate: String
-  let usageHour: Int
+/// One row of Usage, identified by what it measures rather than by when.
+///
+/// The hour is carried by the upload that replaces it, so a row names no instant, no local
+/// date, and no aggregation timezone: those made the same measurement look like two rows
+/// whenever a device moved.
+struct UsageRow: Codable, Equatable, Sendable {
   let agent: BillingAgent
   let billingChannel: BillingChannel
   let channelSource: ChannelSource
@@ -92,9 +44,6 @@ struct UsageHourlyFact: Codable, Equatable, Sendable {
   let sourceCostCoveredRequests: Int
 
   private enum CodingKeys: String, CodingKey {
-    case bucketStartUTC = "bucketStartUtc"
-    case usageDate
-    case usageHour
     case agent
     case billingChannel
     case channelSource
@@ -117,16 +66,27 @@ struct UsageHourlyFact: Codable, Equatable, Sendable {
     case sourceCostCoveredRequests
   }
 
+  /// What makes two measurements the same row inside one hour.
+  var identity: String {
+    [
+      agent.rawValue,
+      billingChannel.rawValue,
+      channelSource.rawValue,
+      model,
+      contextBucket.rawValue,
+      serviceTier,
+      speed,
+      inferenceGeo,
+    ].joined(separator: "\u{0}")
+  }
+
   var isValid: Bool {
     let counts = [
       inputTokens, cacheReadTokens, cacheWrite5mTokens, cacheWrite1hTokens,
       cacheWriteInferredTokens, outputTokens, reasoningTokens, requests, webSearchRequests,
       webFetchRequests, sourceCostCoveredRequests,
     ]
-    guard UsageCoverage.utcHour(bucketStartUTC) != nil,
-      WireValidation.isCalendarDate(usageDate),
-      (0...23).contains(usageHour),
-      WireValidation.isModel(model),
+    guard WireValidation.isModel(model),
       WireValidation.isBillingDimension(serviceTier), WireValidation.isBillingDimension(speed),
       WireValidation.isBillingDimension(inferenceGeo),
       counts.allSatisfy({ (0...WireCodec.jsonSafeIntegerMaximum).contains($0) }),
@@ -150,26 +110,16 @@ struct UsageHourlyFact: Codable, Equatable, Sendable {
   }
 }
 
-extension UsageHourlyFact {
+extension UsageRow {
   init(from decoder: Decoder) throws {
-    try self.init(from: decoder, allowingUnknownKeys: [])
-  }
-
-  init(from decoder: Decoder, allowingUnknownKeys allowedKeys: Set<String>) throws {
-    try decoder.rejectUnknownWireKeys(
-      Set([
-        "bucketStartUtc", "usageDate", "usageHour", "agent", "billingChannel", "channelSource",
-        "model",
-        "contextBucket", "serviceTier", "speed", "inferenceGeo", "inputTokens", "cacheReadTokens",
-        "cacheWrite5MTokens", "cacheWrite1HTokens", "cacheWriteInferredTokens", "outputTokens",
-        "reasoningTokens", "requests", "webSearchRequests", "webFetchRequests",
-        "sourceCostMicrousd",
-        "sourceCostCoveredRequests",
-      ]).union(allowedKeys))
+    try decoder.rejectUnknownWireKeys([
+      "agent", "billingChannel", "channelSource", "model", "contextBucket", "serviceTier",
+      "speed", "inferenceGeo", "inputTokens", "cacheReadTokens", "cacheWrite5MTokens",
+      "cacheWrite1HTokens", "cacheWriteInferredTokens", "outputTokens", "reasoningTokens",
+      "requests", "webSearchRequests", "webFetchRequests", "sourceCostMicrousd",
+      "sourceCostCoveredRequests",
+    ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
-    bucketStartUTC = try container.decode(String.self, forKey: .bucketStartUTC)
-    usageDate = try container.decode(String.self, forKey: .usageDate)
-    usageHour = try container.decode(Int.self, forKey: .usageHour)
     agent = try container.decode(BillingAgent.self, forKey: .agent)
     billingChannel = try container.decode(BillingChannel.self, forKey: .billingChannel)
     channelSource = try container.decode(ChannelSource.self, forKey: .channelSource)
@@ -189,122 +139,95 @@ extension UsageHourlyFact {
     webSearchRequests = try container.decode(Int.self, forKey: .webSearchRequests)
     webFetchRequests = try container.decode(Int.self, forKey: .webFetchRequests)
     sourceCostMicrousd = try container.decodeIfPresent(String.self, forKey: .sourceCostMicrousd)
-    sourceCostCoveredRequests = try container.decode(Int.self, forKey: .sourceCostCoveredRequests)
+    sourceCostCoveredRequests = try container.decode(
+      Int.self, forKey: .sourceCostCoveredRequests)
   }
 }
 
-struct UsageSubmission: Decodable, Equatable, Sendable {
-  let protocolVersion: Int
-  let submissionID: String
-  let deviceID: String
-  let generation: Int
-  let sequence: Int
-  let parserRevision: String
-  let aggregationTimezone: String
-  let coverage: UsageCoverage
-  let rows: [UsageHourlyFact]
-  let writeMode: UsageSubmissionWriteMode?
-  let multipart: UsageSubmissionMultipart?
+/// One scanned UTC hour and every row the scan found in it.
+///
+/// `scanVersion` orders the scans of one hour, so an upload replaces an hour only when it
+/// carries a strictly newer reading of it. `partial` says the scan behind this hour came up
+/// short, which the reads report.
+struct UsageHour: Decodable, Equatable, Sendable {
+  let bucketStartUTC: String
+  let scanVersion: Int
+  let partial: Bool
+  let rows: [UsageRow]
 
   private enum CodingKeys: String, CodingKey {
-    case protocolVersion
-    case submissionID = "submissionId"
-    case deviceID = "deviceId"
-    case generation
-    case sequence
-    case parserRevision
-    case aggregationTimezone
-    case coverage
+    case bucketStartUTC = "bucketStartUtc"
+    case scanVersion
+    case partial
     case rows
-    case writeMode
-    case multipart
   }
 
   init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys([
-      "protocolVersion", "submissionId", "deviceId", "generation", "sequence", "parserRevision",
-      "aggregationTimezone", "coverage", "rows", "writeMode", "multipart",
-    ])
+    try decoder.rejectUnknownWireKeys(["bucketStartUtc", "scanVersion", "partial", "rows"])
     let container = try decoder.container(keyedBy: CodingKeys.self)
-    protocolVersion = try container.decode(Int.self, forKey: .protocolVersion)
-    submissionID = try container.decode(String.self, forKey: .submissionID)
-    deviceID = try container.decode(String.self, forKey: .deviceID)
-    generation = try container.decode(Int.self, forKey: .generation)
-    sequence = try container.decode(Int.self, forKey: .sequence)
-    parserRevision = try container.decode(String.self, forKey: .parserRevision)
-    aggregationTimezone = try container.decode(String.self, forKey: .aggregationTimezone)
-    coverage = try container.decode(UsageCoverage.self, forKey: .coverage)
-    rows = try container.decode([UsageHourlyFact].self, forKey: .rows)
-    writeMode =
-      container.contains(.writeMode)
-      ? try container.decode(UsageSubmissionWriteMode.self, forKey: .writeMode)
-      : nil
-    multipart =
-      container.contains(.multipart)
-      ? try container.decode(UsageSubmissionMultipart.self, forKey: .multipart)
-      : nil
-
-    let start = UsageCoverage.utcHour(coverage.startAt)
-    let end = UsageCoverage.utcHour(coverage.endAt)
-    guard protocolVersion == WireCodec.managedDataProtocolVersion,
-      WireValidation.isOpaqueID(submissionID), WireValidation.isOpaqueID(deviceID), WireValidation.isOpaqueID(parserRevision),
-      (1...WireCodec.jsonSafeIntegerMaximum).contains(generation),
-      (0...WireCodec.jsonSafeIntegerMaximum).contains(sequence),
-      WireValidation.isTimezone(aggregationTimezone), TimeZone(identifier: aggregationTimezone) != nil,
-      coverage.isValid,
-      writeMode == nil || coverage.status == .partial,
-      rows.count <= 2_048,
-      rows.allSatisfy({ row in
-        guard let bucket = UsageCoverage.utcHour(row.bucketStartUTC) else { return false }
-        return row.isValid && row.agent == coverage.agent
-          && start.map({ bucket >= $0 }) == true
-          && end.map({ bucket < $0 }) == true
-          && localProjectionMatches(
-            bucketStart: bucket,
-            timezone: aggregationTimezone,
-            usageDate: row.usageDate,
-            usageHour: row.usageHour
-          )
-      }),
-      Set(rows.map(usageHourlyFactIdentity)).count == rows.count
+    bucketStartUTC = try container.decode(String.self, forKey: .bucketStartUTC)
+    scanVersion = try container.decode(Int.self, forKey: .scanVersion)
+    partial = try container.decode(Bool.self, forKey: .partial)
+    rows = try container.decode([UsageRow].self, forKey: .rows)
+    guard let bucket = Self.utcHour(bucketStartUTC),
+      let earliest = Self.utcHour(QuotaProtocol.earliestUsageInstant),
+      bucket >= earliest,
+      (0...WireCodec.jsonSafeIntegerMaximum).contains(scanVersion),
+      rows.count <= 512,
+      rows.allSatisfy(\.isValid),
+      Set(rows.map(\.identity)).count == rows.count
     else {
       throw DecodingError.dataCorruptedError(
         forKey: .rows,
         in: container,
-        debugDescription: "Invalid Usage submission."
+        debugDescription: "Invalid Usage hour."
       )
     }
   }
+
+  static func utcHour(_ value: String) -> Date? {
+    guard value.count == 20, value.hasSuffix(":00:00Z") else { return nil }
+    let formatter = ISO8601DateFormatter()
+    guard let instant = formatter.date(from: value), formatter.string(from: instant) == value else {
+      return nil
+    }
+    return instant
+  }
 }
 
-enum UsageSubmissionWriteMode: String, Decodable, Equatable, Sendable {
-  case mergePartial = "merge_partial"
-}
-
-struct UsageSubmissionMultipart: Decodable, Equatable, Sendable {
-  let batchID: String
-  let partIndex: Int
-  let partCount: Int
+/// One agent's rescanned hours. The device token names the device and its generation.
+struct UsageUpload: Decodable, Equatable, Sendable {
+  let protocolVersion: Int
+  let generation: Int
+  let agent: BillingAgent
+  let hours: [UsageHour]
 
   private enum CodingKeys: String, CodingKey {
-    case batchID = "batchId"
-    case partIndex
-    case partCount
+    case protocolVersion
+    case generation
+    case agent
+    case hours
   }
 
   init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys(["batchId", "partIndex", "partCount"])
+    try decoder.rejectUnknownWireKeys(["protocolVersion", "generation", "agent", "hours"])
     let container = try decoder.container(keyedBy: CodingKeys.self)
-    batchID = try container.decode(String.self, forKey: .batchID)
-    partIndex = try container.decode(Int.self, forKey: .partIndex)
-    partCount = try container.decode(Int.self, forKey: .partCount)
-    guard WireValidation.isOpaqueID(batchID), (2...64).contains(partCount),
-      (0..<partCount).contains(partIndex)
+    protocolVersion = try container.decode(Int.self, forKey: .protocolVersion)
+    generation = try container.decode(Int.self, forKey: .generation)
+    agent = try container.decode(BillingAgent.self, forKey: .agent)
+    hours = try container.decode([UsageHour].self, forKey: .hours)
+
+    guard protocolVersion == WireCodec.managedDataProtocolVersion,
+      (1...WireCodec.jsonSafeIntegerMaximum).contains(generation),
+      agent != .unknown,
+      hours.count <= 256,
+      Set(hours.map(\.bucketStartUTC)).count == hours.count,
+      hours.allSatisfy({ hour in hour.rows.allSatisfy { $0.agent == agent } })
     else {
       throw DecodingError.dataCorruptedError(
-        forKey: .partCount,
+        forKey: .hours,
         in: container,
-        debugDescription: "Invalid Usage multipart metadata."
+        debugDescription: "Invalid Usage upload."
       )
     }
   }
@@ -375,7 +298,7 @@ struct LocalUsageCoverage: Codable, Equatable, Sendable {
   }
 
   var isOrdered: Bool {
-    guard let start = UsageCoverage.utcHour(startAt), let end = UsageCoverage.utcHour(endAt) else {
+    guard let start = UsageHour.utcHour(startAt), let end = UsageHour.utcHour(endAt) else {
       return false
     }
     return end > start
@@ -486,144 +409,6 @@ struct LocalUsageReport: Codable, Equatable, Sendable {
     case status
     case modelCatalogRevision
     case coverage
-  }
-}
-
-struct AccountUsageResponse: Decodable, Equatable, Sendable {
-  let protocolVersion: Int
-  let usage: AccountUsageSummary
-
-  init(from decoder: Decoder) throws {
-    let container = try decoder.container(keyedBy: CodingKeys.self)
-    protocolVersion = try container.decode(Int.self, forKey: .protocolVersion)
-    usage = try container.decode(AccountUsageSummary.self, forKey: .usage)
-    guard protocolVersion == WireCodec.managedDataProtocolVersion, usage.isValid else {
-      throw DecodingError.dataCorruptedError(
-        forKey: .protocolVersion,
-        in: container,
-        debugDescription: "Invalid account Usage response."
-      )
-    }
-  }
-
-  private enum CodingKeys: String, CodingKey {
-    case protocolVersion
-    case usage
-  }
-}
-
-struct AccountQuotaResponse: Decodable, Equatable, Sendable {
-  let protocolVersion: Int
-  let quota: [AccountQuotaObservation]
-
-  init(from decoder: Decoder) throws {
-    let container = try decoder.container(keyedBy: CodingKeys.self)
-    protocolVersion = try container.decode(Int.self, forKey: .protocolVersion)
-    quota = try container.decode([AccountQuotaObservation].self, forKey: .quota)
-    guard protocolVersion == WireCodec.managedDataProtocolVersion, quota.count <= 8_192, quota.allSatisfy(\.isValid) else {
-      throw DecodingError.dataCorruptedError(
-        forKey: .protocolVersion,
-        in: container,
-        debugDescription: "Invalid account quota response."
-      )
-    }
-  }
-
-  private enum CodingKeys: String, CodingKey {
-    case protocolVersion
-    case quota
-  }
-}
-
-enum QuotaSnapshotUploadOutcome: String, Codable, Sendable {
-  case accepted
-  case duplicate
-}
-
-struct QuotaSnapshotUploadResponse: Codable, Equatable, Sendable {
-  let protocolVersion: Int
-  let outcome: QuotaSnapshotUploadOutcome
-  let deviceID: String
-  let deviceGeneration: Int
-  let acceptedSequence: Int
-  let nextSnapshotSequence: Int
-
-  private enum CodingKeys: String, CodingKey {
-    case protocolVersion
-    case outcome
-    case deviceID = "deviceId"
-    case deviceGeneration
-    case acceptedSequence
-    case nextSnapshotSequence
-  }
-
-  init(from decoder: Decoder) throws {
-    let container = try decoder.container(keyedBy: CodingKeys.self)
-    protocolVersion = try container.decode(Int.self, forKey: .protocolVersion)
-    outcome = try container.decode(QuotaSnapshotUploadOutcome.self, forKey: .outcome)
-    deviceID = try container.decode(String.self, forKey: .deviceID)
-    deviceGeneration = try container.decode(Int.self, forKey: .deviceGeneration)
-    acceptedSequence = try container.decode(Int.self, forKey: .acceptedSequence)
-    nextSnapshotSequence = try container.decode(Int.self, forKey: .nextSnapshotSequence)
-    guard protocolVersion == WireCodec.managedDataProtocolVersion,
-      WireValidation.isOpaqueID(deviceID),
-      (1...WireCodec.jsonSafeIntegerMaximum).contains(deviceGeneration),
-      (0...WireCodec.jsonSafeIntegerMaximum).contains(acceptedSequence),
-      (0...WireCodec.jsonSafeIntegerMaximum).contains(nextSnapshotSequence)
-    else {
-      throw DecodingError.dataCorruptedError(
-        forKey: .protocolVersion,
-        in: container,
-        debugDescription: "Invalid quota upload response."
-      )
-    }
-  }
-}
-
-struct DeviceSyncResponse: Codable, Equatable, Sendable {
-  let protocolVersion: Int
-  let accountID: String
-  let deviceID: String
-  let deviceGeneration: Int
-  let nextSnapshotSequence: Int
-  let nextUsageSequence: Int
-  let usageDeletedBefore: Date?
-  let usageSyncRevision: Int
-
-  private enum CodingKeys: String, CodingKey {
-    case protocolVersion
-    case accountID = "accountId"
-    case deviceID = "deviceId"
-    case deviceGeneration
-    case nextSnapshotSequence
-    case nextUsageSequence
-    case usageDeletedBefore
-    case usageSyncRevision
-  }
-
-  init(from decoder: Decoder) throws {
-    let container = try decoder.container(keyedBy: CodingKeys.self)
-    protocolVersion = try container.decode(Int.self, forKey: .protocolVersion)
-    accountID = try container.decode(String.self, forKey: .accountID)
-    deviceID = try container.decode(String.self, forKey: .deviceID)
-    deviceGeneration = try container.decode(Int.self, forKey: .deviceGeneration)
-    nextSnapshotSequence = try container.decode(Int.self, forKey: .nextSnapshotSequence)
-    nextUsageSequence = try container.decode(Int.self, forKey: .nextUsageSequence)
-    usageDeletedBefore = try container.decode(Date?.self, forKey: .usageDeletedBefore)
-    usageSyncRevision = try container.decode(Int.self, forKey: .usageSyncRevision)
-    guard protocolVersion == QuotaProtocol.control,
-      WireValidation.isOpaqueID(accountID), WireValidation.isOpaqueID(deviceID),
-      (1...WireCodec.jsonSafeIntegerMaximum).contains(deviceGeneration),
-      (0...WireCodec.jsonSafeIntegerMaximum).contains(nextSnapshotSequence),
-      (0...WireCodec.jsonSafeIntegerMaximum).contains(nextUsageSequence),
-      (0...WireCodec.jsonSafeIntegerMaximum).contains(usageSyncRevision)
-    else {
-      throw DecodingError.dataCorruptedError(
-        forKey: .protocolVersion,
-        in: container,
-        debugDescription: "Invalid device sync response."
-      )
-    }
   }
 }
 
@@ -809,41 +594,6 @@ struct PricingCatalog: Decodable, Equatable, Sendable {
   }
 }
 
-private func localProjectionMatches(
-  bucketStart: Date,
-  timezone: String,
-  usageDate: String,
-  usageHour: Int
-) -> Bool {
-  guard let timeZone = TimeZone(identifier: timezone) else { return false }
-  var calendar = Calendar(identifier: .gregorian)
-  calendar.locale = Locale(identifier: "en_US_POSIX")
-  calendar.timeZone = timeZone
-  return [bucketStart, bucketStart.addingTimeInterval(3_600 - 0.001)].contains { instant in
-    let components = calendar.dateComponents([.year, .month, .day, .hour], from: instant)
-    guard let year = components.year, let month = components.month, let day = components.day,
-      let hour = components.hour
-    else { return false }
-    return String(format: "%04d-%02d-%02d", year, month, day) == usageDate && hour == usageHour
-  }
-}
-
-private func usageHourlyFactIdentity(_ fact: UsageHourlyFact) -> String {
-  [
-    fact.bucketStartUTC,
-    fact.usageDate,
-    String(fact.usageHour),
-    fact.agent.rawValue,
-    fact.billingChannel.rawValue,
-    fact.channelSource.rawValue,
-    fact.model,
-    fact.contextBucket.rawValue,
-    fact.serviceTier,
-    fact.speed,
-    fact.inferenceGeo,
-  ].joined(separator: "\u{0}")
-}
-
 private func isDecimalAmount(_ value: String) -> Bool {
   guard !value.isEmpty, value.count <= 32 else { return false }
   let parts = value.split(separator: ".", omittingEmptySubsequences: false)
@@ -857,19 +607,3 @@ private func isUsagePricingDimension(_ value: String) -> Bool {
   value == "*" || WireValidation.isBillingDimension(value)
 }
 
-extension UsageSummaryTotals {
-  /// The local v3 summary shape, projected from the managed token totals. Which counts fold
-  /// into which is QuotaBar's Usage presentation, not part of either wire object.
-  init(_ totals: UsageTokenTotals) {
-    self.init(
-      totalTokens: totals.inputTokens + totals.outputTokens,
-      inputTokens: totals.inputTokens,
-      outputTokens: totals.outputTokens,
-      cacheReadInputTokens: totals.cacheReadTokens,
-      cacheWriteInputTokens: totals.cacheWrite5mTokens + totals.cacheWrite1hTokens
-        + totals.cacheWriteInferredTokens,
-      reasoningTokens: totals.reasoningTokens,
-      messages: totals.requests
-    )
-  }
-}

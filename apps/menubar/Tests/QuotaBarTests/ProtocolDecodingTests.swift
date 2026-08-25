@@ -31,78 +31,89 @@ func loadsBundledQuotaBrandSVG() throws {
   #expect(image.size == NSSize(width: 18, height: 18))
 }
 
-@Test
-func decodesAccountSummaryWithUsageCost() throws {
-  let data = Data(
-    #"""
+private func usagePeriodJSON(cost: String) -> String {
+  """
+  {
+    "totals": {
+      "total_tokens": 1200,
+      "input_tokens": 1000,
+      "output_tokens": 200,
+      "cache_read_input_tokens": 100,
+      "cache_write_input_tokens": 0,
+      "reasoning_tokens": 50,
+      "messages": 1
+    },
+    "cost": \(cost),
+    "partial": false,
+    "agents": []
+  }
+  """
+}
+
+private let completeCostJSON = """
+  {
+    "mode": "calculate",
+    "basis": "calculated",
+    "status": "complete",
+    "amount_microusd": "3138",
+    "catalog_revision": "pricing_1",
+    "calculated_rows": 1,
+    "reported_rows": 0,
+    "unpriced_rows": 0,
+    "assumptions": ["agent_default_channel"],
+    "unpriced": []
+  }
+  """
+
+private func accountSummaryJSON() -> Data {
+  Data(
+    """
     {
-      "protocol_version": 5,
+      "protocol_version": 6,
       "account": {
         "account_id": "account_01",
         "display_label": "octocat",
         "created_at": "2026-07-01T00:00:00Z"
       },
       "devices": [{
-        "device_id": "device_01",
+        "id": "device_01",
         "display_name": "Kitchen Mac",
         "platform": "macos",
-        "device_generation": 3,
-        "status": "active",
-        "created_at": "2026-07-01T00:00:00Z",
-        "last_login_at": "2026-08-01T00:00:00Z",
         "last_seen_at": "2026-08-02T01:00:00Z",
-        "signed_out_at": null
+        "last_observed_at": "2026-08-02T00:30:00Z"
       }],
-      "quota": [],
+      "subscriptions": [],
       "usage": {
-        "range": { "from": "2026-08-01", "to": "2026-08-02" },
-        "totals": {
-          "input_tokens": 1000,
-          "cache_read_tokens": 100,
-          "cache_write_5m_tokens": 0,
-          "cache_write_1h_tokens": 0,
-          "cache_write_inferred_tokens": 0,
-          "output_tokens": 200,
-          "reasoning_tokens": 50,
-          "requests": 1,
-          "web_search_requests": 0,
-          "web_fetch_requests": 0,
-          "source_cost_microusd": null,
-          "source_cost_covered_requests": 0
-        },
-        "cost": {
-          "mode": "calculate",
-          "basis": "calculated",
-          "status": "complete",
-          "amount_microusd": "3138",
-          "catalog_revision": "pricing_1",
-          "calculated_rows": 1,
-          "reported_rows": 0,
-          "unpriced_rows": 0,
-          "assumptions": ["agent_default_channel"],
-          "unpriced": []
-        },
-        "coverage": "complete",
-        "breakdowns": []
-      }
+        "today": \(usagePeriodJSON(cost: completeCostJSON)),
+        "last_7_days": \(usagePeriodJSON(cost: completeCostJSON)),
+        "last_30_days": \(usagePeriodJSON(cost: completeCostJSON)),
+        "all": \(usagePeriodJSON(cost: completeCostJSON))
+      },
+      "pricing_revision": "pricing_1",
+      "model_catalog_revision": "models_1"
     }
-    """#.utf8
+    """.utf8
   )
+}
 
+@Test
+func decodesAccountSummaryWithUsageCost() throws {
+  let data = accountSummaryJSON()
   let summary = try QuotaWireCodec.makeDecoder().decode(AccountSummary.self, from: data)
 
   #expect(summary.protocolVersion == WireCodec.managedDataProtocolVersion)
-  #expect(summary.devices.first?.deviceGeneration == 3)
-  #expect(summary.usage.cost.amountMicrousd == "3138")
+  #expect(summary.devices.first?.id == "device_01")
+  #expect(summary.usage.today.cost.amountMicrousd == "3138")
+  #expect(summary.pricingRevision == "pricing_1")
 
   var expandedObject = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
   var expandedUsage = try #require(expandedObject["usage"] as? [String: Any])
-  var expandedCost = try #require(expandedUsage["cost"] as? [String: Any])
+  var today = try #require(expandedUsage["today"] as? [String: Any])
+  var expandedCost = try #require(today["cost"] as? [String: Any])
   expandedCost["status"] = "partial"
   expandedCost["unpriced_rows"] = 1
   expandedCost["unpriced_truncated"] = true
-  expandedUsage["cost"] = expandedCost
-  expandedUsage["breakdowns_truncated"] = true
+  today["cost"] = expandedCost
   let structuredTotals: [String: Any] = [
     "total_tokens": 1200,
     "input_tokens": 1000,
@@ -112,49 +123,35 @@ func decodesAccountSummaryWithUsageCost() throws {
     "reasoning_tokens": 50,
     "messages": 1,
   ]
-  expandedUsage["agents"] = [
+  today["agents"] = [
     [
       "agent": "codex",
-      "totals": structuredTotals,
-      "cost": expandedCost,
       "providers": [
         [
           "provider": "openai",
-          "totals": structuredTotals,
-          "cost": expandedCost,
           "models": [
-            [
-              "model": "gpt-5.6-sol",
-              "totals": structuredTotals,
-              "cost": expandedCost,
-            ]
+            ["model": "gpt-5.6-sol", "totals": structuredTotals, "cost": expandedCost]
           ],
         ]
       ],
     ]
   ]
+  expandedUsage["today"] = today
   expandedObject["usage"] = expandedUsage
   let expandedData = try JSONSerialization.data(withJSONObject: expandedObject)
   let expanded = try QuotaWireCodec.makeDecoder().decode(AccountSummary.self, from: expandedData)
-  #expect(expanded.usage.hasTruncatedDetails)
-  #expect(expanded.usage.cost.hasUnpricedTruncatedDetails)
-  #expect(expanded.usage.cost.unpricedRows == 1)
-  #expect(expanded.usage.agents?.first?.providers.first?.models.first?.model == "gpt-5.6-sol")
-
-  var falseMarkerObject = expandedObject
-  var falseMarkerUsage = try #require(falseMarkerObject["usage"] as? [String: Any])
-  falseMarkerUsage["breakdowns_truncated"] = false
-  falseMarkerObject["usage"] = falseMarkerUsage
-  let falseMarkerData = try JSONSerialization.data(withJSONObject: falseMarkerObject)
-  #expect(throws: DecodingError.self) {
-    _ = try QuotaWireCodec.makeDecoder().decode(AccountSummary.self, from: falseMarkerData)
-  }
+  #expect(expanded.usage.today.hasTruncatedDetails)
+  #expect(expanded.usage.today.cost.unpricedRows == 1)
+  #expect(
+    expanded.usage.today.agents.first?.providers.first?.models.first?.model == "gpt-5.6-sol")
 
   var falseCostMarkerObject = expandedObject
   var falseCostMarkerUsage = try #require(falseCostMarkerObject["usage"] as? [String: Any])
-  var falseCostMarker = try #require(falseCostMarkerUsage["cost"] as? [String: Any])
+  var falseCostMarkerToday = try #require(falseCostMarkerUsage["today"] as? [String: Any])
+  var falseCostMarker = try #require(falseCostMarkerToday["cost"] as? [String: Any])
   falseCostMarker["unpriced_truncated"] = false
-  falseCostMarkerUsage["cost"] = falseCostMarker
+  falseCostMarkerToday["cost"] = falseCostMarker
+  falseCostMarkerUsage["today"] = falseCostMarkerToday
   falseCostMarkerObject["usage"] = falseCostMarkerUsage
   let falseCostMarkerData = try JSONSerialization.data(withJSONObject: falseCostMarkerObject)
   #expect(throws: DecodingError.self) {
@@ -170,136 +167,61 @@ func decodesAccountSummaryWithUsageCost() throws {
     _ = try QuotaWireCodec.makeDecoder().decode(AccountSummary.self, from: missingRequiredNull)
   }
 
-  let nestedExtra = Data(
-    String(decoding: data, as: UTF8.self).replacingOccurrences(
-      of: "\"usage\": {\n    \"range\"",
-      with: "\"usage\": {\n    \"extra\": true,\n    \"range\""
-    ).utf8
-  )
   // A Relay newer than this build can name a field anywhere in a read, at any depth.
-  #expect(String(decoding: nestedExtra, as: UTF8.self).contains("\"extra\""))
-  let tolerated = try QuotaWireCodec.makeDecoder().decode(AccountSummary.self, from: nestedExtra)
-  #expect(tolerated.usage.cost.catalogRevision == "pricing_1")
+  var nestedExtraObject = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+  var nestedExtraUsage = try #require(nestedExtraObject["usage"] as? [String: Any])
+  nestedExtraUsage["settled_at"] = "2026-08-02T02:00:00Z"
+  nestedExtraObject["usage"] = nestedExtraUsage
+  let tolerated = try QuotaWireCodec.makeDecoder().decode(
+    AccountSummary.self,
+    from: try JSONSerialization.data(withJSONObject: nestedExtraObject)
+  )
+  #expect(tolerated.usage.today.cost.catalogRevision == "pricing_1")
 }
 
 @Test
 func accountDeviceActivityUsesTheNewerOfLastSeenAndLastReading() throws {
   let now = try #require(ISO8601DateFormatter().date(from: "2026-08-15T08:10:00Z"))
   func decodeDevice(
-    status: String = "active",
-    lastSeenAt: Any = "2026-08-15T08:00:05Z"
+    lastSeenAt: Any = "2026-08-15T08:00:05Z",
+    lastObservedAt: Any = NSNull(),
+    extra: [String: Any] = [:]
   ) throws -> AccountDevice {
-    let value: [String: Any] = [
-      "device_id": "device_01",
+    var value: [String: Any] = [
+      "id": "device_01",
       "display_name": "Studio Mac",
       "platform": "macos",
-      "device_generation": 1,
-      "status": status,
-      "created_at": "2026-08-01T00:00:00Z",
-      "last_login_at": "2026-08-15T08:00:00Z",
       "last_seen_at": lastSeenAt,
-      "signed_out_at": status == "signed_out" ? "2026-08-15T08:05:00Z" : NSNull(),
+      "last_observed_at": lastObservedAt,
     ]
+    for (key, item) in extra {
+      value[key] = item
+    }
     return try QuotaWireCodec.makeDecoder().decode(
       AccountDevice.self,
       from: JSONSerialization.data(withJSONObject: value)
     )
   }
 
-  // A device carrying an assertion about its own health is not part of the wire any more.
-  var withHealth: [String: Any] = [
-    "device_id": "device_01",
-    "display_name": "Studio Mac",
-    "platform": "macos",
-    "device_generation": 1,
-    "status": "active",
-    "created_at": "2026-08-01T00:00:00Z",
-    "last_login_at": "2026-08-15T08:00:00Z",
-    "last_seen_at": "2026-08-15T08:00:05Z",
-    "signed_out_at": NSNull(),
-  ]
   // A field the contract retired reads as any other field this build does not name: ignored.
-  withHealth["health"] = NSNull()
-  let withRetiredField = try QuotaWireCodec.makeDecoder().decode(
-    AccountDevice.self, from: JSONSerialization.data(withJSONObject: withHealth))
-  #expect(withRetiredField.deviceID == "device_01")
+  let withRetiredField = try decodeDevice(extra: ["health": NSNull(), "status": "active"])
+  #expect(withRetiredField.id == "device_01")
 
-  #expect(
-    AccountDeviceActivity.status(for: try decodeDevice(), lastReadingAt: nil, now: now) == .active)
+  #expect(AccountDeviceActivity.status(for: try decodeDevice(), now: now) == .active)
   #expect(
     AccountDeviceActivity.status(
-      for: try decodeDevice(lastSeenAt: "2026-08-14T08:00:00Z"),
-      lastReadingAt: try #require(ISO8601DateFormatter().date(from: "2026-08-15T08:05:00Z")),
+      for: try decodeDevice(
+        lastSeenAt: "2026-08-14T08:00:00Z", lastObservedAt: "2026-08-15T08:05:00Z"),
       now: now) == .active)
   #expect(
     AccountDeviceActivity.status(
-      for: try decodeDevice(lastSeenAt: "2026-08-15T05:00:00Z"), lastReadingAt: nil, now: now)
-      == .idle)
+      for: try decodeDevice(lastSeenAt: "2026-08-15T05:00:00Z"), now: now) == .idle)
   #expect(
     AccountDeviceActivity.status(
-      for: try decodeDevice(lastSeenAt: "2026-08-12T05:00:00Z"), lastReadingAt: nil, now: now)
+      for: try decodeDevice(lastSeenAt: "2026-08-12T05:00:00Z"), now: now) == .notReporting)
+  #expect(
+    AccountDeviceActivity.status(for: try decodeDevice(lastSeenAt: NSNull()), now: now)
       == .notReporting)
-  #expect(
-    AccountDeviceActivity.status(
-      for: try decodeDevice(lastSeenAt: NSNull()), lastReadingAt: nil, now: now) == .notReporting)
-  #expect(
-    AccountDeviceActivity.status(
-      for: try decodeDevice(status: "signed_out"), lastReadingAt: nil, now: now) == .signedOut)
-}
-
-@Test
-func validatesUsageBreakdownKeysByDimension() throws {
-  let totals: [String: Any] = [
-    "input_tokens": 1000,
-    "cache_read_tokens": 100,
-    "cache_write_5m_tokens": 0,
-    "cache_write_1h_tokens": 0,
-    "cache_write_inferred_tokens": 0,
-    "output_tokens": 200,
-    "reasoning_tokens": 50,
-    "requests": 1,
-    "web_search_requests": 0,
-    "web_fetch_requests": 0,
-    "source_cost_microusd": NSNull(),
-    "source_cost_covered_requests": 0,
-  ]
-  let cost: [String: Any] = [
-    "mode": "calculate",
-    "basis": "calculated",
-    "status": "complete",
-    "amount_microusd": "3138",
-    "catalog_revision": "pricing_1",
-    "calculated_rows": 1,
-    "reported_rows": 0,
-    "unpriced_rows": 0,
-    "assumptions": ["agent_default_channel"],
-    "unpriced": [],
-  ]
-
-  func decode(_ dimension: String, key: String) throws -> UsageBreakdown {
-    let object: [String: Any] = [
-      "dimension": dimension,
-      "key": key,
-      "totals": totals,
-      "cost": cost,
-    ]
-    return try QuotaWireCodec.makeDecoder().decode(
-      UsageBreakdown.self,
-      from: JSONSerialization.data(withJSONObject: object)
-    )
-  }
-
-  let exactModel = try decode("model", key: "GPT-5.5[1m]")
-  #expect(exactModel.key == "GPT-5.5[1m]")
-  _ = try decode("agent", key: "codex")
-
-  _ = try decode("model", key: String(repeating: "😀", count: 128))
-  #expect(throws: DecodingError.self) {
-    _ = try decode("model", key: String(repeating: "😀", count: 129))
-  }
-  #expect(throws: DecodingError.self) {
-    _ = try decode("model", key: "GPT-5.5\n1m")
-  }
 }
 
 @Test
@@ -570,21 +492,15 @@ func decodesLocalUsageReportShape() throws {
 
 @Test
 func decodesLocalUsagePeriodClientProviderModelSummary() throws {
-  let totals = UsageTokenTotals(
+  let summaryTotals = UsageSummaryTotals(
+    totalTokens: 130,
     inputTokens: 100,
-    cacheReadTokens: 20,
-    cacheWrite5mTokens: 0,
-    cacheWrite1hTokens: 0,
-    cacheWriteInferredTokens: 0,
     outputTokens: 30,
+    cacheReadInputTokens: 20,
+    cacheWriteInputTokens: 0,
     reasoningTokens: 10,
-    requests: 1,
-    webSearchRequests: 0,
-    webFetchRequests: 0,
-    sourceCostMicrousd: "0",
-    sourceCostCoveredRequests: 1
+    messages: 1
   )
-  let summaryTotals = UsageSummaryTotals(totals)
   let cost = UsageCostOutcome(
     mode: .calculate,
     basis: .calculated,
@@ -734,128 +650,76 @@ func rejectsCollectionResultWithoutSnapshots() {
   }
 }
 
+/// One agent's rescanned hours, as QuotaBar restates the contract it uploads.
 @Test
-func decodesIndependentQuotaAndUsageSyncSequences() throws {
+func decodesUsageUploadAndConservesTokenSubsets() throws {
   let data = Data(
     #"""
     {
-      "protocol_version": 2,
-      "account_id": "account_01",
-      "device_id": "device_01",
-      "device_generation": 3,
-      "next_snapshot_sequence": 42,
-      "next_usage_sequence": 8,
-      "usage_deleted_before": null,
-      "usage_sync_revision": 9
-    }
-    """#.utf8
-  )
-
-  let sync = try QuotaWireCodec.makeDecoder().decode(DeviceSyncResponse.self, from: data)
-  #expect(sync.nextSnapshotSequence == 42)
-  #expect(sync.nextUsageSequence == 8)
-  #expect(sync.usageSyncRevision == 9)
-
-  let missingWatermark = Data(
-    String(decoding: data, as: UTF8.self).replacingOccurrences(
-      of: #""usage_deleted_before": null,"#,
-      with: ""
-    ).utf8)
-  #expect(throws: DecodingError.self) {
-    _ = try QuotaWireCodec.makeDecoder().decode(DeviceSyncResponse.self, from: missingWatermark)
-  }
-}
-
-@Test
-func decodesUsageSubmissionAndConservesTokenSubsets() throws {
-  let data = Data(
-    #"""
-    {
-      "protocol_version": 5,
-      "submission_id": "submission_01",
-      "device_id": "device_01",
+      "protocol_version": 6,
       "generation": 3,
-      "sequence": 7,
-      "parser_revision": "parser_1",
-      "aggregation_timezone": "Asia/Singapore",
-      "coverage": {
-        "agent": "codex",
-        "start_at": "2026-08-02T12:00:00Z",
-        "end_at": "2026-08-02T13:00:00Z",
-        "status": "complete"
-      },
-      "rows": [{
+      "agent": "codex",
+      "hours": [{
         "bucket_start_utc": "2026-08-02T12:00:00Z",
-        "usage_date": "2026-08-02",
-        "usage_hour": 20,
-        "agent": "codex",
-        "billing_channel": "openai_direct",
-        "channel_source": "agent_default",
-        "model": "gpt-5",
-        "context_bucket": "le_128k",
-        "service_tier": "default",
-        "speed": "standard",
-        "inference_geo": "global",
-        "input_tokens": 1000,
-        "cache_read_tokens": 100,
-        "cache_write_5m_tokens": 0,
-        "cache_write_1h_tokens": 0,
-        "cache_write_inferred_tokens": 0,
-        "output_tokens": 200,
-        "reasoning_tokens": 50,
-        "requests": 1,
-        "web_search_requests": 0,
-        "web_fetch_requests": 0,
-        "source_cost_covered_requests": 0
+        "scan_version": 7,
+        "partial": false,
+        "rows": [{
+          "agent": "codex",
+          "billing_channel": "openai_direct",
+          "channel_source": "agent_default",
+          "model": "gpt-5",
+          "context_bucket": "le_128k",
+          "service_tier": "default",
+          "speed": "standard",
+          "inference_geo": "global",
+          "input_tokens": 1000,
+          "cache_read_tokens": 100,
+          "cache_write_5m_tokens": 0,
+          "cache_write_1h_tokens": 0,
+          "cache_write_inferred_tokens": 0,
+          "output_tokens": 200,
+          "reasoning_tokens": 50,
+          "requests": 1,
+          "web_search_requests": 0,
+          "web_fetch_requests": 0,
+          "source_cost_covered_requests": 0
+        }]
       }]
     }
     """#.utf8
   )
 
-  let submission = try QuotaWireCodec.makeDecoder().decode(UsageSubmission.self, from: data)
+  let upload = try QuotaWireCodec.makeDecoder().decode(UsageUpload.self, from: data)
+  #expect(upload.protocolVersion == WireCodec.managedDataProtocolVersion)
+  #expect(upload.hours.first?.scanVersion == 7)
+  #expect(upload.hours.first?.rows.first?.inputTokens == 1000)
 
-  #expect(submission.protocolVersion == WireCodec.managedDataProtocolVersion)
-  #expect(submission.rows.first?.inputTokens == 1000)
-
-  var multipartObject = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
-  var partialCoverage = try #require(multipartObject["coverage"] as? [String: Any])
-  partialCoverage["status"] = "partial"
-  multipartObject["coverage"] = partialCoverage
-  multipartObject["write_mode"] = "merge_partial"
-  multipartObject["multipart"] = [
-    "batch_id": "batch_01",
-    "part_index": 0,
-    "part_count": 2,
-  ]
-  let multipartData = try JSONSerialization.data(withJSONObject: multipartObject)
-  let multipart = try QuotaWireCodec.makeDecoder().decode(
-    UsageSubmission.self, from: multipartData)
-  #expect(multipart.writeMode == .mergePartial)
-  #expect(multipart.multipart?.partIndex == 0)
+  // An hour with nothing left in it is how a device says a scan found none.
+  var emptyObject = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+  var emptyHours = try #require(emptyObject["hours"] as? [[String: Any]])
+  emptyHours[0]["rows"] = []
+  emptyHours[0]["partial"] = true
+  emptyObject["hours"] = emptyHours
+  let empty = try QuotaWireCodec.makeDecoder().decode(
+    UsageUpload.self, from: try JSONSerialization.data(withJSONObject: emptyObject))
+  #expect(empty.hours.first?.rows.isEmpty == true)
+  #expect(empty.hours.first?.partial == true)
 
   var modelBoundaryObject = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
-  var modelBoundaryRows = try #require(modelBoundaryObject["rows"] as? [[String: Any]])
-  modelBoundaryRows[0]["model"] = String(repeating: "😀", count: 128)
-  modelBoundaryObject["rows"] = modelBoundaryRows
-  let modelBoundaryData = try JSONSerialization.data(withJSONObject: modelBoundaryObject)
-  _ = try QuotaWireCodec.makeDecoder().decode(UsageSubmission.self, from: modelBoundaryData)
+  var boundaryHours = try #require(modelBoundaryObject["hours"] as? [[String: Any]])
+  var boundaryRows = try #require(boundaryHours[0]["rows"] as? [[String: Any]])
+  boundaryRows[0]["model"] = String(repeating: "\u{1F600}", count: 128)
+  boundaryHours[0]["rows"] = boundaryRows
+  modelBoundaryObject["hours"] = boundaryHours
+  _ = try QuotaWireCodec.makeDecoder().decode(
+    UsageUpload.self, from: try JSONSerialization.data(withJSONObject: modelBoundaryObject))
 
-  modelBoundaryRows[0]["model"] = String(repeating: "😀", count: 129)
-  modelBoundaryObject["rows"] = modelBoundaryRows
-  let oversizedModelData = try JSONSerialization.data(withJSONObject: modelBoundaryObject)
+  boundaryRows[0]["model"] = String(repeating: "\u{1F600}", count: 129)
+  boundaryHours[0]["rows"] = boundaryRows
+  modelBoundaryObject["hours"] = boundaryHours
   #expect(throws: DecodingError.self) {
-    _ = try QuotaWireCodec.makeDecoder().decode(UsageSubmission.self, from: oversizedModelData)
-  }
-
-  var invalidMultipartObject = multipartObject
-  invalidMultipartObject["multipart"] = [
-    "batch_id": "batch_01",
-    "part_index": 2,
-    "part_count": 2,
-  ]
-  let invalidMultipartData = try JSONSerialization.data(withJSONObject: invalidMultipartObject)
-  #expect(throws: DecodingError.self) {
-    _ = try QuotaWireCodec.makeDecoder().decode(UsageSubmission.self, from: invalidMultipartData)
+    _ = try QuotaWireCodec.makeDecoder().decode(
+      UsageUpload.self, from: try JSONSerialization.data(withJSONObject: modelBoundaryObject))
   }
 
   let invalid = Data(
@@ -864,7 +728,7 @@ func decodesUsageSubmissionAndConservesTokenSubsets() throws {
       with: #""cache_read_tokens": 1001"#
     ).utf8)
   #expect(throws: DecodingError.self) {
-    _ = try QuotaWireCodec.makeDecoder().decode(UsageSubmission.self, from: invalid)
+    _ = try QuotaWireCodec.makeDecoder().decode(UsageUpload.self, from: invalid)
   }
 
   let invalidHour = Data(
@@ -873,18 +737,29 @@ func decodesUsageSubmissionAndConservesTokenSubsets() throws {
       with: "2023-02-29T00:00:00Z"
     ).utf8)
   #expect(throws: DecodingError.self) {
-    _ = try QuotaWireCodec.makeDecoder().decode(UsageSubmission.self, from: invalidHour)
+    _ = try QuotaWireCodec.makeDecoder().decode(UsageUpload.self, from: invalidHour)
   }
 
-  var duplicatedObject = try #require(
-    JSONSerialization.jsonObject(with: data) as? [String: Any]
-  )
-  var duplicatedRows = try #require(duplicatedObject["rows"] as? [[String: Any]])
+  // Two rows with one identity are two answers to the same question.
+  var duplicatedObject = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+  var duplicatedHours = try #require(duplicatedObject["hours"] as? [[String: Any]])
+  var duplicatedRows = try #require(duplicatedHours[0]["rows"] as? [[String: Any]])
   duplicatedRows.append(try #require(duplicatedRows.first))
-  duplicatedObject["rows"] = duplicatedRows
-  let duplicatedData = try JSONSerialization.data(withJSONObject: duplicatedObject)
+  duplicatedHours[0]["rows"] = duplicatedRows
+  duplicatedObject["hours"] = duplicatedHours
   #expect(throws: DecodingError.self) {
-    _ = try QuotaWireCodec.makeDecoder().decode(UsageSubmission.self, from: duplicatedData)
+    _ = try QuotaWireCodec.makeDecoder().decode(
+      UsageUpload.self, from: try JSONSerialization.data(withJSONObject: duplicatedObject))
+  }
+
+  // One hour named twice is not an hour this upload can replace.
+  var repeatedObject = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+  var repeatedHours = try #require(repeatedObject["hours"] as? [[String: Any]])
+  repeatedHours.append(try #require(repeatedHours.first))
+  repeatedObject["hours"] = repeatedHours
+  #expect(throws: DecodingError.self) {
+    _ = try QuotaWireCodec.makeDecoder().decode(
+      UsageUpload.self, from: try JSONSerialization.data(withJSONObject: repeatedObject))
   }
 }
 

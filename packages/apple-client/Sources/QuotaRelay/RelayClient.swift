@@ -29,7 +29,7 @@ public enum RelayRoute: String, CaseIterable, Sendable {
     switch self {
     case .token: "/oauth/v2/token"
     case .revoke: "/oauth/v2/revoke"
-    case .accountSummary: "/api/v5/account/summary"
+    case .accountSummary: "/api/v6/account/summary"
     }
   }
 
@@ -113,17 +113,17 @@ public struct RelayClient: Sendable {
     )
   }
 
-  /// Reads the Account summary, offering the validator the caller already holds.
+  /// Reads the Account, offering the validator the caller already holds.
   ///
-  /// Passing `etag` turns the read conditional: an account that has not changed answers 304
-  /// and sends no body, so the poll costs a round trip instead of a full Usage aggregation.
+  /// One read answers the whole account: the devices, the resolved subscriptions, and the four
+  /// periods in the calendar `timeZone` names. Passing `etag` turns the read conditional: an
+  /// account that has not changed answers 304 and sends no body.
   public func fetchAccountSummary(
-    from: String,
-    to: String,
+    timeZone: String,
     accessToken: String,
     etag: String? = nil
   ) async throws -> AccountSummaryRead {
-    guard WireValidation.isCalendarDate(from), WireValidation.isCalendarDate(to), from <= to else {
+    guard WireValidation.isTimezone(timeZone), TimeZone(identifier: timeZone) != nil else {
       throw RelayClientError.invalidResponse
     }
     guard WireValidation.isIOSAccessToken(accessToken) else {
@@ -131,12 +131,7 @@ public struct RelayClient: Sendable {
     }
     let (data, response) = try await perform(
       route: .accountSummary,
-      query: [
-        ("from", from),
-        ("to", to),
-        ("cost_mode", "auto"),
-        ("usage_agents", "all"),
-      ],
+      query: [("tz", timeZone)],
       body: nil,
       bearer: accessToken,
       expectedStatus: 200,

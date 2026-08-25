@@ -28,7 +28,7 @@ struct OverviewView: View {
         }
 
         if let devices = model.summary?.devices, !devices.isEmpty {
-          AccountDevicesCard(devices: devices, observations: model.summary?.quota ?? [])
+          AccountDevicesCard(devices: devices)
         }
 
         TodayUsageCard(summary: model.summary)
@@ -127,11 +127,9 @@ enum RemoteDeviceActivity: String, Equatable, Sendable {
   case active = "Active"
   case idle = "Idle"
   case notReporting = "Not reporting"
-  case signedOut = "Signed out"
 
-  static func status(for device: AccountDevice, lastReadingAt: Date?, now: Date) -> Self {
-    if device.status == .signedOut { return .signedOut }
-    let instants = [device.lastSeenAt, lastReadingAt].compactMap { $0 }
+  static func status(for device: AccountDevice, now: Date) -> Self {
+    let instants = [device.lastSeenAt, device.lastObservedAt].compactMap { $0 }
     guard let newest = instants.max() else { return .notReporting }
     let age = now.timeIntervalSince(newest)
     if age < 30 * 60 { return .active }
@@ -142,7 +140,6 @@ enum RemoteDeviceActivity: String, Equatable, Sendable {
 
 struct AccountDevicesCard: View {
   let devices: [AccountDevice]
-  let observations: [AccountQuotaObservation]
 
   var body: some View {
     let now = Date()
@@ -160,16 +157,8 @@ struct AccountDevicesCard: View {
     .quotaSurface()
   }
 
-  private func lastReadingAt(_ device: AccountDevice) -> Date? {
-    observations
-      .filter { $0.deviceID == device.deviceID }
-      .map(\.snapshot.observedAt)
-      .max()
-  }
-
   private func deviceRow(_ device: AccountDevice, now: Date) -> some View {
-    let status = RemoteDeviceActivity.status(
-      for: device, lastReadingAt: lastReadingAt(device), now: now)
+    let status = RemoteDeviceActivity.status(for: device, now: now)
     return VStack(alignment: .leading, spacing: 5) {
       HStack(alignment: .firstTextBaseline, spacing: 8) {
         Text(device.displayName)
@@ -199,12 +188,12 @@ struct AccountDevicesCard: View {
     case .unknown: "Unknown"
     }
     var parts = [platform]
-    if let seenAt = device.lastSeenAt ?? device.signedOutAt {
+    if let seenAt = device.lastSeenAt {
       parts.append("Last seen \(QuotaFormat.refreshedAge(seenAt, now: now)) ago")
     } else {
       parts.append("Never reported")
     }
-    if let reading = lastReadingAt(device) {
+    if let reading = device.lastObservedAt {
       parts.append("Last reading \(QuotaFormat.refreshedAge(reading, now: now)) ago")
     }
     return parts.joined(separator: " · ")
@@ -219,8 +208,8 @@ struct TodayUsageCard: View {
       Text("Today")
         .font(.headline)
         .accessibilityAddTraits(.isHeader)
-      if let usage = summary?.usage,
-        usage.totals.requests > 0 || usage.totals.inputTokens > 0
+      if let usage = summary?.usage.today,
+        usage.totals.messages > 0 || usage.totals.inputTokens > 0
           || usage.totals.outputTokens > 0
       {
         metric(

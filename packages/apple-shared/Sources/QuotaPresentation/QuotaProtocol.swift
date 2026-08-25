@@ -12,9 +12,9 @@ public enum QuotaProtocol {
   /// OAuth, Device authorization and control, Account metadata, and the catalogs.
   public static let control = 2
   /// Quota, Usage, and Account summary between a Device and Relay.
-  public static let managedData = 5
+  public static let managedData = 6
 
-  /// No agent this Account accepts existed before this instant, so a coverage window reaching
-  /// back past it was computed from a missing lower bound rather than scanned.
+  /// No agent this Account accepts existed before this instant, so an hour reaching back past
+  /// it was computed from a missing lower bound rather than scanned.
   public static let earliestUsageInstant = "2020-01-01T00:00:00Z"
 }
