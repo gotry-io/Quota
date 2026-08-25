@@ -1029,6 +1029,19 @@ describe("managed Relay on real Workers and D1", () => {
     expect(stored.map((observation) => observation.snapshot.provider)).toEqual(["cursor"]);
   });
 
+  it("no longer stores anything an unauthenticated reader could have asked for", async () => {
+    const columns = await env.DB.prepare("PRAGMA table_info(accounts)").all<{ name: string }>();
+    const names = columns.results.map((column) => column.name);
+    expect(names).not.toContain("public_profile_enabled");
+    expect(names).not.toContain("public_profile_slug");
+    const indexes = await env.DB.prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'accounts'",
+    ).all<{ name: string }>();
+    expect(indexes.results.map((index) => index.name)).not.toContain(
+      "accounts_public_profile_slug",
+    );
+  });
+
   it("keeps a sleeping device's reading and deletes one nothing will read again", async () => {
     const snapshot = (provider: string, observedAt: string) =>
       env.DB.prepare(
