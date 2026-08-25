@@ -739,7 +739,8 @@
       snapshots: snapshots,
       source: nil,
       message: nil,
-      sources: 1
+      sources: 1,
+      accessDenied: nil
     )
   }
 
@@ -755,7 +756,8 @@
       source: nil,
       message: message,
       // A Mac whose stored sign-ins were rejected, not one that never had them.
-      sources: 1
+      sources: 1,
+      accessDenied: nil
     )
   }
 

@@ -77,7 +77,7 @@ fn collect_official(context: &CollectionContext) -> Result<QuotaSnapshot, Provid
         // reader to sign in again for as long as the access decision stands.
         return Err(ProviderError::new(
             if lookup.keychain_refused {
-                ErrorCategory::Unavailable
+                ErrorCategory::AccessDenied
             } else {
                 ErrorCategory::AuthRequired
             },

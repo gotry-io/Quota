@@ -90,17 +90,6 @@ export function buildUsageSummary(
   );
 }
 
-export function buildUsageCost(
-  rows: readonly StoredUsageHourlyFact[],
-  mode: UsageCostMode,
-  catalog: PricingCatalog,
-): UsageCostOutcome {
-  return boundedModelResult(() => {
-    const facts = rows.map(usageFact);
-    return boundedFoldPreparedUsageCosts(prepareUsageCosts(facts, catalog, mode));
-  });
-}
-
 export class UsageSummaryLimitError extends Error {
   constructor() {
     super("Usage summary exceeds the response limit");

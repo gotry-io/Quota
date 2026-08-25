@@ -3065,6 +3065,12 @@ pub(crate) fn relay_error_for_backend(error: RelayError) -> crate::protocol::Ipc
             "invalid_request" | "invalid_response" => {
                 crate::protocol::IpcError::new(ErrorCode::InvalidResponse, RecoveryAction::Retry)
             }
+            // Relay serves one set of contracts and answers anything else under /api this way.
+            // Retrying a route this deployment has retired never succeeds; updating does.
+            "client_upgrade_required" => crate::protocol::IpcError::new(
+                ErrorCode::ClientUpgradeRequired,
+                RecoveryAction::Upgrade,
+            ),
             _ if status == 429 || status >= 500 => {
                 crate::protocol::IpcError::new(ErrorCode::NetworkError, RecoveryAction::Retry)
             }
@@ -3772,7 +3778,7 @@ mod tests {
     fn quota_report_snapshot_extraction_is_strict() {
         let snapshot = valid_snapshot();
         let report = serde_json::json!({
-            "protocol_version": CONTROL_PROTOCOL,
+            "protocol_version": LOCAL_COLLECTION_PROTOCOL,
             "captured_at": "2026-08-10T00:00:00Z",
             "results": [{"snapshots": [snapshot.clone()]}]
         });
@@ -3785,7 +3791,7 @@ mod tests {
         cursor["provider"] = serde_json::json!("cursor");
         let (_, mixed) = snapshot_payload_from_quota_report(
             &serde_json::json!({
-                "protocol_version": CONTROL_PROTOCOL,
+                "protocol_version": LOCAL_COLLECTION_PROTOCOL,
                 "captured_at": "2026-08-10T00:00:00Z",
                 "results": [{"snapshots": [snapshot.clone(), cursor.clone()]}]
             }),
@@ -3795,7 +3801,7 @@ mod tests {
         assert_eq!(mixed, [snapshot.clone(), cursor.clone()]);
         let (_, cursor_only) = snapshot_payload_from_quota_report(
             &serde_json::json!({
-                "protocol_version": CONTROL_PROTOCOL,
+                "protocol_version": LOCAL_COLLECTION_PROTOCOL,
                 "captured_at": "2026-08-10T00:00:00Z",
                 "results": [{"snapshots": [cursor.clone()]}]
             }),
@@ -3808,7 +3814,7 @@ mod tests {
         assert!(
             snapshot_payload_from_quota_report(
                 &serde_json::json!({
-                    "protocol_version": CONTROL_PROTOCOL,
+                    "protocol_version": LOCAL_COLLECTION_PROTOCOL,
                     "captured_at": "2026-08-10T00:00:00Z",
                     "results": [{"snapshots": [unknown]}]
                 }),
@@ -3821,7 +3827,7 @@ mod tests {
         assert!(
             snapshot_payload_from_quota_report(
                 &serde_json::json!({
-                    "protocol_version": CONTROL_PROTOCOL,
+                    "protocol_version": LOCAL_COLLECTION_PROTOCOL,
                     "captured_at": "2026-08-10T00:00:00Z",
                     "snapshots": []
                 }),
@@ -3832,7 +3838,7 @@ mod tests {
         assert!(
             snapshot_payload_from_quota_report(
                 &serde_json::json!({
-                    "protocol_version": CONTROL_PROTOCOL,
+                    "protocol_version": LOCAL_COLLECTION_PROTOCOL,
                     "captured_at": "2026-08-10T00:00:00Z",
                     "results": [{}]
                 }),

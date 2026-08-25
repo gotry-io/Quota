@@ -4,7 +4,6 @@ import {
   AccountQuotaResponseSchema,
   AccountResponseSchema,
   AccountSummarySchema,
-  AccountUsageHourlyResponseSchema,
   AccountUsageResponseSchema,
   BILLING_AGENTS,
   DeleteDeviceResponseSchema,
@@ -21,7 +20,6 @@ import {
   IosSessionRefreshRequestSchema,
   LogoutResponseSchema,
   MANAGED_DATA_PROTOCOL_VERSION,
-  MAXIMUM_USAGE_READ_ROWS,
   MAXIMUM_USAGE_SUBMISSION_BYTES,
   MODEL_CATALOG,
   type ModelCatalog,
@@ -44,7 +42,6 @@ import {
   UsageDateRangeSchema,
   UsageSubmissionSchema,
   UsageUploadResponseSchema,
-  UtcHourSchema,
 } from "@gotry-io/quota-protocol";
 import type {
   AccountMaintenanceInput,
@@ -69,7 +66,7 @@ import { managedServiceInfo } from "./config.ts";
 import { PRICING_CATALOG, PRICING_CATALOG_ETAG } from "./pricing-catalog.ts";
 import { normalizePublicSlug, publicProfileFromAccount } from "./public-profile.ts";
 import { bearerToken, type SecretHasher } from "./security.ts";
-import { buildUsageCost, buildUsageSummary, UsageSummaryLimitError } from "./usage-summary.ts";
+import { buildUsageSummary, UsageSummaryLimitError } from "./usage-summary.ts";
 
 const maximumCredentialBodyBytes = 64 * 1024;
 const maximumSnapshotBodyBytes = 256 * 1024;
@@ -731,68 +728,6 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     });
   }
 
-  app.get("/api/v5/account/usage/hourly", async (context) => {
-    const principal = await accountReader(context, options, now());
-    if (principal instanceof Response) {
-      return principal;
-    }
-    if (
-      !hasOnlyQueryKeys(context, ["start_at", "end_at", "device_id", "cost_mode", "usage_agents"])
-    ) {
-      return invalidRequest(context);
-    }
-    const requestedAgents = context.req.query("usage_agents");
-    if (requestedAgents !== undefined && requestedAgents !== "all") {
-      return invalidRequest(context);
-    }
-    const start = UtcHourSchema.safeParse(context.req.query("start_at"));
-    const end = UtcHourSchema.safeParse(context.req.query("end_at"));
-    const mode = UsageCostModeSchema.safeParse(context.req.query("cost_mode") ?? "calculate");
-    if (
-      !start.success ||
-      !end.success ||
-      !mode.success ||
-      Date.parse(end.data) <= Date.parse(start.data) ||
-      Date.parse(end.data) - Date.parse(start.data) > 31 * 24 * 60 * 60 * 1000
-    ) {
-      return invalidRequest(context);
-    }
-    const deviceId = context.req.query("device_id");
-    if (
-      deviceId &&
-      !(await options.state.accountOwnsVisibleDevice(principal.account_id, deviceId))
-    ) {
-      return notFound(context);
-    }
-    const queried = await options.usageState.queryAccountUsage(principal.account_id, {
-      ...(deviceId ? { device_id: deviceId } : {}),
-      agents: BILLING_AGENTS,
-      start_at: start.data,
-      end_at: end.data,
-      limit: MAXIMUM_USAGE_READ_ROWS,
-    });
-    if (queried.truncated) {
-      return resultLimit(context);
-    }
-    try {
-      return context.json(
-        AccountUsageHourlyResponseSchema.parse({
-          protocol_version: MANAGED_DATA_PROTOCOL_VERSION,
-          start_at: start.data,
-          end_at: end.data,
-          facts: queried.rows,
-          coverage: queried.coverage,
-          cost: buildUsageCost(queried.rows, mode.data, catalog),
-        }),
-      );
-    } catch (error) {
-      if (error instanceof UsageSummaryLimitError) {
-        return resultLimit(context);
-      }
-      throw error;
-    }
-  });
-
   app.delete("/api/v2/account/devices/:device_id", async (context) => {
     const principal = await authorizeAccount(context, options, "account:manage", now());
     if (principal instanceof Response) {
@@ -1095,7 +1030,19 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     return context.json(modelCatalog);
   });
 
-  app.notFound((context) => notFound(context));
+  // A request that matched no route under /api is one this Worker does not serve. For a
+  // versioned data route that means the caller speaks a contract this deployment has retired,
+  // and a caller told only that a resource was missing retries a route that will never return.
+  app.notFound((context) =>
+    new URL(context.req.url).pathname.startsWith("/api/")
+      ? relayError(
+          context,
+          404,
+          "client_upgrade_required",
+          "This client speaks a retired contract. Update it to continue.",
+        )
+      : notFound(context),
+  );
   app.onError((_error, context) =>
     relayError(context, 500, "internal_error", "QuotaRelay could not complete the request."),
   );

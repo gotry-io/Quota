@@ -21,12 +21,15 @@ struct QuotaCollectionResult: Codable, Equatable, Sendable {
   /// because the service persists this report in SQLite: after an upgrade `get_state`
   /// replays the previous build's report until the first refresh rewrites it.
   let sources: Int?
+  /// Set when this Mac was refused a credential it holds. It reads as `unavailable` to every
+  /// other device, because none of them can see or change this one's access.
+  let accessDenied: Bool?
 }
 
 extension QuotaCollectionResult {
   init(from decoder: Decoder) throws {
     try decoder.rejectUnknownWireKeys([
-      "provider", "outcome", "snapshots", "source", "message", "sources",
+      "provider", "outcome", "snapshots", "source", "message", "sources", "accessDenied",
     ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     provider = try container.decode(ProviderID.self, forKey: .provider)
@@ -35,6 +38,7 @@ extension QuotaCollectionResult {
     source = try container.decodeIfPresent(String.self, forKey: .source)
     message = try container.decodeIfPresent(String.self, forKey: .message)
     sources = try container.decodeIfPresent(Int.self, forKey: .sources)
+    accessDenied = try decodeTrueMarker(.accessDenied, from: container)
     let isSuccess = outcome == .success
     guard isSuccess == !snapshots.isEmpty,
       snapshots.count <= 32,
@@ -55,6 +59,7 @@ extension QuotaCollectionResult {
     case source
     case message
     case sources
+    case accessDenied
   }
 }
 

@@ -57,7 +57,42 @@ has no usage to miss, so treating every hour it did not run as incomplete would 
 on for every account forever; a scan that was attempted and came up short already records a
 `partial` window, which is what `partial` reports.
 
-**Merge adjacent windows on write.** The stored windows are never coalesced, so they grow with
-every upload — 971 rows over eleven months here. With the read no longer scanning them this is
-storage, not latency, and the upload path carries the sequence and idempotency guarantees that
-make a rewrite there expensive to get right. Left as it is, deliberately.
+**Merge adjacent windows.** The stored windows are never coalesced, so they grow with every
+upload — 971 rows over eleven months here. With the read no longer scanning them this is
+storage, not latency.
+
+Merging them was designed and rejected. On the upload path it would have to widen the inserted
+range inside the same batch that deletes what it absorbs, and that path carries the sequence and
+idempotency guarantees the whole outbox rests on. In maintenance it can be written as one
+statement, but SQLite does not define the order in which an `UPDATE` sees its own subqueries, so
+a chain of touching windows can widen out of order and leave two rows overlapping — coverage
+corrupted to save space nothing is short of. Constraining the update to run heads is provably
+safe and merges one pair per pass, which converges on a thousand rows in a thousand passes.
+
+Neither is worth its risk against a cost that is now bounded storage, so the windows stay as
+they are written.
+
+## Addendum: what a reader is told to do
+
+Three conditions reached the reader as something they could not act on, and are now named:
+
+**A retired contract.** Relay answers anything unmatched under `/api` with
+`client_upgrade_required`, which it already defined and never sent. A cutover used to reach an
+older build as a resource that was merely missing, so it retried a route that will never return.
+The code maps to `ErrorCode::ClientUpgradeRequired` and the recovery `Upgrade`, which QuotaBar
+already renders as an update prompt.
+
+**A refused credential store.** A Keychain entry whose secret is withheld is an access decision,
+not an expired sign-in, and telling the reader to sign in again rewrites a secret this device
+still would not be handed. It reads as `unavailable` to every other device — none of them can
+see or change this one's access — and the local collection result carries `access_denied` so the
+diagnostic on the device that can act says `check_access`. That marker advances the local
+collection contract to v3; managed data is untouched, because there is nothing here for a remote
+reader to do.
+
+**An account with nothing to report.** A read that answers `null` for a window it knows is a
+successful read of an account with no such window. Only a read that answers for no known window
+is a shape this build cannot understand, and only that is a collection failure.
+
+`/api/v5/account/usage/hourly` is deleted. It had no client in any runtime and no test, and its
+schema and Swift models went with it.

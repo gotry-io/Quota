@@ -29,7 +29,8 @@ func consumesServiceMergedOverviewWithoutReprocessingObservations() async throws
         snapshots: [snapshot],
         source: "test",
         message: nil,
-        sources: 1
+        sources: 1,
+              accessDenied: nil
       )
     ]
   )
@@ -281,7 +282,8 @@ func anotherDeviceReadingDoesNotHideThisMacsOwnCollectionFailure() async throws 
               snapshots: [],
               source: nil,
               message: nil,
-              sources: sources
+              sources: sources,
+              accessDenied: nil
             )
           ]
         ),

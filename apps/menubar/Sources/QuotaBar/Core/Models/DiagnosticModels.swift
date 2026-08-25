@@ -103,6 +103,8 @@ enum LocalServiceDiagnosticAttemptCode: String, Codable, Equatable, Sendable {
   case invalidResponse = "invalid_response"
   case invalidState = "invalid_state"
   case providerError = "provider_error"
+  case accessDenied = "access_denied"
+  case clientUpgradeRequired = "client_upgrade_required"
   case partialSource = "partial_source"
   case malformedData = "malformed_data"
   case truncatedActiveSource = "truncated_active_source"

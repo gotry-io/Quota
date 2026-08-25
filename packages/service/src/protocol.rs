@@ -373,7 +373,7 @@ pub const MANAGED_DATA_PROTOCOL: i64 = 5;
 pub const LOCAL_USAGE_PROTOCOL: i64 = 3;
 
 /// The private local quota collection report, versioned independently of both.
-pub const LOCAL_COLLECTION_PROTOCOL: i64 = 2;
+pub const LOCAL_COLLECTION_PROTOCOL: i64 = 3;
 
 #[derive(Debug, Clone, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -833,6 +833,8 @@ pub enum DiagnosticAttemptCode {
     InvalidResponse,
     InvalidState,
     ProviderError,
+    AccessDenied,
+    ClientUpgradeRequired,
     PartialSource,
     MalformedData,
     TruncatedActiveSource,

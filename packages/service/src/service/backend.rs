@@ -101,9 +101,8 @@ fn backend_attempt_error(
         ErrorCode::DeviceDeleted => DiagnosticAttemptCode::DeviceDeleted,
         ErrorCode::NetworkError => DiagnosticAttemptCode::NetworkError,
         ErrorCode::InvalidResponse => DiagnosticAttemptCode::InvalidResponse,
-        ErrorCode::InvalidState | ErrorCode::ClientUpgradeRequired => {
-            DiagnosticAttemptCode::InvalidState
-        }
+        ErrorCode::InvalidState => DiagnosticAttemptCode::InvalidState,
+        ErrorCode::ClientUpgradeRequired => DiagnosticAttemptCode::ClientUpgradeRequired,
         ErrorCode::ProviderError => DiagnosticAttemptCode::ProviderError,
         ErrorCode::Cancelled => DiagnosticAttemptCode::Cancelled,
         ErrorCode::InvalidRequest
@@ -134,6 +133,8 @@ fn diagnostic_attempt_code_wire(value: DiagnosticAttemptCode) -> &'static str {
         DiagnosticAttemptCode::InvalidResponse => "invalid_response",
         DiagnosticAttemptCode::InvalidState => "invalid_state",
         DiagnosticAttemptCode::ProviderError => "provider_error",
+        DiagnosticAttemptCode::AccessDenied => "access_denied",
+        DiagnosticAttemptCode::ClientUpgradeRequired => "client_upgrade_required",
         DiagnosticAttemptCode::PartialSource => "partial_source",
         DiagnosticAttemptCode::MalformedData => "malformed_data",
         DiagnosticAttemptCode::TruncatedActiveSource => "truncated_active_source",
@@ -652,7 +653,10 @@ impl NativeBackend {
                     ]),
                 });
                 if !success {
+                    let access_denied =
+                        result.get("access_denied").and_then(Value::as_bool) == Some(true);
                     let code = match outcome {
+                        _ if access_denied => "access_denied",
                         "auth_required" => "auth_required",
                         "unsupported" => "unsupported",
                         "unavailable" => "unavailable",
@@ -667,10 +671,12 @@ impl NativeBackend {
                         code: code.into(),
                         severity: DiagnosticSeverity::Warning,
                         impact: DiagnosticImpact::Source,
-                        recovery: if code == "auth_required" {
-                            DiagnosticRecovery::ConfigureProvider
-                        } else {
-                            DiagnosticRecovery::Retry
+                        recovery: match code {
+                            "auth_required" => DiagnosticRecovery::ConfigureProvider,
+                            // Signing in again rewrites a secret this Mac still would not be
+                            // handed, and retrying asks for it once more every five minutes.
+                            "access_denied" => DiagnosticRecovery::CheckAccess,
+                            _ => DiagnosticRecovery::Retry,
                         },
                         count: 1,
                         observed_at: attempt_facts
@@ -1452,7 +1458,16 @@ impl NativeBackend {
                     DiagnosticRecovery::Retry,
                 )
             } else {
+                let access_denied =
+                    result.get("access_denied").and_then(Value::as_bool) == Some(true);
                 match result_outcome {
+                    // A refusal reads as unavailable to every other device, and names itself
+                    // here, because only this Mac can act on it.
+                    _ if access_denied => (
+                        DiagnosticAttemptOutcome::Failed,
+                        Some(DiagnosticAttemptCode::AccessDenied),
+                        DiagnosticRecovery::CheckAccess,
+                    ),
                     "success" => (
                         DiagnosticAttemptOutcome::Success,
                         None,
@@ -2462,6 +2477,11 @@ fn collect_discovered_provider(
         if category == ErrorCategory::AuthRequired {
             result["message"] = json!("The saved sign-in expired or was rejected. Sign in again.");
         }
+        if category == ErrorCategory::AccessDenied {
+            result["access_denied"] = json!(true);
+            result["message"] =
+                json!("A saved sign-in is stored here but this Mac was refused it. Check access.");
+        }
         result
     } else {
         json!({
@@ -2655,6 +2675,11 @@ impl LocalBackend for NativeBackend {
                     ),
                     ErrorCategory::Unavailable => {
                         IpcError::new(ErrorCode::NetworkError, RecoveryAction::Retry)
+                    }
+                    // A browser session is pasted in, never read from a credential store, so
+                    // this cannot arise here and is answered as the unavailability it is.
+                    ErrorCategory::AccessDenied => {
+                        IpcError::new(ErrorCode::Unavailable, RecoveryAction::Retry)
                     }
                     ErrorCategory::Unsupported => {
                         IpcError::new(ErrorCode::UnsupportedOperation, RecoveryAction::None)
@@ -3978,8 +4003,8 @@ mod tests {
             .collect_quota(Arc::new(AtomicBool::new(false)))
             .expect("local quota report");
         assert_eq!(
-            report.get("protocol_version").and_then(Value::as_u64),
-            Some(2)
+            report.get("protocol_version").and_then(Value::as_i64),
+            Some(crate::protocol::LOCAL_COLLECTION_PROTOCOL)
         );
         for result in report
             .get("results")

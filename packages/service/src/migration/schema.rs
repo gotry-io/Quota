@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use crate::state::StateError;
 
-const CURRENT_SCHEMA: i64 = 10;
+const CURRENT_SCHEMA: i64 = 11;
 
 pub fn apply(conn: &mut Connection) -> Result<(), StateError> {
     conn.execute_batch(
@@ -36,6 +36,7 @@ pub fn apply(conn: &mut Connection) -> Result<(), StateError> {
             8 => migration_v8(&tx)?,
             9 => migration_v9(&tx)?,
             10 => migration_v10(&tx)?,
+            11 => migration_v11(&tx)?,
             _ => return Err(StateError::InvalidState),
         }
         tx.execute(
@@ -561,6 +562,94 @@ fn migration_v10(tx: &Transaction<'_>) -> Result<(), StateError> {
     Ok(())
 }
 
+/// Two conditions this build can now name needed room to be recorded: a credential store that
+/// refuses what it holds, and a contract Relay has retired.  Both were being filed under codes
+/// that sent the reader somewhere that could not help.
+///
+/// The attempt table names its codes in a CHECK, which SQLite cannot alter, so the table is
+/// rebuilt.  History is copied across, because it is the record a reader consults to see how
+/// long something has been failing.
+fn migration_v11(tx: &Transaction<'_>) -> Result<(), StateError> {
+    tx.execute_batch(
+        "ALTER TABLE diagnostic_attempts RENAME TO diagnostic_attempts_v10;
+         DROP INDEX IF EXISTS diagnostic_attempts_recent_idx;
+         DROP INDEX IF EXISTS diagnostic_attempts_parent_idx;
+         CREATE TABLE diagnostic_attempts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            parent_refresh_id INTEGER REFERENCES diagnostic_attempts(id) ON DELETE SET NULL,
+            kind TEXT NOT NULL CHECK (kind IN (
+                'refresh', 'quota_collection', 'usage_scan', 'usage_upload',
+                'account_sync', 'pricing_refresh', 'device_health_upload'
+            )),
+            trigger TEXT NOT NULL CHECK (trigger IN (
+                'manual', 'scheduled', 'startup', 'recheck', 'settings_change', 'account_change'
+            )),
+            source TEXT NOT NULL CHECK (source IN ('this_device', 'account', 'system')),
+            subject TEXT CHECK (subject IS NULL OR (
+                length(subject) BETWEEN 7 AND 96
+                AND (subject LIKE 'provider:%' OR subject LIKE 'agent:%')
+                AND subject NOT GLOB '*[^a-z0-9_:]*'
+            )),
+            mode TEXT NOT NULL CHECK (mode IN ('inactive', 'opportunistic', 'required')),
+            started_at TEXT NOT NULL,
+            completed_at TEXT,
+            duration_ms INTEGER CHECK (duration_ms IS NULL OR duration_ms BETWEEN 0 AND 86400000),
+            outcome TEXT CHECK (outcome IS NULL OR outcome IN (
+                'success', 'partial', 'no_work', 'failed', 'interrupted', 'cancelled'
+            )),
+            code TEXT CHECK (code IS NULL OR code IN (
+                'process_interrupted', 'cancelled', 'no_work', 'authentication_required',
+                'network_error', 'unavailable', 'invalid_response', 'invalid_state',
+                'provider_error', 'access_denied', 'client_upgrade_required',
+                'partial_source', 'malformed_data',
+                'truncated_active_source', 'invalid_usage_batch', 'unrepresentable_hour',
+                'device_deleted', 'upload_disabled', 'signed_out'
+            )),
+            recovery TEXT NOT NULL CHECK (recovery IN (
+                'none', 'automatic', 'login', 'configure_provider', 'retry',
+                'update_source', 'check_access', 'upgrade', 'reinstall', 'feedback'
+            )),
+            metrics_json TEXT NOT NULL DEFAULT '{}',
+            start_revision INTEGER NOT NULL CHECK (start_revision >= 0),
+            end_revision INTEGER CHECK (end_revision IS NULL OR end_revision >= 0)
+         );
+         INSERT INTO diagnostic_attempts
+            SELECT id, parent_refresh_id, kind, trigger, source, subject, mode, started_at,
+                   completed_at, duration_ms, outcome, code, recovery, metrics_json,
+                   start_revision, end_revision
+            FROM diagnostic_attempts_v10;
+         DROP TABLE diagnostic_attempts_v10;
+         CREATE INDEX diagnostic_attempts_recent_idx
+            ON diagnostic_attempts(started_at DESC, id DESC);
+         CREATE INDEX diagnostic_attempts_parent_idx
+            ON diagnostic_attempts(parent_refresh_id, id);",
+    )?;
+
+    // The persisted collection report is stamped with the contract it was written under, and
+    // the app decodes the whole IPC state or none of it.  It is this device's own reading of
+    // its own sources, so it is promoted rather than discarded: v3 only added a marker a v2
+    // report could not have set.
+    if let Some(raw) = tx
+        .query_row(
+            "SELECT value_json FROM components WHERE name = 'quota'",
+            [],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()?
+        .flatten()
+    {
+        let mut value: Value = serde_json::from_str(&raw)?;
+        if value.get("protocol_version").and_then(Value::as_i64) == Some(2) {
+            value["protocol_version"] = Value::from(crate::protocol::LOCAL_COLLECTION_PROTOCOL);
+            tx.execute(
+                "UPDATE components SET value_json = ?1 WHERE name = 'quota'",
+                [serde_json::to_string(&value)?],
+            )?;
+        }
+    }
+    Ok(())
+}
+
 /// Removes the stamp and the collector name from every reading in a persisted value.
 ///
 /// A reading is recognised by its own shape rather than by a path, because it appears at
@@ -652,7 +741,7 @@ mod tests {
             .expect("v1 rows")
             .collect::<Result<Vec<_>, _>>()
             .expect("v1 values");
-        assert_eq!(fresh_versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+        assert_eq!(fresh_versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
         assert_eq!(fresh_versions, v1_versions);
         assert_eq!(
             columns(&fresh, "usage_period_cache"),
@@ -1137,7 +1226,7 @@ mod tests {
             .expect("rows")
             .collect::<Result<Vec<_>, _>>()
             .expect("values");
-        assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+        assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
     }
 
     fn columns_after_fresh_apply(table: &str) -> Vec<String> {
@@ -1153,7 +1242,7 @@ mod tests {
     fn a_device_holding_an_unsendable_submission_gives_up_its_staged_set() {
         let mut conn = Connection::open_in_memory().expect("memory");
         apply(&mut conn).expect("fresh");
-        conn.execute("DELETE FROM schema_migrations WHERE version = 10", [])
+        conn.execute("DELETE FROM schema_migrations WHERE version >= 10", [])
             .expect("rewind");
 
         let mut stranded = usage_submission(4, "stranded", "codex");
@@ -1204,6 +1293,57 @@ mod tests {
             Some(crate::protocol::MANAGED_DATA_PROTOCOL)
         );
         assert!(crate::relay::validate_usage_submission(&promoted).is_ok());
+    }
+
+    /// Naming a condition is only useful if it can be written down.  The attempt table lists
+    /// its codes in a CHECK that SQLite cannot alter, so the ladder rebuilds it — and the
+    /// history a reader consults to see how long something has been failing comes across.
+    #[test]
+    fn the_attempt_table_accepts_the_conditions_this_build_can_name() {
+        let mut conn = Connection::open_in_memory().expect("memory");
+        apply(&mut conn).expect("fresh");
+        conn.execute(
+            "INSERT INTO diagnostic_attempts(
+                kind, trigger, source, mode, started_at, outcome, code, recovery, start_revision
+             ) VALUES ('quota_collection', 'scheduled', 'this_device', 'required',
+                       '2026-08-25T00:00:00Z', 'failed', 'provider_error', 'retry', 1)",
+            [],
+        )
+        .expect("history");
+
+        for (code, recovery) in [
+            ("access_denied", "check_access"),
+            ("client_upgrade_required", "upgrade"),
+        ] {
+            conn.execute(
+                "INSERT INTO diagnostic_attempts(
+                    kind, trigger, source, mode, started_at, outcome, code, recovery,
+                    start_revision
+                 ) VALUES ('quota_collection', 'scheduled', 'this_device', 'required',
+                           '2026-08-25T00:01:00Z', 'failed', ?1, ?2, 1)",
+                params![code, recovery],
+            )
+            .unwrap_or_else(|error| panic!("{code} rejected: {error}"));
+        }
+
+        let kept: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM diagnostic_attempts WHERE code = 'provider_error'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("history kept");
+        assert_eq!(kept, 1);
+        // Rewinding and re-running the rebuild keeps every row it found.
+        conn.execute("DELETE FROM schema_migrations WHERE version = 11", [])
+            .expect("rewind");
+        apply(&mut conn).expect("v11");
+        let total: i64 = conn
+            .query_row("SELECT COUNT(*) FROM diagnostic_attempts", [], |row| {
+                row.get(0)
+            })
+            .expect("after rebuild");
+        assert_eq!(total, 3);
     }
 
     fn usage_submission(protocol_version: u64, submission_id: &str, agent: &str) -> Value {

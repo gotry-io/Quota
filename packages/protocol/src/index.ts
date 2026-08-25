@@ -31,7 +31,7 @@ export const MANAGED_DATA_PROTOCOL_VERSION = 5 as const;
 /** The private local Usage report the service hands its own app. */
 export const LOCAL_USAGE_PROTOCOL_VERSION = 3 as const;
 /** The private local quota collection report the service hands its own app. */
-export const LOCAL_COLLECTION_PROTOCOL_VERSION = 2 as const;
+export const LOCAL_COLLECTION_PROTOCOL_VERSION = 3 as const;
 /** The unauthenticated public profile projection. */
 export const PUBLIC_PROFILE_PROTOCOL_VERSION = 2 as const;
 export const MAXIMUM_SNAPSHOTS_PER_ENVELOPE = 32;
@@ -188,6 +188,12 @@ const QuotaCollectionResultFieldsSchema = z.object({
   message: z.string().trim().min(1).max(512).optional(),
   /** Local credential sources discovered for this provider; 0 means it is not set up here. */
   sources: SafeNonnegativeIntegerSchema.optional(),
+  /**
+   * Set when the failure was this device being refused what it holds — a Keychain entry whose
+   * secret is withheld, say.  Signing in again rewrites a secret this device still cannot
+   * read, so the reader is sent to check access instead.
+   */
+  access_denied: z.literal(true).optional(),
 });
 
 const QuotaCollectionSuccessResultSchema = QuotaCollectionResultFieldsSchema.extend({
@@ -1204,64 +1210,6 @@ export const AccountQuotaResponseSchema = z
   })
   .strict();
 export type AccountQuotaResponse = z.infer<typeof AccountQuotaResponseSchema>;
-
-export const AccountUsageHourlyFactSchema = UsageHourlyFactSchema.safeExtend({
-  device_id: OpaqueIdSchema,
-  aggregation_timezone: IanaTimezoneSchema,
-}).superRefine((fact, context) => {
-  const bucket = Date.parse(fact.bucket_start_utc);
-  const formatter = new Intl.DateTimeFormat("en", {
-    timeZone: fact.aggregation_timezone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    hourCycle: "h23",
-  });
-  if (!localProjectionMatches(formatter, bucket, fact.usage_date, fact.usage_hour)) {
-    context.addIssue({
-      code: "custom",
-      path: ["usage_date"],
-      message: "Row local date/hour must match aggregation_timezone.",
-    });
-  }
-});
-export type AccountUsageHourlyFact = z.infer<typeof AccountUsageHourlyFactSchema>;
-
-export const AccountUsageHourlyResponseSchema = z
-  .object({
-    protocol_version: z.literal(MANAGED_DATA_PROTOCOL_VERSION),
-    start_at: UtcHourSchema,
-    end_at: UtcHourSchema,
-    facts: z.array(AccountUsageHourlyFactSchema).max(MAXIMUM_USAGE_READ_ROWS),
-    coverage: UsageCoverageVerdictSchema,
-    cost: UsageCostOutcomeSchema,
-  })
-  .strict()
-  .superRefine((response, context) => {
-    const start = Date.parse(response.start_at);
-    const end = Date.parse(response.end_at);
-    for (const [index, fact] of response.facts.entries()) {
-      const bucket = Date.parse(fact.bucket_start_utc);
-      if (bucket < start || bucket >= end) {
-        context.addIssue({
-          code: "custom",
-          path: ["facts", index, "bucket_start_utc"],
-          message: "Hourly fact must fall inside the response range.",
-        });
-      }
-    }
-    const costRows =
-      response.cost.calculated_rows + response.cost.reported_rows + response.cost.unpriced_rows;
-    if (!Number.isSafeInteger(costRows) || costRows !== response.facts.length) {
-      context.addIssue({
-        code: "custom",
-        path: ["cost"],
-        message: "Cost row counts must match the hourly facts.",
-      });
-    }
-  });
-export type AccountUsageHourlyResponse = z.infer<typeof AccountUsageHourlyResponseSchema>;
 
 export const AccountSummarySchema = z
   .object({

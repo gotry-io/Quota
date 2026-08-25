@@ -7,7 +7,7 @@
   "properties": {
     "protocol_version": {
       "type": "number",
-      "const": 2
+      "const": 3
     },
     "captured_at": {
       "$ref": "#/$defs/__schema0"
@@ -35,7 +35,7 @@
           "$ref": "#/$defs/__schema2"
         },
         {
-          "$ref": "#/$defs/__schema10"
+          "$ref": "#/$defs/__schema11"
         }
       ]
     },
@@ -54,6 +54,9 @@
         "sources": {
           "$ref": "#/$defs/__schema6"
         },
+        "access_denied": {
+          "$ref": "#/$defs/__schema8"
+        },
         "outcome": {
           "type": "string",
           "const": "success"
@@ -63,7 +66,7 @@
           "maxItems": 32,
           "type": "array",
           "items": {
-            "$ref": "#/$defs/__schema8"
+            "$ref": "#/$defs/__schema9"
           }
         }
       },
@@ -94,6 +97,10 @@
       "maximum": 9007199254740991
     },
     "__schema8": {
+      "type": "boolean",
+      "const": true
+    },
+    "__schema9": {
       "type": "object",
       "properties": {
         "provider": {
@@ -130,7 +137,7 @@
           "maxItems": 16,
           "type": "array",
           "items": {
-            "$ref": "#/$defs/__schema9"
+            "$ref": "#/$defs/__schema10"
           }
         },
         "status": {
@@ -144,7 +151,7 @@
       "required": ["provider", "account", "windows", "status", "observed_at"],
       "additionalProperties": false
     },
-    "__schema9": {
+    "__schema10": {
       "type": "object",
       "properties": {
         "id": {
@@ -184,7 +191,7 @@
       "required": ["id", "title", "used_percent"],
       "additionalProperties": false
     },
-    "__schema10": {
+    "__schema11": {
       "type": "object",
       "properties": {
         "provider": {
@@ -199,6 +206,9 @@
         "sources": {
           "$ref": "#/$defs/__schema6"
         },
+        "access_denied": {
+          "$ref": "#/$defs/__schema8"
+        },
         "outcome": {
           "type": "string",
           "enum": ["auth_required", "unavailable", "unsupported", "error"]
@@ -207,7 +217,7 @@
           "maxItems": 0,
           "type": "array",
           "items": {
-            "$ref": "#/$defs/__schema8"
+            "$ref": "#/$defs/__schema9"
           }
         }
       },
