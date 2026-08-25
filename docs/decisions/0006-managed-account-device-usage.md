@@ -18,7 +18,13 @@ safe retries and deletion.
 
 Quota supports one managed service at `https://quota.gotry.io` and GitHub is its only account identity
 provider. Better Auth is the browser identity/session boundary and owns provider OAuth state, PKCE,
-cookies, expiry, and standard auth-route origin protection. Quota keeps only its product-specific
+cookies, expiry, and standard auth-route origin protection.
+
+> Updated 2026-08-26: Relay owns that boundary itself. Better Auth and its tables are gone; a
+> hand-written GitHub OAuth flow writes one `account_sessions` row with `client_kind = 'web'`.
+> See [ADR 0025](0025-one-session-system.md).
+
+Quota keeps only its product-specific
 Device lifecycle and native token families. An Account directly owns Devices. Each Device
 `display_name` is the host computer name collected at login and reconciled by authenticated device
 sync, not the QuotaBar or QuotaCLI product name. This lets a shipped session repair an earlier
@@ -41,6 +47,9 @@ current-device-write token families. Refresh tokens rotate with compare-and-swap
 Account deletion; its deletion hook removes the Quota domain Account and cascading business data.
 Product-specific Device authorization and deletion additionally require recent authentication and
 an exact same-origin request.
+
+> Updated 2026-08-26: Account deletion is one Relay D1 batch over the rows Relay keeps, with no
+> hook on another system. See [ADR 0025](0025-one-session-system.md).
 
 The installation ID is random user-level state. Relay stores only an account-scoped HMAC of it, so
 the same installation restores the same Device within one Account without becoming a cross-account
@@ -94,6 +103,6 @@ SQLite adapter, Relay discovery document, arbitrary Relay URL, anonymous owner, 
   credentials.
 - Earlier D1 and protocol cutovers applied only to unreleased data and interfaces. The bounded
   native-cutover exception ended after its documented two-release window.
-- Self-hosting requires a future decision. Additional identity providers can use Better Auth's
-  provider boundary without creating a second session system, but still require an explicit product
-  and privacy decision.
+- Self-hosting requires a future decision. An additional identity provider is another start and
+  callback route resolving to the same `accounts` row, but still requires an explicit product and
+  privacy decision.

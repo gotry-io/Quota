@@ -59,7 +59,8 @@ remain TypeScript. See the canonical
 [managed-data v6](docs/decisions/0024-hour-versioned-usage-and-daily-rollups.md),
 [read-only iOS account client](docs/decisions/0013-readonly-ios-account-client.md),
 [non-secret iOS widget snapshot](docs/decisions/0014-nonsecret-ios-widget-snapshot.md), and
-[SvelteKit document Worker composition](docs/decisions/0011-sveltekit-document-worker.md). The data
+[SvelteKit document Worker composition](docs/decisions/0011-sveltekit-document-worker.md), and
+[one session system](docs/decisions/0025-one-session-system.md). The data
 integrity contract is [ADR 0008](docs/decisions/0008-data-integrity-and-diagnostics.md),
 report-time model identity is [ADR 0009](docs/decisions/0009-versioned-model-catalog.md),
 the diagnostic report and the attempt journal behind it are
@@ -169,7 +170,8 @@ The marketing version lives in `apps/menubar/Support/Info.plist`.
 
 ## Current status
 
-The repository implements protocol-v2 account/device authentication, managed-data v6, a registered
+The repository implements protocol-v2 account/device authentication, a hand-written GitHub OAuth
+sign-in whose browser session is one row in the same table the native clients use, managed-data v6, a registered
 read-only `quota-ios` account OAuth client, a Quota iOS Connect Account / Today overview slice on
 `packages/apple-client`, shared Apple presentation semantics in `packages/apple-shared`, a
 non-secret App Group widget snapshot with an embedded WidgetKit extension, hour-versioned Usage

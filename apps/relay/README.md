@@ -46,15 +46,22 @@ The Worker requires these secrets:
 - `GITHUB_SUBJECT_KEY`
 - `QUOTA_INSTALLATION_KEY`
 - `QUOTA_SESSION_HASH_KEY`
-- `BETTER_AUTH_SECRET`
+
+An earlier `BETTER_AUTH_SECRET` is no longer read by anything and can be removed from a local
+`.env` and from the deployed Worker's secrets.
 
 Register the GitHub OAuth App callback as
-`https://quota.gotry.io/api/auth/v2/callback/github`. Better Auth owns GitHub OAuth state, PKCE,
-browser cookies, session expiry, and standard auth-route origin checks. QuotaRelay retains the
-native grants and their separate account/device token families. The registered `quota-ios` public
-client is a read-only Account login: Authorization Code with PKCE and the exact redirect
+`https://quota.gotry.io/api/auth/github/callback`. QuotaRelay owns the browser sign-in itself:
+`GET /api/auth/github/start` seals a 256-bit `state` and a PKCE verifier in a signed ten-minute
+`quota_oauth` cookie and redirects to GitHub with no scope; the callback checks that cookie, spends
+the code once, and opens one `account_sessions` row with `client_kind = 'web'` behind a
+`quota_session` cookie. `POST /api/auth/logout` revokes it, and `DELETE /api/v2/account` removes
+the Account and everything stored for it in one D1 batch. See
+[ADR 0025](../../docs/decisions/0025-one-session-system.md). QuotaRelay also retains the native
+grants and their separate account/device token families. The registered `quota-ios` public client
+is a read-only Account login: Authorization Code with PKCE and the exact redirect
 `io.gotry.quota:/oauth/callback`. It never receives a Device session or upload authority. The
-checked-in Worker enables Cloudflare `nodejs_compat`, which Better Auth's runtime requires.
+checked-in Worker enables Cloudflare `nodejs_compat`, which the SvelteKit server runtime requires.
 
 Each keyed secret is independent and must contain at least 32 random characters. OAuth and session
 routes return `Cache-Control: no-store`; only the versioned pricing and model catalogs are publicly
