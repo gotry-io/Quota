@@ -397,22 +397,33 @@ struct LocalServiceClientTests {
 
   @Test
   func reportsAHelperThatNeverAnnouncesItselfAsUnavailableAfterOneRetry() async throws {
+    // A helper that records the start it is and then answers nothing: no `ready`, no response,
+    // and no clock of its own. It ends when the client closes its stdin, so every step of this
+    // test is something the client did rather than time that passed.
     let service = try TemporaryService(
       announcesReady: false,
       python: #"""
         import sys
-        import time
 
-        time.sleep(600)
+        sys.stdin.read()
         """#
     )
     defer { service.remove() }
+    // macOS assesses a newly written executable the first time it is started, which costs
+    // hundreds of milliseconds and far more on a loaded machine. Spending it here rather than
+    // inside the ready deadline is what keeps that deadline measuring the helper's silence.
+    try await service.warmUp()
+
+    // The ready deadline is the only clock the outcome depends on. No request is ever written,
+    // so liveness never pings; a helper whose stdin has been closed exits before the grace
+    // period matters. Both are set past anything reachable here so that neither can decide
+    // this test, and the deadline itself is two orders of magnitude longer than a warm start.
     let client = try LocalServiceClient(
       executableURL: service.executableURL,
       timings: LocalServiceClientTimings(
         ready: .seconds(1),
-        ping: .milliseconds(50),
-        termination: .milliseconds(200)
+        ping: .seconds(60),
+        termination: .seconds(5)
       )
     )
 
@@ -500,6 +511,31 @@ private struct TemporaryService {
       [.posixPermissions: 0o700],
       ofItemAtPath: executableURL.path
     )
+  }
+
+  /// Runs the fixture once with nothing on its stdin, waits for it to exit, and then forgets
+  /// that start. The first execution of a freshly written file pays macOS's launch assessment,
+  /// which is far slower than every start after it; a test that measures one of the client's
+  /// own deadlines calls this so that the deadline is not measuring that assessment instead.
+  func warmUp() async throws {
+    let process = Process()
+    process.executableURL = executableURL
+    process.standardInput = FileHandle.nullDevice
+    process.standardOutput = FileHandle.nullDevice
+    process.standardError = FileHandle.nullDevice
+    // Waiting for the exit rather than for an interval: the fixture reaches end of file on its
+    // first read, so this returns as soon as it has run, however long that took.
+    try await withCheckedThrowingContinuation {
+      (continuation: CheckedContinuation<Void, any Error>) in
+      process.terminationHandler = { _ in continuation.resume() }
+      do {
+        try process.run()
+      } catch {
+        process.terminationHandler = nil
+        continuation.resume(throwing: error)
+      }
+    }
+    try FileManager.default.removeItem(at: launchCountURL)
   }
 
   func launchCount() throws -> Int {
