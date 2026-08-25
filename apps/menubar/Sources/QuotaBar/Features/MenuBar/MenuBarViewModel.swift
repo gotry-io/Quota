@@ -371,6 +371,13 @@ final class MenuBarViewModel {
     usagePeriods?.detail(source: source, period: period)
   }
 
+  func menuBarLabel(
+    preference: MenuBarDisplayPreference,
+    now: Date = Date()
+  ) -> MenuBarLabelModel {
+    MenuBarLabelModel.make(overview: overview, preference: preference, now: now)
+  }
+
   func isPreparingUsage(source: UsageSource) -> Bool {
     source == .local ? usageRefreshing : accountRefreshing
   }

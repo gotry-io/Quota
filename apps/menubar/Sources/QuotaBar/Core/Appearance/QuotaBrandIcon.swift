@@ -14,7 +14,27 @@ struct QuotaMenuBarIcon: View {
     }
     .frame(width: 18, height: 18)
     .foregroundStyle(.primary)
-    .accessibilityLabel("QuotaBar")
+    .accessibilityHidden(true)
+  }
+}
+
+/// The menu-bar item itself: the template mark, the tightest remaining percent, or both.
+/// The status bar owns the text style, so this adds none.
+struct QuotaMenuBarLabel: View {
+  let label: MenuBarLabelModel
+
+  var body: some View {
+    HStack(spacing: QuotaDesign.Spacing.xxs) {
+      if label.showsIcon {
+        QuotaMenuBarIcon()
+      }
+      if let text = label.text {
+        Text(text)
+          .monospacedDigit()
+      }
+    }
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel(label.accessibilityLabel)
   }
 }
 
