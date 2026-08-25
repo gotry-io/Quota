@@ -10,8 +10,6 @@ import {
   DeviceAuthorizationDecisionRequestSchema,
   DeviceAuthorizationRequestSchema,
   DeviceAuthorizationResponseSchema,
-  DeviceHealthUploadRequestSchema,
-  DeviceHealthUploadResponseSchema,
   DeviceProfileUpdateRequestSchema,
   DeviceProfileUpdateResponseSchema,
   DeviceSyncResponseSchema,
@@ -72,7 +70,6 @@ const maximumAccountSnapshots = 8_192;
 const maximumAccountUsageSummaryRows = 100_000;
 const recentAuthenticationMilliseconds = 10 * 60 * 1000;
 const activeDeviceMilliseconds = 15 * 60 * 1000;
-const deviceHealthFreshMilliseconds = 20 * 60 * 1000;
 const expiredSessionRetentionMilliseconds = 7 * 24 * 60 * 60 * 1000;
 /**
  * How long Relay keeps a quota observation after the moment it describes.
@@ -198,10 +195,6 @@ export function createRelayApp(options: RelayAppOptions): Hono {
   );
   app.use(
     "/api/v2/device/profile",
-    bodyLimit({ maxSize: maximumCredentialBodyBytes, onError: requestBodyTooLarge }),
-  );
-  app.use(
-    "/api/v5/device/health",
     bodyLimit({ maxSize: maximumCredentialBodyBytes, onError: requestBodyTooLarge }),
   );
 
@@ -583,26 +576,20 @@ export function createRelayApp(options: RelayAppOptions): Hono {
       request,
     );
     if (selected instanceof Response) return selected;
-    const [account, devices, stored, deviceHealth] = await Promise.all([
+    const [account, devices, stored] = await Promise.all([
       options.state.getAccount(principal.account_id),
       options.state.listAccountDevices(principal.account_id),
       options.state.listLatestSnapshots(principal.account_id),
-      options.state.listDeviceHealth(principal.account_id),
     ]);
     if (!account) return unauthorized(context);
     if (devices.length > maximumAccountDevices || stored.length > maximumAccountSnapshots) {
       return resultLimit(context);
     }
     const quota = stored.map(publicObservation);
-    const publicDevices = devices.map((device) => publicDevice(device, checkedAt));
-    const healthByDevice = new Map(deviceHealth.map((health) => [health.device_id, health]));
     const response = {
       protocol_version: MANAGED_DATA_PROTOCOL_VERSION,
       account: publicAccount(account),
-      devices: publicDevices.map((device) => ({
-        ...device,
-        health: publicDeviceHealth(healthByDevice.get(device.device_id)),
-      })),
+      devices: devices.map((device) => publicDevice(device, checkedAt)),
       quota,
       usage: selected.summary,
     };
@@ -738,62 +725,6 @@ export function createRelayApp(options: RelayAppOptions): Hono {
         protocol_version: PROTOCOL_VERSION,
         status: "updated",
         device_id: principal.device_id,
-      }),
-    );
-  });
-
-  app.put("/api/v5/device/health", async (context) => {
-    // Existing released device sessions carry sync:read:self. Health is a new self-only write
-    // attached to that authenticated device principal so installed 0.0.15 sessions keep working.
-    const checkedAt = now();
-    const principal = await deviceWriter(context, options, "sync:read:self", checkedAt);
-    if (principal instanceof Response) return principal;
-    const limited = await enforceRateLimit(
-      context,
-      options.state,
-      options.hasher,
-      "device-health",
-      principal.device_id,
-      rateLimits.sessionMutation,
-      checkedAt,
-    );
-    if (limited) return limited;
-    const raw = await parseRawJSON(context);
-    if (raw instanceof Response) return raw;
-    const parsed = DeviceHealthUploadRequestSchema.safeParse(raw);
-    if (!parsed.success) return invalidRequest(context);
-    const observedAt = Date.parse(parsed.data.observed_at);
-    if (
-      observedAt > checkedAt.getTime() + 5 * 60 * 1000 ||
-      observedAt < checkedAt.getTime() - 7 * 24 * 60 * 60 * 1000 ||
-      [parsed.data.last_completed_refresh_at, parsed.data.last_successful_account_sync_at].some(
-        (value) => value !== null && Date.parse(value) > observedAt + 5 * 60 * 1000,
-      )
-    ) {
-      return invalidRequest(context);
-    }
-    const receivedAt = checkedAt.toISOString();
-    const freshUntil = new Date(checkedAt.getTime() + deviceHealthFreshMilliseconds).toISOString();
-    const outcome = await options.state.recordDeviceHealth(
-      principal,
-      parsed.data,
-      receivedAt,
-      freshUntil,
-    );
-    if (outcome === "unauthorized") return unauthorized(context);
-    const current =
-      outcome === "ignored_stale"
-        ? (await options.state.listDeviceHealth(principal.account_id)).find(
-            (health) => health.device_id === principal.device_id,
-          )
-        : undefined;
-    if (outcome === "ignored_stale" && !current) return unauthorized(context);
-    return context.json(
-      DeviceHealthUploadResponseSchema.parse({
-        protocol_version: MANAGED_DATA_PROTOCOL_VERSION,
-        status: outcome,
-        received_at: current?.received_at ?? receivedAt,
-        fresh_until: current?.fresh_until ?? freshUntil,
       }),
     );
   });
@@ -1294,28 +1225,6 @@ function publicDevice(
  */
 function publicObservation(stored: { device_id: string; snapshot: unknown }) {
   return { device_id: stored.device_id, snapshot: stored.snapshot };
-}
-
-function publicDeviceHealth(
-  health: Awaited<ReturnType<AccountState["listDeviceHealth"]>>[number] | undefined,
-) {
-  if (!health) return null;
-  return {
-    schema_version: health.schema_version,
-    client_product: health.client_product,
-    client_version: health.client_version,
-    platform: health.platform,
-    observed_at: health.observed_at,
-    refresh_revision: health.refresh_revision,
-    received_at: health.received_at,
-    fresh_until: health.fresh_until,
-    last_completed_refresh_at: health.last_completed_refresh_at,
-    last_successful_account_sync_at: health.last_successful_account_sync_at,
-    summary: health.summary,
-    top_code: health.top_code,
-    consecutive_failures: health.consecutive_failures,
-    usage_upload_enabled: health.usage_upload_enabled,
-  };
 }
 
 function iosOAuthTokenResponse(

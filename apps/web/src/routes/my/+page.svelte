@@ -1,6 +1,6 @@
 <script lang="ts">
 import type {
-  AccountDeviceWithHealth as AccountDevice,
+  AccountDevice,
   AccountSummary,
   AccountUsageSummary,
   UsageBreakdown,
@@ -25,7 +25,7 @@ import {
   observedSnapshotStatusLabel,
   titleCase,
 } from "$lib/format";
-import { deviceHealthStatus } from "$lib/device-health";
+import { deviceActivity } from "$lib/device-activity";
 import {
   type MergedQuotaObservation,
   mergeQuotaObservations,
@@ -266,35 +266,23 @@ async function loadDay(date: string): Promise<void> {
         <p class="empty-state">No devices yet. Sign in from QuotaBar to add this Mac.</p>
       {:else if summary}
         {#each summary.devices as device (device.device_id)}
-          {@const healthStatus = deviceHealthStatus(device)}
+          {@const activity = deviceActivity(device, summary.quota)}
           <article class="device-card">
             <div class="device-card-heading">
               <h3>{device.display_name}</h3>
-              <span class="status-pill status-{healthStatus.tone}">{healthStatus.label}</span>
+              <span class="status-pill status-{activity.tone}">{activity.label}</span>
             </div>
             <p>
               {titleCase(device.platform)}
-              {#if device.health}
-                · {device.health.client_product === "quotabar" ? "QuotaBar" : "QuotaCLI"}
-                {device.health.client_version} · report {formatDate(device.health.received_at)}
-              {:else if device.last_seen_at}
+              {#if device.last_seen_at}
                 · last seen {formatDate(device.last_seen_at)}
               {:else}
                 · never reported
               {/if}
-            </p>
-            {#if device.health}
-              <p>
-                Refresh {device.health.last_completed_refresh_at
-                  ? formatDate(device.health.last_completed_refresh_at)
-                  : "not reported"} · Account sync {device.health.last_successful_account_sync_at
-                  ? formatDate(device.health.last_successful_account_sync_at)
-                  : "not reported"}
-              </p>
-              {#if healthStatus.needsDeviceReview}
-                <p>Review Diagnostics on this device.</p>
+              {#if activity.lastReadingAt}
+                · last reading {formatDate(activity.lastReadingAt)}
               {/if}
-            {/if}
+            </p>
             <button
               class="text-button danger-button"
               type="button"

@@ -52,9 +52,9 @@ struct RelayClientTests {
       .queryItems ?? []
     let items = Dictionary(uniqueKeysWithValues: query.map { ($0.name, $0.value ?? "") })
     #expect(items["usage_agents"] == "all")
-    // One contract: the summary carries client groups, the catalog revision, and Device
-    // Health without being asked, so the request has no negotiation keys.
-    for retired in ["usage_clients", "model_catalog", "device_health", "usage_channels"] {
+    // One contract: the summary carries client groups and the catalog revision without being
+    // asked, so the request has no negotiation keys.
+    for retired in ["usage_clients", "model_catalog", "usage_channels"] {
       #expect(items[retired] == nil)
     }
     #expect(items["cost_mode"] == "auto")

@@ -77,16 +77,15 @@ describe("quota protocol", () => {
     );
   });
 
-  it("carries Device Health on every summary Device", () => {
+  it("refuses a summary Device that asserts something about its own health", () => {
     const summary = accountSummary();
     expect(AccountSummarySchema.safeParse(summary).success).toBe(true);
-    // `health` is required and nullable: a Device that has never reported says so.
-    expect(summary.devices.every((device) => device.health === null)).toBe(true);
-    const missing = {
+    // A Device says when it was last seen. Anything it claimed about itself is not the wire.
+    const claiming = {
       ...summary,
-      devices: summary.devices.map(({ health: _health, ...device }) => device),
+      devices: summary.devices.map((device) => ({ ...device, health: null })),
     };
-    expect(AccountSummarySchema.safeParse(missing).success).toBe(false);
+    expect(AccountSummarySchema.safeParse(claiming).success).toBe(false);
   });
 
   it("accepts the sole quota upload contract with device generation", () => {
@@ -926,7 +925,6 @@ function accountSummary() {
         last_login_at: "2026-08-01T00:00:00Z",
         last_seen_at: "2026-08-02T12:00:00Z",
         signed_out_at: null,
-        health: null,
       },
     ],
     quota: [{ device_id: "device_01", snapshot: snapshot("codex") }],

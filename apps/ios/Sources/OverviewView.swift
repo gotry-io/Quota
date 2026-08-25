@@ -28,7 +28,7 @@ struct OverviewView: View {
         }
 
         if let devices = model.summary?.devices, !devices.isEmpty {
-          AccountDevicesCard(devices: devices)
+          AccountDevicesCard(devices: devices, observations: model.summary?.quota ?? [])
         }
 
         TodayUsageCard(summary: model.summary)
@@ -120,31 +120,29 @@ struct OverviewView: View {
   }
 }
 
-enum RemoteDeviceHealthStatus: String, Equatable, Sendable {
-  case healthy = "Healthy"
-  case needsAttention = "Needs attention"
-  case checkDevice = "Check device"
-  case notRecentlyActive = "Not recently active"
-  case unknown = "Unknown"
+/// How recently a device spoke, from the two things Relay actually witnessed: when the device
+/// last called, and when the newest reading it sent was taken. A device that is asleep or closed
+/// is quiet, not broken, so nothing here claims a device is unhealthy.
+enum RemoteDeviceActivity: String, Equatable, Sendable {
+  case active = "Active"
+  case idle = "Idle"
+  case notReporting = "Not reporting"
   case signedOut = "Signed out"
 
-  static func status(for device: AccountDevice, now: Date) -> Self {
+  static func status(for device: AccountDevice, lastReadingAt: Date?, now: Date) -> Self {
     if device.status == .signedOut { return .signedOut }
-    guard let health = device.health else { return .unknown }
-    guard now <= health.freshUntil else { return .notRecentlyActive }
-    guard health.summary.operation == .healthy,
-      health.summary.data == .current || health.summary.data == .empty
-    else { return .needsAttention }
-    switch health.summary.attention {
-    case .none, .automatic: return .healthy
-    case .optional: return .checkDevice
-    case .required: return .needsAttention
-    }
+    let instants = [device.lastSeenAt, lastReadingAt].compactMap { $0 }
+    guard let newest = instants.max() else { return .notReporting }
+    let age = now.timeIntervalSince(newest)
+    if age < 30 * 60 { return .active }
+    if age < 24 * 60 * 60 { return .idle }
+    return .notReporting
   }
 }
 
 struct AccountDevicesCard: View {
   let devices: [AccountDevice]
+  let observations: [AccountQuotaObservation]
 
   var body: some View {
     let now = Date()
@@ -162,8 +160,16 @@ struct AccountDevicesCard: View {
     .quotaSurface()
   }
 
+  private func lastReadingAt(_ device: AccountDevice) -> Date? {
+    observations
+      .filter { $0.deviceID == device.deviceID }
+      .map(\.snapshot.observedAt)
+      .max()
+  }
+
   private func deviceRow(_ device: AccountDevice, now: Date) -> some View {
-    let status = RemoteDeviceHealthStatus.status(for: device, now: now)
+    let status = RemoteDeviceActivity.status(
+      for: device, lastReadingAt: lastReadingAt(device), now: now)
     return VStack(alignment: .leading, spacing: 5) {
       HStack(alignment: .firstTextBaseline, spacing: 8) {
         Text(device.displayName)
@@ -178,11 +184,6 @@ struct AccountDevicesCard: View {
         .font(.footnote.monospacedDigit())
         .foregroundStyle(.secondary)
         .fixedSize(horizontal: false, vertical: true)
-      if status == .needsAttention || status == .checkDevice {
-        Text("Review Diagnostics on this device.")
-          .font(.footnote)
-          .foregroundStyle(.secondary)
-      }
     }
     .accessibilityElement(children: .ignore)
     .accessibilityLabel(
@@ -196,20 +197,14 @@ struct AccountDevicesCard: View {
     case .linux: "Linux"
     case .windows: "Windows"
     }
-    guard let health = device.health else {
-      if let seenAt = device.lastSeenAt ?? device.signedOutAt {
-        return "\(platform) · Last seen \(QuotaFormat.refreshedAge(seenAt, now: now)) ago"
-      }
-      return "\(platform) · Never reported"
+    var parts = [platform]
+    if let seenAt = device.lastSeenAt ?? device.signedOutAt {
+      parts.append("Last seen \(QuotaFormat.refreshedAge(seenAt, now: now)) ago")
+    } else {
+      parts.append("Never reported")
     }
-    let product = health.clientProduct == .quotaBar ? "QuotaBar" : "QuotaCLI"
-    var parts = [platform, "\(product) \(health.clientVersion)"]
-    parts.append("Report \(QuotaFormat.refreshedAge(health.receivedAt, now: now)) ago")
-    if let refresh = health.lastCompletedRefreshAt {
-      parts.append("Refresh \(QuotaFormat.refreshedAge(refresh, now: now)) ago")
-    }
-    if let sync = health.lastSuccessfulAccountSyncAt {
-      parts.append("Sync \(QuotaFormat.refreshedAge(sync, now: now)) ago")
+    if let reading = lastReadingAt(device) {
+      parts.append("Last reading \(QuotaFormat.refreshedAge(reading, now: now)) ago")
     }
     return parts.joined(separator: " · ")
   }

@@ -57,176 +57,6 @@ public enum AccountDevicePlatform: String, Codable, Sendable {
   case windows
 }
 
-public enum AccountDeviceHealthClientProduct: String, Codable, Sendable {
-  case quotaBar = "quotabar"
-  case quotaCLI = "quotacli"
-}
-
-public enum AccountDeviceHealthOperation: String, Codable, Sendable {
-  case healthy
-  case degraded
-  case blocked
-}
-
-public enum AccountDeviceHealthDataState: String, Codable, Sendable {
-  case current
-  case stale
-  case partial
-  case empty
-  case unknown
-}
-
-public enum AccountDeviceHealthAttention: String, Codable, Sendable {
-  case none
-  case automatic
-  case optional
-  case required
-}
-
-public enum AccountDeviceHealthCode: String, Codable, Sendable {
-  case refreshFailed = "refresh_failed"
-  case quotaCollectionFailed = "quota_collection_failed"
-  case usageScanPartial = "usage_scan_partial"
-  case usageUploadFailed = "usage_upload_failed"
-  case accountSyncFailed = "account_sync_failed"
-  case pricingRefreshFailed = "pricing_refresh_failed"
-  case processInterrupted = "process_interrupted"
-  case localStateInvalid = "local_state_invalid"
-}
-
-public struct AccountDeviceHealthSummary: Codable, Equatable, Sendable {
-  public let operation: AccountDeviceHealthOperation
-  public let data: AccountDeviceHealthDataState
-  public let attention: AccountDeviceHealthAttention
-
-  public init(
-    operation: AccountDeviceHealthOperation,
-    data: AccountDeviceHealthDataState,
-    attention: AccountDeviceHealthAttention
-  ) {
-    self.operation = operation
-    self.data = data
-    self.attention = attention
-  }
-
-  public init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys(["operation", "data", "attention"])
-    let container = try decoder.container(keyedBy: CodingKeys.self)
-    operation = try container.decode(AccountDeviceHealthOperation.self, forKey: .operation)
-    data = try container.decode(AccountDeviceHealthDataState.self, forKey: .data)
-    attention = try container.decode(AccountDeviceHealthAttention.self, forKey: .attention)
-  }
-
-  private enum CodingKeys: String, CodingKey {
-    case operation
-    case data
-    case attention
-  }
-}
-
-public struct AccountDeviceHealth: Codable, Equatable, Sendable {
-  public let schemaVersion: Int
-  public let clientProduct: AccountDeviceHealthClientProduct
-  public let clientVersion: String
-  public let platform: AccountDevicePlatform
-  public let observedAt: Date
-  public let refreshRevision: Int
-  public let lastCompletedRefreshAt: Date?
-  public let lastSuccessfulAccountSyncAt: Date?
-  public let summary: AccountDeviceHealthSummary
-  public let topCode: AccountDeviceHealthCode?
-  public let consecutiveFailures: Int
-  public let usageUploadEnabled: Bool
-  public let receivedAt: Date
-  public let freshUntil: Date
-
-  public init(
-    schemaVersion: Int = 1,
-    clientProduct: AccountDeviceHealthClientProduct,
-    clientVersion: String,
-    platform: AccountDevicePlatform,
-    observedAt: Date,
-    refreshRevision: Int,
-    lastCompletedRefreshAt: Date?,
-    lastSuccessfulAccountSyncAt: Date?,
-    summary: AccountDeviceHealthSummary,
-    topCode: AccountDeviceHealthCode?,
-    consecutiveFailures: Int,
-    usageUploadEnabled: Bool,
-    receivedAt: Date,
-    freshUntil: Date
-  ) {
-    self.schemaVersion = schemaVersion
-    self.clientProduct = clientProduct
-    self.clientVersion = clientVersion
-    self.platform = platform
-    self.observedAt = observedAt
-    self.refreshRevision = refreshRevision
-    self.lastCompletedRefreshAt = lastCompletedRefreshAt
-    self.lastSuccessfulAccountSyncAt = lastSuccessfulAccountSyncAt
-    self.summary = summary
-    self.topCode = topCode
-    self.consecutiveFailures = consecutiveFailures
-    self.usageUploadEnabled = usageUploadEnabled
-    self.receivedAt = receivedAt
-    self.freshUntil = freshUntil
-  }
-
-  public init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys([
-      "schemaVersion", "clientProduct", "clientVersion", "platform", "observedAt",
-      "refreshRevision", "lastCompletedRefreshAt", "lastSuccessfulAccountSyncAt", "summary",
-      "topCode", "consecutiveFailures", "usageUploadEnabled", "receivedAt", "freshUntil",
-    ])
-    let container = try decoder.container(keyedBy: CodingKeys.self)
-    schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
-    clientProduct = try container.decode(AccountDeviceHealthClientProduct.self, forKey: .clientProduct)
-    clientVersion = try container.decode(String.self, forKey: .clientVersion)
-    platform = try container.decode(AccountDevicePlatform.self, forKey: .platform)
-    observedAt = try container.decode(Date.self, forKey: .observedAt)
-    refreshRevision = try container.decode(Int.self, forKey: .refreshRevision)
-    lastCompletedRefreshAt = try container.decode(Date?.self, forKey: .lastCompletedRefreshAt)
-    lastSuccessfulAccountSyncAt = try container.decode(Date?.self, forKey: .lastSuccessfulAccountSyncAt)
-    summary = try container.decode(AccountDeviceHealthSummary.self, forKey: .summary)
-    topCode = try container.decode(AccountDeviceHealthCode?.self, forKey: .topCode)
-    consecutiveFailures = try container.decode(Int.self, forKey: .consecutiveFailures)
-    usageUploadEnabled = try container.decode(Bool.self, forKey: .usageUploadEnabled)
-    receivedAt = try container.decode(Date.self, forKey: .receivedAt)
-    freshUntil = try container.decode(Date.self, forKey: .freshUntil)
-    let versionValid = !clientVersion.isEmpty && clientVersion.count <= 32
-      && clientVersion.enumerated().allSatisfy { index, character in
-        character.isASCII && (character.isLetter || character.isNumber
-          || (index > 0 && ".+_-".contains(character)))
-      }
-    guard schemaVersion == 1, versionValid,
-      WireValidation.isSafeNonnegative(refreshRevision),
-      (0 ... 1_000).contains(consecutiveFailures), freshUntil >= receivedAt,
-      lastCompletedRefreshAt.map({ $0 <= observedAt.addingTimeInterval(300) }) ?? true,
-      lastSuccessfulAccountSyncAt.map({ $0 <= observedAt.addingTimeInterval(300) }) ?? true
-    else {
-      throw DecodingError.dataCorruptedError(
-        forKey: .schemaVersion, in: container, debugDescription: "Invalid device health.")
-    }
-  }
-
-  private enum CodingKeys: String, CodingKey {
-    case schemaVersion
-    case clientProduct
-    case clientVersion
-    case platform
-    case observedAt
-    case refreshRevision
-    case lastCompletedRefreshAt
-    case lastSuccessfulAccountSyncAt
-    case summary
-    case topCode
-    case consecutiveFailures
-    case usageUploadEnabled
-    case receivedAt
-    case freshUntil
-  }
-}
-
 public struct AccountDevice: Codable, Equatable, Identifiable, Sendable {
   public let deviceID: String
   public let displayName: String
@@ -237,7 +67,6 @@ public struct AccountDevice: Codable, Equatable, Identifiable, Sendable {
   public let lastLoginAt: Date
   public let lastSeenAt: Date?
   public let signedOutAt: Date?
-  public let health: AccountDeviceHealth?
 
   public var id: String { deviceID }
 
@@ -250,8 +79,7 @@ public struct AccountDevice: Codable, Equatable, Identifiable, Sendable {
     createdAt: Date,
     lastLoginAt: Date,
     lastSeenAt: Date?,
-    signedOutAt: Date?,
-    health: AccountDeviceHealth? = nil
+    signedOutAt: Date?
   ) {
     self.deviceID = deviceID
     self.displayName = displayName
@@ -262,13 +90,12 @@ public struct AccountDevice: Codable, Equatable, Identifiable, Sendable {
     self.lastLoginAt = lastLoginAt
     self.lastSeenAt = lastSeenAt
     self.signedOutAt = signedOutAt
-    self.health = health
   }
 
   public init(from decoder: Decoder) throws {
     try decoder.rejectUnknownWireKeys([
       "deviceId", "displayName", "platform", "deviceGeneration", "status", "createdAt",
-      "lastLoginAt", "lastSeenAt", "signedOutAt", "health",
+      "lastLoginAt", "lastSeenAt", "signedOutAt",
     ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     deviceID = try container.decode(String.self, forKey: .deviceID)
@@ -280,7 +107,6 @@ public struct AccountDevice: Codable, Equatable, Identifiable, Sendable {
     lastLoginAt = try container.decode(Date.self, forKey: .lastLoginAt)
     lastSeenAt = try container.decode(Date?.self, forKey: .lastSeenAt)
     signedOutAt = try container.decode(Date?.self, forKey: .signedOutAt)
-    health = try container.decode(AccountDeviceHealth?.self, forKey: .health)
     guard isValid else {
       throw DecodingError.dataCorruptedError(
         forKey: .deviceID,
@@ -301,7 +127,6 @@ public struct AccountDevice: Codable, Equatable, Identifiable, Sendable {
     try container.encode(lastLoginAt, forKey: .lastLoginAt)
     try container.encode(lastSeenAt, forKey: .lastSeenAt)
     try container.encode(signedOutAt, forKey: .signedOutAt)
-    try container.encode(health, forKey: .health)
   }
 
   public var isValid: Bool {
@@ -309,7 +134,6 @@ public struct AccountDevice: Codable, Equatable, Identifiable, Sendable {
       && WireValidation.isTrimmedText(displayName, maximum: 128)
       && WireValidation.isSafePositive(deviceGeneration)
       && (status == .signedOut) == (signedOutAt != nil)
-      && (health.map { $0.platform == platform } ?? true)
   }
 
   private enum CodingKeys: String, CodingKey {
@@ -322,7 +146,6 @@ public struct AccountDevice: Codable, Equatable, Identifiable, Sendable {
     case lastLoginAt
     case lastSeenAt
     case signedOutAt
-    case health
   }
 }
 

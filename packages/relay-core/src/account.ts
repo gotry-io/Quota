@@ -1,9 +1,4 @@
-import type {
-  AccountDeviceHealth,
-  DeviceHealthUploadRequest,
-  QuotaSnapshot,
-  QuotaSnapshotEnvelope,
-} from "@gotry-io/quota-protocol";
+import type { QuotaSnapshot, QuotaSnapshotEnvelope } from "@gotry-io/quota-protocol";
 
 export const ACCOUNT_SCOPES = ["account:read", "account:manage", "session:revoke:self"] as const;
 export type AccountScope = (typeof ACCOUNT_SCOPES)[number];
@@ -42,13 +37,6 @@ export interface DeviceRecord {
   deleted_at: string | null;
   deleted_before: string | null;
 }
-
-export interface StoredDeviceHealth extends AccountDeviceHealth {
-  device_id: string;
-  device_generation: number;
-}
-
-export type DeviceHealthWriteOutcome = "updated" | "ignored_stale" | "unauthorized";
 
 export interface AccountPrincipal {
   kind: "account";
@@ -239,8 +227,6 @@ export interface AccountVersionStamp {
   device_signed_out_at: string | null;
   snapshots: number;
   snapshot_updated_at: string | null;
-  device_health: number;
-  device_health_received_at: string | null;
 }
 
 export interface AccountMaintenanceInput {
@@ -338,13 +324,6 @@ export interface AccountState {
     platform: string,
     updatedAt: string,
   ): Promise<boolean>;
-  recordDeviceHealth(
-    principal: DevicePrincipal,
-    health: DeviceHealthUploadRequest,
-    receivedAt: string,
-    freshUntil: string,
-  ): Promise<DeviceHealthWriteOutcome>;
-  listDeviceHealth(accountId: string): Promise<StoredDeviceHealth[]>;
   accountVersionStamp(accountId: string, activeSince: string): Promise<AccountVersionStamp>;
   deleteDeviceData(
     accountId: string,

@@ -9,13 +9,10 @@ import Testing
 @MainActor
 struct AppModelTests {
   @Test
-  func remoteDeviceHealthPresentationUsesAllAxesAndServerFreshness() {
+  func remoteDeviceActivityUsesTheNewerOfLastSeenAndLastReading() {
     let now = Fixtures.date("2026-08-15T08:10:00Z")
     func device(
-      operation: AccountDeviceHealthOperation = .healthy,
-      data: AccountDeviceHealthDataState = .current,
-      attention: AccountDeviceHealthAttention = .none,
-      freshUntil: Date? = Fixtures.date("2026-08-15T08:20:00Z"),
+      lastSeenAt: Date?,
       status: AccountDeviceStatus = .active
     ) -> AccountDevice {
       AccountDevice(
@@ -26,44 +23,35 @@ struct AppModelTests {
         status: status,
         createdAt: now.addingTimeInterval(-86_400),
         lastLoginAt: now.addingTimeInterval(-600),
-        lastSeenAt: now.addingTimeInterval(-300),
-        signedOutAt: status == .signedOut ? now.addingTimeInterval(-60) : nil,
-        health: freshUntil.map { freshUntil in
-          AccountDeviceHealth(
-            clientProduct: .quotaBar,
-            clientVersion: "0.0.16",
-            platform: .macos,
-            observedAt: now.addingTimeInterval(-300),
-            refreshRevision: 9,
-            lastCompletedRefreshAt: now.addingTimeInterval(-300),
-            lastSuccessfulAccountSyncAt: nil,
-            summary: AccountDeviceHealthSummary(
-              operation: operation,
-              data: data,
-              attention: attention
-            ),
-            topCode: nil,
-            consecutiveFailures: 0,
-            usageUploadEnabled: true,
-            receivedAt: now.addingTimeInterval(-295),
-            freshUntil: freshUntil
-          )
-        }
+        lastSeenAt: lastSeenAt,
+        signedOutAt: status == .signedOut ? now.addingTimeInterval(-60) : nil
       )
     }
 
-    #expect(RemoteDeviceHealthStatus.status(for: device(), now: now) == .healthy)
-    #expect(RemoteDeviceHealthStatus.status(for: device(data: .partial), now: now) == .needsAttention)
     #expect(
-      RemoteDeviceHealthStatus.status(for: device(attention: .required), now: now)
-        == .needsAttention)
+      RemoteDeviceActivity.status(
+        for: device(lastSeenAt: now.addingTimeInterval(-300)), lastReadingAt: nil, now: now)
+        == .active)
+    // A device that has not called in a day can still have sent a reading minutes ago.
     #expect(
-      RemoteDeviceHealthStatus.status(
-        for: device(freshUntil: now.addingTimeInterval(-1)), now: now) == .notRecentlyActive)
-    #expect(RemoteDeviceHealthStatus.status(for: device(freshUntil: nil), now: now) == .unknown)
+      RemoteDeviceActivity.status(
+        for: device(lastSeenAt: now.addingTimeInterval(-86_400)),
+        lastReadingAt: now.addingTimeInterval(-120), now: now) == .active)
     #expect(
-      RemoteDeviceHealthStatus.status(
-        for: device(freshUntil: nil, status: .signedOut), now: now) == .signedOut)
+      RemoteDeviceActivity.status(
+        for: device(lastSeenAt: now.addingTimeInterval(-3 * 3_600)), lastReadingAt: nil, now: now)
+        == .idle)
+    #expect(
+      RemoteDeviceActivity.status(
+        for: device(lastSeenAt: now.addingTimeInterval(-3 * 86_400)), lastReadingAt: nil, now: now)
+        == .notReporting)
+    #expect(
+      RemoteDeviceActivity.status(for: device(lastSeenAt: nil), lastReadingAt: nil, now: now)
+        == .notReporting)
+    #expect(
+      RemoteDeviceActivity.status(
+        for: device(lastSeenAt: now.addingTimeInterval(-60), status: .signedOut),
+        lastReadingAt: nil, now: now) == .signedOut)
   }
 
   @Test

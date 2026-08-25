@@ -1,8 +1,4 @@
-import {
-  type DeviceHealthUploadRequest,
-  IOS_OAUTH_CLIENT_ID,
-  QuotaSnapshotSchema,
-} from "@gotry-io/quota-protocol";
+import { IOS_OAUTH_CLIENT_ID, QuotaSnapshotSchema } from "@gotry-io/quota-protocol";
 import {
   ACCOUNT_SCOPES,
   type AccountLoginGrantConsumeResult,
@@ -21,7 +17,6 @@ import {
   type DeleteDeviceResult,
   type DeviceGrantDecisionOutcome,
   type DeviceGrantPollResult,
-  type DeviceHealthWriteOutcome,
   type DevicePrincipal,
   type DeviceRecord,
   type DeviceSyncControl,
@@ -34,7 +29,6 @@ import {
   type RevokeRefreshSessionInput,
   type SnapshotWriteOutcome,
   type StoredQuotaSnapshot,
-  type StoredDeviceHealth,
 } from "@gotry-io/relay-core";
 import { canonicalRequestDigest } from "../security.ts";
 import {
@@ -76,27 +70,6 @@ interface SnapshotControlRow {
   generation: number;
   last_sequence: number;
   last_snapshot_digest: string | null;
-}
-
-interface DeviceHealthRow {
-  device_id: string;
-  device_generation: number;
-  schema_version: 1;
-  client_product: StoredDeviceHealth["client_product"];
-  client_version: string;
-  platform: StoredDeviceHealth["platform"];
-  observed_at: string;
-  refresh_revision: number;
-  received_at: string;
-  fresh_until: string;
-  last_completed_refresh_at: string | null;
-  last_successful_account_sync_at: string | null;
-  operation: StoredDeviceHealth["summary"]["operation"];
-  data_state: StoredDeviceHealth["summary"]["data"];
-  attention: StoredDeviceHealth["summary"]["attention"];
-  top_code: StoredDeviceHealth["top_code"];
-  consecutive_failures: number;
-  usage_upload_enabled: number;
 }
 
 export class D1AccountState implements AccountState {
@@ -901,96 +874,6 @@ export class D1AccountState implements AccountState {
     return result?.id === deviceId;
   }
 
-  async recordDeviceHealth(
-    principal: DevicePrincipal,
-    health: DeviceHealthUploadRequest,
-    receivedAt: string,
-    freshUntil: string,
-  ): Promise<DeviceHealthWriteOutcome> {
-    const results = await this.database.batch([
-      this.database
-        .prepare(
-          `INSERT INTO device_health (
-             device_id, device_generation, schema_version, client_product, client_version,
-             platform, observed_at, refresh_revision, received_at, fresh_until, last_completed_refresh_at,
-             last_successful_account_sync_at, operation, data_state, attention, top_code,
-             consecutive_failures, usage_upload_enabled
-           )
-           SELECT id, generation, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
-                  ?16, ?17, ?18, ?19
-           FROM devices
-           WHERE id = ?1 AND account_id = ?2 AND generation = ?3
-             AND platform = ?7
-             AND signed_out_at IS NULL AND deleted_at IS NULL
-           ON CONFLICT(device_id) DO UPDATE SET
-             device_generation = excluded.device_generation,
-             schema_version = excluded.schema_version,
-             client_product = excluded.client_product,
-             client_version = excluded.client_version,
-             platform = excluded.platform,
-             observed_at = excluded.observed_at,
-             refresh_revision = excluded.refresh_revision,
-             received_at = excluded.received_at,
-             fresh_until = excluded.fresh_until,
-             last_completed_refresh_at = excluded.last_completed_refresh_at,
-             last_successful_account_sync_at = excluded.last_successful_account_sync_at,
-             operation = excluded.operation,
-             data_state = excluded.data_state,
-             attention = excluded.attention,
-             top_code = excluded.top_code,
-             consecutive_failures = excluded.consecutive_failures,
-             usage_upload_enabled = excluded.usage_upload_enabled
-           WHERE excluded.refresh_revision >= device_health.refresh_revision`,
-        )
-        .bind(
-          principal.device_id,
-          principal.account_id,
-          principal.generation,
-          health.schema_version,
-          health.client_product,
-          health.client_version,
-          health.platform,
-          health.observed_at,
-          health.refresh_revision,
-          receivedAt,
-          freshUntil,
-          health.last_completed_refresh_at,
-          health.last_successful_account_sync_at,
-          health.summary.operation,
-          health.summary.data,
-          health.summary.attention,
-          health.top_code,
-          health.consecutive_failures,
-          health.usage_upload_enabled ? 1 : 0,
-        ),
-      this.database
-        .prepare(
-          `UPDATE devices SET last_seen_at = ?4
-           WHERE id = ?1 AND account_id = ?2 AND generation = ?3
-             AND signed_out_at IS NULL AND deleted_at IS NULL
-             AND EXISTS (
-               SELECT 1 FROM device_health
-               WHERE device_id = ?1 AND device_generation = ?3 AND received_at = ?4
-             )`,
-        )
-        .bind(principal.device_id, principal.account_id, principal.generation, receivedAt),
-    ]);
-    if (resultChanged(results[0])) return "updated";
-    const current = await this.database
-      .prepare(
-        `SELECT health.refresh_revision
-         FROM devices
-         LEFT JOIN device_health AS health ON health.device_id = devices.id
-         WHERE devices.id = ?1 AND devices.account_id = ?2 AND devices.generation = ?3
-           AND devices.signed_out_at IS NULL AND devices.deleted_at IS NULL`,
-      )
-      .bind(principal.device_id, principal.account_id, principal.generation)
-      .first<{ refresh_revision: number | null }>();
-    return current && (current.refresh_revision ?? -1) > health.refresh_revision
-      ? "ignored_stale"
-      : "unauthorized";
-  }
-
   /**
    * Three aggregates over the tables an Account read projects. They are the whole basis for the
    * conditional answer, so each one has to move whenever the response would: counts catch
@@ -998,7 +881,7 @@ export class D1AccountState implements AccountState {
    * usage revision catches an upload from any device rather than only the leading one.
    */
   async accountVersionStamp(accountId: string, activeSince: string): Promise<AccountVersionStamp> {
-    const [devices, snapshots, health] = await this.database.batch<Record<string, unknown>>([
+    const [devices, snapshots] = await this.database.batch<Record<string, unknown>>([
       this.database
         .prepare(
           `SELECT COUNT(*) AS devices,
@@ -1022,21 +905,10 @@ export class D1AccountState implements AccountState {
            WHERE devices.account_id = ?1 AND devices.deleted_at IS NULL`,
         )
         .bind(accountId),
-      this.database
-        .prepare(
-          `SELECT COUNT(*) AS device_health,
-                  MAX(health.received_at) AS device_health_received_at
-           FROM device_health AS health
-           INNER JOIN devices ON devices.id = health.device_id
-           WHERE devices.account_id = ?1 AND devices.deleted_at IS NULL
-             AND devices.generation = health.device_generation`,
-        )
-        .bind(accountId),
     ]);
     const merged = {
       ...(devices?.results[0] ?? {}),
       ...(snapshots?.results[0] ?? {}),
-      ...(health?.results[0] ?? {}),
     };
     return {
       devices: stampCount(merged.devices),
@@ -1048,50 +920,7 @@ export class D1AccountState implements AccountState {
       device_signed_out_at: stampInstant(merged.device_signed_out_at),
       snapshots: stampCount(merged.snapshots),
       snapshot_updated_at: stampInstant(merged.snapshot_updated_at),
-      device_health: stampCount(merged.device_health),
-      device_health_received_at: stampInstant(merged.device_health_received_at),
     };
-  }
-
-  async listDeviceHealth(accountId: string): Promise<StoredDeviceHealth[]> {
-    const rows = await this.database
-      .prepare(
-        `SELECT health.device_id, health.device_generation, health.schema_version,
-                health.client_product, health.client_version, health.platform,
-                health.observed_at, health.refresh_revision, health.received_at, health.fresh_until,
-                health.last_completed_refresh_at, health.last_successful_account_sync_at,
-                health.operation, health.data_state, health.attention, health.top_code,
-                health.consecutive_failures, health.usage_upload_enabled
-         FROM device_health AS health
-         INNER JOIN devices ON devices.id = health.device_id
-         WHERE devices.account_id = ?1 AND devices.deleted_at IS NULL
-           AND devices.generation = health.device_generation
-         ORDER BY health.received_at DESC, health.device_id ASC LIMIT 257`,
-      )
-      .bind(accountId)
-      .all<DeviceHealthRow>();
-    return rows.results.map((row) => ({
-      device_id: row.device_id,
-      device_generation: row.device_generation,
-      schema_version: row.schema_version,
-      client_product: row.client_product,
-      client_version: row.client_version,
-      platform: row.platform,
-      observed_at: row.observed_at,
-      refresh_revision: row.refresh_revision,
-      received_at: row.received_at,
-      fresh_until: row.fresh_until,
-      last_completed_refresh_at: row.last_completed_refresh_at,
-      last_successful_account_sync_at: row.last_successful_account_sync_at,
-      summary: {
-        operation: row.operation,
-        data: row.data_state,
-        attention: row.attention,
-      },
-      top_code: row.top_code,
-      consecutive_failures: row.consecutive_failures,
-      usage_upload_enabled: row.usage_upload_enabled === 1,
-    }));
   }
 
   async deleteDeviceData(
@@ -1128,13 +957,6 @@ export class D1AccountState implements AccountState {
       this.database
         .prepare(
           `DELETE FROM quota_snapshots WHERE device_id = ?2 AND EXISTS (
-             SELECT 1 FROM devices WHERE id = ?2 AND account_id = ?1
-           )`,
-        )
-        .bind(accountId, deviceId),
-      this.database
-        .prepare(
-          `DELETE FROM device_health WHERE device_id = ?2 AND EXISTS (
              SELECT 1 FROM devices WHERE id = ?2 AND account_id = ?1
            )`,
         )

@@ -16,7 +16,7 @@ use crate::protocol::{
 use crate::service::{BackendError, LoginOutcome};
 use crate::state::StateStore;
 use base64::Engine;
-use chrono::{DateTime, Timelike};
+use chrono::Timelike;
 use reqwest::blocking::{Client, Response};
 use reqwest::header::{
     ACCEPT, AUTHORIZATION, CONTENT_TYPE, ETAG, HeaderMap, HeaderValue, IF_NONE_MATCH,
@@ -215,13 +215,6 @@ impl RelayClient {
             token,
             200,
         )
-    }
-
-    pub fn upload_device_health(&self, token: &str, payload: &Value) -> Result<Value, RelayError> {
-        validate_device_health_upload(payload)?;
-        let response = self.put_json("/api/v5/device/health", payload, token, 200)?;
-        validate_device_health_response(&response)?;
-        Ok(response)
     }
 
     pub fn upload_snapshot(&self, token: &str, envelope: &Value) -> Result<Value, RelayError> {
@@ -1107,169 +1100,6 @@ fn validate_response_object(value: &Value, keys: &[&str]) -> Result<(), RelayErr
     Ok(())
 }
 
-fn validate_device_health_upload(value: &Value) -> Result<(), RelayError> {
-    validate_response_object(
-        value,
-        &[
-            "protocol_version",
-            "schema_version",
-            "client_product",
-            "client_version",
-            "platform",
-            "observed_at",
-            "refresh_revision",
-            "last_completed_refresh_at",
-            "last_successful_account_sync_at",
-            "summary",
-            "top_code",
-            "consecutive_failures",
-            "usage_upload_enabled",
-        ],
-    )?;
-    if value.get("protocol_version").and_then(Value::as_i64) != Some(MANAGED_DATA_PROTOCOL) {
-        return Err(RelayError::InvalidResponse);
-    }
-    validate_device_health_fields(value)
-}
-
-fn validate_device_health_response(value: &Value) -> Result<(), RelayError> {
-    validate_response_object(
-        value,
-        &["protocol_version", "status", "received_at", "fresh_until"],
-    )?;
-    if value.get("protocol_version").and_then(Value::as_i64) != Some(MANAGED_DATA_PROTOCOL)
-        || !matches!(
-            value.get("status").and_then(Value::as_str),
-            Some("updated" | "ignored_stale")
-        )
-        || !value
-            .get("received_at")
-            .and_then(Value::as_str)
-            .is_some_and(valid_rfc3339)
-        || !value
-            .get("fresh_until")
-            .and_then(Value::as_str)
-            .is_some_and(valid_rfc3339)
-    {
-        return Err(RelayError::InvalidResponse);
-    }
-    Ok(())
-}
-
-fn validate_device_health(value: &Value) -> Result<(), RelayError> {
-    validate_response_object(
-        value,
-        &[
-            "schema_version",
-            "client_product",
-            "client_version",
-            "platform",
-            "observed_at",
-            "refresh_revision",
-            "last_completed_refresh_at",
-            "last_successful_account_sync_at",
-            "summary",
-            "top_code",
-            "consecutive_failures",
-            "usage_upload_enabled",
-            "received_at",
-            "fresh_until",
-        ],
-    )?;
-    validate_device_health_fields(value)?;
-    let received_at = value.get("received_at").and_then(Value::as_str);
-    let fresh_until = value.get("fresh_until").and_then(Value::as_str);
-    if !received_at.is_some_and(valid_rfc3339)
-        || !fresh_until.is_some_and(valid_rfc3339)
-        || received_at
-            .zip(fresh_until)
-            .is_some_and(|(received, fresh)| {
-                DateTime::parse_from_rfc3339(fresh).ok()
-                    < DateTime::parse_from_rfc3339(received).ok()
-            })
-    {
-        return Err(RelayError::InvalidResponse);
-    }
-    Ok(())
-}
-
-fn validate_device_health_fields(value: &Value) -> Result<(), RelayError> {
-    let nullable_instant = |key: &str| {
-        value
-            .get(key)
-            .is_some_and(|item| item.is_null() || item.as_str().is_some_and(valid_rfc3339))
-    };
-    let summary = value.get("summary").ok_or(RelayError::InvalidResponse)?;
-    validate_response_object(summary, &["operation", "data", "attention"])?;
-    if value.get("schema_version").and_then(Value::as_u64) != Some(1)
-        || !matches!(
-            value.get("client_product").and_then(Value::as_str),
-            Some("quotabar" | "quotacli")
-        )
-        || !value
-            .get("client_version")
-            .and_then(Value::as_str)
-            .is_some_and(|version| {
-                !version.is_empty()
-                    && version.len() <= 32
-                    && version.bytes().enumerate().all(|(index, byte)| {
-                        byte.is_ascii_alphanumeric()
-                            || (index > 0 && matches!(byte, b'.' | b'+' | b'_' | b'-'))
-                    })
-            })
-        || !matches!(
-            value.get("platform").and_then(Value::as_str),
-            Some("macos" | "linux" | "windows")
-        )
-        || !value
-            .get("observed_at")
-            .and_then(Value::as_str)
-            .is_some_and(valid_rfc3339)
-        || value.get("refresh_revision").and_then(safe_u64).is_none()
-        || !nullable_instant("last_completed_refresh_at")
-        || !nullable_instant("last_successful_account_sync_at")
-        || !matches!(
-            summary.get("operation").and_then(Value::as_str),
-            Some("healthy" | "degraded" | "blocked")
-        )
-        || !matches!(
-            summary.get("data").and_then(Value::as_str),
-            Some("current" | "stale" | "partial" | "empty" | "unknown")
-        )
-        || !matches!(
-            summary.get("attention").and_then(Value::as_str),
-            Some("none" | "automatic" | "optional" | "required")
-        )
-        || !value.get("top_code").is_some_and(|code| {
-            code.is_null()
-                || matches!(
-                    code.as_str(),
-                    Some(
-                        "refresh_failed"
-                            | "quota_collection_failed"
-                            | "usage_scan_partial"
-                            | "usage_upload_failed"
-                            | "account_sync_failed"
-                            | "pricing_refresh_failed"
-                            | "process_interrupted"
-                            | "local_state_invalid"
-                    )
-                )
-        })
-        || !value
-            .get("consecutive_failures")
-            .and_then(safe_u64)
-            .is_some_and(|count| count <= 1_000)
-        || value
-            .get("usage_upload_enabled")
-            .and_then(Value::as_bool)
-            .is_none()
-    {
-        return Err(RelayError::InvalidResponse);
-    }
-    Ok(())
-}
-
 fn validate_control_response(value: &Value) -> Result<(), RelayError> {
     validate_response_object(
         value,
@@ -1335,7 +1165,7 @@ fn validate_account_summary(value: &Value) -> Result<(), RelayError> {
         .filter(|devices| devices.len() <= 256)
         .ok_or(RelayError::InvalidResponse)?;
     for device in devices {
-        validate_account_device_with_health(device)?;
+        validate_account_device(device)?;
     }
     let quota = object
         .get("quota")
@@ -1381,7 +1211,7 @@ fn validate_account_record(value: &Value) -> Result<(), RelayError> {
     Ok(())
 }
 
-fn validate_account_device_with_health(value: &Value) -> Result<(), RelayError> {
+fn validate_account_device(value: &Value) -> Result<(), RelayError> {
     validate_response_object(
         value,
         &[
@@ -1394,7 +1224,6 @@ fn validate_account_device_with_health(value: &Value) -> Result<(), RelayError> 
             "last_login_at",
             "last_seen_at",
             "signed_out_at",
-            "health",
         ],
     )?;
     let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
@@ -1437,12 +1266,6 @@ fn validate_account_device_with_health(value: &Value) -> Result<(), RelayError> 
                 .is_some_and(|value| !value.is_null())
     {
         return Err(RelayError::InvalidResponse);
-    }
-    if let Some(health) = object.get("health").filter(|value| !value.is_null()) {
-        validate_device_health(health)?;
-        if health.get("platform") != object.get("platform") {
-            return Err(RelayError::InvalidResponse);
-        }
     }
     Ok(())
 }
@@ -2596,37 +2419,6 @@ impl AccountManager {
         let response = self
             .client
             .upload_usage(&token, submission)
-            .map_err(|error| BackendError {
-                error: relay_error_for_backend(error),
-            })?;
-        if !self
-            .state
-            .active_session_at_epoch(epoch)
-            .map_err(|_| BackendError::unavailable())?
-        {
-            return Err(session_changed_error());
-        }
-        Ok(response)
-    }
-
-    pub fn upload_device_health(&self, payload: &Value) -> Result<Value, BackendError> {
-        let (session, epoch) = self
-            .state
-            .session_snapshot()
-            .map_err(|_| BackendError::unavailable())?
-            .ok_or_else(session_changed_error)?;
-        if !is_active_session(&session)
-            || !self
-                .state
-                .active_session_at_epoch(epoch)
-                .map_err(|_| BackendError::unavailable())?
-        {
-            return Err(session_changed_error());
-        }
-        let token = session_access_token_from(&session, "device")?;
-        let response = self
-            .client
-            .upload_device_health(&token, payload)
             .map_err(|error| BackendError {
                 error: relay_error_for_backend(error),
             })?;
@@ -4105,12 +3897,7 @@ mod tests {
         assert_eq!(sent.len(), 1, "{sent:?}");
         // One contract: the request carries what it asks for and no negotiation keys.
         assert!(sent[0].contains("usage_agents=all"), "{}", sent[0]);
-        for retired in [
-            "device_health=",
-            "usage_channels=",
-            "model_catalog=",
-            "usage_clients=",
-        ] {
+        for retired in ["usage_channels=", "model_catalog=", "usage_clients="] {
             assert!(!sent[0].contains(retired), "{}", sent[0]);
         }
     }

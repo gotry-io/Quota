@@ -287,8 +287,7 @@
               "created_at": "2026-07-01T00:00:00Z",
               "last_login_at": "2026-08-01T00:00:00Z",
               "last_seen_at": "2026-08-24T09:00:00Z",
-              "signed_out_at": null,
-              "health": null
+              "signed_out_at": null
             }
           ],
           "quota": [
@@ -371,8 +370,7 @@
               "created_at": "2026-07-01T00:00:00Z",
               "last_login_at": "2026-08-01T00:00:00Z",
               "last_seen_at": "2026-08-24T09:00:00Z",
-              "signed_out_at": null,
-              "health": null
+              "signed_out_at": null
             }
           ],
           "quota": [
@@ -437,90 +435,6 @@
         "reason": "protocol_version"
       },
       {
-        "name": "a device without the health key is refused",
-        "accepted": false,
-        "payload": {
-          "protocol_version": 5,
-          "account": {
-            "account_id": "account_01",
-            "display_label": "octocat",
-            "created_at": "2026-07-01T00:00:00Z"
-          },
-          "devices": [
-            {
-              "device_id": "device_01",
-              "display_name": "Kitchen Mac",
-              "platform": "macos",
-              "device_generation": 3,
-              "status": "active",
-              "created_at": "2026-07-01T00:00:00Z",
-              "last_login_at": "2026-08-01T00:00:00Z",
-              "last_seen_at": "2026-08-24T09:00:00Z",
-              "signed_out_at": null
-            }
-          ],
-          "quota": [
-            {
-              "device_id": "device_01",
-              "snapshot": {
-                "provider": "codex",
-                "account": {
-                  "fingerprint": "fp-codex",
-                  "fingerprint_scope": "global",
-                  "plan": "plus"
-                },
-                "windows": [
-                  {
-                    "id": "weekly",
-                    "title": "Weekly",
-                    "used_percent": 40,
-                    "resets_at": "2026-08-25T00:00:00Z",
-                    "duration_seconds": 604800
-                  }
-                ],
-                "status": "available",
-                "observed_at": "2026-08-24T09:00:00Z"
-              }
-            }
-          ],
-          "usage": {
-            "range": {
-              "from": "2026-08-01",
-              "to": "2026-08-24"
-            },
-            "totals": {
-              "input_tokens": 10,
-              "cache_read_tokens": 0,
-              "cache_write_5m_tokens": 0,
-              "cache_write_1h_tokens": 0,
-              "cache_write_inferred_tokens": 0,
-              "output_tokens": 4,
-              "reasoning_tokens": 0,
-              "requests": 1,
-              "web_search_requests": 0,
-              "web_fetch_requests": 0,
-              "source_cost_microusd": null,
-              "source_cost_covered_requests": 0
-            },
-            "cost": {
-              "mode": "calculate",
-              "basis": "calculated",
-              "status": "complete",
-              "amount_microusd": "1000",
-              "catalog_revision": "pricing_1",
-              "calculated_rows": 1,
-              "reported_rows": 0,
-              "unpriced_rows": 0,
-              "assumptions": [],
-              "unpriced": []
-            },
-            "coverage": "complete",
-            "breakdowns": []
-          }
-        },
-        "reason": "health"
-      },
-      {
         "name": "an observation carrying upload bookkeeping is refused",
         "accepted": false,
         "payload": {
@@ -540,8 +454,7 @@
               "created_at": "2026-07-01T00:00:00Z",
               "last_login_at": "2026-08-01T00:00:00Z",
               "last_seen_at": "2026-08-24T09:00:00Z",
-              "signed_out_at": null,
-              "health": null
+              "signed_out_at": null
             }
           ],
           "quota": [
@@ -626,8 +539,7 @@
               "created_at": "2026-07-01T00:00:00Z",
               "last_login_at": "2026-08-01T00:00:00Z",
               "last_seen_at": "2026-08-24T09:00:00Z",
-              "signed_out_at": null,
-              "health": null
+              "signed_out_at": null
             }
           ],
           "quota": [
@@ -693,109 +605,6 @@
         "reason": "generated_at"
       },
       {
-        "name": "health whose platform disagrees with its device is refused",
-        "accepted": false,
-        "payload": {
-          "protocol_version": 5,
-          "account": {
-            "account_id": "account_01",
-            "display_label": "octocat",
-            "created_at": "2026-07-01T00:00:00Z"
-          },
-          "devices": [
-            {
-              "device_id": "device_01",
-              "display_name": "Kitchen Mac",
-              "platform": "macos",
-              "device_generation": 3,
-              "status": "active",
-              "created_at": "2026-07-01T00:00:00Z",
-              "last_login_at": "2026-08-01T00:00:00Z",
-              "last_seen_at": "2026-08-24T09:00:00Z",
-              "signed_out_at": null,
-              "health": {
-                "schema_version": 1,
-                "client_product": "quotabar",
-                "client_version": "0.0.21",
-                "platform": "linux",
-                "observed_at": "2026-08-24T09:00:00Z",
-                "received_at": "2026-08-24T09:00:01Z",
-                "refresh_revision": 42,
-                "usage_upload_enabled": true,
-                "summary": {
-                  "operation": "healthy",
-                  "data": "current",
-                  "attention": "none"
-                },
-                "last_completed_refresh_at": null,
-                "last_successful_account_sync_at": null,
-                "last_successful_usage_upload_at": null,
-                "attention_code": null
-              }
-            }
-          ],
-          "quota": [
-            {
-              "device_id": "device_01",
-              "snapshot": {
-                "provider": "codex",
-                "account": {
-                  "fingerprint": "fp-codex",
-                  "fingerprint_scope": "global",
-                  "plan": "plus"
-                },
-                "windows": [
-                  {
-                    "id": "weekly",
-                    "title": "Weekly",
-                    "used_percent": 40,
-                    "resets_at": "2026-08-25T00:00:00Z",
-                    "duration_seconds": 604800
-                  }
-                ],
-                "status": "available",
-                "observed_at": "2026-08-24T09:00:00Z"
-              }
-            }
-          ],
-          "usage": {
-            "range": {
-              "from": "2026-08-01",
-              "to": "2026-08-24"
-            },
-            "totals": {
-              "input_tokens": 10,
-              "cache_read_tokens": 0,
-              "cache_write_5m_tokens": 0,
-              "cache_write_1h_tokens": 0,
-              "cache_write_inferred_tokens": 0,
-              "output_tokens": 4,
-              "reasoning_tokens": 0,
-              "requests": 1,
-              "web_search_requests": 0,
-              "web_fetch_requests": 0,
-              "source_cost_microusd": null,
-              "source_cost_covered_requests": 0
-            },
-            "cost": {
-              "mode": "calculate",
-              "basis": "calculated",
-              "status": "complete",
-              "amount_microusd": "1000",
-              "catalog_revision": "pricing_1",
-              "calculated_rows": 1,
-              "reported_rows": 0,
-              "unpriced_rows": 0,
-              "assumptions": [],
-              "unpriced": []
-            },
-            "coverage": "complete",
-            "breakdowns": []
-          }
-        },
-        "reason": "platform"
-      },
-      {
         "name": "usage attributed to every inference provider is accepted",
         "accepted": true,
         "payload": {
@@ -815,8 +624,7 @@
               "created_at": "2026-07-01T00:00:00Z",
               "last_login_at": "2026-08-01T00:00:00Z",
               "last_seen_at": "2026-08-24T09:00:00Z",
-              "signed_out_at": null,
-              "health": null
+              "signed_out_at": null
             }
           ],
           "quota": [
@@ -1427,8 +1235,7 @@
               "created_at": "2026-07-01T00:00:00Z",
               "last_login_at": "2026-08-01T00:00:00Z",
               "last_seen_at": "2026-08-24T09:00:00Z",
-              "signed_out_at": null,
-              "health": null
+              "signed_out_at": null
             }
           ],
           "quota": [
@@ -1519,8 +1326,7 @@
               "created_at": "2026-07-01T00:00:00Z",
               "last_login_at": "2026-08-01T00:00:00Z",
               "last_seen_at": "2026-08-24T09:00:00Z",
-              "signed_out_at": null,
-              "health": null
+              "signed_out_at": null
             }
           ],
           "quota": [
