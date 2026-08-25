@@ -39,6 +39,12 @@ export const MAXIMUM_PUBLIC_PROFILE_QUOTA = 32;
 export const MAXIMUM_WINDOWS_PER_SNAPSHOT = 16;
 export const MAXIMUM_USAGE_ROWS_PER_SUBMISSION = 2_048;
 export const MAXIMUM_USAGE_COVERAGE_HOURS = 24 * 31;
+/**
+ * No agent this Account accepts existed before this instant, so a window reaching back past it
+ * was computed from a missing lower bound rather than scanned.  Six such windows, each a
+ * 31-hour-limit chunk marching forward from the Unix epoch, reached production this way.
+ */
+export const EARLIEST_USAGE_INSTANT = "2020-01-01T00:00:00Z";
 export const MAXIMUM_USAGE_BREAKDOWNS = 1_000;
 export const MAXIMUM_USAGE_READ_ROWS = 1_000;
 export const MAXIMUM_USAGE_COVERAGE_ITEMS = 2_048;
@@ -1591,6 +1597,13 @@ function validateCoverageRange(
   validateCoverageOrder(coverage, context);
   const start = Date.parse(coverage.start_at);
   const end = Date.parse(coverage.end_at);
+  if (start < Date.parse(EARLIEST_USAGE_INSTANT)) {
+    context.addIssue({
+      code: "custom",
+      path: ["start_at"],
+      message: `Coverage may not begin before ${EARLIEST_USAGE_INSTANT}.`,
+    });
+  }
   if (end <= start) return;
   if ((end - start) / 3_600_000 > MAXIMUM_USAGE_COVERAGE_HOURS) {
     context.addIssue({

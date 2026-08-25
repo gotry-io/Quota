@@ -714,6 +714,40 @@ describe("quota protocol", () => {
     ).toBe(false);
   });
 
+  it("refuses a coverage window computed from a missing lower bound", () => {
+    const submission = usageSubmission();
+    expect(
+      UsageSubmissionSchema.safeParse({
+        ...submission,
+        coverage: {
+          ...submission.coverage,
+          start_at: "1970-01-01T00:00:00Z",
+          end_at: "1970-02-01T00:00:00Z",
+        },
+        rows: [],
+      }).success,
+    ).toBe(false);
+    // The private local report states whatever range the app asked for and is not bounded here.
+    expect(
+      LocalUsageReportSchema.safeParse({
+        protocol_version: LOCAL_USAGE_PROTOCOL_VERSION,
+        generated_at: "2026-08-02T12:30:00Z",
+        aggregation_timezone: "UTC",
+        range: { from: "1970-01-01", to: "1970-02-01" },
+        status: "partial",
+        model_catalog_revision: null,
+        coverage: [
+          {
+            agent: "codex",
+            start_at: "1970-01-01T00:00:00Z",
+            end_at: "1970-02-01T00:00:00Z",
+            status: "partial",
+          },
+        ],
+      }).success,
+    ).toBe(true);
+  });
+
   it("keeps local Usage available independently from an account", () => {
     const report = {
       protocol_version: 3,

@@ -347,8 +347,19 @@ fn open_live_and_probe(path: &Path) -> Result<Connection, StateError> {
     let mut connection = open_writable_connection(path)?;
     migration::apply(&mut connection)?;
     probe_small_image(&connection)?;
+    reclaim_unused_pages(&connection)?;
     Ok(connection)
 }
+
+/// The write-ahead log is truncated back to this after each checkpoint.  Without a limit the
+/// file keeps whatever high-water mark one large transaction reached, for the life of the
+/// image: a rescan of this device's Usage had left 213MB of empty log on disk.
+const MAXIMUM_WAL_BYTES: i64 = 16 * 1024 * 1024;
+
+/// Pages freed by deletes are handed back to the filesystem once this much has accumulated.
+/// Re-scanning a Usage file deletes and reinserts every record it holds, so an image that is
+/// never compacted keeps growing: this device reached 411MB holding 218MB of records.
+const COMPACT_FREE_BYTES: i64 = 64 * 1024 * 1024;
 
 fn open_writable_connection(path: &Path) -> Result<Connection, StateError> {
     let connection =
@@ -358,7 +369,36 @@ fn open_writable_connection(path: &Path) -> Result<Connection, StateError> {
          PRAGMA busy_timeout = 5000;
          PRAGMA journal_mode = WAL;",
     )?;
+    connection.pragma_update(None, "journal_size_limit", MAXIMUM_WAL_BYTES)?;
     Ok(connection)
+}
+
+/// Returns free pages to the filesystem, converting the image to incremental reclaim the first
+/// time so later deletes cost a truncation rather than a full rewrite.
+///
+/// The full rewrite runs only for an image that predates the conversion and has already grown
+/// past the threshold, so it happens once.  Neither step is required for correctness, and an
+/// image that cannot be compacted right now is left exactly as it is.
+fn reclaim_unused_pages(conn: &Connection) -> Result<(), StateError> {
+    let free_bytes = conn.query_row(
+        "SELECT (SELECT * FROM pragma_freelist_count()) * (SELECT * FROM pragma_page_size())",
+        [],
+        |row| row.get::<_, i64>(0),
+    )?;
+    let incremental = conn.query_row("PRAGMA auto_vacuum", [], |row| row.get::<_, i64>(0))? == 2;
+    if incremental {
+        // Each step of this pragma moves one page, so it has to be run to completion rather
+        // than executed once.
+        if let Ok(mut statement) = conn.prepare("PRAGMA incremental_vacuum")
+            && let Ok(mut rows) = statement.query([])
+        {
+            while matches!(rows.next(), Ok(Some(_))) {}
+        }
+    } else if free_bytes >= COMPACT_FREE_BYTES {
+        let _ = conn.execute_batch("PRAGMA auto_vacuum = INCREMENTAL; VACUUM;");
+    }
+    let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
+    Ok(())
 }
 
 fn open_snapshot_connection(path: &Path) -> Result<Connection, StateError> {
@@ -1010,6 +1050,74 @@ mod tests {
     use serde_json::json;
     use std::os::unix::fs::PermissionsExt;
     use uuid::Uuid;
+
+    /// An image is not allowed to keep growing on pages nothing uses: the first open past the
+    /// threshold rewrites it and converts it, and every open after that hands back what the
+    /// last deletes freed without rewriting anything.
+    #[test]
+    fn deleted_pages_are_returned_to_the_filesystem() {
+        let root = std::env::temp_dir().join(format!("quota-compact-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("root");
+        let root = std::fs::canonicalize(&root).expect("canonical root");
+        let path = root.join("state.sqlite");
+
+        let filler = "x".repeat(4_096);
+        {
+            let conn = open_writable_connection(&path).expect("open");
+            assert_eq!(
+                conn.query_row("PRAGMA journal_size_limit", [], |row| row.get::<_, i64>(0))
+                    .expect("limit"),
+                MAXIMUM_WAL_BYTES
+            );
+            conn.execute_batch("CREATE TABLE bulk(id INTEGER PRIMARY KEY, blob TEXT)")
+                .expect("table");
+            let tx = conn.unchecked_transaction().expect("transaction");
+            for id in 0..24_000 {
+                tx.execute("INSERT INTO bulk(id, blob) VALUES (?1, ?2)", (id, &filler))
+                    .expect("insert");
+            }
+            tx.commit().expect("commit");
+            conn.execute("DELETE FROM bulk", []).expect("delete");
+        }
+
+        let grown = std::fs::metadata(&path).expect("grown").len();
+        let conn = open_writable_connection(&path).expect("reopen");
+        reclaim_unused_pages(&conn).expect("first reclaim");
+        let compacted = std::fs::metadata(&path).expect("compacted").len();
+        assert!(compacted < grown / 2, "{grown} -> {compacted}");
+        assert_eq!(
+            conn.query_row("PRAGMA auto_vacuum", [], |row| row.get::<_, i64>(0))
+                .expect("auto_vacuum"),
+            2
+        );
+
+        // A later round of deletes is reclaimed without another full rewrite.
+        let tx = conn.unchecked_transaction().expect("transaction");
+        for id in 0..24_000 {
+            tx.execute("INSERT INTO bulk(id, blob) VALUES (?1, ?2)", (id, &filler))
+                .expect("insert");
+        }
+        tx.commit().expect("commit");
+        conn.execute("DELETE FROM bulk", []).expect("delete");
+        assert!(
+            conn.query_row("PRAGMA freelist_count", [], |row| row.get::<_, i64>(0))
+                .expect("freelist")
+                > 0
+        );
+        reclaim_unused_pages(&conn).expect("second reclaim");
+        assert_eq!(
+            conn.query_row("PRAGMA freelist_count", [], |row| row.get::<_, i64>(0))
+                .expect("freelist"),
+            0
+        );
+        assert_eq!(
+            conn.query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0))
+                .expect("integrity"),
+            "ok"
+        );
+        drop(conn);
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     fn start_sql_log() {
         SQL_LOG.with(|log| *log.borrow_mut() = Some(Vec::new()));
