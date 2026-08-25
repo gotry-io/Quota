@@ -10,7 +10,7 @@
 | 核对提交 | `f74117a`（2026-08-20） |
 | 核对方式 | 读取 `ProviderManifest.swift`（69 个 descriptor）+ 各 `*ProviderDescriptor.swift` 的 `fetchPlan` / `resolveStrategies`、`ProviderTokenCostConfig.supportsTokenCost`，并以单平台文档补窗口语义 |
 | 优先级 | **Descriptor / strategy 源码 > 单平台 `docs/<provider>.md` > `docs/providers.md` 总览表** |
-| 增量核对 | `27c7f33`（2026-08-22）：仅重读 Quota 已支持 provider 的 descriptor / probe / fetcher（Codex、Claude、Cursor、Grok、Kimi、DeepSeek、OpenRouter、LiteLLM），用于 §7 对照 |
+| 增量核对 | `27c7f33`（2026-08-22）：仅重读 Quota 已支持 provider 的 descriptor / probe / fetcher（Codex、Claude、Cursor、Grok、Kimi、DeepSeek、OpenRouter、LiteLLM），用于 §7 对照。2026-08-26 复核 §7：上游未变，Quota 侧删掉了全部 provider CLI 阶梯（Claude PTY 探针、Codex `app-server`、Grok `agent stdio`），并把 `browser_session` 收敛到 Cursor 一家；差异按下表逐条记录 |
 
 已发现并按源码修正的偏差（相对上游 `providers.md` 或初版整理）：
 
@@ -282,7 +282,7 @@ Cost：本机 projects JSONL；Admin 另出 org spend。
 
 | 主题 | CodexBar（源码） | Quota 现状（[`provider-collection.md`](provider-collection.md)） |
 | --- | --- | --- |
-| Cursor 额度 | Probe 内 App→Cookie；`usage-summary` + `get-sand-usage-status`（Grok Bot 周额度）+ `/api/usage?user=`（legacy 按次套餐） | 已对齐：Cursor.app `state.vscdb` → stored browser session；三个端点及 legacy 套餐替换规则一致。Cursor 是唯一声明 browser_session 的 provider，首次读 cookie 前有同意弹窗 |
+| Cursor 额度 | Probe 内 App→Cookie；`usage-summary` + `get-sand-usage-status`（Grok Bot 周额度）+ `/api/usage?user=`（legacy 按次套餐） | 已对齐：Cursor.app `state.vscdb` → stored browser session；三个端点及 legacy 套餐替换规则一致。Cursor 是 Quota 中唯一声明 `browser_session` 的 provider——它既无 CLI 登录也无 API key，其余各家的 grant 由自己的程序续期，因此不为它们打开任何 cookie store；首次读 cookie 前有同意弹窗，被 macOS 拒绝时报 `browser_access_denied` 而不是「无会话」 |
 | Cursor cost | Dashboard events + token-cost | 本机 bubble/JSONL，不等价 |
 | Codex Auto | PAT→OAuth→CLI | PAT→OAuth(WHAM)；窗口按时长分类。**有意差异**：不启动 `codex app-server`——定时刷新不 spawn provider CLI；也不读 chatgpt.com cookie——Codex 自己续期 grant，多一条 cookie 阶梯只是多要一份浏览器权限；直连失败即 `auth_required`，由用户打开 Codex 续期 |
 | Claude Auto | Planner oauth→cli→web | 仅 OAuth。**有意差异**：不跑 `/status`、`/usage` PTY 探针——同上；也不读 claude.ai cookie——同 Codex 理由；过期 grant 直接报 `auth_required`。唯一保留的子进程是读 Keychain 的 `/usr/bin/security`，每次刷新至多一次 |
@@ -292,6 +292,7 @@ Cost：本机 projects JSONL；Admin 另出 org spend。
 | OpenRouter | `/credits` + `/key` 额度；`/activity` 花费历史 | 额度已对齐；`/activity` 属 cost，不在 quota 范围 |
 | LiteLLM | `key/info` → `user/info` / `team/info`，含 `budget_reset_at` | 已对齐 |
 | Usage & Spend 集合 | 11 个 supportsTokenCost | Quota Usage 为本机 agent 扫描集 |
+| 采集阶梯总则 | 各 provider 允许 CLI / PTY / cookie 阶梯 | **有意差异**：定时刷新路径不 spawn 任何 provider CLI，`browser_session` 只声明给 Cursor。凭据过期一律报 `auth_required`，恢复文案指向拥有该 grant 的程序 |
 
 ---
 

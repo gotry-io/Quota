@@ -16,11 +16,14 @@ Read the relevant source before changing that area:
 | Codex, Claude Code, Grok, and OpenRouter collection strategies | `docs/provider-collection.md` |
 | CodexBar external platform capability baseline (quota/usage/fallback) | `docs/codexbar-platform-capabilities.md` |
 | Persistent Relay storage decision and rationale | `docs/decisions/0001-persistent-relay-storage.md` |
-| Managed account, device, authentication, deletion, and Usage boundary | `docs/decisions/0006-managed-account-device-usage.md` |
+| Managed account, device, authentication, and deletion lifecycle | `docs/decisions/0006-managed-account-device-usage.md` |
 | Browser sign-in and the one session table behind every client | `docs/decisions/0025-one-session-system.md` |
 | Managed-data v6: hour-versioned Usage, daily rollups, resolved subscriptions | `docs/decisions/0024-hour-versioned-usage-and-daily-rollups.md` |
+| Strict writes, tolerant reads, and unknown enum members | `docs/decisions/0023-strict-writes-tolerant-reads.md` |
+| Local identity store, disposable cache, and what a damaged image costs | `docs/decisions/0021-identity-store-and-disposable-cache.md` |
+| Diagnostic report v3, the attempt journal, and Account device status | `docs/decisions/0022-minimal-diagnostics.md` |
 | Read-only iOS account client | `docs/decisions/0013-readonly-ios-account-client.md` |
-| Non-secret iOS widget snapshot | `docs/decisions/0014-nonsecret-ios-widget-snapshot.md` |
+| Non-secret iOS widget snapshot and background refresh | `docs/decisions/0014-nonsecret-ios-widget-snapshot.md` |
 | Freshness, provider-name, and Devices copy shared by every client | `apps/menubar/DESIGN.md` (Shared product vocabulary) |
 | Website visual tokens and marketing UI | `apps/web/DESIGN.md` |
 | QuotaBar menu-panel visual tokens and UI behavior | `apps/menubar/DESIGN.md` |
@@ -57,7 +60,12 @@ Do not create a second description of a canonical rule. Update its source and li
 - Provider changes must update `packages/provider/catalog.json`, the Rust collector, and
   `docs/provider-collection.md`, then run `pnpm generate:provider-catalog` so protocol ids and Swift
   `ProviderID` stay aligned. Follow `docs/security.md` for credentials and redaction.
-- Persistence changes require a new explicit migration. Do not rewrite an applied migration.
+- Persistence changes require a new explicit migration, in the right store: D1 for Relay, and
+  locally either `identity.sqlite` or the disposable `cache.sqlite`, whose migration ladders are
+  separate. Do not rewrite an applied migration.
+- The private IPC surface — including the `ready` event, `ping`, and the `diagnose` report's
+  `schema_version: 3` — ships atomically with QuotaBar. Change both sides together and delete the
+  replaced one; the local reports carried inside IPC state name no version of their own.
 - Architecture, trust boundary, retention, provider strategy, layout, command, and current-status
   changes must update their canonical document in the same change.
 - Durable architecture decisions belong in `docs/decisions/`; temporary implementation plans do not
@@ -135,11 +143,16 @@ Do not commit generated state such as `node_modules/`, `dist/`, `target/`, `.bui
 - TypeScript-only change: run the affected workspace's type check and tests, plus root formatting.
 - Provider change: run shared Rust service and entry-point tests, including relevant failure and
   redaction cases.
-- Protocol change: run protocol, model, provider, Relay, and Swift decoding tests. After catalog id
-  changes, run `pnpm generate:provider-catalog` before type check and Swift tests.
+- Protocol change: run protocol, model, provider, Relay, and Swift decoding tests, including the
+  `wire-conformance.json` cases every runtime answers. After catalog id changes, run
+  `pnpm generate:provider-catalog` before type check and Swift tests.
+- Managed-data change: managed reads and writes are v6 on `/api/v6`. Exercise the hour-replacement
+  and daily-rollup paths and the resolved `subscriptions[]` a summary answers with.
 - Relay change: run Vitest, local D1 migration verification, and the Cloudflare dry-run build.
 - QuotaBar account-path change: on macOS, run affected Swift and Relay tests plus the signed-service
   integration tests available in the app package.
+- Local-state change: cover both stores. A damaged `cache.sqlite` must be rebuilt without touching
+  identity; a damaged identity must make the device a new signed-out installation.
 - Quota iOS, `packages/apple-client`, or a QuotaBar change that crosses either: run
   `pnpm generate:ios`, `swift test --package-path packages/apple-client`, `swift test --package-path
   apps/menubar`, and the iOS Simulator build/tests from `apps/ios/README.md`.
