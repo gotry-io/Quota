@@ -581,17 +581,6 @@ impl StateStore {
         })
     }
 
-    /// What a reader is told about the cache: whether it is still filling in, and when it was
-    /// last thrown away.
-    pub fn cache_state(&self) -> Result<CacheState, StateError> {
-        let reset_at = self.with_identity(|conn| preference(conn, CACHE_RESET_KEY))?;
-        let rebuilding = self.with_cache(|conn| metadata_flag(conn, REBUILDING_KEY))?;
-        Ok(CacheState {
-            rebuilding,
-            reset_at,
-        })
-    }
-
     /// When this device last had to start over as a new installation, if that is recent enough
     /// for the person in front of it to still be missing what it lost.
     pub fn identity_reset_at(&self) -> Result<Option<String>, StateError> {
@@ -1383,15 +1372,6 @@ impl StateStore {
             let _ = self.bump_revision();
         }
         Ok(cleared)
-    }
-
-    pub fn clear_session(&self) -> Result<u64, StateError> {
-        self.with_identity_mut(|conn| {
-            conn.execute("DELETE FROM session WHERE id = 1", [])?;
-            Ok(())
-        })?;
-        self.forget_account_reads();
-        self.bump_revision()
     }
 
     /// Stored Account responses end with the session that was allowed to read them. They are a
