@@ -795,7 +795,7 @@ dependencies = [
 
 [[package]]
 name = "quotacli"
-version = "0.0.15"
+version = "0.0.16"
 dependencies = [
  "libc",
  "quota-service",

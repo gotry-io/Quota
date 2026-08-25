@@ -319,6 +319,10 @@ impl StateStore {
         let owner_lock = OwnerLock::acquire(&root)?;
         let (mut connection, salvaged) = salvage::open_or_salvage(&root)?;
         recover_interrupted_attempts(&mut connection)?;
+        // Every way of arriving at a live image converges here, so this is where the image is
+        // compacted: the open paths each build their own connection and one of them not doing
+        // it is exactly how it gets missed.
+        salvage::reclaim_unused_pages(&connection)?;
         let persisted = repair::read_persisted_repair(&connection).unwrap_or_default();
         let store = Self {
             root,

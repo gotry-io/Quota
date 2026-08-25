@@ -347,7 +347,6 @@ fn open_live_and_probe(path: &Path) -> Result<Connection, StateError> {
     let mut connection = open_writable_connection(path)?;
     migration::apply(&mut connection)?;
     probe_small_image(&connection)?;
-    reclaim_unused_pages(&connection)?;
     Ok(connection)
 }
 
@@ -381,7 +380,7 @@ fn open_writable_connection(path: &Path) -> Result<Connection, StateError> {
 /// measured at 3.2s on a 411MB image holding 193MB of free pages, against 1.9s for the
 /// incremental pass that replaces it.  Neither step is required for correctness, and an image
 /// that cannot be compacted right now is left exactly as it is.
-fn reclaim_unused_pages(conn: &Connection) -> Result<(), StateError> {
+pub(super) fn reclaim_unused_pages(conn: &Connection) -> Result<(), StateError> {
     let free_bytes = conn.query_row(
         "SELECT (SELECT * FROM pragma_freelist_count()) * (SELECT * FROM pragma_page_size())",
         [],
@@ -1052,6 +1051,51 @@ mod tests {
     use serde_json::json;
     use std::os::unix::fs::PermissionsExt;
     use uuid::Uuid;
+
+    /// Opening the store is what has to compact the image, not one of the several functions
+    /// that build a connection: the ordinary path for an existing image assembles its own and
+    /// never called the one that did, so the reclaim shipped attached to a branch almost
+    /// nothing takes.
+    #[test]
+    fn opening_the_store_compacts_a_bloated_image() {
+        let root = std::env::temp_dir().join(format!("quota-store-compact-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("root");
+        let root = std::fs::canonicalize(&root).expect("canonical root");
+        let path = root.join("state.sqlite");
+
+        let filler = "x".repeat(4_096);
+        {
+            let store = StateStore::open(&root).expect("first open");
+            let conn = store.lock_conn().expect("conn");
+            conn.execute_batch("CREATE TABLE bulk(id INTEGER PRIMARY KEY, blob TEXT)")
+                .expect("table");
+            let tx = conn.unchecked_transaction().expect("transaction");
+            for id in 0..24_000 {
+                tx.execute("INSERT INTO bulk(id, blob) VALUES (?1, ?2)", (id, &filler))
+                    .expect("insert");
+            }
+            tx.commit().expect("commit");
+            conn.execute("DELETE FROM bulk", []).expect("delete");
+            conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+                .expect("checkpoint");
+        }
+        let grown = std::fs::metadata(&path).expect("grown").len();
+        assert!(grown > COMPACT_FREE_BYTES as u64, "{grown}");
+
+        let store = StateStore::open(&root).expect("reopen");
+        let compacted = std::fs::metadata(&path).expect("compacted").len();
+        assert!(compacted < grown / 2, "{grown} -> {compacted}");
+        assert_eq!(
+            store
+                .lock_conn()
+                .expect("conn")
+                .query_row("PRAGMA auto_vacuum", [], |row| row.get::<_, i64>(0))
+                .expect("auto_vacuum"),
+            2
+        );
+        drop(store);
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     /// An image is not allowed to keep growing on pages nothing uses: the first open past the
     /// threshold rewrites it and converts it, and every open after that hands back what the
