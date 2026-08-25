@@ -368,6 +368,32 @@ func quittingAsksTheLocalServiceToShutDownBeforeTheAppGoes() async {
   #expect(shutdowns == 1, "the app's termination path sends the service its shutdown")
 }
 
+/// The other half of that promise: a quit is a decision the person already made, so a service
+/// that never answers costs the deadline and nothing more. The injected value stands in for the
+/// two seconds production waits, which the first expectation pins.
+@Test @MainActor
+func quittingStopsWaitingOnAHelperThatNeverAnswersItsShutdown() async {
+  #expect(MenuBarViewModel.shutdownDeadline == .seconds(2))
+  let record = ShutdownRecord()
+  let model = MenuBarViewModel(
+    client: StubLocalService(
+      state: loggingInState(),
+      shutdownRecord: record,
+      shutdownAnswerDelayNanoseconds: 60_000_000_000
+    ),
+    shutdownDeadline: .milliseconds(120)
+  )
+  model.start()
+
+  let started = ContinuousClock.now
+  await model.shutdown()
+  let waited = ContinuousClock.now - started
+
+  #expect(waited < .seconds(2), "the quit waited on a helper that was never going to answer")
+  let shutdowns = await record.count
+  #expect(shutdowns == 0, "the helper had not answered, and the quit went ahead anyway")
+}
+
 private func todayOnly(tokens: Int) -> LocalServiceUsagePeriodValues {
   LocalServiceUsagePeriodValues(
     today: LocalServiceUsageDetail(
@@ -494,13 +520,15 @@ private struct StubLocalService: LocalServiceServing {
   let cancelDelayNanoseconds: UInt64
   let cancelFails: Bool
   let shutdownRecord: ShutdownRecord?
+  let shutdownAnswerDelayNanoseconds: UInt64
 
   init(
     state: LocalServiceState,
     loginDelayNanoseconds: UInt64 = 0,
     cancelDelayNanoseconds: UInt64 = 0,
     cancelFails: Bool = false,
-    shutdownRecord: ShutdownRecord? = nil
+    shutdownRecord: ShutdownRecord? = nil,
+    shutdownAnswerDelayNanoseconds: UInt64 = 0
   ) {
     stateValue = state
     events = AsyncStream { $0.finish() }
@@ -508,6 +536,7 @@ private struct StubLocalService: LocalServiceServing {
     self.cancelDelayNanoseconds = cancelDelayNanoseconds
     self.cancelFails = cancelFails
     self.shutdownRecord = shutdownRecord
+    self.shutdownAnswerDelayNanoseconds = shutdownAnswerDelayNanoseconds
   }
 
   func state() async throws -> LocalServiceState { stateValue }
@@ -609,6 +638,9 @@ private struct StubLocalService: LocalServiceServing {
     throw LocalServiceClientError.serviceMissing
   }
   func shutdown() async {
+    if shutdownAnswerDelayNanoseconds > 0 {
+      try? await Task.sleep(nanoseconds: shutdownAnswerDelayNanoseconds)
+    }
     await shutdownRecord?.record()
   }
 }

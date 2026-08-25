@@ -218,9 +218,8 @@ The service owns local storage. QuotaBar only presents `get_state.cache`.
 While `cache.rebuilding` is true, Overview shows one inline notice at the top: **Usage history is
 catching up** with **Quota and Account stay available.** Everything else stays exactly as it is —
 navigation, Quota, Account, and Usage are unaffected, there is no progress to watch, and there is
-no action to offer, because the next scan finishes it. A rebuild never blocks Quit: quitting
-sends the service its `shutdown` and waits only for that, bounded by the client's own liveness and
-kill escalation.
+no action to offer, because the next scan finishes it. Nothing blocks Quit: quitting sends the
+service its `shutdown` and waits at most two seconds for the answer before going ahead without it.
 
 ### Settings
 

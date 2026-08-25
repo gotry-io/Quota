@@ -199,13 +199,21 @@ final class MenuBarViewModel {
   @ObservationIgnored
   private var accountActionErrorMessage: String?
 
+  /// How long a quit waits for the service's goodbye before going ahead without it.
+  nonisolated static let shutdownDeadline: Duration = .seconds(2)
+
+  @ObservationIgnored
+  private let shutdownDeadline: Duration
+
   init(
     client: (any LocalServiceServing)? = nil,
     browserSessionImporter: any BrowserSessionImporting = BrowserSessionImporter(),
-    browserApplicationRouter: any BrowserApplicationRouting = WorkspaceBrowserApplicationRouter()
+    browserApplicationRouter: any BrowserApplicationRouting = WorkspaceBrowserApplicationRouter(),
+    shutdownDeadline: Duration = MenuBarViewModel.shutdownDeadline
   ) {
     self.browserSessionImporter = browserSessionImporter
     self.browserApplicationRouter = browserApplicationRouter
+    self.shutdownDeadline = shutdownDeadline
     if let client {
       self.client = client
       initializationError = nil
@@ -229,6 +237,7 @@ final class MenuBarViewModel {
       browserSessionImporter = BrowserSessionImporter()
       browserApplicationRouter = WorkspaceBrowserApplicationRouter()
       client = nil
+      shutdownDeadline = MenuBarViewModel.shutdownDeadline
       initializationError = nil
       self.errorMessage = errorMessage
       self.lastCheckedAt = lastCheckedAt
@@ -307,12 +316,27 @@ final class MenuBarViewModel {
     }
   }
 
-  /// QuotaBar's last word to its local service. The panel stops following it first, then the
-  /// client asks the helper to exit and escalates to terminate and kill if it will not.
+  /// QuotaBar's last word to its local service, and the last thing that can hold up a quit. The
+  /// panel stops following the service, then the client asks the helper to exit and escalates to
+  /// terminate and kill if it will not — but the wait for that answer is capped, because the
+  /// person pressed Quit. A helper wedged badly enough to answer neither its `shutdown` nor a
+  /// ping would otherwise hold the run loop AppKit is turning on our behalf; past the deadline
+  /// the escalation finishes without an audience, and this process exiting closes the child's
+  /// stdin, which says the same thing by a slower route.
   func shutdown() async {
     eventTask?.cancel()
     eventTask = nil
-    await client?.shutdown()
+    guard let client else { return }
+    // A race whose loser is abandoned rather than awaited: the deadline is the thing waited on,
+    // and a goodbye that lands first cancels it so a healthy quit is not slowed to two seconds.
+    let goodbye = Task { await client.shutdown() }
+    let deadline = Task { try await Task.sleep(for: shutdownDeadline) }
+    let arrival = Task {
+      await goodbye.value
+      deadline.cancel()
+    }
+    _ = await deadline.result
+    arrival.cancel()
   }
 
   func refreshIfNeeded() async {

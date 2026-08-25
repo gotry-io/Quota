@@ -14,8 +14,9 @@ final class QuotaBarAppDelegate: NSObject, NSApplicationDelegate {
   /// `terminateCancel` would not. It does mean the quit has to reach here from the run loop
   /// rather than from inside a main-actor task, which would leave the main queue holding the
   /// task below; every route QuotaBar quits by — the panel's Quit item, ⌘Q, a Quit event, and
-  /// logging out — is a run-loop one. Shutting the service down is bounded by the client's own
-  /// liveness and kill escalation, so the reply always comes.
+  /// logging out — is a run-loop one. The wait is capped by `MenuBarViewModel.shutdownDeadline`,
+  /// so a wedged helper delays a quit by two seconds and then stops mattering: the reply always
+  /// comes, and it is always yes.
   func applicationShouldTerminate(
     _ sender: NSApplication
   ) -> NSApplication.TerminateReply {
