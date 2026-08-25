@@ -110,7 +110,7 @@ async function onDeleteDevice(device: AccountDeviceRead, event: Event): Promise<
   if (button instanceof HTMLButtonElement) button.disabled = true;
   const outcome = await deleteDevice(device.id);
   if (outcome === "reauth") {
-    void beginWebLogin(DASHBOARD_PATH);
+    beginWebLogin(DASHBOARD_PATH);
     return;
   }
   if (outcome === "error") {
@@ -129,7 +129,7 @@ async function onDeleteAccount(event: Event): Promise<void> {
   if (button instanceof HTMLButtonElement) button.disabled = true;
   const outcome = await deleteAccount();
   if (outcome === "reauth") {
-    void beginWebLogin(DASHBOARD_PATH);
+    beginWebLogin(DASHBOARD_PATH);
     return;
   }
   if (outcome === "error") {

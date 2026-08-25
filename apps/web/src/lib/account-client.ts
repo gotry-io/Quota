@@ -13,7 +13,7 @@ import {
   browserTimezone,
   parseAccountActivityResponse,
 } from "./account-reads.ts";
-import { accountEntryAction, DASHBOARD_PATH } from "$lib/routes";
+import { signInHref } from "$lib/routes";
 
 export type { AccountActivityResult };
 export {
@@ -30,35 +30,13 @@ const jsonRequest = {
   headers: { Accept: "application/json" },
 } satisfies RequestInit;
 
-export async function beginWebLogin(returnTo: string): Promise<void> {
-  const response = await fetch("/api/auth/v2/sign-in/social", {
-    method: "POST",
-    credentials: "same-origin",
-    redirect: "error",
-    headers: { Accept: "application/json", "Content-Type": "application/json" },
-    body: JSON.stringify({ provider: "github", callbackURL: returnTo }),
-  });
-  const body = (await response.json()) as { url?: unknown };
-  if (!response.ok || typeof body.url !== "string") throw new Error("login_failed");
-  window.location.assign(body.url);
-}
-
-export async function openAccountOrLogin(): Promise<void> {
-  const response = await fetch("/api/v2/account", jsonRequest);
-  switch (accountEntryAction(response.status)) {
-    case "dashboard":
-      window.location.assign(DASHBOARD_PATH);
-      return;
-    case "login":
-      await beginWebLogin(DASHBOARD_PATH);
-      return;
-    case "error":
-      throw new Error("account_probe_failed");
-  }
+/** Sign-in is a navigation, not a fetch: Relay answers it with a redirect to GitHub. */
+export function beginWebLogin(returnTo: string): void {
+  window.location.assign(signInHref(returnTo));
 }
 
 export async function signOut(): Promise<void> {
-  const response = await fetch("/api/auth/v2/sign-out", {
+  const response = await fetch("/api/auth/logout", {
     method: "POST",
     ...jsonRequest,
   });
@@ -95,14 +73,11 @@ export async function deleteDevice(deviceId: string): Promise<"ok" | "reauth" | 
 }
 
 export async function deleteAccount(): Promise<"ok" | "reauth" | "error"> {
-  const response = await fetch("/api/auth/v2/delete-user", {
-    method: "POST",
-    credentials: "same-origin",
-    redirect: "error",
-    headers: { Accept: "application/json", "Content-Type": "application/json" },
-    body: "{}",
+  const response = await fetch("/api/v2/account", {
+    method: "DELETE",
+    ...jsonRequest,
   });
-  if ([400, 401, 403].includes(response.status)) return "reauth";
+  if (response.status === 401 || response.status === 403) return "reauth";
   return response.ok ? "ok" : "error";
 }
 
@@ -125,7 +100,7 @@ export async function decideActivation(
     body: JSON.stringify(request.data),
   });
   if (response.status === 401 || response.status === 403) {
-    await beginWebLogin(returnTo);
+    beginWebLogin(returnTo);
     return "reauth";
   }
   return response.ok ? "ok" : "error";

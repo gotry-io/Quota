@@ -1,5 +1,6 @@
 <script lang="ts">
-import { openAccountOrLogin, signOut } from "$lib/account-client";
+import { signOut } from "$lib/account-client";
+import { signInHref } from "$lib/routes";
 import type { WebDocumentViewer } from "$lib/server/document-port";
 
 let { viewer }: { viewer: WebDocumentViewer | null } = $props();
@@ -16,14 +17,6 @@ $effect(() => {
   document.addEventListener("pointerdown", onPointerDown);
   return () => document.removeEventListener("pointerdown", onPointerDown);
 });
-
-async function onLogin(): Promise<void> {
-  try {
-    await openAccountOrLogin();
-  } catch {
-    window.alert("Quota could not start GitHub sign-in. Try again.");
-  }
-}
 
 async function onLogout(event: SubmitEvent): Promise<void> {
   event.preventDefault();
@@ -44,15 +37,15 @@ async function onLogout(event: SubmitEvent): Promise<void> {
     <a href="/#product">Product</a>
     <a href="https://github.com/gotry-io/Quota">GitHub</a>
     <div class="header-session">
-      <button
+      <a
         id="header-login"
         class="button button-primary header-action"
-        type="button"
+        href={signInHref()}
         hidden={viewer !== null}
-        onclick={() => void onLogin()}
+        data-sveltekit-reload
       >
         Continue with GitHub
-      </button>
+      </a>
       <div id="header-account" class="header-account" hidden={viewer === null}>
         <a id="header-account-name" class="header-account-name" href="/my"
           >{viewer?.displayLabel ?? "Account"}</a
@@ -60,7 +53,7 @@ async function onLogout(event: SubmitEvent): Promise<void> {
         <details id="header-account-menu" class="account-menu" bind:this={menu}>
           <summary class="account-menu-trigger" aria-label="Account menu"></summary>
           <div class="account-menu-popover">
-            <form action="/api/auth/v2/sign-out" method="post" onsubmit={onLogout}>
+            <form action="/api/auth/logout" method="post" onsubmit={onLogout}>
               <button class="text-button" type="submit">Sign out</button>
             </form>
           </div>

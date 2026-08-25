@@ -1,10 +1,12 @@
 export const DASHBOARD_PATH = "/my";
+/** Relay's GitHub sign-in. Following it is the whole flow; the browser never fetches it. */
+export const SIGN_IN_PATH = "/api/auth/github/start";
 
-export type AccountEntryAction = "dashboard" | "login" | "error";
-
-export function accountEntryAction(status: number): AccountEntryAction {
-  if (status >= 200 && status < 300) return "dashboard";
-  return status === 401 ? "login" : "error";
+/** Where to send a signed-out visitor so they come back to the page they wanted. */
+export function signInHref(returnTo: string = DASHBOARD_PATH): string {
+  return returnTo === DASHBOARD_PATH
+    ? SIGN_IN_PATH
+    : `${SIGN_IN_PATH}?return_to=${encodeURIComponent(returnTo)}`;
 }
 
 /** `/app` shipped in 0.0.4; keep one bookmark redirect while `/my` is canonical. */
