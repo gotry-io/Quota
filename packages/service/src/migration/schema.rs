@@ -620,12 +620,28 @@ fn migration_v11(tx: &Transaction<'_>) -> Result<(), StateError> {
                    completed_at, duration_ms, outcome, code, recovery, metrics_json,
                    start_revision, end_revision
             FROM diagnostic_attempts_v10;
-         DROP TABLE diagnostic_attempts_v10;
          CREATE INDEX diagnostic_attempts_recent_idx
             ON diagnostic_attempts(started_at DESC, id DESC);
          CREATE INDEX diagnostic_attempts_parent_idx
             ON diagnostic_attempts(parent_refresh_id, id);",
     )?;
+    // A row the copy could not take is one no reader could take either — the attempt log is
+    // read whole, and a single unparseable code fails all of it.  Dropping it is a repair, but
+    // the reader is told the history is short, the same way retention says so.
+    let dropped = tx.query_row(
+        "SELECT (SELECT COUNT(*) FROM diagnostic_attempts_v10)
+              - (SELECT COUNT(*) FROM diagnostic_attempts)",
+        [],
+        |row| row.get::<_, i64>(0),
+    )?;
+    if dropped > 0 {
+        tx.execute(
+            "INSERT INTO metadata(key, value) VALUES ('attempt_history_truncated', '1')
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [],
+        )?;
+    }
+    tx.execute_batch("DROP TABLE diagnostic_attempts_v10;")?;
 
     // The persisted collection report is stamped with the contract it was written under, and
     // the app decodes the whole IPC state or none of it.  It is this device's own reading of
@@ -642,7 +658,18 @@ fn migration_v11(tx: &Transaction<'_>) -> Result<(), StateError> {
     {
         let mut value: Value = serde_json::from_str(&raw)?;
         if value.get("protocol_version").and_then(Value::as_i64) == Some(2) {
-            value["protocol_version"] = Value::from(crate::protocol::LOCAL_COLLECTION_PROTOCOL);
+            // Stamping a newer version onto a report that is not one hands the app something it
+            // decodes the whole state by and cannot read.  A report is this device's own cache
+            // of its own sources, so one that is not the shape being promoted is dropped and
+            // rebuilt by the next collection rather than carried forward as a version it is not.
+            let promotable = value.get("captured_at").and_then(Value::as_str).is_some()
+                && value.get("results").and_then(Value::as_array).is_some();
+            value = if promotable {
+                value["protocol_version"] = Value::from(crate::protocol::LOCAL_COLLECTION_PROTOCOL);
+                value
+            } else {
+                Value::Null
+            };
             tx.execute(
                 "UPDATE components SET value_json = ?1 WHERE name = 'quota'",
                 [serde_json::to_string(&value)?],
@@ -1388,6 +1415,69 @@ mod tests {
             .collect::<Result<Vec<_>, _>>()
             .expect("values");
         assert_eq!(codes, vec!["provider_error".to_string()]);
+        // Dropping it is a repair, but the reader is told their history is short.
+        let truncated: String = conn
+            .query_row(
+                "SELECT value FROM metadata WHERE key = 'attempt_history_truncated'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("marker");
+        assert_eq!(truncated, "1");
+    }
+
+    /// A report that is not the shape being promoted is not given a version it does not have:
+    /// the app decodes the whole state by that version, so carrying one forward would cost the
+    /// reader every surface at once instead of one cache the next collection rebuilds.
+    #[test]
+    fn a_report_that_is_not_the_shape_being_promoted_is_dropped() {
+        for (name, value, promoted) in [
+            (
+                "a report",
+                serde_json::json!({
+                    "protocol_version": 2,
+                    "captured_at": "2026-08-25T00:00:00Z",
+                    "results": []
+                }),
+                true,
+            ),
+            (
+                "something else entirely",
+                serde_json::json!({"protocol_version": 2, "unexpected": true}),
+                false,
+            ),
+        ] {
+            let mut conn = Connection::open_in_memory().expect("memory");
+            apply(&mut conn).expect("fresh");
+            conn.execute("DELETE FROM schema_migrations WHERE version = 11", [])
+                .expect("rewind");
+            conn.execute(
+                "INSERT INTO components(name, status, value_json) VALUES ('quota', 'ready', ?1)
+                 ON CONFLICT(name) DO UPDATE SET value_json = excluded.value_json",
+                params![value.to_string()],
+            )
+            .expect("persisted report");
+
+            apply(&mut conn).expect("v11");
+
+            let stored: String = conn
+                .query_row(
+                    "SELECT value_json FROM components WHERE name = 'quota'",
+                    [],
+                    |row| row.get(0),
+                )
+                .expect("component");
+            let stored: Value = serde_json::from_str(&stored).expect("json");
+            if promoted {
+                assert_eq!(
+                    stored.get("protocol_version").and_then(Value::as_i64),
+                    Some(crate::protocol::LOCAL_COLLECTION_PROTOCOL),
+                    "{name}"
+                );
+            } else {
+                assert!(stored.is_null(), "{name}: {stored}");
+            }
+        }
     }
 
     fn usage_submission(protocol_version: u64, submission_id: &str, agent: &str) -> Value {
