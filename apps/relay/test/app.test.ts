@@ -1340,6 +1340,59 @@ describe("managed Relay on real Workers and D1", () => {
         .bind(tokens.device_id)
         .first("display_name"),
     ).toBe("Kyle's Mac mini");
+    // Reads are tolerant of a field this build cannot name; a write is not. (ADR 0023)
+    const deviceHeaders = {
+      Authorization: `Bearer ${tokens.device_session.access_token}`,
+      "Content-Type": "application/json",
+    };
+    expect(
+      (
+        await app.request("https://quota.gotry.io/api/v2/device/profile", {
+          method: "PUT",
+          headers: deviceHeaders,
+          body: JSON.stringify({
+            protocol_version: 2,
+            display_name: "Kyle's Mac mini",
+            platform: "macos",
+            reported_at: now.toISOString(),
+          }),
+        })
+      ).status,
+    ).toBe(400);
+    const envelope = {
+      protocol_version: 5,
+      device_id: tokens.device_id,
+      generation: tokens.device_generation,
+      sequence: 0,
+      captured_at: now.toISOString(),
+      snapshots: [
+        {
+          provider: "codex",
+          account: { fingerprint: "fingerprint_strict", fingerprint_scope: "global" },
+          windows: [{ id: "weekly", title: "Weekly", used_percent: 25 }],
+          status: "available",
+          observed_at: now.toISOString(),
+        },
+      ],
+    };
+    expect(
+      (
+        await app.request("https://quota.gotry.io/api/v5/device/snapshots", {
+          method: "PUT",
+          headers: deviceHeaders,
+          body: JSON.stringify(envelope),
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await app.request("https://quota.gotry.io/api/v5/device/snapshots", {
+          method: "PUT",
+          headers: deviceHeaders,
+          body: JSON.stringify({ ...envelope, sequence: 1, uploaded_at: now.toISOString() }),
+        })
+      ).status,
+    ).toBe(400);
     expect(
       (
         await app.request("https://quota.gotry.io/oauth/v2/revoke", {
