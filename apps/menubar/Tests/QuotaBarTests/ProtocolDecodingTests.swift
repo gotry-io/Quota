@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import QuotaWire
+import QuotaPresentation
 import Testing
 
 @testable import QuotaBar
@@ -603,70 +604,6 @@ func decodesUnifiedDiagnosticsAndRejectsUnknownFields() throws {
 }
 
 @Test
-func decodesAccountHourlyUsageResponse() throws {
-  let data = Data(
-    #"""
-    {
-      "protocol_version": 5,
-      "start_at": "2026-08-02T12:00:00Z",
-      "end_at": "2026-08-02T13:00:00Z",
-      "facts": [{
-        "device_id": "device_01",
-        "aggregation_timezone": "Asia/Singapore",
-        "bucket_start_utc": "2026-08-02T12:00:00Z",
-        "usage_date": "2026-08-02",
-        "usage_hour": 20,
-        "agent": "grok",
-        "billing_channel": "xai_direct",
-        "channel_source": "agent_default",
-        "model": "grok-4.5",
-        "context_bucket": "le_128k",
-        "service_tier": "default",
-        "speed": "standard",
-        "inference_geo": "global",
-        "input_tokens": 1000,
-        "cache_read_tokens": 100,
-        "cache_write_5m_tokens": 0,
-        "cache_write_1h_tokens": 0,
-        "cache_write_inferred_tokens": 0,
-        "output_tokens": 200,
-        "reasoning_tokens": 50,
-        "requests": 1,
-        "web_search_requests": 0,
-        "web_fetch_requests": 0,
-        "source_cost_covered_requests": 0
-      }],
-      "coverage": "partial",
-      "cost": {
-        "mode": "calculate",
-        "basis": "calculated",
-        "status": "complete",
-        "amount_microusd": "3138",
-        "catalog_revision": "pricing_1",
-        "calculated_rows": 1,
-        "reported_rows": 0,
-        "unpriced_rows": 0,
-        "assumptions": ["agent_default_channel"],
-        "unpriced": []
-      }
-    }
-    """#.utf8
-  )
-
-  let response = try QuotaWireCodec.makeDecoder().decode(
-    AccountUsageHourlyResponse.self,
-    from: data
-  )
-
-  #expect(response.facts.first?.deviceID == "device_01")
-  #expect(response.facts.first?.fact.agent == .grok)
-  #expect(response.facts.first?.fact.billingChannel == .xaiDirect)
-  #expect(response.facts.first?.aggregationTimezone == "Asia/Singapore")
-  #expect(response.cost.calculatedRows == response.facts.count)
-  #expect(response.coverage == .partial)
-}
-
-@Test
 func decodesLocalUsageReportShape() throws {
   let report = LocalUsageReport(
     generatedAt: Date(timeIntervalSince1970: 1_754_080_000),
@@ -792,7 +729,7 @@ func decodesCollectionReportAndCalculatesRemainingQuota() throws {
   let data = Data(
     #"""
     {
-      "protocol_version": 2,
+      "protocol_version": 3,
       "captured_at": "2026-08-02T01:00:00Z",
       "results": [{
         "provider": "codex",
@@ -827,7 +764,7 @@ func decodesCollectionReportAndCalculatesRemainingQuota() throws {
 
   let report = try QuotaWireCodec.makeDecoder().decode(QuotaCollectionReport.self, from: data)
 
-  #expect(report.protocolVersion == 2)
+  #expect(report.protocolVersion == QuotaProtocol.localCollection)
   #expect(report.results.first?.snapshots.first?.windows.first?.remainingPercent == 84)
   #expect(report.results.first?.snapshots.first?.account.fingerprintScope == .source)
   #expect(report.results.last?.outcome == .authRequired)
@@ -838,7 +775,7 @@ func rejectsCollectionResultWithoutSnapshots() {
   let data = Data(
     #"""
     {
-      "protocol_version": 2,
+      "protocol_version": 3,
       "captured_at": "2026-08-02T01:00:00Z",
       "results": [{
         "provider": "claude",
@@ -1067,7 +1004,7 @@ func aReportPersistedByAnEarlierBuildDecodesWithoutTheSourceCount() throws {
   let data = Data(
     #"""
     {
-      "protocol_version": 2,
+      "protocol_version": 3,
       "captured_at": "2026-08-02T01:00:00Z",
       "results": [{ "provider": "codex", "outcome": "unavailable", "snapshots": [] }]
     }

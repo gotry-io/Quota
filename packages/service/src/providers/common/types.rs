@@ -13,6 +13,10 @@ pub const BROWSER_SESSION_SOURCE: &str = "browser_session";
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ErrorCategory {
     AuthRequired,
+    /// This device was refused a credential it holds.  It reads as `unavailable` on the wire,
+    /// because a reader on another device can neither see nor change this one's access; the
+    /// marker that separates it travels with the local collection result.
+    AccessDenied,
     Unavailable,
     Unsupported,
     Error,
@@ -22,7 +26,7 @@ impl ErrorCategory {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::AuthRequired => "auth_required",
-            Self::Unavailable => "unavailable",
+            Self::AccessDenied | Self::Unavailable => "unavailable",
             Self::Unsupported => "unsupported",
             Self::Error => "error",
         }

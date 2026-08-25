@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use crate::state::StateError;
 
-const CURRENT_SCHEMA: i64 = 10;
+const CURRENT_SCHEMA: i64 = 11;
 
 pub fn apply(conn: &mut Connection) -> Result<(), StateError> {
     conn.execute_batch(
@@ -36,6 +36,7 @@ pub fn apply(conn: &mut Connection) -> Result<(), StateError> {
             8 => migration_v8(&tx)?,
             9 => migration_v9(&tx)?,
             10 => migration_v10(&tx)?,
+            11 => migration_v11(&tx)?,
             _ => return Err(StateError::InvalidState),
         }
         tx.execute(
@@ -561,6 +562,123 @@ fn migration_v10(tx: &Transaction<'_>) -> Result<(), StateError> {
     Ok(())
 }
 
+/// Two conditions this build can now name needed room to be recorded: a credential store that
+/// refuses what it holds, and a contract Relay has retired.  Both were being filed under codes
+/// that sent the reader somewhere that could not help.
+///
+/// The attempt table names its codes in a CHECK, which SQLite cannot alter, so the table is
+/// rebuilt.  History is copied across, because it is the record a reader consults to see how
+/// long something has been failing — but only as far as it can be: a row an image should never
+/// have held would otherwise fail the whole copy, and a device that cannot open its state is a
+/// worse outcome than a device missing a line of history it could not read anyway.
+fn migration_v11(tx: &Transaction<'_>) -> Result<(), StateError> {
+    tx.execute_batch(
+        "ALTER TABLE diagnostic_attempts RENAME TO diagnostic_attempts_v10;
+         DROP INDEX IF EXISTS diagnostic_attempts_recent_idx;
+         DROP INDEX IF EXISTS diagnostic_attempts_parent_idx;
+         CREATE TABLE diagnostic_attempts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            parent_refresh_id INTEGER REFERENCES diagnostic_attempts(id) ON DELETE SET NULL,
+            kind TEXT NOT NULL CHECK (kind IN (
+                'refresh', 'quota_collection', 'usage_scan', 'usage_upload',
+                'account_sync', 'pricing_refresh', 'device_health_upload'
+            )),
+            trigger TEXT NOT NULL CHECK (trigger IN (
+                'manual', 'scheduled', 'startup', 'recheck', 'settings_change', 'account_change'
+            )),
+            source TEXT NOT NULL CHECK (source IN ('this_device', 'account', 'system')),
+            subject TEXT CHECK (subject IS NULL OR (
+                length(subject) BETWEEN 7 AND 96
+                AND (subject LIKE 'provider:%' OR subject LIKE 'agent:%')
+                AND subject NOT GLOB '*[^a-z0-9_:]*'
+            )),
+            mode TEXT NOT NULL CHECK (mode IN ('inactive', 'opportunistic', 'required')),
+            started_at TEXT NOT NULL,
+            completed_at TEXT,
+            duration_ms INTEGER CHECK (duration_ms IS NULL OR duration_ms BETWEEN 0 AND 86400000),
+            outcome TEXT CHECK (outcome IS NULL OR outcome IN (
+                'success', 'partial', 'no_work', 'failed', 'interrupted', 'cancelled'
+            )),
+            code TEXT CHECK (code IS NULL OR code IN (
+                'process_interrupted', 'cancelled', 'no_work', 'authentication_required',
+                'network_error', 'unavailable', 'invalid_response', 'invalid_state',
+                'provider_error', 'access_denied', 'client_upgrade_required',
+                'partial_source', 'malformed_data',
+                'truncated_active_source', 'invalid_usage_batch', 'unrepresentable_hour',
+                'device_deleted', 'upload_disabled', 'signed_out'
+            )),
+            recovery TEXT NOT NULL CHECK (recovery IN (
+                'none', 'automatic', 'login', 'configure_provider', 'retry',
+                'update_source', 'check_access', 'upgrade', 'reinstall', 'feedback'
+            )),
+            metrics_json TEXT NOT NULL DEFAULT '{}',
+            start_revision INTEGER NOT NULL CHECK (start_revision >= 0),
+            end_revision INTEGER CHECK (end_revision IS NULL OR end_revision >= 0)
+         );
+         INSERT OR IGNORE INTO diagnostic_attempts
+            SELECT id, parent_refresh_id, kind, trigger, source, subject, mode, started_at,
+                   completed_at, duration_ms, outcome, code, recovery, metrics_json,
+                   start_revision, end_revision
+            FROM diagnostic_attempts_v10;
+         CREATE INDEX diagnostic_attempts_recent_idx
+            ON diagnostic_attempts(started_at DESC, id DESC);
+         CREATE INDEX diagnostic_attempts_parent_idx
+            ON diagnostic_attempts(parent_refresh_id, id);",
+    )?;
+    // A row the copy could not take is one no reader could take either — the attempt log is
+    // read whole, and a single unparseable code fails all of it.  Dropping it is a repair, but
+    // the reader is told the history is short, the same way retention says so.
+    let dropped = tx.query_row(
+        "SELECT (SELECT COUNT(*) FROM diagnostic_attempts_v10)
+              - (SELECT COUNT(*) FROM diagnostic_attempts)",
+        [],
+        |row| row.get::<_, i64>(0),
+    )?;
+    if dropped > 0 {
+        tx.execute(
+            "INSERT INTO metadata(key, value) VALUES ('attempt_history_truncated', '1')
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [],
+        )?;
+    }
+    tx.execute_batch("DROP TABLE diagnostic_attempts_v10;")?;
+
+    // The persisted collection report is stamped with the contract it was written under, and
+    // the app decodes the whole IPC state or none of it.  It is this device's own reading of
+    // its own sources, so it is promoted rather than discarded: v3 only added a marker a v2
+    // report could not have set.
+    if let Some(raw) = tx
+        .query_row(
+            "SELECT value_json FROM components WHERE name = 'quota'",
+            [],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()?
+        .flatten()
+    {
+        let mut value: Value = serde_json::from_str(&raw)?;
+        if value.get("protocol_version").and_then(Value::as_i64) == Some(2) {
+            // Stamping a newer version onto a report that is not one hands the app something it
+            // decodes the whole state by and cannot read.  A report is this device's own cache
+            // of its own sources, so one that is not the shape being promoted is dropped and
+            // rebuilt by the next collection rather than carried forward as a version it is not.
+            let promotable = value.get("captured_at").and_then(Value::as_str).is_some()
+                && value.get("results").and_then(Value::as_array).is_some();
+            value = if promotable {
+                value["protocol_version"] = Value::from(crate::protocol::LOCAL_COLLECTION_PROTOCOL);
+                value
+            } else {
+                Value::Null
+            };
+            tx.execute(
+                "UPDATE components SET value_json = ?1 WHERE name = 'quota'",
+                [serde_json::to_string(&value)?],
+            )?;
+        }
+    }
+    Ok(())
+}
+
 /// Removes the stamp and the collector name from every reading in a persisted value.
 ///
 /// A reading is recognised by its own shape rather than by a path, because it appears at
@@ -652,7 +770,7 @@ mod tests {
             .expect("v1 rows")
             .collect::<Result<Vec<_>, _>>()
             .expect("v1 values");
-        assert_eq!(fresh_versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+        assert_eq!(fresh_versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
         assert_eq!(fresh_versions, v1_versions);
         assert_eq!(
             columns(&fresh, "usage_period_cache"),
@@ -1137,7 +1255,7 @@ mod tests {
             .expect("rows")
             .collect::<Result<Vec<_>, _>>()
             .expect("values");
-        assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+        assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
     }
 
     fn columns_after_fresh_apply(table: &str) -> Vec<String> {
@@ -1153,7 +1271,7 @@ mod tests {
     fn a_device_holding_an_unsendable_submission_gives_up_its_staged_set() {
         let mut conn = Connection::open_in_memory().expect("memory");
         apply(&mut conn).expect("fresh");
-        conn.execute("DELETE FROM schema_migrations WHERE version = 10", [])
+        conn.execute("DELETE FROM schema_migrations WHERE version >= 10", [])
             .expect("rewind");
 
         let mut stranded = usage_submission(4, "stranded", "codex");
@@ -1204,6 +1322,162 @@ mod tests {
             Some(crate::protocol::MANAGED_DATA_PROTOCOL)
         );
         assert!(crate::relay::validate_usage_submission(&promoted).is_ok());
+    }
+
+    /// Naming a condition is only useful if it can be written down.  The attempt table lists
+    /// its codes in a CHECK that SQLite cannot alter, so the ladder rebuilds it — and the
+    /// history a reader consults to see how long something has been failing comes across.
+    #[test]
+    fn the_attempt_table_accepts_the_conditions_this_build_can_name() {
+        let mut conn = Connection::open_in_memory().expect("memory");
+        apply(&mut conn).expect("fresh");
+        conn.execute(
+            "INSERT INTO diagnostic_attempts(
+                kind, trigger, source, mode, started_at, outcome, code, recovery, start_revision
+             ) VALUES ('quota_collection', 'scheduled', 'this_device', 'required',
+                       '2026-08-25T00:00:00Z', 'failed', 'provider_error', 'retry', 1)",
+            [],
+        )
+        .expect("history");
+
+        for (code, recovery) in [
+            ("access_denied", "check_access"),
+            ("client_upgrade_required", "upgrade"),
+        ] {
+            conn.execute(
+                "INSERT INTO diagnostic_attempts(
+                    kind, trigger, source, mode, started_at, outcome, code, recovery,
+                    start_revision
+                 ) VALUES ('quota_collection', 'scheduled', 'this_device', 'required',
+                           '2026-08-25T00:01:00Z', 'failed', ?1, ?2, 1)",
+                params![code, recovery],
+            )
+            .unwrap_or_else(|error| panic!("{code} rejected: {error}"));
+        }
+
+        let kept: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM diagnostic_attempts WHERE code = 'provider_error'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("history kept");
+        assert_eq!(kept, 1);
+        // Rewinding and re-running the rebuild keeps every row it found.
+        conn.execute("DELETE FROM schema_migrations WHERE version = 11", [])
+            .expect("rewind");
+        apply(&mut conn).expect("v11");
+        let total: i64 = conn
+            .query_row("SELECT COUNT(*) FROM diagnostic_attempts", [], |row| {
+                row.get(0)
+            })
+            .expect("after rebuild");
+        assert_eq!(total, 3);
+    }
+
+    /// Rebuilding the table must not be able to strand a device.  An image holding a row it
+    /// should never have held gives up that row, not the ladder: a service that cannot open
+    /// its state is worse than a missing line of history nothing could read anyway.
+    #[test]
+    fn a_row_the_table_should_never_have_held_does_not_strand_the_ladder() {
+        let mut conn = Connection::open_in_memory().expect("memory");
+        apply(&mut conn).expect("fresh");
+        conn.execute("DELETE FROM schema_migrations WHERE version = 11", [])
+            .expect("rewind");
+        conn.execute_batch("PRAGMA ignore_check_constraints = ON")
+            .expect("simulate an image that already holds one");
+        conn.execute(
+            "INSERT INTO diagnostic_attempts(
+                kind, trigger, source, mode, started_at, outcome, code, recovery, start_revision
+             ) VALUES ('quota_collection', 'scheduled', 'this_device', 'required',
+                       '2026-08-25T00:00:00Z', 'failed', 'not_a_code', 'retry', 1)",
+            [],
+        )
+        .expect("unreadable row");
+        conn.execute(
+            "INSERT INTO diagnostic_attempts(
+                kind, trigger, source, mode, started_at, outcome, code, recovery, start_revision
+             ) VALUES ('quota_collection', 'scheduled', 'this_device', 'required',
+                       '2026-08-25T00:00:01Z', 'failed', 'provider_error', 'retry', 1)",
+            [],
+        )
+        .expect("readable row");
+        conn.execute_batch("PRAGMA ignore_check_constraints = OFF")
+            .expect("restore");
+
+        apply(&mut conn).expect("the ladder still completes");
+
+        let codes: Vec<String> = conn
+            .prepare("SELECT code FROM diagnostic_attempts ORDER BY started_at")
+            .expect("query")
+            .query_map([], |row| row.get(0))
+            .expect("rows")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("values");
+        assert_eq!(codes, vec!["provider_error".to_string()]);
+        // Dropping it is a repair, but the reader is told their history is short.
+        let truncated: String = conn
+            .query_row(
+                "SELECT value FROM metadata WHERE key = 'attempt_history_truncated'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("marker");
+        assert_eq!(truncated, "1");
+    }
+
+    /// A report that is not the shape being promoted is not given a version it does not have:
+    /// the app decodes the whole state by that version, so carrying one forward would cost the
+    /// reader every surface at once instead of one cache the next collection rebuilds.
+    #[test]
+    fn a_report_that_is_not_the_shape_being_promoted_is_dropped() {
+        for (name, value, promoted) in [
+            (
+                "a report",
+                serde_json::json!({
+                    "protocol_version": 2,
+                    "captured_at": "2026-08-25T00:00:00Z",
+                    "results": []
+                }),
+                true,
+            ),
+            (
+                "something else entirely",
+                serde_json::json!({"protocol_version": 2, "unexpected": true}),
+                false,
+            ),
+        ] {
+            let mut conn = Connection::open_in_memory().expect("memory");
+            apply(&mut conn).expect("fresh");
+            conn.execute("DELETE FROM schema_migrations WHERE version = 11", [])
+                .expect("rewind");
+            conn.execute(
+                "INSERT INTO components(name, status, value_json) VALUES ('quota', 'ready', ?1)
+                 ON CONFLICT(name) DO UPDATE SET value_json = excluded.value_json",
+                params![value.to_string()],
+            )
+            .expect("persisted report");
+
+            apply(&mut conn).expect("v11");
+
+            let stored: String = conn
+                .query_row(
+                    "SELECT value_json FROM components WHERE name = 'quota'",
+                    [],
+                    |row| row.get(0),
+                )
+                .expect("component");
+            let stored: Value = serde_json::from_str(&stored).expect("json");
+            if promoted {
+                assert_eq!(
+                    stored.get("protocol_version").and_then(Value::as_i64),
+                    Some(crate::protocol::LOCAL_COLLECTION_PROTOCOL),
+                    "{name}"
+                );
+            } else {
+                assert!(stored.is_null(), "{name}: {stored}");
+            }
+        }
     }
 
     fn usage_submission(protocol_version: u64, submission_id: &str, agent: &str) -> Value {

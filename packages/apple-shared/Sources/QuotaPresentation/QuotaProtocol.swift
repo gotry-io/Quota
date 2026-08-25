@@ -13,7 +13,7 @@ public enum QuotaProtocol {
   /// The private local Usage report the service hands its own app.
   public static let localUsage = 3
   /// The private local quota collection report the service hands its own app.
-  public static let localCollection = 2
+  public static let localCollection = 3
 
   /// No agent this Account accepts existed before this instant, so a coverage window reaching
   /// back past it was computed from a missing lower bound rather than scanned.

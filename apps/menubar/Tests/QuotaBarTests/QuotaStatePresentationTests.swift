@@ -83,7 +83,8 @@ struct QuotaStatePresentationTests {
         snapshots: [],
         source: nil,
         message: expired,
-        sources: 1
+        sources: 1,
+              accessDenied: nil
       )
     )
     #expect(rejected?.kind == .needsSignIn)
@@ -97,7 +98,8 @@ struct QuotaStatePresentationTests {
         snapshots: [],
         source: nil,
         message: nil,
-        sources: 0
+        sources: 0,
+              accessDenied: nil
       )
     )
     #expect(neverConfigured?.kind == .needsSignIn)

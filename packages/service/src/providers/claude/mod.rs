@@ -71,8 +71,19 @@ pub fn collect(
 }
 
 fn collect_official(context: &CollectionContext) -> Result<QuotaSnapshot, ProviderError> {
-    let credentials = load_credentials(context)
-        .ok_or_else(|| ProviderError::new(ErrorCategory::AuthRequired, SOURCE))?;
+    let lookup = look_up_credentials(context);
+    let Some(credentials) = lookup.credentials else {
+        // A withheld secret is not an expired sign-in, and reporting it as one sends the
+        // reader to sign in again for as long as the access decision stands.
+        return Err(ProviderError::new(
+            if lookup.keychain_refused {
+                ErrorCategory::AccessDenied
+            } else {
+                ErrorCategory::AuthRequired
+            },
+            SOURCE,
+        ));
+    };
     let plan = credentials.subscription_type.clone();
     match collect_oauth(credentials, context) {
         Ok(snapshot) => Ok(snapshot),
@@ -119,28 +130,75 @@ fn collect_oauth(
     }
 }
 
-fn load_credentials(context: &CollectionContext) -> Option<Credentials> {
+/// What the Keychain had to say about this account's sign-in.
+enum KeychainRead {
+    Found(Credentials),
+    /// No entry for this service, or this build does not read the Keychain at all.
+    Absent,
+    /// The entry is there and its secret was withheld.  That is an access decision, and
+    /// signing in again only rewrites a secret this device still would not be handed.
+    Refused,
+}
+
+/// This device's Claude sign-in, and whether the Keychain refused to hand one over.
+struct CredentialLookup {
+    credentials: Option<Credentials>,
+    keychain_refused: bool,
+}
+
+fn look_up_credentials(context: &CollectionContext) -> CredentialLookup {
     let root = context
         .env("CLAUDE_CONFIG_DIR")
         .filter(|value| !value.trim().is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| context.home_directory.join(".claude"));
-    let file = root.join(".credentials.json");
-    let file_credentials = read_credentials_file(&file);
-    if file_credentials
-        .as_ref()
-        .map(|credentials| !is_expiring(credentials, context.observed_unix()))
-        .unwrap_or(false)
-    {
-        return file_credentials;
+    let file_credentials = read_credentials_file(&root.join(".credentials.json"));
+    let keychain = if cfg!(target_os = "macos") && context.allows_host_keychain() {
+        read_keychain(context)
+    } else {
+        KeychainRead::Absent
+    };
+    let keychain_refused = matches!(keychain, KeychainRead::Refused);
+    let keychain_credentials = match keychain {
+        KeychainRead::Found(credentials) => Some(credentials),
+        KeychainRead::Absent | KeychainRead::Refused => None,
+    };
+    // Claude renews the Keychain entry in place, so that is the live grant and the file is
+    // what an older version left behind.  Reading the file first let one that had been
+    // revoked but not yet expired mask the renewed grant for as long as its clock ran, and
+    // took the renewal this collector performs with it: `/status` writes to the Keychain, so
+    // reloading returned the same dead token and the refresh looked like it had done nothing.
+    CredentialLookup {
+        credentials: preferred_credentials(
+            keychain_credentials,
+            file_credentials,
+            context.observed_unix(),
+        ),
+        keychain_refused,
     }
-    if cfg!(target_os = "macos")
-        && context.allows_host_keychain()
-        && let Some(credentials) = read_keychain(context)
-    {
-        return Some(credentials);
+}
+
+/// The Keychain grant wins unless it is the only expiring one of the two.
+fn preferred_credentials(
+    keychain: Option<Credentials>,
+    file: Option<Credentials>,
+    now: i64,
+) -> Option<Credentials> {
+    match (keychain, file) {
+        (Some(keychain), Some(file)) => {
+            Some(if !is_expiring(&keychain, now) || is_expiring(&file, now) {
+                keychain
+            } else {
+                file
+            })
+        }
+        (Some(keychain), None) => Some(keychain),
+        (None, file) => file,
     }
-    file_credentials
+}
+
+fn load_credentials(context: &CollectionContext) -> Option<Credentials> {
+    look_up_credentials(context).credentials
 }
 
 fn read_credentials_file(path: &Path) -> Option<Credentials> {
@@ -152,17 +210,46 @@ fn read_credentials_file(path: &Path) -> Option<Credentials> {
     parse_credentials(&value, &path.to_string_lossy())
 }
 
-fn read_keychain(context: &CollectionContext) -> Option<Credentials> {
+fn read_keychain(context: &CollectionContext) -> KeychainRead {
     let mut command = Command::new("/usr/bin/security");
     command.args(["find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"]);
-    let output = run_bounded_command(
+    let Some(output) = run_bounded_command(
         command,
         Duration::from_secs(10),
         context.cancel.as_ref(),
         1_048_576,
-    )?;
-    let value: Value = serde_json::from_slice(&output).ok()?;
-    parse_credentials(&value, &format!("macOS Keychain: {KEYCHAIN_SERVICE}"))
+    ) else {
+        // A refresh that was cancelled proves nothing about access, and the probe below shares
+        // its cancellation, so ask first rather than read a stopped command as a refusal.
+        let cancelled = context
+            .cancel
+            .as_ref()
+            .is_some_and(|cancel| cancel.load(std::sync::atomic::Ordering::Acquire));
+        return if !cancelled && keychain_entry_exists(context) {
+            KeychainRead::Refused
+        } else {
+            KeychainRead::Absent
+        };
+    };
+    serde_json::from_slice::<Value>(&output)
+        .ok()
+        .and_then(|value| parse_credentials(&value, &format!("macOS Keychain: {KEYCHAIN_SERVICE}")))
+        .map_or(KeychainRead::Absent, KeychainRead::Found)
+}
+
+/// Asks only whether the entry is there.  Answering that needs no access to the secret it
+/// holds, which is what separates an account that was never signed in from one this device
+/// is not allowed to read.
+fn keychain_entry_exists(context: &CollectionContext) -> bool {
+    let mut command = Command::new("/usr/bin/security");
+    command.args(["find-generic-password", "-s", KEYCHAIN_SERVICE]);
+    run_bounded_command(
+        command,
+        Duration::from_secs(10),
+        context.cancel.as_ref(),
+        1_048_576,
+    )
+    .is_some()
 }
 
 fn parse_credentials(value: &Value, source: &str) -> Option<Credentials> {
@@ -1094,7 +1181,12 @@ fn collect_with_credentials(
         Err(error) => return Err(error),
     };
     let windows = map_usage(&usage);
-    if windows.is_empty() {
+    // An account that answers for a window this build knows, even to say it has none, has
+    // nothing to report and is read successfully.  A response that answers for none of them
+    // is one this build cannot read, and only that is a collection failure.  Reporting both
+    // as a failure told a reader whose account simply had no windows that their source was
+    // broken, and left them a retry that could never succeed.
+    if windows.is_empty() && !answers_for_a_known_window(&usage) {
         return Err(ProviderError::new(ErrorCategory::Unavailable, SOURCE));
     }
     let (email, organization_id) = {
@@ -1125,6 +1217,14 @@ fn collect_with_credentials(
         status: "available",
         observed_at: context.observed_at(),
     })
+}
+
+/// Whether the response named a window this build knows and answered `null` for it, which is
+/// an account stating it has no such window rather than a shape this build failed to read.
+fn answers_for_a_known_window(value: &Value) -> bool {
+    CLAUDE_WINDOWS
+        .iter()
+        .any(|entry| matches!(obj_get(value, entry.field), Some(Value::Null)))
 }
 
 pub(super) fn map_usage(value: &Value) -> Vec<QuotaWindow> {
@@ -1282,6 +1382,66 @@ fn is_all_models(model_id: Option<&str>, model_name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn credential(source: &str, expires_at: Option<i64>) -> Credentials {
+        Credentials {
+            access_token: format!("token-{source}"),
+            expires_at,
+            scopes: Vec::new(),
+            subscription_type: None,
+            rate_limit_tier: None,
+            source: source.to_owned(),
+        }
+    }
+
+    /// Claude renews the Keychain entry in place, so a file left behind by an older version
+    /// must not decide this device's sign-in just because its clock has not run out yet: a
+    /// revoked-but-unexpired file token used to mask the live grant, and to swallow the
+    /// renewal this collector performs, because `/status` writes where nothing was reading.
+    #[test]
+    fn the_renewed_grant_outranks_the_file_left_behind() {
+        let now = 1_000_000;
+        let live = || Some(credential("keychain", Some(now + 86_400)));
+        let stale = || Some(credential("file", Some(now + 86_400)));
+        let expired = |source: &'static str| Some(credential(source, Some(now - 1)));
+
+        // Both usable: the Keychain is the one Claude renews.
+        assert_eq!(
+            preferred_credentials(live(), stale(), now)
+                .expect("credentials")
+                .source,
+            "keychain"
+        );
+        // Only the file is usable: an expiring Keychain grant is not worth preferring.
+        assert_eq!(
+            preferred_credentials(expired("keychain"), stale(), now)
+                .expect("credentials")
+                .source,
+            "file"
+        );
+        // Both expiring: still the Keychain, so the caller reports one expired sign-in
+        // rather than reporting the one that cannot be renewed.
+        assert_eq!(
+            preferred_credentials(expired("keychain"), expired("file"), now)
+                .expect("credentials")
+                .source,
+            "keychain"
+        );
+        // Either alone is used, and neither means neither.
+        assert_eq!(
+            preferred_credentials(live(), None, now)
+                .expect("credentials")
+                .source,
+            "keychain"
+        );
+        assert_eq!(
+            preferred_credentials(None, stale(), now)
+                .expect("credentials")
+                .source,
+            "file"
+        );
+        assert!(preferred_credentials(None, None, now).is_none());
+    }
 
     fn isolated_context() -> CollectionContext {
         CollectionContext {
@@ -1501,6 +1661,27 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    /// A collection failure and an account with nothing to report are different answers, and
+    /// only one of them is worth telling the reader to retry.
+    #[test]
+    fn an_account_stating_it_has_no_windows_is_not_a_failure() {
+        // The account answered for a window it knows: no windows, read successfully.
+        assert!(answers_for_a_known_window(&serde_json::json!({
+            "five_hour": null,
+            "seven_day": null
+        })));
+        // A response naming none of them is one this build cannot read.
+        assert!(!answers_for_a_known_window(&serde_json::json!({})));
+        assert!(!answers_for_a_known_window(&serde_json::json!({
+            "something_else": {"utilization": 10}
+        })));
+        // A window that is present but unreadable is not an account stating it has none.
+        assert!(!answers_for_a_known_window(&serde_json::json!({
+            "five_hour": {"unexpected": true}
+        })));
+        assert!(map_usage(&serde_json::json!({"five_hour": null, "seven_day": null})).is_empty());
     }
 
     #[test]

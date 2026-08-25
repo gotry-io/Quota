@@ -82,6 +82,7 @@ enum DiagnosticsPresentation {
     case "malformed_json", "unknown_record", "invalid_timestamp", "invalid_model", "invalid_usage": "Some Usage records are invalid\(label)"
     case "invalid_catalog": "Pricing data is invalid"
     case "client_upgrade_required": "QuotaBar needs an update"
+    case "access_denied": "Saved sign-in can’t be read\(label)"
     case "invalid_state": "Local state needs repair"
     case "unrepresentable_hour", "invalid_usage_batch", "sync_failed": "Usage upload failed"
     default: "\(componentTitle(finding.component)) needs attention\(label)"

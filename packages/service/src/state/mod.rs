@@ -319,6 +319,10 @@ impl StateStore {
         let owner_lock = OwnerLock::acquire(&root)?;
         let (mut connection, salvaged) = salvage::open_or_salvage(&root)?;
         recover_interrupted_attempts(&mut connection)?;
+        // Every way of arriving at a live image converges here, so this is where the image is
+        // compacted: the open paths each build their own connection and one of them not doing
+        // it is exactly how it gets missed.
+        salvage::reclaim_unused_pages(&connection)?;
         let persisted = repair::read_persisted_repair(&connection).unwrap_or_default();
         let store = Self {
             root,
@@ -3604,6 +3608,8 @@ fn diagnostic_attempt_code_key(value: DiagnosticAttemptCode) -> &'static str {
         DiagnosticAttemptCode::Unavailable => "unavailable",
         DiagnosticAttemptCode::InvalidResponse => "invalid_response",
         DiagnosticAttemptCode::InvalidState => "invalid_state",
+        DiagnosticAttemptCode::AccessDenied => "access_denied",
+        DiagnosticAttemptCode::ClientUpgradeRequired => "client_upgrade_required",
         DiagnosticAttemptCode::ProviderError => "provider_error",
         DiagnosticAttemptCode::PartialSource => "partial_source",
         DiagnosticAttemptCode::MalformedData => "malformed_data",
@@ -3626,6 +3632,8 @@ fn parse_diagnostic_attempt_code(value: &str) -> Result<DiagnosticAttemptCode, r
         "unavailable" => Ok(DiagnosticAttemptCode::Unavailable),
         "invalid_response" => Ok(DiagnosticAttemptCode::InvalidResponse),
         "invalid_state" => Ok(DiagnosticAttemptCode::InvalidState),
+        "access_denied" => Ok(DiagnosticAttemptCode::AccessDenied),
+        "client_upgrade_required" => Ok(DiagnosticAttemptCode::ClientUpgradeRequired),
         "provider_error" => Ok(DiagnosticAttemptCode::ProviderError),
         "partial_source" => Ok(DiagnosticAttemptCode::PartialSource),
         "malformed_data" => Ok(DiagnosticAttemptCode::MalformedData),

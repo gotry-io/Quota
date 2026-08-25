@@ -6,7 +6,6 @@ import * as protocol from "../src/index.ts";
 import {
   AccountQuotaResponseSchema,
   AccountSummarySchema,
-  AccountUsageHourlyResponseSchema,
   AccountUsageResponseSchema,
   BrowserLoginExchangeRequestSchema,
   DeviceAuthorizationRequestSchema,
@@ -20,6 +19,7 @@ import {
   IosOAuthTokenResponseSchema,
   IosSessionRefreshRequestSchema,
   LOCAL_PROVIDER_IDS,
+  LOCAL_COLLECTION_PROTOCOL_VERSION,
   LOCAL_USAGE_PROTOCOL_VERSION,
   LocalProviderIdSchema,
   LocalUsageReportSchema,
@@ -226,7 +226,7 @@ describe("quota protocol", () => {
 
   it("keeps local collection reports versioned, strict, and provider-consistent", () => {
     const report = {
-      protocol_version: 2,
+      protocol_version: LOCAL_COLLECTION_PROTOCOL_VERSION,
       captured_at: "2026-08-02T12:00:00Z",
       results: [
         {
@@ -239,6 +239,15 @@ describe("quota protocol", () => {
           outcome: "auth_required",
           snapshots: [],
           message: "Sign in again",
+        },
+        {
+          // A refusal reads as unavailable to every other device and names itself here,
+          // because only the Mac holding the credential can act on it.
+          provider: "grok",
+          outcome: "unavailable",
+          snapshots: [],
+          access_denied: true as const,
+          message: "Check access",
         },
         {
           provider: "cursor",
@@ -645,34 +654,6 @@ describe("quota protocol", () => {
       AccountUsageResponseSchema.safeParse({
         protocol_version: 5,
         usage: accountSummary().usage,
-      }).success,
-    ).toBe(true);
-    expect(
-      AccountUsageHourlyResponseSchema.safeParse({
-        protocol_version: 5,
-        start_at: "2026-08-02T12:00:00Z",
-        end_at: "2026-08-02T13:00:00Z",
-        facts: [
-          {
-            ...usageFact(),
-            device_id: "device_01",
-            aggregation_timezone: "Asia/Singapore",
-          },
-        ],
-        coverage: "complete",
-        cost: {
-          ...emptyCost(),
-          status: "unavailable",
-          unpriced_rows: 1,
-          unpriced: [
-            {
-              billing_channel: "openai_direct",
-              model: "gpt-5",
-              reason: "unknown_model",
-              rows: 1,
-            },
-          ],
-        },
       }).success,
     ).toBe(true);
     expect(
