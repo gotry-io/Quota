@@ -68,7 +68,9 @@ The four fixed surfaces are `quota_overview`, `usage_this_device`, `usage_accoun
 Checks explain the collection path behind them and carry `source` (`this_device`, `account`, or
 `system`), an optional safe `provider:<id>` or `agent:<id>` subject, `mode` (`inactive`,
 `opportunistic`, or `required`), operation/data state, last-attempt and last-success timestamps, and
-bounded metrics. Findings carry the same source and safe subject plus one root-cause code, severity,
+bounded metrics. Findings carry the same source and safe subject — narrowed to
+`provider:<id>/<source_id>` when one collection source, rather than the provider, is what failed —
+plus one root-cause code, severity,
 impact (`none`, `source`, `surface`, or `system`), occurrence count, observation time, recovery code,
 and fixed safe message. The report contains at most four surfaces, 128 checks, and 256 findings;
 metric values and finding counts are bounded to `0..1,000,000` and `1..1,000,000` respectively.

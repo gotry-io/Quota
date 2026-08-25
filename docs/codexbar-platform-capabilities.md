@@ -284,9 +284,9 @@ Cost：本机 projects JSONL；Admin 另出 org spend。
 | --- | --- | --- |
 | Cursor 额度 | Probe 内 App→Cookie；`usage-summary` + `get-sand-usage-status`（Grok Bot 周额度）+ `/api/usage?user=`（legacy 按次套餐） | 已对齐：Cursor.app `state.vscdb` → stored browser session；三个端点及 legacy 套餐替换规则一致 |
 | Cursor cost | Dashboard events + token-cost | 本机 bubble/JSONL，不等价 |
-| Codex Auto | PAT→OAuth→CLI | 已对齐：PAT→OAuth(WHAM)→app-server RPC→browser；窗口按时长分类 |
-| Claude Auto | Planner oauth→cli→web | 已对齐：OAuth→CLI `/usage` PTY 探针（仅在本地凭据存在时）→browser |
-| Grok Auto | CLI→OAuth(proxy)→Web→OAuth(grpc)；套餐名来自 `/v1/settings` `subscription_tier_display` | 已对齐 OAuth(proxy)→OAuth(grpc)→browser 与 settings 套餐名。**有意差异**：不走 CLI 取额度——grok 1.0.5 `agent stdio` 对 `x.ai/billing` 返回 `-32601 Method not found`（CodexBar 源码 `isBillingMethodUnavailable` 也专门处理该错误），CLI 仅用于 token 刷新；OAuth(grpc) 排在 browser 之前，因为它不需要额外凭据 |
+| Codex Auto | PAT→OAuth→CLI | PAT→OAuth(WHAM)→browser；窗口按时长分类。**有意差异**：不启动 `codex app-server`——定时刷新不 spawn provider CLI；直连失败即 `auth_required`，由用户打开 Codex 续期 |
+| Claude Auto | Planner oauth→cli→web | OAuth→browser。**有意差异**：不跑 `/status`、`/usage` PTY 探针——同上；过期 grant 直接报 `auth_required`。唯一保留的子进程是读 Keychain 的 `/usr/bin/security`，每次刷新至多一次 |
+| Grok Auto | CLI→OAuth(proxy)→Web→OAuth(grpc)；套餐名来自 `/v1/settings` `subscription_tier_display` | OAuth(proxy)→OAuth(grpc)→browser 与 settings 套餐名一致。**有意差异**：完全不启动 grok CLI——既不取额度（grok 1.0.5 `agent stdio` 对 `x.ai/billing` 返回 `-32601 Method not found`），也不用它刷新 token；OAuth(grpc) 排在 browser 之前，因为它不需要额外凭据 |
 | Kimi | API→CLI cred→Web | 已对齐：API key→`~/.kimi-code` CLI 凭据→browser |
 | DeepSeek | 有 key→API（可叠加 Chrome localStorage `userToken` 取月度明细）；无 key→Platform Web（同一 token） | **有意差异**：仅 API balance。Platform 路径的 token 来源是浏览器 localStorage（安全基线排除）或 `DEEPSEEK_PLATFORM_TOKEN` 手工粘贴；其增量是月度花费明细（cost，不是 quota），余额与 API key 路径相同 |
 | OpenRouter | `/credits` + `/key` 额度；`/activity` 花费历史 | 额度已对齐；`/activity` 属 cost，不在 quota 范围 |
