@@ -31,7 +31,9 @@ binary with a checksum. It has no npm, Homebrew, or source-package publication.
 
 The private protocol is `snake_case` IPC v1 with request IDs, typed operations, stable error and
 recovery codes, independent component state, and revisioned state-change events. Lines are limited to
-1 MiB. `get_state` is read-only and returns persisted last-known-good state immediately; startup and
+1 MiB. The helper emits `ready` when its local state is open and answers `ping` without taking a
+lock; those two facts, not a request deadline, tell QuotaBar whether the child is starting, working,
+or gone. `get_state` is read-only and returns persisted last-known-good state immediately; startup and
 five-minute refreshes run in the service background. QuotaBar and the service ship atomically, so an
 unreleased private IPC change replaces both sides directly rather than adding compatibility shims.
 

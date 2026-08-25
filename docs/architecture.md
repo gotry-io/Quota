@@ -68,15 +68,19 @@ official provider sessions       agent JSON/JSONL logs
 ```
 
 QuotaBar launches the fixed signed `Contents/Helpers/quota-service` path once. Requests, responses,
-and state-change events are newline-delimited `snake_case` JSON with a 1 MiB line limit and request
-IDs. Supported operations are state read, diagnose/recheck, refresh, login/cancel, logout, provider
+and events are newline-delimited `snake_case` JSON with a 1 MiB line limit and request IDs.
+Supported operations are ping, state read, diagnose/recheck, refresh, login/cancel, logout, provider
 configuration, provider browser-session validate/commit/remove, Usage upload configuration, and
-shutdown. Browser-session validate is non-mutating; commit revalidates and transactionally replaces
-the Rust-owned SQLite session. `get_state` performs no collection or
-network work: it returns the current SQLite-backed snapshot, including precomputed Today, 7 Days,
-30 Days, and All Usage periods, immediately. State components carry
-independent status, last-good value, update time, error/recovery code, and refreshing flag for quota,
-Usage, account, and pricing.
+shutdown. The helper opens its local state first and then emits a `ready` event; it reads no request
+before that, and QuotaBar sends none. It runs every operation but `ping` on one worker thread and
+answers `ping` on the thread that reads stdin, so an operation that blocks — a provider round trip,
+a state lock held by a refresh — never stops the helper from saying it is alive. That is the only
+liveness signal QuotaBar uses: requests themselves are never on a deadline. Browser-session validate
+is non-mutating; commit revalidates and transactionally replaces the Rust-owned SQLite session.
+`get_state` performs no collection or network work: it returns the current SQLite-backed snapshot,
+including precomputed Today, 7 Days, 30 Days, and All Usage periods, immediately. State components
+carry independent status, last-good value, update time, error/recovery code, and refreshing flag for
+quota, Usage, account, and pricing.
 
 The service begins a background startup refresh after IPC is available, emits revisioned
 `state_changed` events, and schedules subsequent refreshes every five minutes. Manual refresh uses

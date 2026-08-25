@@ -35,13 +35,15 @@ stale/partial/unknown data, or required attention; healthy empty and automatic w
 ## Architecture
 
 QuotaBar starts a fixed signed `Contents/Helpers/quota-service` child and communicates over bounded,
-versioned stdin/stdout NDJSON. Each request has a fixed fifteen-second deadline; a timed-out child is
-closed and the next request starts a fresh helper. The shared Rust service immediately returns its
-last valid SQLite state, then collects provider quota, incrementally indexes Usage logs, refreshes
-pricing and report-time model aliases, and synchronizes a signed-in account in the background. Its
-five-minute scheduler exists only for the QuotaBar process lifetime, so quitting QuotaBar stops local
-work and synchronization. Linux `quotacli` uses the same Rust service semantics through a native
-command-line entry point.
+versioned stdin/stdout NDJSON. The child announces `ready` once its local state is open, and
+QuotaBar holds every request until then. Requests have no deadline of their own: a `ping` the child
+answers without taking a lock is what says it is alive, and only a child that leaves two consecutive
+pings unanswered is killed and replaced. The shared Rust service immediately returns its last valid
+SQLite state, then collects provider quota, incrementally indexes Usage logs, refreshes pricing and
+report-time model aliases, and synchronizes a signed-in account in the background. Its five-minute
+scheduler exists only for the QuotaBar process lifetime, so quitting QuotaBar stops local work and
+synchronization. Linux `quotacli` uses the same Rust service semantics through a native command-line
+entry point.
 
 Swift owns presentation, UI preferences, accessibility, and Launch at Login. Shared remaining-quota,
 plan, count, cost, and compact-age copy lives in `packages/apple-shared`; wire decoding and Relay

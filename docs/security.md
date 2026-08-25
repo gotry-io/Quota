@@ -22,10 +22,12 @@ data requirements. Architecture and product behavior are defined in
   `apps/menubar/helper` entry point and exchanges bounded stdin/stdout NDJSON. It does not resolve
   from `PATH`, run a shell, read service files, or implement provider/account networking.
 - If the private helper cannot initialize its owner-only state, it keeps the IPC stream available and
-  returns only a fixed, allowlisted error/recovery pair. The startup path never sends
-  raw paths, filesystem errors, or diagnostic stderr to Swift. Each Swift request has a fixed
-  fifteen-second deadline; timeout closes the child and all pending continuations so a later request can
-  start a fresh helper.
+  returns only a fixed, allowlisted error/recovery pair to every request. The startup path never sends
+  raw paths, filesystem errors, or diagnostic stderr to Swift. Requests are not on a clock. The helper
+  announces `ready` when its state is open, and answers `ping` on the thread that reads stdin without
+  taking a lock. A helper that leaves two consecutive pings unanswered is terminated, killed if it
+  does not exit, and reaped before its pending continuations fail, so a later request starts a fresh
+  helper and never a second live one.
 - The deliberate macOS browser-session exception is acquisition only. SweetCookieKit briefly reads
   catalog-allowlisted Cookie names from catalog-declared exact hosts in the one browser selected for
   login. Its logger is disabled; profile paths/store IDs and unrelated Cookies never cross private

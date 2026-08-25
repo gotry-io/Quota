@@ -6,12 +6,16 @@ and a private Rust child at `Contents/Helpers/quota-service`.
 ## Runtime boundary
 
 QuotaBar launches the fixed signed service path and keeps a persistent stdin/stdout NDJSON IPC v1
-connection. Every request has a fixed fifteen-second deadline; a timed-out request closes the child and
-the next request starts a clean helper. If the helper cannot initialize its owner-only state, it
-stays on the IPC boundary and returns only a fixed, allowlisted error/recovery pair. It never
-resolves an executable from `PATH`, invokes a shell, reads provider/service files, receives
-account/provider tokens, or contacts Relay directly. Requests and responses are bounded to 1 MiB and
-use typed `snake_case` models; revisioned events tell Swift when to reload state.
+connection. The helper emits `{"type":"event","event":"ready","ipc_version":1}` once it has opened
+its local state; QuotaBar sends nothing before that and shows its loading state, restarts one start
+that stays silent for a minute, and reports the service unavailable after a second. Requests have no
+deadline. While one is outstanding QuotaBar pings every five seconds, and a helper that misses two
+consecutive pings is terminated, killed if it will not exit, and replaced on the next request. If
+the helper cannot initialize its owner-only state, it stays on the IPC boundary and returns only a
+fixed, allowlisted error/recovery pair. It never resolves an executable from `PATH`, invokes a
+shell, reads provider/service files, receives account/provider tokens, or contacts Relay directly.
+Requests and responses are bounded to 1 MiB and use typed `snake_case` models; revisioned events
+tell Swift when to reload state.
 
 The Rust service returns persisted component state immediately, then performs startup collection in
 the background. It owns the five-minute schedule, providers, Usage, pricing, OAuth/account sync,
