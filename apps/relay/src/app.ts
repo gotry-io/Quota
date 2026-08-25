@@ -1030,11 +1030,13 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     return context.json(modelCatalog);
   });
 
-  // A request that matched no route under /api is one this Worker does not serve. For a
-  // versioned data route that means the caller speaks a contract this deployment has retired,
-  // and a caller told only that a resource was missing retries a route that will never return.
+  // A request naming an API version this deployment does not serve comes from a caller
+  // speaking a contract that has been retired, and telling it only that a resource was missing
+  // leaves it retrying a route that will never return. A path naming a version this deployment
+  // *does* serve is a wrong path, and stays a wrong path, so a routing mistake of our own
+  // cannot hide behind an upgrade prompt.
   app.notFound((context) =>
-    new URL(context.req.url).pathname.startsWith("/api/")
+    speaksARetiredContract(new URL(context.req.url).pathname)
       ? relayError(
           context,
           404,
@@ -1433,6 +1435,16 @@ function unauthorized(context: Context): Response {
 
 function forbidden(context: Context): Response {
   return relayError(context, 403, "forbidden", "The principal lacks the required scope.");
+}
+
+const servedApiVersions: ReadonlySet<number> = new Set<number>([
+  PROTOCOL_VERSION,
+  MANAGED_DATA_PROTOCOL_VERSION,
+]);
+
+function speaksARetiredContract(pathname: string): boolean {
+  const version = /^\/api\/v(\d{1,3})\//.exec(pathname)?.[1];
+  return version !== undefined && !servedApiVersions.has(Number(version));
 }
 
 function notFound(context: Context): Response {

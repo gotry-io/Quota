@@ -575,11 +575,22 @@ describe("managed Relay on real Workers and D1", () => {
       "codex",
       "cursor",
     ]);
-    // The retired data routes are gone rather than kept answering an older shape.
-    expect(
-      (await app.request("https://quota.gotry.io/api/v3/account/summary?usage_agents=all")).status,
-    ).toBe(404);
-    expect((await app.request("https://quota.gotry.io/api/v2/account/snapshots")).status).toBe(404);
+    // The retired data routes are gone rather than kept answering an older shape, and they say
+    // so as the one thing a caller on them can do: a version this deployment no longer serves
+    // cannot be retried back into existence.
+    const retired = await app.request(
+      "https://quota.gotry.io/api/v3/account/summary?usage_agents=all",
+    );
+    expect(retired.status).toBe(404);
+    expect(await retired.json()).toMatchObject({ error: { code: "client_upgrade_required" } });
+
+    // A version this deployment does serve, spelled wrong, is a wrong path and stays one, so a
+    // routing mistake of our own cannot hide behind an upgrade prompt.
+    const wrong = await app.request("https://quota.gotry.io/api/v2/account/snapshots");
+    expect(wrong.status).toBe(404);
+    expect(await wrong.json()).toMatchObject({ error: { code: "not_found" } });
+    const mistyped = await app.request("https://quota.gotry.io/api/v5/account/sumary");
+    expect(await mistyped.json()).toMatchObject({ error: { code: "not_found" } });
   });
 
   it("reports every billing channel it stores without an opt-in", async () => {

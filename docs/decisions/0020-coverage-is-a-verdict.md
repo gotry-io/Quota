@@ -76,11 +76,14 @@ they are written.
 
 Three conditions reached the reader as something they could not act on, and are now named:
 
-**A retired contract.** Relay answers anything unmatched under `/api` with
+**A retired contract.** Relay answers a path naming an API version it does not serve with
 `client_upgrade_required`, which it already defined and never sent. A cutover used to reach an
 older build as a resource that was merely missing, so it retried a route that will never return.
 The code maps to `ErrorCode::ClientUpgradeRequired` and the recovery `Upgrade`, which QuotaBar
 already renders as an update prompt.
+
+The rule is the version, not the prefix. A path naming a version this deployment *does* serve is
+a wrong path and stays one, so a routing mistake of our own cannot hide behind an upgrade prompt.
 
 **A refused credential store.** A Keychain entry whose secret is withheld is an access decision,
 not an expired sign-in, and telling the reader to sign in again rewrites a secret this device
