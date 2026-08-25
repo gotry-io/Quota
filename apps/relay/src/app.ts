@@ -893,11 +893,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
   });
 
   app.get("/api/v2/pricing/catalog", (context) => {
-    if (!hasOnlyQueryKeys(context, ["usage_agents"])) return invalidRequest(context);
-    const requestedAgents = context.req.query("usage_agents");
-    if (requestedAgents !== undefined && requestedAgents !== "all") {
-      return invalidRequest(context);
-    }
+    if (!hasOnlyQueryKeys(context, [])) return invalidRequest(context);
     context.header("ETag", catalogETag);
     context.header("Cache-Control", "public, max-age=300, must-revalidate");
     if (context.req.header("If-None-Match") === catalogETag) {

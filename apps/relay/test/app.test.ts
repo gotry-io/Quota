@@ -374,10 +374,10 @@ describe("managed Relay on real Workers and D1", () => {
     });
 
     const pricing = (await (
-      await app.request("https://quota.gotry.io/api/v2/pricing/catalog?usage_agents=all")
+      await app.request("https://quota.gotry.io/api/v2/pricing/catalog")
     ).json()) as { entries: Array<{ billing_channel: string }> };
     const invalid = await app.request(
-      "https://quota.gotry.io/api/v2/pricing/catalog?usage_agents=codex",
+      "https://quota.gotry.io/api/v2/pricing/catalog?usage_agents=all",
     );
 
     expect(pricing.entries.some((entry) => entry.billing_channel === "xai_direct")).toBe(true);
