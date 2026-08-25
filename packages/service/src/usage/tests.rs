@@ -1804,6 +1804,113 @@ fn invalid_reason_counts_are_saturated_and_not_limited_to_sample_capacity() {
     let _ = fs::remove_dir_all(path);
 }
 
+/// A log that only grew is read from where the last parse stopped, and what it produces is
+/// what a whole-file read of the same bytes would.
+#[test]
+fn an_appended_log_is_read_from_where_the_last_parse_stopped() {
+    let path = root("incremental-append");
+    let source = path.join("session.jsonl");
+    let line = |minute: usize, input: u64| {
+        serde_json::json!({
+            "timestamp": format!("2026-08-02T12:{minute:02}:00.000Z"),
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "model": "claude-sonnet-4",
+                "usage": {"input_tokens": input, "output_tokens": 1}
+            }
+        })
+        .to_string()
+    };
+    fs::write(&source, format!("{}\n{}\n", line(0, 100), line(1, 200))).expect("write log");
+
+    let first = scan_claude_usage(&options(&path)).expect("first scan");
+    assert_eq!(first.sources.len(), 1);
+    assert!(!first.sources[0].append);
+    let index = first.sources[0].index.clone();
+    assert!(index.parsed_offset > 0);
+    assert!(!index.tail_hash.is_empty());
+
+    fs::write(
+        &source,
+        format!("{}\n{}\n{}\n", line(0, 100), line(1, 200), line(2, 300)),
+    )
+    .expect("append to log");
+
+    let mut resumed_options = options(&path);
+    resumed_options.file_index = HashMap::from([(index.source_file_id.clone(), index)]);
+    let resumed = scan_claude_usage(&resumed_options).expect("resumed scan");
+    assert!(resumed.sources[0].append, "the same log, only longer");
+    assert_eq!(resumed.records.len(), 1);
+    assert_eq!(resumed.records[0].event.input_tokens, 300);
+
+    // What the tail produced, plus what was already stored, is what a whole-file read says.
+    let whole = scan_claude_usage(&options(&path)).expect("whole-file scan");
+    assert_eq!(whole.records.len(), 3);
+    assert_eq!(
+        whole.records.last().map(|record| record.record_key.clone()),
+        resumed
+            .records
+            .last()
+            .map(|record| record.record_key.clone()),
+        "a line is named by the byte it starts at either way"
+    );
+    assert_eq!(
+        whole.sources[0].index.parsed_offset,
+        resumed.sources[0].index.parsed_offset
+    );
+    assert_eq!(
+        whole.sources[0].index.tail_hash,
+        resumed.sources[0].index.tail_hash
+    );
+    let _ = fs::remove_dir_all(path);
+}
+
+/// A file that was rewritten rather than appended to is not the log the last parse read, so it
+/// is read whole even when it is longer than it was.
+#[test]
+fn a_log_whose_tail_no_longer_matches_is_read_whole() {
+    let path = root("incremental-rewrite");
+    let source = path.join("session.jsonl");
+    let line = |minute: usize, input: u64| {
+        serde_json::json!({
+            "timestamp": format!("2026-08-02T12:{minute:02}:00.000Z"),
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "model": "claude-sonnet-4",
+                "usage": {"input_tokens": input, "output_tokens": 1}
+            }
+        })
+        .to_string()
+    };
+    fs::write(&source, format!("{}\n{}\n", line(0, 100), line(1, 200))).expect("write log");
+    let first = scan_claude_usage(&options(&path)).expect("first scan");
+    let index = first.sources[0].index.clone();
+
+    // The same length as before at the offset that was parsed, and different bytes there.
+    fs::write(
+        &source,
+        format!("{}\n{}\n{}\n", line(0, 999), line(1, 200), line(2, 300)),
+    )
+    .expect("rewrite log");
+    let mut rewritten_options = options(&path);
+    rewritten_options.file_index = HashMap::from([(index.source_file_id.clone(), index.clone())]);
+    let rewritten = scan_claude_usage(&rewritten_options).expect("rewritten scan");
+    assert!(!rewritten.sources[0].append, "not the same log any more");
+    assert_eq!(rewritten.records.len(), 3);
+    assert_eq!(rewritten.records[0].event.input_tokens, 999);
+
+    // A file that lost bytes cannot be resumed either: the offset is past its end.
+    fs::write(&source, format!("{}\n", line(0, 100))).expect("truncate log");
+    let mut truncated_options = options(&path);
+    truncated_options.file_index = HashMap::from([(index.source_file_id.clone(), index)]);
+    let truncated = scan_claude_usage(&truncated_options).expect("truncated scan");
+    assert!(!truncated.sources[0].append);
+    assert_eq!(truncated.records.len(), 1);
+    let _ = fs::remove_dir_all(path);
+}
+
 fn test_event(occurred_at: &str, model: &str, input_tokens: u64) -> NormalizedUsageEvent {
     NormalizedUsageEvent {
         occurred_at: occurred_at.into(),

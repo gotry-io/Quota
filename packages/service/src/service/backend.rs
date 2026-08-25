@@ -4136,6 +4136,218 @@ mod tests {
         assert!(serde_json::to_vec(&upload).expect("bytes").len() <= 1_048_576);
     }
 
+    /// The payloads this device sends, checked against the JSON Schema `packages/protocol`
+    /// exports rather than against a second description of the same contract.
+    ///
+    /// The schema is the shape: which keys are required, which are refused, and what each one
+    /// holds. The value bounds a shape cannot state — token subsets, source-cost coverage,
+    /// unique row identities — are the validators', and the shared fixture is what keeps those
+    /// in step across runtimes.
+    #[test]
+    fn what_this_device_uploads_matches_the_exported_json_schema() {
+        const USAGE_SCHEMA: &str = include_str!("../../../protocol/schema/usage.json");
+        const SNAPSHOT_SCHEMA: &str = include_str!("../../../protocol/schema/quota-snapshot.json");
+
+        let hour = UsageOutboxEntry {
+            agent: UsageAgent::Codex,
+            bucket_start_utc: "2026-08-12T09:00:00Z".into(),
+            scan_version: 7,
+            partial: false,
+            rows: vec![usage::UsageRow {
+                agent: UsageAgent::Codex,
+                billing_channel: usage::BillingChannel::OpenaiDirect,
+                channel_source: usage::ChannelSource::Explicit,
+                model: "gpt-5.6-sol".into(),
+                context_bucket: usage::ContextBucket::Le128k,
+                service_tier: "standard".into(),
+                speed: "standard".into(),
+                inference_geo: "global".into(),
+                input_tokens: 1_200,
+                cache_read_tokens: 400,
+                cache_write_5m_tokens: 100,
+                cache_write_1h_tokens: 0,
+                cache_write_inferred_tokens: 0,
+                output_tokens: 350,
+                reasoning_tokens: 120,
+                requests: 4,
+                web_search_requests: 1,
+                web_fetch_requests: 0,
+                source_cost_microusd: Some("4200".into()),
+                source_cost_covered_requests: 4,
+            }],
+        };
+        let upload = usage_upload(UsageAgent::Codex, 3, &[hour]).expect("upload");
+        JsonSchema::parse(USAGE_SCHEMA)
+            .check(&upload)
+            .expect("the Usage upload matches the exported schema");
+
+        // A row without a reported cost omits the key rather than sending it as null.
+        let bare = usage_upload(
+            UsageAgent::Codex,
+            3,
+            &[UsageOutboxEntry {
+                agent: UsageAgent::Codex,
+                bucket_start_utc: "2026-08-12T10:00:00Z".into(),
+                scan_version: 8,
+                partial: true,
+                rows: Vec::new(),
+            }],
+        )
+        .expect("empty upload");
+        JsonSchema::parse(USAGE_SCHEMA)
+            .check(&bare)
+            .expect("an emptied hour matches the exported schema");
+
+        // The check is not vacuous: a key the contract does not name is refused, and so is a
+        // value of the wrong kind.
+        let mut extra = upload.clone();
+        extra["uploaded_at"] = json!("2026-08-12T09:31:00Z");
+        assert!(JsonSchema::parse(USAGE_SCHEMA).check(&extra).is_err());
+        let mut wrong = upload;
+        wrong["hours"][0]["scan_version"] = json!("seven");
+        assert!(JsonSchema::parse(USAGE_SCHEMA).check(&wrong).is_err());
+
+        let envelope = crate::relay::snapshot_envelope(
+            3,
+            vec![json!({
+                "provider": "codex",
+                "account": {"fingerprint": "codex_account_1", "fingerprint_scope": "global"},
+                "windows": [{"id": "weekly", "title": "Weekly", "used_percent": 42.0}],
+                "status": "available",
+                "observed_at": "2026-08-12T09:30:00Z"
+            })],
+        );
+        JsonSchema::parse(SNAPSHOT_SCHEMA)
+            .check(&envelope)
+            .expect("the snapshot envelope matches the exported schema");
+    }
+
+    /// The part of JSON Schema an exported contract uses: what a document is made of, not what
+    /// its text has to look like. String patterns are the runtime validators' job, and the
+    /// shared conformance fixture is what proves those agree across runtimes.
+    struct JsonSchema {
+        root: Value,
+    }
+
+    impl JsonSchema {
+        fn parse(document: &str) -> Self {
+            Self {
+                root: serde_json::from_str(document).expect("schema document"),
+            }
+        }
+
+        fn check(&self, value: &Value) -> Result<(), String> {
+            self.check_at(value, &self.root, "$")
+        }
+
+        fn check_at(&self, value: &Value, schema: &Value, path: &str) -> Result<(), String> {
+            let schema = self.resolve(schema);
+            let object = schema
+                .as_object()
+                .ok_or_else(|| format!("{path}: schema"))?;
+            if let Some(branches) = object.get("anyOf").and_then(Value::as_array) {
+                return branches
+                    .iter()
+                    .any(|branch| self.check_at(value, branch, path).is_ok())
+                    .then_some(())
+                    .ok_or_else(|| format!("{path}: matches none of anyOf"));
+            }
+            if let Some(expected) = object.get("const")
+                && value != expected
+            {
+                return Err(format!("{path}: expected {expected}, found {value}"));
+            }
+            if let Some(members) = object.get("enum").and_then(Value::as_array)
+                && !members.contains(value)
+            {
+                return Err(format!("{path}: {value} is not a member"));
+            }
+            match object.get("type").and_then(Value::as_str) {
+                Some("object") => self.check_object(value, object, path),
+                Some("array") => self.check_array(value, object, path),
+                Some("string") if !value.is_string() => Err(format!("{path}: expected a string")),
+                Some("boolean") if !value.is_boolean() => Err(format!("{path}: expected a bool")),
+                Some("integer") if value.as_i64().is_none() => {
+                    Err(format!("{path}: expected an integer"))
+                }
+                Some("number") if !value.is_number() => Err(format!("{path}: expected a number")),
+                Some("null") if !value.is_null() => Err(format!("{path}: expected null")),
+                _ => Ok(()),
+            }
+        }
+
+        fn check_object(
+            &self,
+            value: &Value,
+            schema: &serde_json::Map<String, Value>,
+            path: &str,
+        ) -> Result<(), String> {
+            let object = value
+                .as_object()
+                .ok_or_else(|| format!("{path}: expected an object"))?;
+            let properties = schema.get("properties").and_then(Value::as_object);
+            for key in schema
+                .get("required")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+            {
+                if !object.contains_key(key) {
+                    return Err(format!("{path}: missing {key}"));
+                }
+            }
+            for (key, item) in object {
+                match properties.and_then(|properties| properties.get(key)) {
+                    Some(property) => self.check_at(item, property, &format!("{path}.{key}"))?,
+                    None if schema.get("additionalProperties") == Some(&Value::Bool(false)) => {
+                        return Err(format!("{path}: {key} is not part of the contract"));
+                    }
+                    None => {}
+                }
+            }
+            Ok(())
+        }
+
+        fn check_array(
+            &self,
+            value: &Value,
+            schema: &serde_json::Map<String, Value>,
+            path: &str,
+        ) -> Result<(), String> {
+            let items = value
+                .as_array()
+                .ok_or_else(|| format!("{path}: expected an array"))?;
+            if let Some(maximum) = schema.get("maxItems").and_then(Value::as_u64)
+                && items.len() as u64 > maximum
+            {
+                return Err(format!("{path}: more than {maximum} items"));
+            }
+            let Some(item_schema) = schema.get("items") else {
+                return Ok(());
+            };
+            for (index, item) in items.iter().enumerate() {
+                self.check_at(item, item_schema, &format!("{path}[{index}]"))?;
+            }
+            Ok(())
+        }
+
+        /// A `$ref` inside the exported document, which only ever names a sibling `$defs` entry.
+        fn resolve<'a>(&'a self, schema: &'a Value) -> &'a Value {
+            let Some(reference) = schema.get("$ref").and_then(Value::as_str) else {
+                return schema;
+            };
+            let name = reference
+                .strip_prefix("#/$defs/")
+                .expect("only local $defs references");
+            self.root
+                .get("$defs")
+                .and_then(|defs| defs.get(name))
+                .map(|target| self.resolve(target))
+                .expect("a named definition")
+        }
+    }
+
     /// An empty hour is a fact: it is how a device says everything it once reported for that
     /// hour is gone.
     #[test]

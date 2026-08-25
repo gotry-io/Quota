@@ -1985,11 +1985,7 @@ impl AccountManager {
             .get("device_generation")
             .and_then(Value::as_u64)
             .ok_or_else(BackendError::unavailable)?;
-        let envelope = serde_json::json!({
-            "protocol_version": MANAGED_DATA_PROTOCOL,
-            "generation": expected_generation,
-            "snapshots": snapshots
-        });
+        let envelope = snapshot_envelope(expected_generation, snapshots);
         if !self
             .state
             .active_session_at_epoch(session_epoch)
@@ -2241,6 +2237,18 @@ fn snapshot_payload_from_quota_report<'a>(
 /// Relay outcome behind it, which is how a queue could sit wedged for a week
 /// reporting `attempted: 0`. An ordering the Relay will not take costs one
 /// rejected request; it can never be stored, because the Relay checks it too.
+/// This device's readings, in the shape Relay accepts.
+///
+/// The device token names the device, so the envelope restates neither an id a caller could
+/// get wrong nor a sequence Relay would have to keep for it.
+pub(crate) fn snapshot_envelope(generation: u64, snapshots: Vec<Value>) -> Value {
+    serde_json::json!({
+        "protocol_version": MANAGED_DATA_PROTOCOL,
+        "generation": generation,
+        "snapshots": snapshots
+    })
+}
+
 /// The upload names the generation it was staged for. A device token names the device, so a
 /// generation that has moved on since means this payload belongs to a session that is gone.
 fn validate_usage_submission_session(
