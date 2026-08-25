@@ -667,21 +667,20 @@ func decodesAccountHourlyUsageResponse() throws {
 }
 
 @Test
-func decodesLocalUsageTruncationFields() throws {
+func decodesLocalUsageReportShape() throws {
   let report = LocalUsageReport(
     generatedAt: Date(timeIntervalSince1970: 1_754_080_000),
     aggregationTimezone: nil,
     range: UsageDateRange(from: "2026-08-01", to: "2026-08-02"),
     status: .unavailable,
-    coverage: [],
-    coverageTruncated: true
+    coverage: []
   )
   let data = try QuotaWireCodec.makeEncoder().encode(report)
   let encodedText = String(decoding: data, as: UTF8.self)
   #expect(!encodedText.contains("\"today\""))
   #expect(!encodedText.contains("\"usage\""))
   let decoded = try QuotaWireCodec.makeDecoder().decode(LocalUsageReport.self, from: data)
-  #expect(decoded.coverageTruncated == true)
+  #expect(decoded.status == .unavailable)
 
   var missingRevisionObject = try #require(
     JSONSerialization.jsonObject(with: data) as? [String: Any])
@@ -691,17 +690,14 @@ func decodesLocalUsageTruncationFields() throws {
     _ = try QuotaWireCodec.makeDecoder().decode(LocalUsageReport.self, from: missingRevision)
   }
 
-  let falseMarker = LocalUsageReport(
-    generatedAt: report.generatedAt,
-    aggregationTimezone: nil,
-    range: report.range,
-    status: .unavailable,
-    coverage: [],
-    coverageTruncated: false
-  )
-  let falseMarkerData = try QuotaWireCodec.makeEncoder().encode(falseMarker)
+  // The report states its coverage window by window; a marker for windows it left out is not
+  // part of the contract, because one agent contributes one window and none are ever dropped.
+  var retiredMarkerObject = try #require(
+    JSONSerialization.jsonObject(with: data) as? [String: Any])
+  retiredMarkerObject["coverage_truncated"] = true
+  let retiredMarker = try JSONSerialization.data(withJSONObject: retiredMarkerObject)
   #expect(throws: DecodingError.self) {
-    _ = try QuotaWireCodec.makeDecoder().decode(LocalUsageReport.self, from: falseMarkerData)
+    _ = try QuotaWireCodec.makeDecoder().decode(LocalUsageReport.self, from: retiredMarker)
   }
 }
 

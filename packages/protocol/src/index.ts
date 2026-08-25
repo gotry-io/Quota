@@ -1139,7 +1139,6 @@ export const LocalUsageReportSchema = z
     status: LocalUsageReportStatusSchema,
     model_catalog_revision: OpaqueIdSchema.nullable(),
     coverage: z.array(LocalUsageCoverageSchema).max(MAXIMUM_USAGE_COVERAGE_ITEMS),
-    coverage_truncated: z.literal(true).optional(),
   })
   .strict()
   .superRefine((report, context) => {

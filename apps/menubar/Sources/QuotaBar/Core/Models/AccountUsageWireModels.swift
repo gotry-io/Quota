@@ -410,7 +410,6 @@ struct LocalUsageReport: Codable, Equatable, Sendable {
   let status: LocalUsageReportStatus
   let modelCatalogRevision: String?
   let coverage: [LocalUsageCoverage]
-  let coverageTruncated: Bool?
 
   init(
     protocolVersion: Int = 3,
@@ -419,8 +418,7 @@ struct LocalUsageReport: Codable, Equatable, Sendable {
     range: UsageDateRange,
     status: LocalUsageReportStatus,
     modelCatalogRevision: String? = nil,
-    coverage: [LocalUsageCoverage],
-    coverageTruncated: Bool? = nil
+    coverage: [LocalUsageCoverage]
   ) {
     self.protocolVersion = protocolVersion
     self.generatedAt = generatedAt
@@ -429,13 +427,12 @@ struct LocalUsageReport: Codable, Equatable, Sendable {
     self.status = status
     self.modelCatalogRevision = modelCatalogRevision
     self.coverage = coverage
-    self.coverageTruncated = coverageTruncated
   }
 
   init(from decoder: Decoder) throws {
     try decoder.rejectUnknownWireKeys([
       "protocolVersion", "generatedAt", "aggregationTimezone", "range", "status",
-      "modelCatalogRevision", "coverage", "coverageTruncated",
+      "modelCatalogRevision", "coverage",
     ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     protocolVersion = try container.decode(Int.self, forKey: .protocolVersion)
@@ -445,7 +442,6 @@ struct LocalUsageReport: Codable, Equatable, Sendable {
     status = try container.decode(LocalUsageReportStatus.self, forKey: .status)
     modelCatalogRevision = try container.decode(String?.self, forKey: .modelCatalogRevision)
     coverage = try container.decode([LocalUsageCoverage].self, forKey: .coverage)
-    coverageTruncated = try decodeTrueMarker(.coverageTruncated, from: container)
 
     let unavailable = status == .unavailable
     let expectedStatus: LocalUsageReportStatus =
@@ -483,7 +479,6 @@ struct LocalUsageReport: Codable, Equatable, Sendable {
     try container.encode(status, forKey: .status)
     try container.encode(modelCatalogRevision, forKey: .modelCatalogRevision)
     try container.encode(coverage, forKey: .coverage)
-    try container.encodeIfPresent(coverageTruncated, forKey: .coverageTruncated)
   }
 
   private enum CodingKeys: String, CodingKey {
@@ -494,7 +489,6 @@ struct LocalUsageReport: Codable, Equatable, Sendable {
     case status
     case modelCatalogRevision
     case coverage
-    case coverageTruncated
   }
 }
 

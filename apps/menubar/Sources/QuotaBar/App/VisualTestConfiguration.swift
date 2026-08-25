@@ -444,8 +444,7 @@
       range: summary.range,
       status: summary.coverage == .partial ? .partial : .complete,
       modelCatalogRevision: "visual-model-catalog",
-      coverage: coverage,
-      coverageTruncated: nil
+      coverage: coverage
     )
   }
 
@@ -456,8 +455,7 @@
       range: UsageDateRange(from: "2026-07-03", to: "2026-08-01"),
       status: .unavailable,
       modelCatalogRevision: nil,
-      coverage: [],
-      coverageTruncated: nil
+      coverage: []
     )
   }
 

@@ -401,8 +401,7 @@ private func unavailableUsage(now: Date) -> LocalUsageReport {
     aggregationTimezone: nil,
     range: UsageDateRange(from: "2026-08-01", to: "2026-08-10"),
     status: .unavailable,
-    coverage: [],
-    coverageTruncated: nil
+    coverage: []
   )
 }
 

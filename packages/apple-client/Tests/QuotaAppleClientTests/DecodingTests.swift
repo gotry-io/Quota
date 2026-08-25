@@ -63,7 +63,7 @@ struct DecodingTests {
 
   @Test
   func rejectsFalseTruncationMarkersAndUnknownProviders() throws {
-    let falseMarker = try Fixtures.accountSummaryJSON(extraUsage: ["coverage_truncated": false])
+    let falseMarker = try Fixtures.accountSummaryJSON(extraUsage: ["breakdowns_truncated": false])
     #expect(throws: DecodingError.self) {
       _ = try WireCodec.decode(AccountSummary.self, from: falseMarker)
     }
