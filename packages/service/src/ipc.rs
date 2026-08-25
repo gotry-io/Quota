@@ -70,8 +70,9 @@ impl crate::service::EventSink for JsonLineWriter {
     }
 }
 
-/// Runs until stdin EOF or a `shutdown` operation.  EOF is the parent-lifetime signal: no new
-/// work is accepted after it, and the service cancels background tasks before returning.
+/// Announces the open service, starts its schedule, and serves requests until stdin EOF or a
+/// `shutdown` operation.  EOF is the parent-lifetime signal: no new work is accepted after it, and
+/// the service cancels background tasks before returning.
 pub fn run_stdio(service: LocalService, writer: Arc<JsonLineWriter>) -> io::Result<()> {
     run_requests(&mut BufReader::new(io::stdin()), service, writer)
 }
@@ -86,7 +87,10 @@ fn run_requests<R: BufRead>(
     service: LocalService,
     writer: Arc<JsonLineWriter>,
 ) -> io::Result<()> {
+    // Open finished before this transport existed.  Say so before anything else — a background
+    // event or a response — can reach the stream, and only then let scheduled work begin.
     writer.ready();
+    service.start_scheduler();
     let (sender, receiver) = mpsc::channel::<IpcRequest>();
     let worker = thread::Builder::new()
         .name("quota-ipc-worker".to_owned())
@@ -359,9 +363,13 @@ mod tests {
             answered_ping.load(Ordering::Acquire),
             "ping was not answered while diagnose held the worker"
         );
-        assert!(lines[1].contains(r#""request_id":"alive""#));
-        assert!(lines[1].contains(r#""ok":true"#));
-        assert!(lines[2].contains(r#""request_id":"slow""#));
+        let responses = lines
+            .iter()
+            .filter(|line| line.contains(r#""type":"response""#))
+            .collect::<Vec<_>>();
+        assert!(responses[0].contains(r#""request_id":"alive""#));
+        assert!(responses[0].contains(r#""ok":true"#));
+        assert!(responses[1].contains(r#""request_id":"slow""#));
     }
 
     #[test]
