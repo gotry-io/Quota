@@ -5,7 +5,7 @@ import { AccountService } from "../src/account/service.ts";
 import { createWebDocumentPort } from "../src/account/web-document-port.ts";
 import { GitHubWebSessions } from "../src/account/web-session.ts";
 import { createRelayApp } from "../src/app.ts";
-import { SecretHasher } from "../src/security.ts";
+import { encodeBase64UrlJSON, SecretHasher } from "../src/security.ts";
 import { D1AccountState } from "../src/state/d1-account-state.ts";
 import { D1UsageState } from "../src/state/d1-usage-state.ts";
 
@@ -177,6 +177,46 @@ describe("browser sign-in through GitHub", () => {
       await env.DB.prepare("SELECT COUNT(*) AS count FROM account_sessions").first("count"),
     ).toBe(0);
     expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM accounts").first("count")).toBe(0);
+  });
+
+  it("refuses a handoff whose deadline has passed or cannot be read", async () => {
+    const github = fakeGitHub();
+    const clock = { at: now };
+    const relay = harness(github, () => clock.at);
+    const started = await relay.app.request(`${origin}/api/auth/github/start`);
+    const state = new URL(started.headers.get("location") ?? "").searchParams.get("state") ?? "";
+    const handoff = onlyCookie(started);
+
+    clock.at = new Date(now.getTime() + 10 * 60_000 + 1);
+    const expired = await relay.app.request(
+      `${origin}/api/auth/github/callback?code=late-code&state=${encodeURIComponent(state)}`,
+      { headers: { Cookie: `${handoff.name}=${handoff.value}` } },
+    );
+    expect(expired.status).toBe(400);
+    expect(github.exchanges).toBe(0);
+    expect(
+      await env.DB.prepare("SELECT COUNT(*) AS count FROM account_sessions").first("count"),
+    ).toBe(0);
+
+    // A deadline nothing can read is not an absent deadline: it must fail closed. This payload is
+    // signed the same way Relay signs its own, so only the deadline itself is under test.
+    const hasher = new SecretHasher(secret);
+    const forged = encodeBase64UrlJSON({
+      state,
+      verifier: "a".repeat(43),
+      return_to: "/my",
+      expires_at: "whenever",
+    });
+    const sealed = `${forged}.${await hasher.hash("oauth-handoff", forged)}`;
+    const unreadable = await relay.app.request(
+      `${origin}/api/auth/github/callback?code=late-code&state=${encodeURIComponent(state)}`,
+      { headers: { Cookie: `quota_oauth=${sealed}` } },
+    );
+    expect(unreadable.status).toBe(400);
+    expect(github.exchanges).toBe(0);
+    expect(
+      await env.DB.prepare("SELECT COUNT(*) AS count FROM account_sessions").first("count"),
+    ).toBe(0);
   });
 
   it("maps a code GitHub will not spend twice to a rejected sign-in", async () => {

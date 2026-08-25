@@ -193,12 +193,17 @@ export class GitHubWebSessions implements WebSessionPort {
     }
     if (payload === null || typeof payload !== "object") return null;
     const candidate = payload as Record<string, unknown>;
+    // An unreadable instant is not an unexpired one: `Date.parse` answers NaN, and every
+    // comparison against NaN is false, so the deadline has to be proven rather than assumed.
+    const expiresAt =
+      typeof candidate.expires_at === "string" ? Date.parse(candidate.expires_at) : Number.NaN;
     if (
       typeof candidate.state !== "string" ||
       typeof candidate.verifier !== "string" ||
       typeof candidate.return_to !== "string" ||
       typeof candidate.expires_at !== "string" ||
-      Date.parse(candidate.expires_at) <= now.getTime()
+      !Number.isFinite(expiresAt) ||
+      expiresAt <= now.getTime()
     ) {
       return null;
     }
