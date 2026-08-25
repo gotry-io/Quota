@@ -7,13 +7,10 @@ struct MenuBarHeader: View {
     case openSettings(() -> Void)
     case overflowMenu
     case usageSource(UsageSource, (UsageSource) -> Void)
-    case diagnostics(
+    case support(
       isChecking: Bool,
       canRecheck: Bool,
-      canCopy: Bool,
-      didCopy: Bool,
-      onRecheck: () -> Void,
-      onCopy: () -> Void
+      onRecheck: () -> Void
     )
   }
 
@@ -168,36 +165,21 @@ struct MenuBarHeader: View {
       .fixedSize()
       .accessibilityLabel("Usage source")
       .accessibilityValue(source.label)
-    case .diagnostics(
-      let isChecking,
-      let canRecheck,
-      let canCopy,
-      let didCopy,
-      let onRecheck,
-      let onCopy
-    ):
-      HStack(spacing: 0) {
-        diagnosticsRecheckButton(
-          isChecking: isChecking,
-          isEnabled: canRecheck,
-          action: onRecheck
-        )
-        headerButton(
-          systemName: didCopy ? "checkmark" : "doc.on.doc",
-          accessibilityLabel: DiagnosticsHeaderAction.copyAccessibilityLabel(didCopy: didCopy),
-          isEnabled: canCopy,
-          action: onCopy
-        )
-      }
+    case .support(let isChecking, let canRecheck, let onRecheck):
+      supportRecheckButton(
+        isChecking: isChecking,
+        isEnabled: canRecheck,
+        action: onRecheck
+      )
     }
   }
 
-  private func diagnosticsRecheckButton(
+  private func supportRecheckButton(
     isChecking: Bool,
     isEnabled: Bool,
     action: @escaping () -> Void
   ) -> some View {
-    let accessibilityLabel = DiagnosticsHeaderAction.recheckAccessibilityLabel(
+    let accessibilityLabel = SupportHeaderAction.recheckAccessibilityLabel(
       isChecking: isChecking
     )
     return Button(action: action) {

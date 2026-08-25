@@ -110,20 +110,18 @@ struct LocalServiceClientTests {
         request = json.loads(sys.stdin.readline())
         if request["operation"] == "diagnose":
             result = {
-                "schema_version": 2,
-                "summary": {"operation": "healthy", "data": "empty", "attention": "none"},
-                "refresh": {"phase": "idle", "revision": 7, "as_of": "2026-08-11T00:00:00Z", "started_at": None, "next_due_at": None},
+                "schema_version": 3,
                 "generated_at": "2026-08-11T00:00:00Z",
                 "client": {"name": "QuotaBar", "version": "0.0.7"},
+                "summary": {"operation": "healthy", "attention": "none"},
                 "surfaces": [
-                    {"name": "quota_overview", "operation": "healthy", "data": "empty", "source": None, "metrics": {}},
-                    {"name": "usage_this_device", "operation": "healthy", "data": "empty", "source": "this_device", "metrics": {}},
-                    {"name": "usage_account", "operation": "healthy", "data": "empty", "source": "account", "metrics": {}},
-                    {"name": "account", "operation": "healthy", "data": "empty", "source": "account", "metrics": {}},
+                    {"id": "quota_overview", "status": "ok", "data": "empty", "last_success_at": None, "message": "No quota yet.", "recovery": "none"},
+                    {"id": "usage_this_device", "status": "ok", "data": "empty", "last_success_at": None, "message": "No Usage yet.", "recovery": "none"},
+                    {"id": "usage_account", "status": "inactive", "data": "empty", "last_success_at": None, "message": "Usage sync is off.", "recovery": "none"},
+                    {"id": "account", "status": "inactive", "data": "empty", "last_success_at": None, "message": "Not signed in.", "recovery": "none"},
                 ],
-                "checks": [],
-                "findings": [],
-                "recent_activity": {"attempts": [], "history_truncated": False},
+                "sources": [],
+                "recent": [],
             }
         else:
             result = {}

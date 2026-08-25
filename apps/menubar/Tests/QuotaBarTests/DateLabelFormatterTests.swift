@@ -31,21 +31,15 @@ struct LastCheckedLabelTests {
   }
 }
 
-struct DiagnosticsHeaderActionTests {
+struct SupportHeaderActionTests {
   @Test
   func copyAccessibilityLabels() {
-    #expect(DiagnosticsHeaderAction.copyAccessibilityLabel(didCopy: false) == "Copy diagnostics")
-    #expect(DiagnosticsHeaderAction.copyAccessibilityLabel(didCopy: true) == "Diagnostics copied")
-    #expect(DiagnosticsHeaderAction.recheckLabel == "Recheck diagnostics")
-    #expect(
-      DiagnosticsHeaderAction.recheckAccessibilityLabel(isChecking: false)
-        == "Recheck diagnostics"
-    )
-    #expect(
-      DiagnosticsHeaderAction.recheckAccessibilityLabel(isChecking: true)
-        == "Checking diagnostics"
-    )
-    #expect(DiagnosticsHeaderAction.copyFeedbackDuration == .seconds(2))
+    #expect(SupportHeaderAction.copyAccessibilityLabel(didCopy: false) == "Copy report")
+    #expect(SupportHeaderAction.copyAccessibilityLabel(didCopy: true) == "Report copied")
+    #expect(SupportHeaderAction.recheckLabel == "Recheck")
+    #expect(SupportHeaderAction.recheckAccessibilityLabel(isChecking: false) == "Recheck")
+    #expect(SupportHeaderAction.recheckAccessibilityLabel(isChecking: true) == "Checking")
+    #expect(SupportHeaderAction.copyFeedbackDuration == .seconds(2))
   }
 }
 

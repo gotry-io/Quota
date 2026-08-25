@@ -172,6 +172,7 @@ private actor FlowService: LocalServiceServing {
   init(state: LocalServiceState) { stateValue = state }
   func state() async throws -> LocalServiceState { stateValue }
   func diagnose() async throws -> LocalServiceDiagnosticReport { throw LocalServiceClientError.serviceMissing }
+  func resetCache() async throws { throw LocalServiceClientError.serviceMissing }
   func refresh() async throws -> LocalServiceRefreshResult { throw LocalServiceClientError.serviceMissing }
   func login() async throws -> LocalServiceLoginResult { throw LocalServiceClientError.serviceMissing }
   func cancelLogin() async throws {}

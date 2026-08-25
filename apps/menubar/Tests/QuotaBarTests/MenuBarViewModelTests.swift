@@ -490,28 +490,26 @@ private struct StubLocalService: LocalServiceServing {
   func diagnose() async throws -> LocalServiceDiagnosticReport {
     let date = Date()
     return LocalServiceDiagnosticReport(
-      schemaVersion: 2,
-      summary: LocalServiceDiagnosticSummary(
-        operation: .healthy, data: .empty, attention: .none),
-      refresh: LocalServiceDiagnosticRefresh(
-        phase: .idle, asOf: date, startedAt: nil, nextDueAt: nil),
       generatedAt: date,
       client: LocalServiceDiagnosticClient(name: "test", version: "1"),
+      summary: LocalServiceDiagnosticSummary(operation: .healthy, attention: .none),
       surfaces: [
         LocalServiceDiagnosticSurface(
-          name: "quota_overview", operation: .healthy, data: .empty, source: nil, metrics: [:]),
+          id: "quota_overview", status: .ok, data: .empty, lastSuccessAt: nil,
+          message: "No quota has been read yet.", recovery: .none),
         LocalServiceDiagnosticSurface(
-          name: "usage_this_device", operation: .healthy, data: .empty,
-          source: .thisDevice, metrics: [:]),
+          id: "usage_this_device", status: .ok, data: .empty, lastSuccessAt: nil,
+          message: "No Usage records have been found on this Mac yet.", recovery: .none),
         LocalServiceDiagnosticSurface(
-          name: "usage_account", operation: .healthy, data: .empty, source: .account, metrics: [:]),
+          id: "usage_account", status: .inactive, data: .empty, lastSuccessAt: nil,
+          message: "Sign in to send Usage to your account.", recovery: .none),
         LocalServiceDiagnosticSurface(
-          name: "account", operation: .healthy, data: .empty, source: .account, metrics: [:]),
-      ],
-      checks: [],
-      findings: []
+          id: "account", status: .inactive, data: .empty, lastSuccessAt: nil,
+          message: "This Mac is not signed in to a Quota account.", recovery: .none),
+      ]
     )
   }
+  func resetCache() async throws {}
   func refresh() async throws -> LocalServiceRefreshResult {
     LocalServiceRefreshResult(accepted: true, pending: false, revision: stateValue.revision)
   }

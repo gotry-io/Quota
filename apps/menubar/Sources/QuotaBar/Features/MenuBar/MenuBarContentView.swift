@@ -11,25 +11,25 @@ struct MenuBarContentView: View {
   @State private var isLogoutConfirmationPresented = false
   @State private var usageSource: UsageSource = .account
   @State private var usagePeriod: UsagePeriod = .today
-  @State private var diagnostics = DiagnosticsPageModel()
+  @State private var support = SupportPageModel()
   private let performsInitialRefresh: Bool
-  private let performsDiagnosticsCheckOnEntry: Bool
+  private let performsSupportCheckOnEntry: Bool
   private let seedsLaunchAtLogin: Bool
 
   init(
     model: MenuBarViewModel,
     initialPath: [MenuBarRoute] = [],
     performsInitialRefresh: Bool = true,
-    performsDiagnosticsCheckOnEntry: Bool = true,
-    diagnosticsModel: DiagnosticsPageModel? = nil,
+    performsSupportCheckOnEntry: Bool = true,
+    supportModel: SupportPageModel? = nil,
     seedsLaunchAtLogin: Bool = true
   ) {
     self.model = model
     self.performsInitialRefresh = performsInitialRefresh
-    self.performsDiagnosticsCheckOnEntry = performsDiagnosticsCheckOnEntry
+    self.performsSupportCheckOnEntry = performsSupportCheckOnEntry
     self.seedsLaunchAtLogin = seedsLaunchAtLogin
     _navigation = State(initialValue: MenuBarNavigationState(path: initialPath))
-    _diagnostics = State(initialValue: diagnosticsModel ?? DiagnosticsPageModel())
+    _support = State(initialValue: supportModel ?? SupportPageModel())
   }
 
   var body: some View {
@@ -140,14 +140,11 @@ struct MenuBarContentView: View {
     {
       return .usageSource(usageSource) { usageSource = $0 }
     }
-    if navigation.currentRoute == .diagnostics, diagnostics.showsHeaderActions {
-      return .diagnostics(
-        isChecking: diagnostics.isLoading,
-        canRecheck: diagnostics.canRecheck,
-        canCopy: diagnostics.canCopy,
-        didCopy: diagnostics.didCopy,
-        onRecheck: { Task { await runDiagnosticsCheck() } },
-        onCopy: { diagnostics.copyTextReport() }
+    if navigation.currentRoute == .support, support.showsHeaderActions {
+      return .support(
+        isChecking: support.isLoading,
+        canRecheck: support.canRecheck,
+        onRecheck: { Task { await runSupportCheck() } }
       )
     }
     if !navigation.canNavigateBack { return .openSettings(openSettings) }
@@ -191,15 +188,15 @@ struct MenuBarContentView: View {
     case .usage:
       AccountUsageView(model: model, source: $usageSource, period: $usagePeriod)
     case .support:
-      SettingsSupportView(model: model, onOpenDiagnostics: { navigate(to: .diagnostics) })
-    case .diagnostics:
-      SettingsDiagnosticsView(
-        state: diagnostics.pageState,
-        onRetry: { Task { await runDiagnosticsCheck() } }
+      SettingsSupportView(
+        state: support.pageState,
+        model: support,
+        onRetry: { Task { await runSupportCheck() } },
+        onResetLocalData: { Task { await resetLocalData() } }
       )
       .task {
-        guard performsDiagnosticsCheckOnEntry else { return }
-        await runDiagnosticsCheck()
+        guard performsSupportCheckOnEntry else { return }
+        await runSupportCheck()
       }
     }
   }
@@ -208,16 +205,21 @@ struct MenuBarContentView: View {
     navigate(to: .settings)
   }
 
-  private func runDiagnosticsCheck() async {
-    await diagnostics.runCheck { try await model.diagnose() }
+  private func runSupportCheck() async {
+    await support.runCheck { try await model.diagnose() }
+  }
+
+  private func resetLocalData() async {
+    await model.resetLocalData()
+    await runSupportCheck()
   }
 
   private func navigate(to route: MenuBarRoute) {
     navigationDirection = .forward
     var next = navigation
     next.open(route)
-    if route == .diagnostics {
-      diagnostics.prepareForEntry()
+    if route == .support {
+      support.prepareForEntry()
     }
     applyNavigation(next)
   }
@@ -273,7 +275,6 @@ enum MenuBarRoute: Hashable {
   case devices
   case usage
   case support
-  case diagnostics
 
   var title: String {
     switch self {
@@ -283,7 +284,6 @@ enum MenuBarRoute: Hashable {
     case .devices: "Devices"
     case .usage: "Usage"
     case .support: "Support"
-    case .diagnostics: "Diagnostics"
     }
   }
 }

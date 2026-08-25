@@ -68,7 +68,6 @@
     case devices
     case usage
     case support
-    case diagnostics
 
     fileprivate var path: [MenuBarRoute] {
       switch self {
@@ -81,7 +80,6 @@
       case .devices: [.settings, .devices]
       case .usage: [.settings, .usage]
       case .support: [.settings, .support]
-      case .diagnostics: [.settings, .support, .diagnostics]
       }
     }
   }
@@ -176,24 +174,24 @@
     }
 
     @MainActor
-    func makeDiagnosticsModel() -> DiagnosticsPageModel {
-      guard dataSource == .fixture else { return DiagnosticsPageModel() }
+    func makeSupportModel() -> SupportPageModel {
+      guard dataSource == .fixture else { return SupportPageModel() }
       switch fixture {
       case .loading:
-        return DiagnosticsPageModel(isLoading: true)
+        return SupportPageModel(isLoading: true)
       case .content:
-        return DiagnosticsPageModel(report: diagnosticVisualReport(at: referenceDate))
+        return SupportPageModel(report: supportVisualReport(at: referenceDate))
       case .cachedRefreshError:
-        return DiagnosticsPageModel(
-          report: diagnosticVisualReport(at: referenceDate),
-          errorMessage: "The latest check failed. Showing the last diagnostics report."
+        return SupportPageModel(
+          report: supportVisualReport(at: referenceDate),
+          errorMessage: "The latest check failed. Showing the last report."
         )
       case .empty:
-        return DiagnosticsPageModel(report: signedOutDiagnosticVisualReport(at: referenceDate))
+        return SupportPageModel(report: signedOutSupportVisualReport(at: referenceDate))
       case .unavailable:
-        return DiagnosticsPageModel(errorMessage: "The bundled local service could not be started.")
+        return SupportPageModel(errorMessage: "The bundled local service could not be started.")
       case .cacheRebuilding:
-        return DiagnosticsPageModel(report: diagnosticVisualReport(at: referenceDate))
+        return SupportPageModel(report: supportVisualReport(at: referenceDate))
       }
     }
 
@@ -240,59 +238,62 @@
     )
   }
 
-  private func diagnosticVisualReport(at date: Date) -> LocalServiceDiagnosticReport {
+  private func supportVisualReport(at date: Date) -> LocalServiceDiagnosticReport {
     LocalServiceDiagnosticReport(
-      schemaVersion: 2,
-      summary: LocalServiceDiagnosticSummary(
-        operation: .healthy, data: .current, attention: .none),
-      refresh: LocalServiceDiagnosticRefresh(
-        phase: .idle, asOf: date, startedAt: nil, nextDueAt: date.addingTimeInterval(300)),
       generatedAt: date,
       client: LocalServiceDiagnosticClient(name: "QuotaBar", version: "Visual QA"),
+      summary: LocalServiceDiagnosticSummary(operation: .healthy, attention: .none),
       surfaces: [
         LocalServiceDiagnosticSurface(
-          name: "quota_overview", operation: .healthy, data: .current, source: nil,
-          metrics: ["items": 5, "this_device_sources": 3, "account_sources": 2]),
+          id: "quota_overview", status: .ok, data: .current, lastSuccessAt: date,
+          message: "5 subscriptions shown · 3 read on this Mac · 2 from the account.",
+          recovery: .none),
         LocalServiceDiagnosticSurface(
-          name: "usage_this_device", operation: .healthy, data: .current, source: .thisDevice,
-          metrics: ["records": 128, "files": 4, "partial_hours": 0]),
+          id: "usage_this_device", status: .ok, data: .current, lastSuccessAt: date,
+          message: "128 records read from 4 agents.", recovery: .none),
         LocalServiceDiagnosticSurface(
-          name: "usage_account", operation: .healthy, data: .current, source: .account,
-          metrics: ["enabled": 1, "periods": 4]),
+          id: "usage_account", status: .ok, data: .current, lastSuccessAt: date,
+          message: "Usage from this Mac is part of your account totals.", recovery: .none),
         LocalServiceDiagnosticSurface(
-          name: "account", operation: .healthy, data: .current, source: .account,
-          metrics: ["signed_in": 1, "devices": 2]),
+          id: "account", status: .ok, data: .current, lastSuccessAt: date,
+          message: "Signed in · 2 devices.", recovery: .none),
       ],
-      checks: [],
-      findings: []
+      sources: [
+        LocalServiceDiagnosticSource(
+          subject: "provider:codex", sourceID: "oauth", status: .ok, lastAttemptAt: date,
+          lastSuccessAt: date, message: "Quota was read on this Mac.", recovery: .none),
+        LocalServiceDiagnosticSource(
+          subject: "agent:claude_code", status: .ok, lastAttemptAt: date, lastSuccessAt: date,
+          message: "Usage records were read on this Mac.", recovery: .none),
+      ],
+      recent: [
+        LocalServiceDiagnosticAttempt(
+          kind: .refresh, subject: nil, startedAt: date.addingTimeInterval(-30),
+          durationMs: 2_400, outcome: .success, code: nil)
+      ]
     )
   }
 
-  private func signedOutDiagnosticVisualReport(at date: Date) -> LocalServiceDiagnosticReport {
-    let report = diagnosticVisualReport(at: date)
+  private func signedOutSupportVisualReport(at date: Date) -> LocalServiceDiagnosticReport {
+    let report = supportVisualReport(at: date)
     return LocalServiceDiagnosticReport(
-      schemaVersion: report.schemaVersion,
-      summary: LocalServiceDiagnosticSummary(
-        operation: .healthy, data: .current, attention: .optional),
-      refresh: report.refresh,
       generatedAt: report.generatedAt,
       client: report.client,
+      summary: LocalServiceDiagnosticSummary(operation: .healthy, attention: .required),
       surfaces: report.surfaces,
-      checks: [],
-      findings: [
-        LocalServiceDiagnosticFinding(
-          component: "quota_collection",
-          source: .thisDevice,
+      sources: [
+        LocalServiceDiagnosticSource(
           subject: "provider:codex",
+          sourceID: "chatgpt_usage_api",
+          status: .degraded,
+          lastAttemptAt: date,
           code: "auth_required",
-          severity: .info,
-          impact: .none,
-          recovery: .login,
-          count: 1,
-          observedAt: date,
-          message: "An opportunistically discovered local source could not be collected."
+          message:
+            "The saved sign-in expired or was rejected. Open Codex to refresh the sign-in.",
+          recovery: .configureProvider
         )
-      ]
+      ],
+      recent: report.recent
     )
   }
 

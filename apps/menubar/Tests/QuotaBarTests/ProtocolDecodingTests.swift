@@ -51,8 +51,7 @@ func decodesAccountSummaryWithUsageCost() throws {
         "created_at": "2026-07-01T00:00:00Z",
         "last_login_at": "2026-08-01T00:00:00Z",
         "last_seen_at": "2026-08-02T01:00:00Z",
-        "signed_out_at": null,
-        "health": null
+        "signed_out_at": null
       }],
       "quota": [],
       "usage": {
@@ -184,34 +183,12 @@ func decodesAccountSummaryWithUsageCost() throws {
 }
 
 @Test
-func accountDeviceHealthPresentationUsesAllAxesAndServerFreshness() throws {
+func accountDeviceActivityUsesTheNewerOfLastSeenAndLastReading() throws {
   let now = try #require(ISO8601DateFormatter().date(from: "2026-08-15T08:10:00Z"))
   func decodeDevice(
     status: String = "active",
-    freshUntil: String = "2026-08-15T08:20:00Z",
-    operation: String = "healthy",
-    data: String = "current",
-    attention: String = "none",
-    includesHealth: Bool = true
+    lastSeenAt: Any = "2026-08-15T08:00:05Z"
   ) throws -> AccountDevice {
-    let health: Any = includesHealth
-      ? [
-        "schema_version": 1,
-        "client_product": "quotabar",
-        "client_version": "0.0.16",
-        "platform": "macos",
-        "observed_at": "2026-08-15T08:00:00Z",
-        "refresh_revision": 7,
-        "last_completed_refresh_at": "2026-08-15T08:00:00Z",
-        "last_successful_account_sync_at": NSNull(),
-        "summary": ["operation": operation, "data": data, "attention": attention],
-        "top_code": NSNull(),
-        "consecutive_failures": 0,
-        "usage_upload_enabled": true,
-        "received_at": "2026-08-15T08:00:05Z",
-        "fresh_until": freshUntil,
-      ] as [String: Any]
-      : NSNull()
     let value: [String: Any] = [
       "device_id": "device_01",
       "display_name": "Studio Mac",
@@ -220,9 +197,8 @@ func accountDeviceHealthPresentationUsesAllAxesAndServerFreshness() throws {
       "status": status,
       "created_at": "2026-08-01T00:00:00Z",
       "last_login_at": "2026-08-15T08:00:00Z",
-      "last_seen_at": "2026-08-15T08:00:05Z",
+      "last_seen_at": lastSeenAt,
       "signed_out_at": status == "signed_out" ? "2026-08-15T08:05:00Z" : NSNull(),
-      "health": health,
     ]
     return try QuotaWireCodec.makeDecoder().decode(
       AccountDevice.self,
@@ -230,23 +206,45 @@ func accountDeviceHealthPresentationUsesAllAxesAndServerFreshness() throws {
     )
   }
 
-  #expect(AccountDeviceHealthPresentation.status(for: try decodeDevice(), now: now) == .healthy)
+  // A device carrying an assertion about its own health is not part of the wire any more.
+  var withHealth: [String: Any] = [
+    "device_id": "device_01",
+    "display_name": "Studio Mac",
+    "platform": "macos",
+    "device_generation": 1,
+    "status": "active",
+    "created_at": "2026-08-01T00:00:00Z",
+    "last_login_at": "2026-08-15T08:00:00Z",
+    "last_seen_at": "2026-08-15T08:00:05Z",
+    "signed_out_at": NSNull(),
+  ]
+  withHealth["health"] = NSNull()
+  #expect(throws: DecodingError.self) {
+    _ = try QuotaWireCodec.makeDecoder().decode(
+      AccountDevice.self, from: JSONSerialization.data(withJSONObject: withHealth))
+  }
+
   #expect(
-    AccountDeviceHealthPresentation.status(
-      for: try decodeDevice(data: "partial"), now: now) == .needsAttention)
+    AccountDeviceActivity.status(for: try decodeDevice(), lastReadingAt: nil, now: now) == .active)
   #expect(
-    AccountDeviceHealthPresentation.status(
-      for: try decodeDevice(attention: "required"), now: now) == .needsAttention)
+    AccountDeviceActivity.status(
+      for: try decodeDevice(lastSeenAt: "2026-08-14T08:00:00Z"),
+      lastReadingAt: try #require(ISO8601DateFormatter().date(from: "2026-08-15T08:05:00Z")),
+      now: now) == .active)
   #expect(
-    AccountDeviceHealthPresentation.status(
-      for: try decodeDevice(freshUntil: "2026-08-15T08:09:59Z"), now: now)
-      == .notRecentlyActive)
+    AccountDeviceActivity.status(
+      for: try decodeDevice(lastSeenAt: "2026-08-15T05:00:00Z"), lastReadingAt: nil, now: now)
+      == .idle)
   #expect(
-    AccountDeviceHealthPresentation.status(
-      for: try decodeDevice(includesHealth: false), now: now) == .unknown)
+    AccountDeviceActivity.status(
+      for: try decodeDevice(lastSeenAt: "2026-08-12T05:00:00Z"), lastReadingAt: nil, now: now)
+      == .notReporting)
   #expect(
-    AccountDeviceHealthPresentation.status(
-      for: try decodeDevice(status: "signed_out", includesHealth: false), now: now) == .signedOut)
+    AccountDeviceActivity.status(
+      for: try decodeDevice(lastSeenAt: NSNull()), lastReadingAt: nil, now: now) == .notReporting)
+  #expect(
+    AccountDeviceActivity.status(
+      for: try decodeDevice(status: "signed_out"), lastReadingAt: nil, now: now) == .signedOut)
 }
 
 @Test
@@ -421,51 +419,33 @@ func decodesABlockedDiagnosticReport() throws {
   let data = Data(
     #"""
     {
-      "schema_version": 2,
-      "summary": { "operation": "blocked", "data": "unknown", "attention": "required" },
-      "refresh": {
-        "phase": "idle",
-        "revision": 0,
-        "as_of": "2026-08-17T00:00:00Z",
-        "started_at": null,
-        "next_due_at": null
-      },
+      "schema_version": 3,
       "generated_at": "2026-08-17T00:00:00Z",
       "client": { "name": "QuotaBar", "version": "0.0.17" },
+      "summary": { "operation": "blocked", "attention": "required" },
       "surfaces": [
-        { "name": "quota_overview", "operation": "blocked", "data": "unknown", "source": null, "metrics": {} },
-        { "name": "usage_this_device", "operation": "blocked", "data": "unknown", "source": "this_device", "metrics": {} },
-        { "name": "usage_account", "operation": "blocked", "data": "unknown", "source": "account", "metrics": {} },
-        { "name": "account", "operation": "blocked", "data": "unknown", "source": "account", "metrics": {} }
+        { "id": "quota_overview", "status": "blocked", "data": "empty", "last_success_at": null,
+          "message": "No quota has been read yet.", "recovery": "reinstall" },
+        { "id": "usage_this_device", "status": "blocked", "data": "empty",
+          "last_success_at": null, "message": "No Usage records yet.", "recovery": "reinstall" },
+        { "id": "usage_account", "status": "inactive", "data": "empty", "last_success_at": null,
+          "message": "Usage sync is off.", "recovery": "none" },
+        { "id": "account", "status": "inactive", "data": "empty", "last_success_at": null,
+          "message": "Not signed in.", "recovery": "none" }
       ],
-      "checks": [
+      "sources": [
         {
-          "name": "local_state",
-          "source": "system",
-          "subject": null,
-          "mode": "required",
-          "operation": "blocked",
-          "data": "unknown",
+          "subject": "local_state",
+          "source_id": null,
+          "status": "blocked",
           "last_attempt_at": "2026-08-17T00:00:00Z",
           "last_success_at": null,
-          "metrics": { "resets": 1 }
-        }
-      ],
-      "findings": [
-        {
-          "component": "local_state",
-          "source": "system",
-          "subject": null,
           "code": "local_identity_reset",
-          "severity": "error",
-          "impact": "system",
-          "recovery": "reinstall",
-          "count": 1,
-          "observed_at": "2026-08-17T00:00:00Z",
-          "message": "Local identity could not be read and was reset. Sign in again."
+          "message": "Local identity could not be read and was reset. Sign in again.",
+          "recovery": "login"
         }
       ],
-      "recent_activity": { "attempts": [], "history_truncated": false }
+      "recent": []
     }
     """#.utf8
   )
@@ -473,16 +453,14 @@ func decodesABlockedDiagnosticReport() throws {
     LocalServiceDiagnosticReport.self, from: data)
   #expect(report.isValid)
   #expect(report.summary.operation == .blocked)
-  #expect(report.summary.data == .unknown)
   #expect(report.summary.attention == .required)
-  #expect(report.surfaces.count == 4)
-  #expect(Set(report.surfaces.map(\.name)) == Set([
-    "quota_overview", "usage_this_device", "usage_account", "account",
-  ]))
-  #expect(report.findings.count == 1)
-  #expect(report.findings[0].code == "local_identity_reset")
-  #expect(report.findings[0].recovery == .reinstall)
-  #expect(report.checks[0].metrics["resets"] == 1)
+  #expect(
+    report.surfaces.map(\.id)
+      == ["quota_overview", "usage_this_device", "usage_account", "account"])
+  #expect(report.sources.count == 1)
+  #expect(report.sources[0].code == "local_identity_reset")
+  #expect(report.sources[0].recovery == .login)
+  #expect(report.textReport.contains("local_state"))
 }
 
 @Test
@@ -490,20 +468,18 @@ func decodesUnifiedDiagnosticsAndRejectsUnknownFields() throws {
   let data = Data(
     #"""
     {
-      "schema_version":2,
-      "summary":{"operation":"healthy","data":"current","attention":"optional"},
-      "refresh":{"phase":"idle","revision":7,"as_of":"2026-08-11T00:00:00Z","started_at":null,"next_due_at":"2026-08-11T00:05:00Z"},
+      "schema_version":3,
       "generated_at":"2026-08-11T00:00:00Z",
       "client":{"name":"QuotaBar","version":"0.0.7"},
+      "summary":{"operation":"healthy","attention":"required"},
       "surfaces":[
-        {"name":"quota_overview","operation":"healthy","data":"current","source":null,"metrics":{"items":1}},
-        {"name":"usage_this_device","operation":"healthy","data":"partial","source":"this_device","metrics":{"files":1}},
-        {"name":"usage_account","operation":"healthy","data":"empty","source":"account","metrics":{}},
-        {"name":"account","operation":"healthy","data":"current","source":"account","metrics":{"signed_in":1}}
+        {"id":"quota_overview","status":"ok","data":"current","last_success_at":"2026-08-11T00:00:00Z","message":"1 subscription shown.","recovery":"none"},
+        {"id":"usage_this_device","status":"ok","data":"partial","last_success_at":null,"message":"Some Usage is incomplete.","recovery":"none"},
+        {"id":"usage_account","status":"inactive","data":"empty","last_success_at":null,"message":"Usage sync is off.","recovery":"none"},
+        {"id":"account","status":"ok","data":"current","last_success_at":"2026-08-11T00:00:00Z","message":"Signed in.","recovery":"none"}
       ],
-      "checks":[{"name":"usage_scan","source":"this_device","subject":"agent:cursor","mode":"required","operation":"healthy","data":"partial","last_attempt_at":"2026-08-11T00:00:00Z","last_success_at":null,"metrics":{"partial_files":1}}],
-      "findings":[{"component":"usage_scan","source":"this_device","subject":"agent:cursor","code":"malformed_json","severity":"warning","impact":"surface","recovery":"update_source","count":2,"observed_at":"2026-08-11T00:00:00Z","message":"Invalid Usage input was isolated while valid records were retained."}],
-      "recent_activity":{"attempts":[],"history_truncated":false}
+      "sources":[{"subject":"agent:cursor","source_id":null,"status":"degraded","last_attempt_at":"2026-08-11T00:00:00Z","last_success_at":null,"code":"malformed_json","message":"Invalid Usage records were skipped and the valid ones were kept.","recovery":"update_source"}],
+      "recent":[{"kind":"usage_scan","subject":"agent:cursor","started_at":"2026-08-11T00:00:00Z","duration_ms":12,"outcome":"partial","code":"malformed_data"}]
     }
     """#.utf8
   )
@@ -511,10 +487,10 @@ func decodesUnifiedDiagnosticsAndRejectsUnknownFields() throws {
     LocalServiceDiagnosticReport.self, from: data)
   #expect(report.summary.operation == .healthy)
   #expect(report.surfaces.count == 4)
-  #expect(report.checks.first?.subject == "agent:cursor")
+  #expect(report.sources.first?.subject == "agent:cursor")
   #expect(report.textReport.contains("agent:cursor"))
-  #expect(report.jsonReport.contains("\"schema_version\":2"))
-  #expect(!report.jsonReport.contains("/Users/"))
+  #expect(report.textReport.contains("usage_scan/agent:cursor"))
+  #expect(!report.textReport.contains("/Users/"))
 
   var object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
   object["future_key"] = true
@@ -524,30 +500,32 @@ func decodesUnifiedDiagnosticsAndRejectsUnknownFields() throws {
       from: JSONSerialization.data(withJSONObject: object))
   }
 
-  object.removeValue(forKey: "future_key")
-  var surfaces = try #require(object["surfaces"] as? [[String: Any]])
-  surfaces[1]["metrics"] = ["files": 1_000_001]
-  object["surfaces"] = surfaces
+  // A report whose surfaces are not the four fixed ones, in order, is not this contract.
+  var reordered = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+  var surfaces = try #require(reordered["surfaces"] as? [[String: Any]])
+  surfaces.reverse()
+  reordered["surfaces"] = surfaces
   #expect(throws: DecodingError.self) {
     _ = try QuotaWireCodec.makeDecoder().decode(
       LocalServiceDiagnosticReport.self,
-      from: JSONSerialization.data(withJSONObject: object))
+      from: JSONSerialization.data(withJSONObject: reordered))
   }
 
-  var missingMetrics = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
-  var missingMetricsChecks = try #require(missingMetrics["checks"] as? [[String: Any]])
-  missingMetricsChecks[0].removeValue(forKey: "metrics")
-  missingMetrics["checks"] = missingMetricsChecks
+  var missingMessage = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+  var missingMessageSources = try #require(missingMessage["sources"] as? [[String: Any]])
+  missingMessageSources[0].removeValue(forKey: "message")
+  missingMessage["sources"] = missingMessageSources
   #expect(throws: DecodingError.self) {
     _ = try QuotaWireCodec.makeDecoder().decode(
       LocalServiceDiagnosticReport.self,
-      from: JSONSerialization.data(withJSONObject: missingMetrics))
+      from: JSONSerialization.data(withJSONObject: missingMessage))
   }
 
+  // A subject is a catalog-owned name or nothing; a path can never reach the page.
   var unsafe = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
-  var findings = try #require(unsafe["findings"] as? [[String: Any]])
-  findings[0]["subject"] = "agent:/Users/private"
-  unsafe["findings"] = findings
+  var unsafeSources = try #require(unsafe["sources"] as? [[String: Any]])
+  unsafeSources[0]["subject"] = "agent:/Users/private"
+  unsafe["sources"] = unsafeSources
   #expect(throws: DecodingError.self) {
     _ = try QuotaWireCodec.makeDecoder().decode(
       LocalServiceDiagnosticReport.self,

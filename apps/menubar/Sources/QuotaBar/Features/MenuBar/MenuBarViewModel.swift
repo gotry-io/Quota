@@ -304,16 +304,28 @@ final class MenuBarViewModel {
     let previous = try await client.diagnose()
     let refresh = try await client.recheckDiagnostics()
     guard refresh.accepted || refresh.pending else { return previous }
+    // A running refresh keeps answering with the report it already had, so a different
+    // evaluation time is the only proof that a newer one exists.
     let deadline = Date().addingTimeInterval(12)
     var latest = previous
     repeat {
       try await Task.sleep(for: .milliseconds(150))
       latest = try await client.diagnose()
-      if latest.refresh.phase == .idle, latest.refresh.revision != previous.refresh.revision {
-        return latest
-      }
+      if latest.generatedAt != previous.generatedAt { return latest }
     } while Date() < deadline
     return latest
+  }
+
+  /// Deletes this Mac's derived cache and starts filling it in again. The session, the upload
+  /// queue, and saved browser sessions live in a different file and are untouched.
+  func resetLocalData() async {
+    guard let client else { return }
+    do {
+      try await client.resetCache()
+      await reloadState()
+    } catch {
+      errorMessage = Self.message(for: error)
+    }
   }
 
   func usageDetail(source: UsageSource, period: UsagePeriod) -> LocalServiceUsageDetail? {
