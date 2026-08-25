@@ -1,5 +1,9 @@
 # ADR 0014: Non-secret iOS widget snapshot via App Group
 
+> Updated 2026-08-26: the app process also refreshes when it is not on screen. A
+> `BGAppRefreshTask` (`io.gotry.quota.refresh`, earliest begin thirty minutes out) runs the same
+> refresh a pull-to-refresh runs and republishes the snapshot. The extension still never fetches.
+
 - Status: Accepted
 - Date: 2026-08-14
 - Related: [ADR 0013](./0013-readonly-ios-account-client.md), [`docs/architecture.md`](../architecture.md), [`docs/security.md`](../security.md)
@@ -30,8 +34,10 @@ Relay.
 - The extension target `QuotaWidgets` (`io.gotry.quota.widgets`) embeds in Quota, uses the same App
   Group, and depends only on `QuotaWidgetData` and `QuotaPresentation`. It must not import or link
   `QuotaWire`, `QuotaRelay`, `QuotaAccount`, Security, or use `URLSession`/Keychain.
-- Timeline policy is local only: placeholder plus a modest fifteen-minute refresh so reset and
-  updated ages can advance. There is no background network task and no extension-initiated fetch.
+- Timeline policy inside the extension is local only: placeholder plus a modest fifteen-minute
+  refresh so reset and updated ages can advance. The extension never fetches. What it draws is
+  republished by the app process, on a foreground refresh and on a background app refresh the app
+  asks for no sooner than every thirty minutes.
 - Each item carries the freshness facts the collecting device reported — whether the reading was
   available and when it stops describing current quota — not a stale verdict. The extension re-draws
   on its own timeline, so it applies the shared rule at the instant it renders, exactly as the app

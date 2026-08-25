@@ -33,6 +33,7 @@ final class AppModel {
   private let authenticator: any BrowserSessionAuthenticating
   private let makeAuthorizationAttempt: @Sendable () throws -> AuthorizationAttempt
   private let widgetPublisher: any WidgetSnapshotPublishing
+  private let backgroundRefresh: any BackgroundRefreshScheduling
 
   var phase: Phase = .launching
   var summary: AccountSummary?
@@ -51,6 +52,7 @@ final class AppModel {
     account: AccountClient,
     authenticator: any BrowserSessionAuthenticating,
     widgetPublisher: any WidgetSnapshotPublishing = NoOpWidgetSnapshotPublisher(),
+    backgroundRefresh: any BackgroundRefreshScheduling = NoOpBackgroundRefreshScheduler(),
     makeAuthorizationAttempt: @escaping @Sendable () throws -> AuthorizationAttempt = {
       try AuthorizationRequest.make()
     }
@@ -58,10 +60,11 @@ final class AppModel {
     self.account = account
     self.authenticator = authenticator
     self.widgetPublisher = widgetPublisher
+    self.backgroundRefresh = backgroundRefresh
     self.makeAuthorizationAttempt = makeAuthorizationAttempt
   }
 
-  convenience init() {
+  convenience init(backgroundRefresh: any BackgroundRefreshScheduling) {
     self.init(
       account: AccountClient(
         sessionStore: KeychainAccountSessionStore(),
@@ -69,7 +72,8 @@ final class AppModel {
           ?? MemoryAccountSummaryStore()
       ),
       authenticator: SystemBrowserAuthenticator(),
-      widgetPublisher: AppGroupWidgetSnapshotPublisher.make()
+      widgetPublisher: AppGroupWidgetSnapshotPublisher.make(),
+      backgroundRefresh: backgroundRefresh
     )
   }
 
@@ -143,12 +147,19 @@ final class AppModel {
     }
   }
 
-  func refresh() async {
-    guard !isRefreshing else { return }
+  /// The one refresh the pull-to-refresh gesture and a background app refresh both run: read
+  /// the account summary, apply it, republish the widget snapshot from the result, and ask for
+  /// the next background window. Reports whether the read reached Relay, which is the success
+  /// a `BGAppRefreshTask` completes with.
+  @discardableResult
+  func refresh() async -> Bool {
+    guard !isRefreshing else { return false }
     isRefreshing = true
     defer { isRefreshing = false }
     let result = await account.fetchTodaySummary()
     apply(result)
+    backgroundRefresh.scheduleNextRefresh()
+    return result.error == nil
   }
 
   func logout() async {

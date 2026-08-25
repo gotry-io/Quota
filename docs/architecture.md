@@ -301,7 +301,8 @@ installation identity and Device fields and returns only an account session. It 
 Device, is absent from `PlatformSchema`, and never receives snapshot or Usage write authority. Quota
 iOS consumes that session through `packages/apple-client` and fetches
 `GET /api/v6/account/summary` for Today and the read-only device list. The app process
-alone holds OAuth and network authority.
+alone holds OAuth and network authority, on screen and under the `io.gotry.quota.refresh` background
+app refresh, which asks for no window sooner than thirty minutes out and runs the same read.
 After a trusted summary is available it projects a non-secret `WidgetSnapshot` into the App Group
 `group.io.gotry.quota` for the embedded `QuotaWidgets` extension; the extension reads only that
 protected file and never calls Relay. See

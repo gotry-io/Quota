@@ -145,8 +145,10 @@ data requirements. Architecture and product behavior are defined in
   cache is displayed or used as a fallback; orphaned or mismatched cache is cleared. Logout clears
   the session and the cache.
 - Quota iOS widgets use App Group `group.io.gotry.quota` only. The app target alone performs OAuth,
-  holds the Keychain session, calls Relay, and publishes a non-secret `WidgetSnapshot` through
-  `ProtectedFileWidgetSnapshotStore` (atomic write,
+  holds the Keychain session, calls Relay — on screen and under the `io.gotry.quota.refresh`
+  background app refresh, which asks for no window sooner than thirty minutes out and reuses that
+  same session and cache rather than holding credentials of its own — and publishes a non-secret
+  `WidgetSnapshot` through `ProtectedFileWidgetSnapshotStore` (atomic write,
   `completeFileProtectionUntilFirstUserAuthentication`, excluded from backup). The snapshot may
   contain display remaining-quota and Today token/cost fields; it must not contain account ids,
   device ids, fingerprints, tokens, or raw sources. The WidgetKit extension reads that

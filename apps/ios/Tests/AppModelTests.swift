@@ -210,6 +210,56 @@ struct AppModelTests {
     #expect(publisher.lastPublished == nil)
   }
 
+  /// The refresh a background app refresh runs is the refresh the pull-to-refresh gesture runs:
+  /// it republishes the widget snapshot from the read it just made and asks for the next window.
+  @Test
+  func sharedRefreshRepublishesSnapshotAndSchedulesTheNextWindow() async throws {
+    let publisher = RecordingWidgetSnapshotPublisher()
+    let scheduler = RecordingBackgroundRefreshScheduler()
+    let model = makeModel(
+      session: Fixtures.session(),
+      cache: nil,
+      exchanges: [.init(status: 200, body: try Fixtures.accountSummaryJSON())],
+      widgetPublisher: publisher,
+      backgroundRefresh: scheduler
+    )
+
+    #expect(await model.refresh())
+    #expect(publisher.publishCount == 1)
+    #expect(publisher.clearCount == 0)
+    #expect(publisher.lastPublished?.fetchedAt == Fixtures.date("2026-08-14T16:00:00Z"))
+    #expect(scheduler.scheduleCount == 1)
+  }
+
+  /// A refresh that never reaches Relay reports failure — which is the success a background task
+  /// completes with — and leaves the snapshot the widget is already drawing in place.
+  @Test
+  func sharedRefreshFailureKeepsThePublishedSnapshot() async throws {
+    let publisher = RecordingWidgetSnapshotPublisher()
+    let scheduler = RecordingBackgroundRefreshScheduler()
+    let model = makeModel(
+      session: Fixtures.session(),
+      cache: nil,
+      exchanges: [
+        .init(status: 200, body: try mutatedSummaryLabel("fresh-label")),
+        .init(status: 503, body: Data()),
+      ],
+      widgetPublisher: publisher,
+      backgroundRefresh: scheduler
+    )
+
+    #expect(await model.refresh())
+    let published = publisher.lastPublished
+    #expect(published != nil)
+
+    #expect(await model.refresh() == false)
+    #expect(model.summary?.account.displayLabel == "fresh-label")
+    #expect(publisher.publishCount == 1)
+    #expect(publisher.clearCount == 0)
+    #expect(publisher.lastPublished == published)
+    #expect(scheduler.scheduleCount == 2)
+  }
+
   @Test
   func connectAccountFetchesFreshSummaryThenLogout() async throws {
     let attempt = AuthorizationAttempt(
@@ -314,7 +364,8 @@ private func makeModel(
   session: AccountSession?,
   cache: CachedAccountSummary?,
   exchanges: [ScriptedHTTPTransport.Exchange],
-  widgetPublisher: any WidgetSnapshotPublishing = NoOpWidgetSnapshotPublisher()
+  widgetPublisher: any WidgetSnapshotPublishing = NoOpWidgetSnapshotPublisher(),
+  backgroundRefresh: any BackgroundRefreshScheduling = NoOpBackgroundRefreshScheduler()
 ) -> AppModel {
   AppModel(
     account: AccountClient(
@@ -326,7 +377,8 @@ private func makeModel(
     authenticator: ScriptedAuthenticator(
       result: .failure(AuthorizationError.cancelled)
     ),
-    widgetPublisher: widgetPublisher
+    widgetPublisher: widgetPublisher,
+    backgroundRefresh: backgroundRefresh
   )
 }
 
