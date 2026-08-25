@@ -338,6 +338,7 @@ impl StateStore {
             write_preference(&identity, CACHE_RESET_KEY, &now_rfc3339())?;
             write_metadata_flag(&cache, REBUILDING_KEY, true)?;
         }
+        checkpoint(&identity);
         let store = Self {
             root,
             identity: Mutex::new(identity),
@@ -426,8 +427,8 @@ impl StateStore {
         let result = f(&mut conn);
         if result.is_ok() {
             // The file is a few kilobytes and is written rarely, so the log is folded back in
-            // immediately: nothing here is worth replaying after a crash.
-            let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
+            // immediately.
+            checkpoint(&conn);
         }
         result
     }
@@ -3336,6 +3337,12 @@ fn open_identity(root: &Path) -> Result<Connection, StateError> {
         write_preference(&opened, IDENTITY_RESET_KEY, &now_rfc3339())?;
     }
     Ok(opened)
+}
+
+/// Folds the identity log back into the image. Every write transaction ends this way, including
+/// the ones that build the schema, so a crash never leaves a log this device has to replay.
+fn checkpoint(conn: &Connection) {
+    let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
 }
 
 fn open_identity_image(path: &Path) -> Result<Connection, StateError> {
