@@ -1601,10 +1601,7 @@ fn validate_usage_agents(value: &Value) -> Result<(), RelayError> {
     for agent in agents {
         validate_response_object(agent, &["agent", "totals", "cost", "providers"])?;
         let object = agent.as_object().ok_or(RelayError::InvalidResponse)?;
-        if !matches!(
-            object.get("agent").and_then(Value::as_str),
-            Some("codex" | "claude_code" | "grok" | "opencode" | "pi" | "cursor")
-        ) {
+        if !valid_billing_agent(object.get("agent").and_then(Value::as_str)) {
             return Err(RelayError::InvalidResponse);
         }
         validate_usage_summary_totals(object.get("totals").ok_or(RelayError::InvalidResponse)?)?;
@@ -1612,24 +1609,12 @@ fn validate_usage_agents(value: &Value) -> Result<(), RelayError> {
         let providers = object
             .get("providers")
             .and_then(Value::as_array)
-            .filter(|providers| providers.len() <= 8)
+            .filter(|providers| providers.len() <= crate::usage::InferenceProvider::ALL.len())
             .ok_or(RelayError::InvalidResponse)?;
         for provider in providers {
             validate_response_object(provider, &["provider", "totals", "cost", "models"])?;
             let object = provider.as_object().ok_or(RelayError::InvalidResponse)?;
-            if !matches!(
-                object.get("provider").and_then(Value::as_str),
-                Some(
-                    "openai"
-                        | "azure_openai"
-                        | "anthropic"
-                        | "aws_bedrock"
-                        | "google_vertex"
-                        | "openrouter"
-                        | "xai"
-                        | "unknown"
-                )
-            ) {
+            if !valid_inference_provider(object.get("provider").and_then(Value::as_str)) {
                 return Err(RelayError::InvalidResponse);
             }
             validate_usage_summary_totals(
@@ -3176,10 +3161,11 @@ fn valid_decimal_integer(value: &str) -> bool {
 }
 
 fn valid_billing_agent(value: Option<&str>) -> bool {
-    matches!(
-        value,
-        Some("codex" | "claude_code" | "grok" | "opencode" | "pi" | "cursor")
-    )
+    value.is_some_and(|value| {
+        crate::usage::UsageAgent::ALL
+            .iter()
+            .any(|agent| agent.as_str() == value)
+    })
 }
 
 fn valid_billing_channel(value: Option<&str>) -> bool {
@@ -3187,6 +3173,14 @@ fn valid_billing_channel(value: Option<&str>) -> bool {
         crate::usage::BillingChannel::ALL
             .iter()
             .any(|channel| channel.as_str() == value)
+    })
+}
+
+fn valid_inference_provider(value: Option<&str>) -> bool {
+    value.is_some_and(|value| {
+        crate::usage::InferenceProvider::ALL
+            .iter()
+            .any(|provider| provider.as_str() == value)
     })
 }
 
@@ -3938,6 +3932,73 @@ mod tests {
         let mut extra = value;
         extra["account"]["unexpected"] = serde_json::json!(true);
         assert!(validate_account_summary(&extra).is_err());
+    }
+
+    /// One statement per contract: the read validator names agents and inference providers by
+    /// asking the enums that define them, so a member added to the wire cannot be rejected here
+    /// as unknown.  A `moonshot` provider once failed every account read for this reason.
+    #[test]
+    fn every_enum_member_the_wire_can_carry_is_accepted() {
+        let totals = serde_json::json!({
+            "total_tokens": 12,
+            "input_tokens": 10,
+            "output_tokens": 2,
+            "cache_read_input_tokens": 0,
+            "cache_write_input_tokens": 0,
+            "reasoning_tokens": 0,
+            "messages": 1
+        });
+        let providers = crate::usage::InferenceProvider::ALL
+            .iter()
+            .map(|provider| {
+                serde_json::json!({
+                    "provider": provider.as_str(),
+                    "totals": totals,
+                    "cost": valid_cost(),
+                    "models": [{"model": "gpt-5.6-sol", "totals": totals, "cost": valid_cost()}]
+                })
+            })
+            .collect::<Vec<_>>();
+        let agents = crate::usage::UsageAgent::ALL
+            .iter()
+            .map(|agent| {
+                serde_json::json!({
+                    "agent": agent.as_str(),
+                    "totals": totals,
+                    "cost": valid_cost(),
+                    "providers": providers
+                })
+            })
+            .collect::<Vec<_>>();
+        let summary = serde_json::json!({
+            "protocol_version": MANAGED_DATA_PROTOCOL,
+            "account": {
+                "account_id": "account_1",
+                "display_label": null,
+                "created_at": "2026-08-09T00:00:00Z"
+            },
+            "devices": [],
+            "quota": [],
+            "usage": {
+                "range": {"from": "2026-08-09", "to": "2026-08-10"},
+                "totals": valid_totals(),
+                "cost": valid_cost(),
+                "coverage": [],
+                "breakdowns": [],
+                "agents": agents
+            }
+        });
+
+        assert!(
+            validate_account_summary(&summary).is_ok(),
+            "{:?}",
+            validate_account_summary(&summary)
+        );
+
+        let mut unknown = summary;
+        unknown["usage"]["agents"][0]["providers"][0]["provider"] =
+            serde_json::json!("not_a_provider");
+        assert!(validate_account_summary(&unknown).is_err());
     }
 
     /// One contract: a rejected read is reported as the error it is, and the request carries

@@ -154,6 +154,19 @@ pub enum InferenceProvider {
 }
 
 impl InferenceProvider {
+    pub const ALL: [Self; 10] = [
+        Self::Openai,
+        Self::AzureOpenai,
+        Self::Anthropic,
+        Self::AwsBedrock,
+        Self::GoogleVertex,
+        Self::Openrouter,
+        Self::Xai,
+        Self::Moonshot,
+        Self::Deepseek,
+        Self::Unknown,
+    ];
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Openai => "openai",
