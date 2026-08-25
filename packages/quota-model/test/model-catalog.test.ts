@@ -43,7 +43,7 @@ describe("report-time model catalog", () => {
             {
               reported_model: "GPT-5.5[1m]",
               provider: "openai",
-              client: "codex",
+              agent: "codex",
               effective_from: "2026-05-01",
             },
           ],

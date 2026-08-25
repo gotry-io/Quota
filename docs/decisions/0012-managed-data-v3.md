@@ -34,14 +34,19 @@ same submission id, Device generation, sequence, coverage, and hourly facts. The
 only the derived v2 Account summary and Account period caches so the first IPC state remains
 decodable and Relay rebuilds current v3 presentation data.
 
-Relay retains the shipped v2 data routes. V2 request schemas reject Cursor; v2 reads query only the
-five v2 Usage agents and filter quota observations to the v2 provider set. Relay normalizes accepted
-v2 writes into its current internal model. D1 migration 0009 expands the four Usage-agent
+Relay retained the shipped v2 data routes alongside v3, with v2 request schemas rejecting Cursor and
+v2 reads filtered to the v2 provider and agent sets. D1 migration 0009 expands the four Usage-agent
 constraints without rewriting previous migrations.
 
-The provider catalog records both whether a provider synchronizes (`account_sync`) and the first
+The provider catalog recorded both whether a provider synchronizes (`account_sync`) and the first
 managed-data version that accepts it (`account_sync_protocol`). Generated v2 and v3 provider enums
-come from that source. Cursor starts at version 3.
+came from that source. Cursor started at version 3.
+
+**Updated 2026-08-24:** [ADR 0018](0018-single-managed-data-contract.md) retires the compatibility
+half of this decision. The v2 data routes, the duplicated v2 schemas, and the `account_sync_protocol`
+gate are deleted, `account_sync` alone decides whether a provider reaches the Account, and the
+managed data contract advances to v4 on `/api/v4/*` because its shape changed. The route and version
+names recorded above describe what shipped as v3, not the current contract.
 
 Managed-data v3 itself shipped with QuotaBar 0.0.12, including a strict Device shape in Account
 summary. Device Health therefore does not add a field to the default response. A new client requests
@@ -55,27 +60,18 @@ Because a packaged native client can update before Relay, ADR 0015 also defines 
 Relay fallback for `400 invalid_request`. The fallback retries the unchanged default v3 response and
 locally represents its absent health as unknown; it does not weaken the opted-in wire schema.
 
-The protocol-version key expresses a closed-enum addition only while some supported client is still
-on the older version. `BillingChannel` is the case where it cannot: menubar-v0.0.19 already speaks
-v3 and decodes the channel and its inference provider with exhaustive Swift enums, so an unknown
-member fails to decode rather than degrading, and no v2/v3 split separates it. Such an addition
-therefore reuses the query opt-in instead: the enum widens once, and a response narrows any member
-outside the released set to `unknown` unless the caller sends `usage_channels=1`. Narrowing moves
-`channel_source` with the channel and happens before grouping, so a narrowed row folds into the
-existing unknown provider. Released v2 routes reject the opt-in and always narrow. The released
-member list is derived from the widened enum in `packages/protocol`, never restated, and is removed
-once no supported client predates the addition.
+A closed-enum addition once had two ways to stay compatible: a new protocol version, or — where
+every supported client already spoke the newest version, as menubar-v0.0.19 did for `BillingChannel`
+— a query opt-in with server-side narrowing to `unknown`. ADR 0018 removed the second: Relay reports
+every stored channel as stored, and a client that cannot represent one updates.
 
 ## Consequences
 
-- Released v2 clients continue to decode every response they can receive.
 - Current clients synchronize and display Cursor quota and Usage end to end.
 - Upgrading a released v2 local state preserves pending Usage uploads without letting a stale
   derived Account presentation make local quota unavailable.
-- A future closed-enum addition declares a new first-supported protocol version instead of
-  mutating a shipped enum. When every supported client already speaks the newest version, that key
-  cannot express the boundary, and the addition uses a query opt-in with server-side narrowing
-  instead; `usage_channels=1` is the current example.
+- A future closed-enum addition declares a new managed-data protocol version rather than a second
+  concurrent shape.
 - Optional response expansion must remain explicit when a released strict client would reject an
   unknown field; Device Health's query opt-in is the current example.
 - V2 remains only for concrete shipped compatibility; new feature work targets v3.

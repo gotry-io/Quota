@@ -41,7 +41,6 @@ pub fn collect(context: &CollectionContext) -> Result<QuotaSnapshot, ProviderErr
             plan: None,
         },
         windows: vec![billing_window(&billing, context.observed_unix())],
-        source: WEB_SOURCE,
         status: "available",
         observed_at: context.observed_at(),
     })

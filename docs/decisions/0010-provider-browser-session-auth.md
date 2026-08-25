@@ -25,7 +25,8 @@ the session as lacking an official CLI or API-key sign-in command; Settings then
 row. Cursor is exclusive. It still discovers a signed-in Cursor.app session from local desktop
 state, as defined by [provider collection](../provider-collection.md). Codex, Claude, Grok, and
 Kimi use the same browser acquisition path when OAuth or the Code API is missing or rejected.
-Cursor synchronizes from managed-data v3 while released v2 routes retain their closed provider
+Cursor synchronizes from managed-data v3, which [ADR 0018](0018-single-managed-data-contract.md)
+made the only data contract; the retired v2 routes had kept their closed provider
 enum, as defined by [ADR 0012](0012-managed-data-v3.md).
 
 The credential and redaction boundary is specified in [security](../security.md), and provider API
@@ -36,4 +37,4 @@ behavior remains in [provider collection](../provider-collection.md).
 Browser/profile discovery can later move to Rust without changing authentication authority or
 persistence. Browser cookies never enter Relay or managed-account payloads. Adding a provider to the
 local catalog does not automatically make it network-compatible; managed synchronization requires
-explicit `account_sync` and `account_sync_protocol` catalog decisions.
+explicit `account_sync` catalog decision.

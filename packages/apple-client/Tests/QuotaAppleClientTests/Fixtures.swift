@@ -88,8 +88,7 @@ enum Fixtures {
       usage[key] = value
     }
     var object: [String: Any] = [
-      "protocol_version": 3,
-      "generated_at": "2026-08-14T16:00:00Z",
+      "protocol_version": 4,
       "account": [
         "account_id": accountID,
         "display_label": "octocat",
@@ -108,9 +107,6 @@ enum Fixtures {
   static func quotaObservation() -> [String: Any] {
     [
       "device_id": "device_01",
-      "sequence": 3,
-      "captured_at": "2026-08-14T15:00:00Z",
-      "updated_at": "2026-08-14T15:05:00Z",
       "snapshot": [
         "provider": "codex",
         "account": [
@@ -127,7 +123,6 @@ enum Fixtures {
             "resets_at": "2026-08-18T00:00:00Z",
           ]
         ],
-        "source": "chatgpt",
         "status": "available",
         "observed_at": "2026-08-14T15:00:00Z",
       ],

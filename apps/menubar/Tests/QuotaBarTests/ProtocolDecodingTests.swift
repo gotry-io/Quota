@@ -35,8 +35,7 @@ func decodesAccountSummaryWithUsageCost() throws {
   let data = Data(
     #"""
     {
-      "protocol_version": 3,
-      "generated_at": "2026-08-02T01:00:00Z",
+      "protocol_version": 4,
       "account": {
         "account_id": "account_01",
         "display_label": "octocat",
@@ -92,7 +91,7 @@ func decodesAccountSummaryWithUsageCost() throws {
 
   let summary = try QuotaWireCodec.makeDecoder().decode(AccountSummary.self, from: data)
 
-  #expect(summary.protocolVersion == 3)
+  #expect(summary.protocolVersion == WireCodec.managedDataProtocolVersion)
   #expect(summary.devices.first?.deviceGeneration == 3)
   #expect(summary.usage.cost.amountMicrousd == "3138")
 
@@ -114,9 +113,9 @@ func decodesAccountSummaryWithUsageCost() throws {
     "reasoning_tokens": 50,
     "messages": 1,
   ]
-  expandedUsage["clients"] = [
+  expandedUsage["agents"] = [
     [
-      "client": "codex",
+      "agent": "codex",
       "totals": structuredTotals,
       "cost": expandedCost,
       "providers": [
@@ -141,7 +140,7 @@ func decodesAccountSummaryWithUsageCost() throws {
   #expect(expanded.usage.hasTruncatedDetails)
   #expect(expanded.usage.cost.hasUnpricedTruncatedDetails)
   #expect(expanded.usage.cost.unpricedRows == 1)
-  #expect(expanded.usage.clients?.first?.providers.first?.models.first?.model == "gpt-5.6-sol")
+  #expect(expanded.usage.agents?.first?.providers.first?.models.first?.model == "gpt-5.6-sol")
 
   var falseMarkerObject = expandedObject
   var falseMarkerUsage = try #require(falseMarkerObject["usage"] as? [String: Any])
@@ -609,7 +608,7 @@ func decodesAccountHourlyUsageResponse() throws {
   let data = Data(
     #"""
     {
-      "protocol_version": 3,
+      "protocol_version": 4,
       "start_at": "2026-08-02T12:00:00Z",
       "end_at": "2026-08-02T13:00:00Z",
       "facts": [{
@@ -754,8 +753,8 @@ func decodesLocalUsagePeriodClientProviderModelSummary() throws {
     cost: cost,
     models: [model]
   )
-  let client = LocalUsageClientSummary(
-    client: .codex,
+  let client = LocalUsageAgentSummary(
+    agent: .codex,
     totals: summaryTotals,
     cost: cost,
     providers: [provider]
@@ -763,15 +762,15 @@ func decodesLocalUsagePeriodClientProviderModelSummary() throws {
   let summary = LocalUsagePeriodSummary(
     totals: summaryTotals,
     cost: cost,
-    clients: [client]
+    agents: [client]
   )
   let data = try QuotaWireCodec.makeEncoder().encode(summary)
   let decoded = try QuotaWireCodec.makeDecoder().decode(LocalUsagePeriodSummary.self, from: data)
   #expect(decoded.totals == summaryTotals)
-  #expect(decoded.clients.first?.client == .codex)
-  #expect(decoded.clients.first?.providers.first?.provider == .openai)
-  #expect(decoded.clients.first?.providers.first?.models.first?.model == "gpt-5.5")
-  #expect(decoded.clients.first?.providers.first?.models.first?.totals.messages == 1)
+  #expect(decoded.agents.first?.agent == .codex)
+  #expect(decoded.agents.first?.providers.first?.provider == .openai)
+  #expect(decoded.agents.first?.providers.first?.models.first?.model == "gpt-5.5")
+  #expect(decoded.agents.first?.providers.first?.models.first?.totals.messages == 1)
 
   var modelObject = try #require(
     JSONSerialization.jsonObject(with: QuotaWireCodec.makeEncoder().encode(model))
@@ -824,7 +823,6 @@ func decodesCollectionReportAndCalculatesRemainingQuota() throws {
             "used_percent": 16,
             "resets_at": "2026-08-08T01:00:00Z"
           }],
-          "source": "chatgpt_usage_api",
           "status": "available",
           "observed_at": "2026-08-02T01:00:00Z"
         }],
@@ -904,7 +902,7 @@ func decodesUsageSubmissionAndConservesTokenSubsets() throws {
   let data = Data(
     #"""
     {
-      "protocol_version": 3,
+      "protocol_version": 4,
       "submission_id": "submission_01",
       "device_id": "device_01",
       "generation": 3,
@@ -945,9 +943,9 @@ func decodesUsageSubmissionAndConservesTokenSubsets() throws {
     """#.utf8
   )
 
-  let submission = try QuotaWireCodec.makeDecoder().decode(UsageSubmissionV3.self, from: data)
+  let submission = try QuotaWireCodec.makeDecoder().decode(UsageSubmission.self, from: data)
 
-  #expect(submission.protocolVersion == 3)
+  #expect(submission.protocolVersion == WireCodec.managedDataProtocolVersion)
   #expect(submission.rows.first?.inputTokens == 1000)
 
   var multipartObject = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
@@ -962,7 +960,7 @@ func decodesUsageSubmissionAndConservesTokenSubsets() throws {
   ]
   let multipartData = try JSONSerialization.data(withJSONObject: multipartObject)
   let multipart = try QuotaWireCodec.makeDecoder().decode(
-    UsageSubmissionV3.self, from: multipartData)
+    UsageSubmission.self, from: multipartData)
   #expect(multipart.writeMode == .mergePartial)
   #expect(multipart.multipart?.partIndex == 0)
 
@@ -971,13 +969,13 @@ func decodesUsageSubmissionAndConservesTokenSubsets() throws {
   modelBoundaryRows[0]["model"] = String(repeating: "😀", count: 128)
   modelBoundaryObject["rows"] = modelBoundaryRows
   let modelBoundaryData = try JSONSerialization.data(withJSONObject: modelBoundaryObject)
-  _ = try QuotaWireCodec.makeDecoder().decode(UsageSubmissionV3.self, from: modelBoundaryData)
+  _ = try QuotaWireCodec.makeDecoder().decode(UsageSubmission.self, from: modelBoundaryData)
 
   modelBoundaryRows[0]["model"] = String(repeating: "😀", count: 129)
   modelBoundaryObject["rows"] = modelBoundaryRows
   let oversizedModelData = try JSONSerialization.data(withJSONObject: modelBoundaryObject)
   #expect(throws: DecodingError.self) {
-    _ = try QuotaWireCodec.makeDecoder().decode(UsageSubmissionV3.self, from: oversizedModelData)
+    _ = try QuotaWireCodec.makeDecoder().decode(UsageSubmission.self, from: oversizedModelData)
   }
 
   var invalidMultipartObject = multipartObject
@@ -988,7 +986,7 @@ func decodesUsageSubmissionAndConservesTokenSubsets() throws {
   ]
   let invalidMultipartData = try JSONSerialization.data(withJSONObject: invalidMultipartObject)
   #expect(throws: DecodingError.self) {
-    _ = try QuotaWireCodec.makeDecoder().decode(UsageSubmissionV3.self, from: invalidMultipartData)
+    _ = try QuotaWireCodec.makeDecoder().decode(UsageSubmission.self, from: invalidMultipartData)
   }
 
   let invalid = Data(
@@ -997,7 +995,7 @@ func decodesUsageSubmissionAndConservesTokenSubsets() throws {
       with: #""cache_read_tokens": 1001"#
     ).utf8)
   #expect(throws: DecodingError.self) {
-    _ = try QuotaWireCodec.makeDecoder().decode(UsageSubmissionV3.self, from: invalid)
+    _ = try QuotaWireCodec.makeDecoder().decode(UsageSubmission.self, from: invalid)
   }
 
   let invalidHour = Data(
@@ -1006,7 +1004,7 @@ func decodesUsageSubmissionAndConservesTokenSubsets() throws {
       with: "2023-02-29T00:00:00Z"
     ).utf8)
   #expect(throws: DecodingError.self) {
-    _ = try QuotaWireCodec.makeDecoder().decode(UsageSubmissionV3.self, from: invalidHour)
+    _ = try QuotaWireCodec.makeDecoder().decode(UsageSubmission.self, from: invalidHour)
   }
 
   var duplicatedObject = try #require(
@@ -1017,7 +1015,7 @@ func decodesUsageSubmissionAndConservesTokenSubsets() throws {
   duplicatedObject["rows"] = duplicatedRows
   let duplicatedData = try JSONSerialization.data(withJSONObject: duplicatedObject)
   #expect(throws: DecodingError.self) {
-    _ = try QuotaWireCodec.makeDecoder().decode(UsageSubmissionV3.self, from: duplicatedData)
+    _ = try QuotaWireCodec.makeDecoder().decode(UsageSubmission.self, from: duplicatedData)
   }
 }
 

@@ -14,6 +14,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::catalog::ProviderId;
+use crate::observation::snapshot_is_current;
 use crate::pricing;
 use crate::protocol::{
     DiagnosticAttemptCode, DiagnosticAttemptKind, DiagnosticAttemptOutcome,
@@ -21,8 +22,9 @@ use crate::protocol::{
     DiagnosticDataState, DiagnosticFinding, DiagnosticImpact, DiagnosticMode, DiagnosticOperation,
     DiagnosticRecovery, DiagnosticRefresh, DiagnosticRefreshPhase, DiagnosticReport,
     DiagnosticSeverity, DiagnosticSource, DiagnosticSummary, DiagnosticSurface, ErrorCode,
-    IpcError, QuotaOverviewIdentity, QuotaOverviewItem, QuotaOverviewSource, RecoveryAction,
-    UsagePeriod, UsageSource,
+    IpcError, LOCAL_COLLECTION_PROTOCOL, LOCAL_USAGE_PROTOCOL, MANAGED_DATA_PROTOCOL,
+    QuotaOverviewIdentity, QuotaOverviewItem, QuotaOverviewSource, RecoveryAction, UsagePeriod,
+    UsageSource,
 };
 use crate::providers::common::{ErrorCategory, ProviderSession};
 use crate::providers::{self, CollectionContext};
@@ -1491,7 +1493,7 @@ impl NativeBackend {
             return Err(BackendError::cancelled());
         }
         Ok(json!({
-            "protocol_version": 2,
+            "protocol_version": LOCAL_COLLECTION_PROTOCOL,
             "captured_at": captured_at,
             "results": results
         }))
@@ -1713,7 +1715,7 @@ impl NativeBackend {
                     CoverageStatus::Partial => "partial",
                 };
                 json!({
-                    "client": agent.coverage.agent,
+                    "agent": agent.coverage.agent,
                     "start_at": agent.coverage.start_at,
                     "end_at": agent.coverage.end_at,
                     "status": status
@@ -1760,7 +1762,7 @@ impl NativeBackend {
         let today = usage_period_range(UsagePeriod::Today, &usage.timezone, generated_at)?.0;
         let (from, to) = usage_date_range(rows, &today);
         Ok(json!({
-            "protocol_version": 3,
+            "protocol_version": LOCAL_USAGE_PROTOCOL,
             "generated_at": usage.generated_at,
             "aggregation_timezone": usage.timezone,
             "range": {"from": from, "to": to},
@@ -2296,7 +2298,7 @@ impl NativeBackend {
                     .flatten()
                 {
                     if let Some(item) = overview_item(snapshot, "local", "Local", None, now) {
-                        merge_overview_item(&mut items, item, now);
+                        merge_overview_item(&mut items, item);
                     }
                 }
             }
@@ -2339,7 +2341,7 @@ impl NativeBackend {
                         .get("provider")
                         .and_then(Value::as_str)
                         .and_then(ProviderId::parse)
-                        .is_some_and(|provider| provider.syncs_to_account(3))
+                        .is_some_and(ProviderId::syncs_to_account)
                     {
                         continue;
                     }
@@ -2354,25 +2356,12 @@ impl NativeBackend {
                         Some(device_id),
                         now,
                     ) {
-                        merge_overview_item(&mut items, item, now);
+                        merge_overview_item(&mut items, item);
                     }
                 }
             }
         }
-        items.sort_by(|left, right| {
-            (
-                &left.identity.provider,
-                &left.identity.fingerprint,
-                &left.identity.scope,
-                &left.identity.source_id,
-            )
-                .cmp(&(
-                    &right.identity.provider,
-                    &right.identity.fingerprint,
-                    &right.identity.scope,
-                    &right.identity.source_id,
-                ))
-        });
+        sort_overview_items(&mut items);
         items
     }
 }
@@ -2385,10 +2374,18 @@ impl NativeBackend {
 /// restating is what turns a local detection into a cross-device fact instead of one that
 /// other devices have to wait out. The reading itself is untouched, `observed_at`
 /// included: the numbers really are as old as they were.
+///
+/// Only a reading that is still current is worth restating, and that is also what makes
+/// this terminate. A reading that already aged out says nothing new: every reader reached
+/// that verdict from the reading itself. A reading that is current is restated once,
+/// because the restatement is no longer `available` and so is no longer current. Whether
+/// the account this compares against was fetched a moment or an hour ago cannot turn that
+/// into a row rewritten on every refresh.
 fn failure_status_snapshots(
     report: &Value,
     account: Option<&Value>,
     device_id: &str,
+    now: DateTime<Utc>,
 ) -> Vec<Value> {
     let failed = report
         .get("results")
@@ -2422,8 +2419,9 @@ fn failure_status_snapshots(
             let snapshot = observation.get("snapshot")?;
             let provider = snapshot.get("provider")?.as_str()?;
             let (_, status) = failed.iter().find(|(failed, _)| *failed == provider)?;
-            // Already restated; saying it again rewrites the row and spends a sequence.
-            (snapshot.get("status").and_then(Value::as_str) != Some(status)).then(|| {
+            (snapshot_is_current(snapshot, now)
+                && snapshot.get("status").and_then(Value::as_str) != Some(status))
+            .then(|| {
                 let mut restated = snapshot.clone();
                 restated["status"] = Value::String((*status).to_owned());
                 restated
@@ -2448,10 +2446,9 @@ fn collect_discovered_provider(
     let mut failure = None;
     for session in sessions {
         match providers::collect(provider, &session, context) {
-            // `valid_until` is what makes this observation expire: the Overview merge,
-            // the account summary readers, and every device that reads this upload treat
-            // a passed instant as stale rather than current.
-            Ok(snapshot) => snapshots.push(snapshot.into_wire_json()),
+            // Expiry is derived from the reading itself by whoever reads it, so this
+            // uploads the observation and nothing about how long it stays current.
+            Ok(snapshot) => snapshots.push(serde_json::to_value(&snapshot).unwrap_or(Value::Null)),
             Err(error) => failure = Some(error.category),
         }
     }
@@ -2595,7 +2592,7 @@ impl LocalBackend for NativeBackend {
             .map_err(|_| BackendError::unavailable())?;
         let observed_at = observed.to_rfc3339_opts(SecondsFormat::Secs, true);
         let payload = json!({
-            "protocol_version": 3,
+            "protocol_version": MANAGED_DATA_PROTOCOL,
             "schema_version": 1,
             "client_product": client_product,
             "client_version": self.client_version,
@@ -2799,6 +2796,7 @@ impl LocalBackend for NativeBackend {
                                     quota_payload,
                                     stored_account.as_ref(),
                                     device_id,
+                                    Utc::now(),
                                 );
                                 if let Err(error) =
                                     self.account.upload_quota_report(quota_payload, &restated)
@@ -3148,9 +3146,9 @@ fn account_usage_detail(value: Value) -> Result<Value, BackendError> {
         .get("cost")
         .cloned()
         .ok_or_else(invalid_usage_detail)?;
-    let has_clients = object.contains_key("clients");
-    let clients = object.get("clients").cloned().unwrap_or_else(|| json!([]));
-    let fallback_models = if has_clients {
+    let has_agents = object.contains_key("agents");
+    let agents = object.get("agents").cloned().unwrap_or_else(|| json!([]));
+    let fallback_models = if has_agents {
         Vec::new()
     } else {
         object
@@ -3185,7 +3183,7 @@ fn account_usage_detail(value: Value) -> Result<Value, BackendError> {
     let mut usage = json!({
         "totals": totals,
         "cost": cost,
-        "clients": clients
+        "agents": agents
     });
     if breakdowns_truncated {
         usage["models_truncated"] = Value::Bool(true);
@@ -3403,7 +3401,7 @@ fn usage_submission(
         }
     }
     let mut submission = json!({
-        "protocol_version": 3,
+        "protocol_version": MANAGED_DATA_PROTOCOL,
         "submission_id": submission_id,
         "device_id": context.device_id,
         "generation": context.generation,
@@ -3626,7 +3624,7 @@ fn overview_item(
     let fingerprint = account.get("fingerprint")?.as_str()?.to_owned();
     let scope = account.get("fingerprint_scope")?.as_str()?.to_owned();
     let observed_at = snapshot.get("observed_at")?.as_str()?.to_owned();
-    let stale = !snapshot_is_valid(snapshot, now);
+    let stale = !snapshot_is_current(snapshot, now);
     Some(QuotaOverviewItem {
         identity: QuotaOverviewIdentity {
             provider,
@@ -3654,25 +3652,11 @@ fn overview_item(
     })
 }
 
-fn snapshot_is_valid(snapshot: &Value, now: DateTime<Utc>) -> bool {
-    if snapshot.get("status").and_then(Value::as_str) != Some("available") {
-        return false;
-    }
-    snapshot
-        .get("valid_until")
-        .and_then(Value::as_str)
-        .is_none_or(|value| {
-            DateTime::parse_from_rfc3339(value)
-                .map(|value| value.with_timezone(&Utc) > now)
-                .unwrap_or(false)
-        })
+fn sort_overview_items(items: &mut [QuotaOverviewItem]) {
+    items.sort_by(|left, right| left.identity.cmp(&right.identity));
 }
 
-fn merge_overview_item(
-    items: &mut Vec<QuotaOverviewItem>,
-    mut incoming: QuotaOverviewItem,
-    now: DateTime<Utc>,
-) {
+fn merge_overview_item(items: &mut Vec<QuotaOverviewItem>, mut incoming: QuotaOverviewItem) {
     let Some(existing) = items
         .iter_mut()
         .find(|item| item.identity == incoming.identity)
@@ -3680,7 +3664,7 @@ fn merge_overview_item(
         items.push(incoming);
         return;
     };
-    let incoming_better = overview_choice_is_better(&incoming, existing, now);
+    let incoming_better = overview_choice_is_better(&incoming, existing);
     for source in incoming.sources.drain(..) {
         existing
             .sources
@@ -3698,15 +3682,9 @@ fn merge_overview_item(
     }
 }
 
-fn overview_choice_is_better(
-    incoming: &QuotaOverviewItem,
-    existing: &QuotaOverviewItem,
-    now: DateTime<Utc>,
-) -> bool {
-    let incoming_valid = snapshot_is_valid(&incoming.snapshot, now);
-    let existing_valid = snapshot_is_valid(&existing.snapshot, now);
-    if incoming_valid != existing_valid {
-        return incoming_valid;
+fn overview_choice_is_better(incoming: &QuotaOverviewItem, existing: &QuotaOverviewItem) -> bool {
+    if incoming.is_stale != existing.is_stale {
+        return !incoming.is_stale;
     }
     let incoming_observed = snapshot_observed_at(&incoming.snapshot);
     let existing_observed = snapshot_observed_at(&existing.snapshot);
@@ -3730,12 +3708,7 @@ fn overview_choice_is_better(
 }
 
 fn snapshot_observed_at(snapshot: &Value) -> DateTime<Utc> {
-    snapshot
-        .get("observed_at")
-        .and_then(Value::as_str)
-        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
-        .map(|value| value.with_timezone(&Utc))
-        .unwrap_or(DateTime::<Utc>::MIN_UTC)
+    crate::observation::instant(snapshot.get("observed_at")).unwrap_or(DateTime::<Utc>::MIN_UTC)
 }
 
 #[cfg(test)]
@@ -3945,8 +3918,8 @@ mod tests {
             "cost": cost,
             "coverage": [],
             "breakdowns": [],
-            "clients": [{
-                "client": "codex",
+            "agents": [{
+                "agent": "codex",
                 "totals": summary_totals,
                 "cost": cost,
                 "providers": [{
@@ -3958,7 +3931,7 @@ mod tests {
             }]
         }))
         .expect("detail");
-        assert_eq!(detail["usage"]["clients"][0]["client"], "codex");
+        assert_eq!(detail["usage"]["agents"][0]["agent"], "codex");
         assert_eq!(detail["usage"]["totals"]["messages"], 2);
         assert_eq!(detail["fallback_models"], json!([]));
     }
@@ -4063,7 +4036,7 @@ mod tests {
         fs::create_dir_all(&root).expect("root");
         let state = Arc::new(StateStore::open(&root).expect("state"));
         let value = json!({
-            "schema_version": 1,
+            "schema_version": 2,
             "revision": "model-test-1",
             "models": [{
                 "canonical_id": "gpt-5.5",
@@ -4302,6 +4275,8 @@ mod tests {
 
     #[test]
     fn a_failed_collection_republishes_this_devices_reading_as_failed() {
+        let now = Utc::now();
+        let observed_at = (now - Duration::hours(1)).to_rfc3339_opts(SecondsFormat::Secs, true);
         let reading = |status: &str| {
             serde_json::json!({
                 "device_id": "device_self",
@@ -4309,9 +4284,8 @@ mod tests {
                     "provider": "codex",
                     "account": {"fingerprint": "account", "fingerprint_scope": "global"},
                     "windows": [{"id": "monthly", "title": "Monthly", "used_percent": 0.0}],
-                    "source": "chatgpt_usage_api",
                     "status": status,
-                    "observed_at": "2026-08-22T14:51:36Z"
+                    "observed_at": observed_at
                 }
             })
         };
@@ -4329,7 +4303,7 @@ mod tests {
             // Another device's reading of the same provider is not this device's to speak for.
             {"device_id": "device_other", "snapshot": reading("available")["snapshot"]}
         ]));
-        let republished = failure_status_snapshots(&report, Some(&account), "device_self");
+        let republished = failure_status_snapshots(&report, Some(&account), "device_self", now);
         assert_eq!(republished.len(), 1);
         assert_eq!(
             republished[0].get("status").and_then(Value::as_str),
@@ -4338,17 +4312,31 @@ mod tests {
         // The numbers and their age are untouched; only what the source can do changed.
         assert_eq!(
             republished[0].get("observed_at").and_then(Value::as_str),
-            Some("2026-08-22T14:51:36Z")
+            Some(observed_at.as_str())
         );
 
         // Once published, saying it again would rewrite the row and spend a sequence.
         let published = summary(serde_json::json!([reading("auth_required")]));
-        assert!(failure_status_snapshots(&report, Some(&published), "device_self").is_empty());
+        assert!(failure_status_snapshots(&report, Some(&published), "device_self", now).is_empty());
+
+        // A reading that already aged out is not current wherever it is read, so restating
+        // it says nothing and would rewrite the row on every refresh forever.
+        let aged_out = summary(serde_json::json!([{
+            "device_id": "device_self",
+            "snapshot": {
+                "provider": "codex",
+                "account": {"fingerprint": "account", "fingerprint_scope": "global"},
+                "windows": [{"id": "monthly", "title": "Monthly", "used_percent": 0.0}],
+                "status": "available",
+                "observed_at": (now - Duration::days(2)).to_rfc3339_opts(SecondsFormat::Secs, true)
+            }
+        }]));
+        assert!(failure_status_snapshots(&report, Some(&aged_out), "device_self", now).is_empty());
 
         // A provider this device never uploaded has nothing to republish.
         let empty = summary(serde_json::json!([]));
-        assert!(failure_status_snapshots(&report, Some(&empty), "device_self").is_empty());
-        assert!(failure_status_snapshots(&report, None, "device_self").is_empty());
+        assert!(failure_status_snapshots(&report, Some(&empty), "device_self", now).is_empty());
+        assert!(failure_status_snapshots(&report, None, "device_self", now).is_empty());
     }
 
     #[test]
@@ -4388,6 +4376,70 @@ mod tests {
         assert_eq!(never_configured.get("message"), None);
     }
 
+    /// Every reader resolves one subscription the same way, so the rule is stated once as
+    /// a fixture and each implementation answers it. Remote source ids carry a `device:`
+    /// prefix that keeps them apart from local collection, which the fixture does not
+    /// model because only this device collects locally.
+    #[test]
+    fn subscription_merge_matches_the_shared_conformance_fixture() {
+        const FIXTURE: &str =
+            include_str!("../../../protocol/fixtures/quota-observation-conformance.json");
+        let fixture: Value = serde_json::from_str(FIXTURE).expect("fixture");
+        let source_id = |device_id: &str| format!("device:{device_id}");
+        let cases = fixture["merge"].as_array().expect("merge cases");
+        assert!(!cases.is_empty());
+        for case in cases {
+            let name = case["name"].as_str().expect("name");
+            let now = DateTime::parse_from_rfc3339(case["now"].as_str().expect("now"))
+                .expect("instant")
+                .with_timezone(&Utc);
+            let mut items = Vec::new();
+            for observation in case["observations"].as_array().expect("observations") {
+                let device_id = observation["device_id"].as_str().expect("device id");
+                let item = overview_item(
+                    &observation["snapshot"],
+                    &source_id(device_id),
+                    device_id,
+                    Some(device_id),
+                    now,
+                )
+                .expect("overview item");
+                merge_overview_item(&mut items, item);
+            }
+            sort_overview_items(&mut items);
+            let expected = case["expected"].as_array().expect("expected");
+            assert_eq!(items.len(), expected.len(), "{name}");
+            for (item, expected) in items.iter().zip(expected) {
+                let identity = &expected["identity"];
+                assert_eq!(item.identity.provider, identity["provider"], "{name}");
+                assert_eq!(item.identity.fingerprint, identity["fingerprint"], "{name}");
+                assert_eq!(item.identity.scope, identity["scope"], "{name}");
+                assert_eq!(
+                    item.identity.source_id.as_deref(),
+                    identity["source_id"].as_str().map(source_id).as_deref(),
+                    "{name}"
+                );
+                assert_eq!(
+                    item.selected_source_id,
+                    source_id(expected["selected_device_id"].as_str().expect("selected")),
+                    "{name}"
+                );
+                assert_eq!(item.is_stale, expected["is_stale"], "{name}");
+                let sources = expected["sources"].as_array().expect("sources");
+                assert_eq!(item.sources.len(), sources.len(), "{name}");
+                for (source, expected) in item.sources.iter().zip(sources) {
+                    assert_eq!(
+                        source.device_id.as_deref(),
+                        expected["device_id"].as_str(),
+                        "{name}"
+                    );
+                    assert_eq!(source.observed_at, expected["observed_at"], "{name}");
+                    assert_eq!(source.is_stale, expected["is_stale"], "{name}");
+                }
+            }
+        }
+    }
+
     #[test]
     fn expired_observations_are_stale_and_lose_to_a_still_valid_device() {
         let root = std::env::temp_dir().join(format!("quota-overview-{}", uuid::Uuid::new_v4()));
@@ -4399,24 +4451,25 @@ mod tests {
             "QuotaTest",
             "test",
         );
-        let snapshot = |valid_until: &str| {
+        // The reading itself says how long it speaks for: a window that reports no reset
+        // and no cadence ages out at the maximum, so how old it is decides.
+        let snapshot = |observed_at: DateTime<Utc>| {
             json!({
                 "provider": "codex",
                 "account": {"fingerprint": "account", "fingerprint_scope": "global"},
                 "windows": [{"id": "five_hour", "title": "5 hour", "used_percent": 40.0}],
-                "source": "chatgpt_usage_api",
                 "status": "available",
-                "observed_at": "2026-08-15T08:00:00Z",
-                "valid_until": valid_until
+                "observed_at": observed_at.to_rfc3339_opts(SecondsFormat::Secs, true)
             })
         };
+        let now = Utc::now();
         let quota = json!({"results": []});
         let mut account = json!({
             "auth_status": "signed_in",
             "device_id": "this-device",
             "account_summary": {
                 "devices": [{"device_id": "asleep", "display_name": "Asleep"}],
-                "quota": [{"device_id": "asleep", "snapshot": snapshot("2026-08-15T13:00:00Z")}]
+                "quota": [{"device_id": "asleep", "snapshot": snapshot(now - Duration::days(2))}]
             }
         });
         let expired = backend.build_overview(&quota, Some(&account));
@@ -4432,7 +4485,7 @@ mod tests {
             .expect("observations")
             .push(json!({
                 "device_id": "awake",
-                "snapshot": snapshot("2099-01-01T00:00:00Z")
+                "snapshot": snapshot(now - Duration::minutes(1))
             }));
         let items = backend.build_overview(&quota, Some(&account));
         assert_eq!(items.len(), 1);
@@ -4458,7 +4511,6 @@ mod tests {
                 "provider": "codex",
                 "account": {"fingerprint": "account", "fingerprint_scope": "global"},
                 "windows": [{"id": "five_hour", "title": "5 hour", "used_percent": 40.0}],
-                "source": "chatgpt_usage_api",
                 "status": "available",
                 "observed_at": observed_at
             })

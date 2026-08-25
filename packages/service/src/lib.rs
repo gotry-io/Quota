@@ -3,6 +3,7 @@ pub mod config;
 pub mod ipc;
 pub mod migration;
 pub mod model_catalog;
+pub mod observation;
 pub mod pricing;
 pub mod protocol;
 pub mod providers;

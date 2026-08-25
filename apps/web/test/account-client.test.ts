@@ -36,7 +36,7 @@ function emptyCost() {
 
 function usageResponse(date: string) {
   return {
-    protocol_version: 3,
+    protocol_version: 4,
     usage: {
       range: { from: date, to: date },
       totals: emptyTotals(),
@@ -54,20 +54,15 @@ function usageResponse(date: string) {
   };
 }
 
-test("builds the managed-data v3 single-day usage summary URL", () => {
+test("builds the single-day usage summary URL", () => {
   const path = accountUsageDayPath("2026-08-14");
   const url = new URL(path, "https://quota.gotry.io");
-  assert.equal(url.pathname, "/api/v3/account/usage/summary");
+  assert.equal(url.pathname, "/api/v4/account/usage/summary");
   assert.equal(url.searchParams.get("usage_agents"), "all");
   assert.equal(url.searchParams.get("cost_mode"), "auto");
-  assert.equal(url.searchParams.get("model_catalog"), "1");
-  assert.equal(url.searchParams.get("usage_channels"), "1");
   assert.equal(url.searchParams.get("from"), "2026-08-14");
   assert.equal(url.searchParams.get("to"), "2026-08-14");
-  assert.equal(
-    [...url.searchParams.keys()].sort().join(","),
-    "cost_mode,from,model_catalog,to,usage_agents,usage_channels",
-  );
+  assert.equal([...url.searchParams.keys()].sort().join(","), "cost_mode,from,to,usage_agents");
 });
 
 test("parses single-day usage responses into explicit client statuses", () => {
@@ -83,6 +78,6 @@ test("parses single-day usage responses into explicit client statuses", () => {
 
   assert.equal(parseAccountUsageDayResponse(401, {}).status, "unauthorized");
   assert.equal(parseAccountUsageDayResponse(500, usageResponse(date)).status, "error");
-  assert.equal(parseAccountUsageDayResponse(200, { protocol_version: 2 }).status, "error");
+  assert.equal(parseAccountUsageDayResponse(200, { protocol_version: 3 }).status, "error");
   assert.equal(parseAccountUsageDayResponse(200, null).status, "error");
 });

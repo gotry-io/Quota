@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use crate::state::StateError;
 
-const CURRENT_SCHEMA: i64 = 8;
+const CURRENT_SCHEMA: i64 = 9;
 
 pub fn apply(conn: &mut Connection) -> Result<(), StateError> {
     conn.execute_batch(
@@ -34,6 +34,7 @@ pub fn apply(conn: &mut Connection) -> Result<(), StateError> {
             6 => migration_v6(&tx)?,
             7 => migration_v7(&tx)?,
             8 => migration_v8(&tx)?,
+            9 => migration_v9(&tx)?,
             _ => return Err(StateError::InvalidState),
         }
         tx.execute(
@@ -390,6 +391,121 @@ fn migration_v8(tx: &Transaction<'_>) -> Result<(), StateError> {
     Ok(())
 }
 
+/// Managed data advanced to v4, so work this device staged under v3 no longer describes a
+/// payload Relay accepts. Promoting it changes only the version: v4 kept the shape v3
+/// already had for these submissions, so the submission id, Device generation, sequence,
+/// coverage, and hourly facts all stand. The derived Account presentation cannot be
+/// promoted the same way — it is a response, not this device's work — so it is discarded
+/// and rebuilt from the first v4 read, which also keeps the first IPC state decodable.
+fn migration_v9(tx: &Transaction<'_>) -> Result<(), StateError> {
+    let mut statement = tx.prepare(
+        "SELECT submission_id, payload_json FROM usage_outbox
+         WHERE json_extract(payload_json, '$.protocol_version') = 3
+         ORDER BY submission_id",
+    )?;
+    let outbox = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(statement);
+
+    for (submission_id, raw) in outbox {
+        let mut payload: Value = serde_json::from_str(&raw)?;
+        payload["protocol_version"] = Value::from(4);
+        tx.execute(
+            "UPDATE usage_outbox SET payload_json = ?1 WHERE submission_id = ?2",
+            params![serde_json::to_string(&payload)?, submission_id],
+        )?;
+    }
+
+    let account = tx
+        .query_row(
+            "SELECT value_json FROM components WHERE name = 'account'",
+            [],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()?
+        .flatten();
+    if let Some(raw) = account {
+        let mut value: Value = serde_json::from_str(&raw)?;
+        let cached_version = value
+            .get("account_summary")
+            .and_then(|summary| summary.get("protocol_version"))
+            .and_then(Value::as_i64);
+        if cached_version.is_some_and(|version| version < 4) {
+            value["account_summary"] = Value::Null;
+            tx.execute(
+                "UPDATE components SET value_json = ?1 WHERE name = 'account'",
+                [serde_json::to_string(&value)?],
+            )?;
+        }
+    }
+    // The persisted collection report and Overview both hold readings this build no longer
+    // accepts, and the app decodes the whole IPC state or none of it. Strip the retired
+    // fields in place rather than discarding a device's last known quota.
+    let quota = tx
+        .query_row(
+            "SELECT value_json FROM components WHERE name = 'quota'",
+            [],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()?
+        .flatten();
+    if let Some(raw) = quota {
+        let mut value: Value = serde_json::from_str(&raw)?;
+        strip_retired_snapshot_fields(&mut value);
+        tx.execute(
+            "UPDATE components SET value_json = ?1 WHERE name = 'quota'",
+            [serde_json::to_string(&value)?],
+        )?;
+    }
+    let overview = tx
+        .query_row(
+            "SELECT value FROM metadata WHERE key = 'overview_json'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    if let Some(raw) = overview {
+        let mut value: Value = serde_json::from_str(&raw)?;
+        strip_retired_snapshot_fields(&mut value);
+        tx.execute(
+            "UPDATE metadata SET value = ?1 WHERE key = 'overview_json'",
+            [serde_json::to_string(&value)?],
+        )?;
+    }
+    tx.execute(
+        "DELETE FROM usage_period_cache WHERE source = 'account'",
+        [],
+    )?;
+    Ok(())
+}
+
+/// Removes the stamp and the collector name from every reading in a persisted value.
+///
+/// A reading is recognised by its own shape rather than by a path, because it appears at
+/// different depths in the collection report and in the Overview. `source` also names a
+/// collection *result*, which is still a field, so only objects that are readings are touched.
+fn strip_retired_snapshot_fields(value: &mut Value) {
+    match value {
+        Value::Object(object) => {
+            let is_reading = ["provider", "account", "windows", "observed_at"]
+                .iter()
+                .all(|key| object.contains_key(*key));
+            if is_reading {
+                object.remove("valid_until");
+                object.remove("source");
+            }
+            for nested in object.values_mut() {
+                strip_retired_snapshot_fields(nested);
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(strip_retired_snapshot_fields),
+        _ => {}
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -457,7 +573,7 @@ mod tests {
             .expect("v1 rows")
             .collect::<Result<Vec<_>, _>>()
             .expect("v1 values");
-        assert_eq!(fresh_versions, vec![1, 2, 3, 4, 5, 6, 7, 8]);
+        assert_eq!(fresh_versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
         assert_eq!(fresh_versions, v1_versions);
         assert_eq!(
             columns(&fresh, "usage_period_cache"),
@@ -561,7 +677,7 @@ mod tests {
     }
 
     #[test]
-    fn v6_promotes_v2_outbox_and_discards_v2_account_presentations() {
+    fn migrations_promote_staged_outbox_work_and_discard_stale_account_presentations() {
         let mut conn = Connection::open_in_memory().expect("database");
         apply(&mut conn).expect("current schema");
         conn.execute(
@@ -617,12 +733,17 @@ mod tests {
                 serde_json::from_str::<Value>(&row.expect("outbox payload")).expect("outbox json")
             })
             .collect::<Vec<_>>();
+        // Staged work survives every managed-data cutover the ladder has applied, and lands
+        // on the version this build uploads.
         assert_eq!(
             payloads
                 .iter()
-                .map(|payload| payload["protocol_version"].as_u64())
+                .map(|payload| payload["protocol_version"].as_i64())
                 .collect::<Vec<_>>(),
-            vec![Some(3), Some(3)]
+            vec![
+                Some(crate::protocol::MANAGED_DATA_PROTOCOL),
+                Some(crate::protocol::MANAGED_DATA_PROTOCOL)
+            ]
         );
         assert!(
             payloads
@@ -660,6 +781,91 @@ mod tests {
             .expect("account periods"),
             0
         );
+    }
+
+    /// A device that upgrades still has its last collection and Overview on disk, in the
+    /// shape the previous build wrote. The app decodes the whole state or none of it.
+    #[test]
+    fn migration_strips_retired_reading_fields_from_persisted_state() {
+        let mut conn = Connection::open_in_memory().expect("database");
+        apply(&mut conn).expect("current schema");
+        let reading = serde_json::json!({
+            "provider": "codex",
+            "account": {"fingerprint": "account", "fingerprint_scope": "global"},
+            "windows": [],
+            "source": "chatgpt_usage_api",
+            "status": "available",
+            "observed_at": "2026-08-22T14:51:36Z",
+            "valid_until": "2026-08-23T14:51:36Z"
+        });
+        conn.execute(
+            "INSERT INTO components(name, status, value_json) VALUES ('quota', 'ready', ?1)",
+            [serde_json::json!({
+                "protocol_version": 2,
+                "captured_at": "2026-08-22T14:51:36Z",
+                // A collection result names its own source, which is still a field.
+                "results": [{
+                    "provider": "codex",
+                    "outcome": "success",
+                    "source": "chatgpt_usage_api",
+                    "snapshots": [reading.clone()]
+                }]
+            })
+            .to_string()],
+        )
+        .expect("quota fixture");
+        conn.execute(
+            "INSERT INTO metadata(key, value) VALUES ('overview_json', ?1)",
+            [serde_json::json!([{
+                "identity": {
+                    "provider": "codex",
+                    "fingerprint": "account",
+                    "scope": "global",
+                    "source_id": null
+                },
+                "snapshot": reading,
+                "sources": [],
+                "selected_source_id": "local",
+                "selected_source_display_name": "Local",
+                "is_stale": false
+            }])
+            .to_string()],
+        )
+        .expect("overview fixture");
+        conn.execute("DELETE FROM schema_migrations WHERE version >= 9", [])
+            .expect("rewind migration marker");
+
+        apply(&mut conn).expect("re-apply");
+
+        let quota: Value = serde_json::from_str(
+            &conn
+                .query_row(
+                    "SELECT value_json FROM components WHERE name = 'quota'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .expect("quota value"),
+        )
+        .expect("quota json");
+        let snapshot = &quota["results"][0]["snapshots"][0];
+        assert!(snapshot.get("source").is_none());
+        assert!(snapshot.get("valid_until").is_none());
+        assert_eq!(snapshot["observed_at"], "2026-08-22T14:51:36Z");
+        // The result's own source is not a reading's, and stays.
+        assert_eq!(quota["results"][0]["source"], "chatgpt_usage_api");
+
+        let overview: Value = serde_json::from_str(
+            &conn
+                .query_row(
+                    "SELECT value FROM metadata WHERE key = 'overview_json'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .expect("overview value"),
+        )
+        .expect("overview json");
+        assert!(overview[0]["snapshot"].get("source").is_none());
+        assert!(overview[0]["snapshot"].get("valid_until").is_none());
     }
 
     #[test]
@@ -724,11 +930,26 @@ mod tests {
                 .expect("session epoch"),
             7
         );
+        // Locally derived periods are this device's own work and survive; the Account
+        // presentation is a response and is rebuilt from the first read on the current
+        // managed-data version.
         assert_eq!(
-            conn.query_row("SELECT COUNT(*) FROM usage_period_cache", [], |row| row
-                .get::<_, i64>(0))
-                .expect("period count"),
-            2
+            conn.query_row(
+                "SELECT COUNT(*) FROM usage_period_cache WHERE source = 'local'",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .expect("local period count"),
+            1
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM usage_period_cache WHERE source = 'account'",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .expect("account period count"),
+            0
         );
     }
 
@@ -844,7 +1065,7 @@ mod tests {
             .expect("rows")
             .collect::<Result<Vec<_>, _>>()
             .expect("values");
-        assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8]);
+        assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
     }
 
     fn columns_after_fresh_apply(table: &str) -> Vec<String> {

@@ -73,7 +73,6 @@ fn collect_at(
             plan: identity.plan,
         },
         windows,
-        source: WEB_SOURCE,
         status: "available",
         observed_at: context.observed_at(),
     })

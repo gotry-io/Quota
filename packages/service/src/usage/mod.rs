@@ -512,8 +512,8 @@ pub struct LocalUsageProviderSummary {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct LocalUsageClientSummary {
-    pub client: UsageAgent,
+pub struct LocalUsageAgentSummary {
+    pub agent: UsageAgent,
     pub totals: UsageSummaryTotals,
     pub cost: crate::pricing::UsageCostOutcome,
     pub providers: Vec<LocalUsageProviderSummary>,
@@ -523,7 +523,7 @@ pub struct LocalUsageClientSummary {
 pub struct LocalUsagePeriodSummary {
     pub totals: UsageSummaryTotals,
     pub cost: crate::pricing::UsageCostOutcome,
-    pub clients: Vec<LocalUsageClientSummary>,
+    pub agents: Vec<LocalUsageAgentSummary>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub models_truncated: bool,
 }
@@ -617,18 +617,18 @@ pub fn build_local_usage_summary(
         pricing_catalog,
         crate::pricing::UsageCostMode::Auto,
     )?;
-    let mut client_groups: BTreeMap<UsageAgent, Vec<usize>> = BTreeMap::new();
+    let mut agent_groups: BTreeMap<UsageAgent, Vec<usize>> = BTreeMap::new();
     for (index, row) in rows.iter().enumerate() {
-        client_groups.entry(row.agent).or_default().push(index);
+        agent_groups.entry(row.agent).or_default().push(index);
     }
 
-    let mut clients = Vec::new();
+    let mut agents = Vec::new();
     let mut model_count = 0usize;
     let mut models_truncated = false;
-    for (client, client_indexes) in client_groups {
-        let client_rows = rows_for_indexes(rows, &client_indexes);
+    for (agent, agent_indexes) in agent_groups {
+        let agent_rows = rows_for_indexes(rows, &agent_indexes);
         let mut provider_groups: BTreeMap<InferenceProvider, Vec<usize>> = BTreeMap::new();
-        for index in client_indexes {
+        for index in agent_indexes {
             provider_groups
                 .entry(rows[index].billing_channel.into())
                 .or_default()
@@ -684,11 +684,11 @@ pub fn build_local_usage_summary(
                 models,
             });
         }
-        clients.push(LocalUsageClientSummary {
-            client,
-            totals: summary_totals(&client_rows)?,
+        agents.push(LocalUsageAgentSummary {
+            agent,
+            totals: summary_totals(&agent_rows)?,
             cost: crate::pricing::calculate_usage_cost(
-                &client_rows,
+                &agent_rows,
                 pricing_catalog,
                 crate::pricing::UsageCostMode::Auto,
             )?,
@@ -698,7 +698,7 @@ pub fn build_local_usage_summary(
     Ok(LocalUsagePeriodSummary {
         totals,
         cost,
-        clients,
+        agents,
         models_truncated,
     })
 }

@@ -244,7 +244,6 @@ fn snapshot(
             plan: Some("Credits".to_owned()),
         },
         windows,
-        source: SOURCE,
         status: "available",
         observed_at: observed_at.to_owned(),
     }

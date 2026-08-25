@@ -1,4 +1,5 @@
 import type { QuotaStatus, UsageCostOutcome } from "@gotry-io/quota-protocol";
+import { remainingPercent } from "@gotry-io/quota-model";
 
 export const WEB_LOCALE = "en-US";
 
@@ -69,7 +70,7 @@ export function formatQuotaRemaining(
   },
   provider?: string,
 ): string {
-  const percent = formatPercent(100 - window.used_percent);
+  const percent = formatPercent(remainingPercent(window.used_percent));
   if (provider === "cursor" && window.id === "other_models") return percent;
   const absolute = formatAbsoluteRemaining(window);
   const balanceOnly = window.remaining_value !== undefined && window.limit_value === undefined;

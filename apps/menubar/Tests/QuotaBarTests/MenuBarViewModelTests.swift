@@ -16,10 +16,8 @@ func consumesServiceMergedOverviewWithoutReprocessingObservations() async throws
       fingerprintScope: .global
     ),
     windows: [QuotaWindow(id: "weekly", title: "Weekly", usedPercent: 20)],
-    source: "test",
     status: .available,
-    observedAt: now,
-    validUntil: now.addingTimeInterval(300)
+    observedAt: now
   )
   let report = QuotaCollectionReport(
     protocolVersion: 2,
@@ -255,10 +253,8 @@ func anotherDeviceReadingDoesNotHideThisMacsOwnCollectionFailure() async throws 
       fingerprintScope: .global
     ),
     windows: [QuotaWindow(id: "monthly", title: "Monthly", usedPercent: 0)],
-    source: "chatgpt_usage_api",
     status: .available,
-    observedAt: now,
-    validUntil: now.addingTimeInterval(3_600)
+    observedAt: now
   )
   let source = LocalServiceOverviewSource(
     sourceID: "device:other",

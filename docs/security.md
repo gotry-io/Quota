@@ -171,6 +171,11 @@ data requirements. Architecture and product behavior are defined in
   closed because it can indicate a cloned local configuration.
 - A snapshot retry reuses its sequence. A Usage retry reuses the immutable submission ID, sequence,
   generation, coverage, and rows. D1 receipts make accepted and duplicate outcomes explicit.
+- Relay keeps one quota observation per `(device_id, provider, fingerprint)` and deletes an
+  observation once it is seven days older than the moment it describes. Readers stop presenting a
+  reading as current a day after it was observed, so retention only bounds what an account keeps
+  from a device that stopped reporting a provider; Device or Account deletion remains the explicit
+  removal boundary for everything else.
 - The owner-only SQLite `usage_upload_enabled` preference defaults on. When disabled, local indexing,
   aggregation, and display continue, but the service neither stages nor drains Usage uploads. Pending
   outbox work remains local and resumes after re-enabling. Cached Account Usage is omitted from the
@@ -260,7 +265,8 @@ data requirements. Architecture and product behavior are defined in
 - D1 is the only Relay store. Keep migrations explicit; never rewrite an applied migration. Review
   lifecycle, retention, and new retained fields as security-sensitive changes.
 - Treat protocol routing as a trust boundary. V2 writes must pass the closed v2 provider/agent
-  schemas, and v2 reads must exclude observations introduced by v3 before serialization.
+  schemas. Relay serves one managed data contract, so a read never has to exclude what a retired
+  contract could not carry.
 - Persist GitHub subjects, installation identities, token/grant secrets, session-store keys, and
   rate-limit subjects only as keyed hashes where equality is required. Better Auth session values
   are encrypted at rest. Persist plaintext native tokens only in the one successful issuance

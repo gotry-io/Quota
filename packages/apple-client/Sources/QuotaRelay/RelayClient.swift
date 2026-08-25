@@ -29,7 +29,7 @@ public enum RelayRoute: String, CaseIterable, Sendable {
     switch self {
     case .token: "/oauth/v2/token"
     case .revoke: "/oauth/v2/revoke"
-    case .accountSummary: "/api/v3/account/summary"
+    case .accountSummary: "/api/v4/account/summary"
     }
   }
 
@@ -120,10 +120,6 @@ public struct RelayClient: Sendable {
         ("to", to),
         ("cost_mode", "auto"),
         ("usage_agents", "all"),
-        ("usage_clients", "1"),
-        ("model_catalog", "1"),
-        ("device_health", "1"),
-        ("usage_channels", "1"),
       ],
       body: nil,
       bearer: accessToken,

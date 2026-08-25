@@ -40,8 +40,9 @@ failing here and is what lets a client stay quiet about the first and speak abou
 `auth_required` additionally carries a result message when a discovered source was rejected, because
 a stored sign-in the provider no longer accepts recovers differently from one that never existed.
 
-Every collected snapshot carries `valid_until`, derived from the observation as described in
-[`architecture.md`](architecture.md). Collectors do not set it and providers do not report it.
+How long a collected snapshot describes current quota is derived from the reading itself, as
+described in [`architecture.md`](architecture.md). Collectors do not report it, providers do not
+report it, and nothing stamps it onto the upload.
 
 ## Codex
 
@@ -146,16 +147,16 @@ Provider grouping uses the normalized fact's explicit billing channel, including
 collector-owned default where the source has one. It never derives provider ownership from model
 text or from `client`. The local-v3 `provider` is the channel's inference provider; `client` records
 which agent emitted the usage-bearing output. Summaries are nested as
-`clients[].providers[].models[]`; unknown channels remain the `unknown` provider within their
+`agents[].providers[].models[]`; unknown channels remain the `unknown` provider within their
 originating client.
 
 A provider id resolves a channel only when it is a registered id that authenticates against that
 vendor's own endpoints. Gateway spellings that merely proxy a vendor, such as an `-oauth` suffix on a
 registered id, are not registered and stay unknown. `kimi-for-coding` and `moonshotai` resolve
 `moonshot_direct`, and `deepseek` resolves `deepseek_direct`, for every collector that reads an
-explicit provider id: OpenCode, Pi, and Cursor. Both channels were added after menubar-v0.0.19, so
-responses narrow them for callers that do not send `usage_channels=1`;
-[ADR 0012](decisions/0012-managed-data-v3.md) owns that rule.
+explicit provider id: OpenCode, Pi, and Cursor. Relay reports every channel it stores as stored;
+[ADR 0018](decisions/0018-single-managed-data-contract.md) retired the narrowing that once rewrote
+channels newer than a released client to `unknown`.
 
 ### Report-time model catalog
 
@@ -259,8 +260,7 @@ make an otherwise unpriced fact priced.
    not a malformed source. Binary or protobuf blobs are skipped. An unreadable database, invalid
    timestamp/model/usage field, or truncated source makes only that file partial.
 
-Cursor enters the BillingAgent enum only in managed-data v3. The released v2 enum remains closed,
-and v2 routes filter Cursor rows and snapshots so menubar-v0.0.9 through 0.0.11 continue decoding.
+Cursor is part of the single BillingAgent set every managed contract carries.
 
 All scanners preserve non-empty bounded model identifiers as opaque provider text, ignore zero-
 token/tool/cost internal records, and use canonical `[start_at, end_at)` UTC-hour boundaries,
@@ -473,10 +473,8 @@ sources. Quota snapshots follow the product default and sync to the managed Acco
      (`numRequestsTotal`, else `numRequests`; `value_unit: "count"`) replaces Cursor Models, Other
      Models, and Grok Bot, which only describe usage-based pricing. On-demand and team windows
      remain.
-7. Catalog `account_sync` is true and `account_sync_protocol` is 3, so Cursor snapshots enter v3
-   envelopes and Account summaries. Browser cookies and the Cursor.app access token still never
-   leave the local service. Released v2 routes keep the original provider enum and filter Cursor
-   observations.
+7. Catalog `account_sync` is true, so Cursor snapshots enter managed envelopes and Account
+   summaries. Browser cookies and the Cursor.app access token still never leave the local service.
 
 ## Identity and normalization
 

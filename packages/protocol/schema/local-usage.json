@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://quota.gotry.io/schema/local-usage-v3.json",
-  "title": "Quota local Usage report v3",
+  "$id": "https://quota.gotry.io/schema/local-usage.json",
+  "title": "Quota local Usage report",
   "$comment": "Local-only Usage collection status and coverage; period summaries are precomputed in the private state snapshot.",
   "type": "object",
   "properties": {
@@ -108,7 +108,7 @@
     "__schema8": {
       "type": "object",
       "properties": {
-        "client": {
+        "agent": {
           "$ref": "#/$defs/__schema9"
         },
         "start_at": {
@@ -121,7 +121,7 @@
           "$ref": "#/$defs/__schema11"
         }
       },
-      "required": ["client", "start_at", "end_at", "status"],
+      "required": ["agent", "start_at", "end_at", "status"],
       "additionalProperties": false
     },
     "__schema9": {

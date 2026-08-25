@@ -96,13 +96,13 @@ describe("public profile projection", () => {
               plan: "Plus",
             },
             windows: [{ id: "weekly", title: "Weekly", used_percent: 20 }],
-            source: "codex_rpc",
             status: "available",
             observed_at: now.toISOString(),
           },
         },
       ],
       usage: usageSummary(),
+      now,
     });
     const serialized = JSON.stringify(profile);
     expect(profile.username).toBe("octocat");
@@ -110,6 +110,87 @@ describe("public profile projection", () => {
     expect(profile.usage.models[0]?.name).toBe("gpt-5");
     expect(serialized).not.toContain("device_secret");
     expect(serialized).not.toContain("aaaaaaaa");
+  });
+
+  it("publishes the current reading for a provider and drops one that aged out", () => {
+    const observation = (
+      device_id: string,
+      provider: "codex" | "cursor",
+      observedAt: string,
+      updatedAt: string,
+    ) => ({
+      device_id,
+      sequence: 3,
+      captured_at: observedAt,
+      updated_at: updatedAt,
+      snapshot: {
+        provider,
+        account: {
+          fingerprint: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          fingerprint_scope: "global" as const,
+          plan: provider,
+        },
+        windows: [{ id: "weekly", title: "Weekly", used_percent: 20 }],
+        status: "available" as const,
+        observed_at: observedAt,
+      },
+    });
+
+    const profile = publicProfileFromAccount({
+      slug: "octocat",
+      displayLabel: "octocat",
+      snapshots: [
+        // Written to Relay a moment ago, but the reading itself is two days old: a device
+        // re-uploading what it already knows does not make that reading current.
+        observation("device_a", "cursor", "2026-08-11T12:00:00Z", now.toISOString()),
+        observation("device_b", "cursor", "2026-08-13T11:00:00Z", "2026-08-13T11:00:05Z"),
+        // The only device reporting Codex stopped collecting two days ago.
+        observation("device_a", "codex", "2026-08-11T12:00:00Z", now.toISOString()),
+      ],
+      usage: usageSummary(),
+      now,
+    });
+
+    expect(profile.quota.map((entry) => entry.provider)).toEqual(["cursor"]);
+    expect(profile.quota[0]?.windows[0]?.used_percent).toBe(20);
+  });
+
+  it("publishes one row per subscription, so one provider can carry two accounts", () => {
+    const observation = (fingerprint: string, plan: string, usedPercent: number) => ({
+      device_id: "device_a",
+      sequence: 3,
+      captured_at: now.toISOString(),
+      updated_at: now.toISOString(),
+      snapshot: {
+        provider: "cursor" as const,
+        account: { fingerprint, fingerprint_scope: "global" as const, plan },
+        windows: [{ id: "weekly", title: "Weekly", used_percent: usedPercent }],
+        status: "available" as const,
+        observed_at: now.toISOString(),
+      },
+    });
+
+    const profile = publicProfileFromAccount({
+      slug: "octocat",
+      displayLabel: "octocat",
+      snapshots: [
+        observation(
+          "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "ultra",
+          20,
+        ),
+        observation("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "pro", 70),
+      ],
+      usage: usageSummary(),
+      now,
+    });
+
+    // Ordered by the same identity comparator every reader sorts by, not by arrival.
+    expect(profile.quota.map((entry) => [entry.provider, entry.plan])).toEqual([
+      ["cursor", "pro"],
+      ["cursor", "ultra"],
+    ]);
+    expect(JSON.stringify(profile)).not.toContain("bbbbbbbb");
   });
 
   it("normalizes opted-in slugs and rejects empty labels", () => {

@@ -6,14 +6,11 @@ import * as protocol from "../src/index.ts";
 import {
   AccountQuotaResponseSchema,
   AccountSummarySchema,
-  AccountSummaryV3DeviceHealthSchema,
-  AccountSummaryV3Schema,
   AccountUsageHourlyResponseSchema,
   AccountUsageResponseSchema,
   BrowserLoginExchangeRequestSchema,
   DeviceAuthorizationRequestSchema,
   DeviceAuthorizationResponseSchema,
-  DeviceHealthUploadRequestSchema,
   DeviceProfileUpdateRequestSchema,
   DeviceProfileUpdateResponseSchema,
   DeviceSyncResponseSchema,
@@ -30,122 +27,69 @@ import {
   MAXIMUM_SNAPSHOTS_PER_ENVELOPE,
   OAuthTokenRequestSchema,
   OAuthTokenResponseSchema,
+  PricingCatalogSchema,
   PROTOCOL_VERSION,
   PROVIDER_IDS,
-  PROVIDER_IDS_V3,
-  PricingCatalogSchema,
   ProviderIdSchema,
   PublicProfileSchema,
   PublicProfileSettingsSchema,
   PublicProfileUpdateRequestSchema,
   QuotaCollectionReportSchema,
   QuotaSnapshotEnvelopeSchema,
-  QuotaSnapshotEnvelopeV3Schema,
   QuotaSnapshotUploadResponseSchema,
   SessionRefreshResponseSchema,
   UsageBreakdownSchema,
   UsageHourlyFactSchema,
   UsageSubmissionSchema,
-  UsageSubmissionV3Schema,
 } from "../src/index.ts";
 
-describe("quota protocol v2", () => {
-  it("keeps v3-only providers out of the released managed-account enum", () => {
-    expect(PROVIDER_IDS).not.toContain("cursor");
-    expect(ProviderIdSchema.safeParse("cursor").success).toBe(false);
-    expect(LOCAL_PROVIDER_IDS).toContain("cursor");
+describe("quota protocol", () => {
+  it("accepts every managed provider and keeps local-only collectors out of the wire", () => {
+    expect(PROVIDER_IDS).toContain("cursor");
+    expect(ProviderIdSchema.safeParse("cursor").success).toBe(true);
+    expect(LOCAL_PROVIDER_IDS).toEqual(expect.arrayContaining([...PROVIDER_IDS]));
     expect(LocalProviderIdSchema.safeParse("cursor").success).toBe(true);
   });
 
-  it("pins the billing channels menubar-v0.0.19 can decode", () => {
-    // Widening BillingChannelSchema must not widen what released clients are sent.
-    expect([...protocol.RELEASED_BILLING_CHANNELS]).toEqual([
-      "openai_direct",
-      "azure_openai",
-      "anthropic_direct",
-      "aws_bedrock",
-      "google_vertex",
-      "openrouter",
-      "xai_direct",
-      "unknown",
-    ]);
-    for (const channel of protocol.BillingChannelSchema.options) {
-      expect(protocol.isReleasedBillingChannel(channel)).toBe(
-        (protocol.RELEASED_BILLING_CHANNELS as readonly string[]).includes(channel),
-      );
-    }
-    expect(protocol.isReleasedBillingChannel("moonshot_direct")).toBe(false);
-    expect(protocol.isReleasedBillingChannel("deepseek_direct")).toBe(false);
-    // Every channel stays priceable except the sentinel.
+  it("prices every billing channel except the unknown sentinel", () => {
+    expect(protocol.BillingChannelSchema.options).toContain("moonshot_direct");
     expect(protocol.PricedBillingChannelSchema.options).toEqual(
       protocol.BillingChannelSchema.options.filter((channel) => channel !== "unknown"),
     );
   });
 
-  it("adds Cursor only to managed-data v3", () => {
-    expect(MANAGED_DATA_PROTOCOL_VERSION).toBe(3);
-    expect(PROVIDER_IDS).not.toContain("cursor");
-    expect(PROVIDER_IDS_V3).toContain("cursor");
-    expect(protocol.BILLING_AGENTS).not.toContain("cursor");
-    expect(protocol.BILLING_AGENTS_V3).toContain("cursor");
-    const cursorEnvelope = {
-      ...quotaEnvelope(),
-      protocol_version: 3 as const,
-      snapshots: [snapshot("cursor")],
-    };
-    expect(QuotaSnapshotEnvelopeV3Schema.safeParse(cursorEnvelope).success).toBe(true);
-    expect(QuotaSnapshotEnvelopeSchema.safeParse(cursorEnvelope).success).toBe(false);
+  it("carries one managed-data version on quota and Usage", () => {
+    expect(MANAGED_DATA_PROTOCOL_VERSION).toBe(4);
+    expect(protocol.BILLING_AGENTS).toContain("cursor");
+    const cursorEnvelope = { ...quotaEnvelope(), snapshots: [snapshot("cursor")] };
+    expect(QuotaSnapshotEnvelopeSchema.safeParse(cursorEnvelope).success).toBe(true);
+    // The shared fixture owns the retired managed-data version; this pins the control one,
+    // which no data contract ever accepted.
+    expect(
+      QuotaSnapshotEnvelopeSchema.safeParse({ ...cursorEnvelope, protocol_version: 2 }).success,
+    ).toBe(false);
 
     const cursorUsage = {
       ...usageSubmission(),
-      protocol_version: 3 as const,
       coverage: { ...usageSubmission().coverage, agent: "cursor" as const },
       rows: usageSubmission().rows.map((row) => ({ ...row, agent: "cursor" as const })),
     };
-    expect(UsageSubmissionV3Schema.safeParse(cursorUsage).success).toBe(true);
-    expect(UsageSubmissionSchema.safeParse(cursorUsage).success).toBe(false);
+    expect(UsageSubmissionSchema.safeParse(cursorUsage).success).toBe(true);
+    expect(UsageSubmissionSchema.safeParse({ ...cursorUsage, protocol_version: 2 }).success).toBe(
+      false,
+    );
   });
 
-  it("keeps shipped v3 devices unchanged unless Device Health is explicitly selected", () => {
-    const current = { ...accountSummary(), protocol_version: 3 as const };
-    expect(AccountSummaryV3Schema.safeParse(current).success).toBe(true);
-    expect(AccountSummaryV3DeviceHealthSchema.safeParse(current).success).toBe(false);
-
-    const opted = {
-      ...current,
-      devices: current.devices.map((device) => ({ ...device, health: null })),
+  it("carries Device Health on every summary Device", () => {
+    const summary = accountSummary();
+    expect(AccountSummarySchema.safeParse(summary).success).toBe(true);
+    // `health` is required and nullable: a Device that has never reported says so.
+    expect(summary.devices.every((device) => device.health === null)).toBe(true);
+    const missing = {
+      ...summary,
+      devices: summary.devices.map(({ health: _health, ...device }) => device),
     };
-    expect(AccountSummaryV3DeviceHealthSchema.safeParse(opted).success).toBe(true);
-    expect(AccountSummaryV3Schema.safeParse(opted).success).toBe(false);
-
-    const health = {
-      protocol_version: 3 as const,
-      schema_version: 1 as const,
-      client_product: "quotabar" as const,
-      client_version: "0.0.16",
-      platform: "macos" as const,
-      observed_at: "2026-08-02T12:00:00Z",
-      refresh_revision: 42,
-      last_completed_refresh_at: "2026-08-02T12:00:00Z",
-      last_successful_account_sync_at: null,
-      summary: {
-        operation: "healthy" as const,
-        data: "current" as const,
-        attention: "none" as const,
-      },
-      top_code: null,
-      consecutive_failures: 0,
-      usage_upload_enabled: false,
-    };
-    expect(DeviceHealthUploadRequestSchema.safeParse(health).success).toBe(true);
-    expect(
-      DeviceHealthUploadRequestSchema.safeParse({
-        ...health,
-        device_id: "device_other",
-        agent: "codex",
-        path: "/Users/private",
-      }).success,
-    ).toBe(false);
+    expect(AccountSummarySchema.safeParse(missing).success).toBe(false);
   });
 
   it("accepts the sole quota upload contract with device generation", () => {
@@ -182,7 +126,7 @@ describe("quota protocol v2", () => {
     ).toBe(false);
     expect(
       QuotaSnapshotUploadResponseSchema.safeParse({
-        protocol_version: 2,
+        protocol_version: 4,
         outcome: "accepted",
         device_id: "device_01",
         device_generation: 3,
@@ -194,7 +138,7 @@ describe("quota protocol v2", () => {
 
   it("requires a reason only for a terminally rejected Usage upload", () => {
     const rejected = {
-      protocol_version: 2,
+      protocol_version: 4,
       outcome: "rejected",
       device_id: "device_01",
       device_generation: 3,
@@ -693,19 +637,19 @@ describe("quota protocol v2", () => {
     expect(AccountSummarySchema.safeParse(accountSummary()).success).toBe(true);
     expect(
       AccountQuotaResponseSchema.safeParse({
-        protocol_version: 2,
+        protocol_version: 4,
         quota: accountSummary().quota,
       }).success,
     ).toBe(true);
     expect(
       AccountUsageResponseSchema.safeParse({
-        protocol_version: 2,
+        protocol_version: 4,
         usage: accountSummary().usage,
       }).success,
     ).toBe(true);
     expect(
       AccountUsageHourlyResponseSchema.safeParse({
-        protocol_version: 2,
+        protocol_version: 4,
         start_at: "2026-08-02T12:00:00Z",
         end_at: "2026-08-02T13:00:00Z",
         facts: [
@@ -741,7 +685,7 @@ describe("quota protocol v2", () => {
     ).toBe(true);
     expect(
       AccountUsageResponseSchema.safeParse({
-        protocol_version: 2,
+        protocol_version: 4,
         usage: {
           ...accountSummary().usage,
           cost: {
@@ -763,7 +707,7 @@ describe("quota protocol v2", () => {
     ).toBe(true);
     expect(
       AccountUsageResponseSchema.safeParse({
-        protocol_version: 2,
+        protocol_version: 4,
         usage: {
           ...accountSummary().usage,
           cost: { ...emptyCost(), unpriced_truncated: false },
@@ -788,7 +732,7 @@ describe("quota protocol v2", () => {
       model_catalog_revision: "model_2026_08_02",
       coverage: [
         {
-          client: "codex",
+          agent: "codex",
           start_at: "2026-07-03T00:00:00Z",
           end_at: "2026-08-02T13:00:00Z",
           status: "partial",
@@ -850,16 +794,13 @@ describe("quota protocol v2", () => {
       .sort();
     expect(schemaFiles.length).toBeGreaterThan(0);
     expect(schemaFiles).toContain("model-catalog-v1.json");
-    expect(schemaFiles).toContain("local-usage-v3.json");
-    expect(
-      schemaFiles.every(
-        (file) =>
-          file === "model-catalog-v1.json" ||
-          file === "local-usage-v3.json" ||
-          file.endsWith("-v2.json") ||
-          file.endsWith("-v3.json"),
-      ),
-    ).toBe(true);
+    expect(schemaFiles).toContain("local-usage.json");
+    expect(schemaFiles).toContain("quota-snapshot.json");
+    // Only a separately versioned catalog carries a version in its name.
+    expect(schemaFiles.filter((file) => /-v\d+\.json$/.test(file))).toEqual([
+      "model-catalog-v1.json",
+      "pricing-catalog-v2.json",
+    ]);
 
     for (const schemaFile of schemaFiles) {
       const schema = JSON.parse(await readFile(`${schemaDirectory}/${schemaFile}`, "utf8")) as {
@@ -879,7 +820,6 @@ function snapshot(provider: "codex" | "claude" | "cursor") {
     provider,
     account: { fingerprint: `${provider}-fixture`, fingerprint_scope: "source" as const },
     windows: [{ id: "five_hour", title: "5 hour", used_percent: 10 }],
-    source: "fixture",
     status: "available" as const,
     observed_at: "2026-08-02T12:00:00Z",
   };
@@ -887,7 +827,7 @@ function snapshot(provider: "codex" | "claude" | "cursor") {
 
 function quotaEnvelope() {
   return {
-    protocol_version: 2 as const,
+    protocol_version: 4 as const,
     device_id: "device_01",
     generation: 3,
     sequence: 42,
@@ -925,7 +865,7 @@ function usageFact() {
 
 function usageSubmission() {
   return {
-    protocol_version: 2 as const,
+    protocol_version: 4 as const,
     submission_id: "submission_01",
     device_id: "device_01",
     generation: 3,
@@ -976,8 +916,7 @@ function emptyCost() {
 
 function accountSummary() {
   return {
-    protocol_version: 2 as const,
-    generated_at: "2026-08-02T12:00:00Z",
+    protocol_version: 4 as const,
     account: {
       account_id: "account_01",
       display_label: "octocat",
@@ -994,17 +933,10 @@ function accountSummary() {
         last_login_at: "2026-08-01T00:00:00Z",
         last_seen_at: "2026-08-02T12:00:00Z",
         signed_out_at: null,
+        health: null,
       },
     ],
-    quota: [
-      {
-        device_id: "device_01",
-        sequence: 42,
-        captured_at: "2026-08-02T12:00:00Z",
-        snapshot: snapshot("codex"),
-        updated_at: "2026-08-02T12:00:01Z",
-      },
-    ],
+    quota: [{ device_id: "device_01", snapshot: snapshot("codex") }],
     usage: {
       range: { from: "2026-08-01", to: "2026-08-02" },
       totals: emptyTotals(),

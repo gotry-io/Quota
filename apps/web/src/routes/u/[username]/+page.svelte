@@ -67,7 +67,9 @@ async function load(username: string): Promise<void> {
           </div>
         </div>
         <div id="public-quota-list" class="quota-grid">
-          {#each profile.quota as provider (provider.provider)}
+          <!-- One row per subscription: a provider can carry more than one, and the public
+               shape deliberately has no account identifier to key on. -->
+          {#each profile.quota as provider, index (index)}
             <article class="quota-card">
               <div class="quota-card-heading">
                 <div class="quota-card-identity">

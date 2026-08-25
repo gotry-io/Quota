@@ -39,7 +39,7 @@ The site has four surfaces:
    the name opens `/my`, and its menu
    contains only **Sign out**. Session cookies stay HttpOnly. SvelteKit renders the header from
    `WebDocumentPort.getViewer` on the first HTML byte. While rendering the signed-in document, the
-   Worker starts `GET /api/v3/account/summary` internally, reuses the resolved Better Auth session,
+   Worker starts `GET /api/v4/account/summary` internally, reuses the resolved Better Auth session,
    and streams the typed result into the page. The browser fetch is only a development or retry
    path; it is not the production first-load path. Unsigned visits to `/my` are a server redirect to
    `/`. A successful `/u/{slug}` page view consumes two `public-profile` limiter tokens (document
@@ -47,9 +47,12 @@ The site has four surfaces:
    JSON returns 429. The shipped `/app`
    bookmark is a single redirect to `/my`. Every signed-in GitHub account is public at
    `/u/{github-username}`. The dashboard has no public-page visibility control.
-3. `/u/{username}` is the public remaining-quota and usage view for that GitHub username. It never
-   includes device ids, fingerprints, credentials, or private identifiers. Unknown usernames show
-   a plain unavailable state.
+3. `/u/{username}` is the public remaining-quota and usage view for that GitHub username. It shows
+   one card per subscription, the same unit the dashboard shows, so a provider with two accounts
+   reads as two cards rather than one silently chosen for the viewer; a reading that is no longer
+   current is not published at all. It never includes device ids, fingerprints, credentials, or
+   private identifiers, so two cards of one provider are told apart by their plan and numbers.
+   Unknown usernames show a plain unavailable state.
 4. `/activate` approves or denies a released native-client device authorization code.
 
 GitHub is the only sign-in action. There is no Relay selection, pairing group, owner capability,
@@ -142,12 +145,17 @@ so weekday labels stay readable and the page does not overflow.
 
 Choosing a day opens an inline details panel under the Activity card, not a modal. The dashboard
 owns selected, loading, error, and data state and fetches
-`GET /api/v3/account/usage/summary?usage_agents=all&cost_mode=calculate&model_catalog=1&from=YYYY-MM-DD&to=YYYY-MM-DD`,
+`GET /api/v4/account/usage/summary?usage_agents=all&cost_mode=calculate&model_catalog=1&from=YYYY-MM-DD&to=YYYY-MM-DD`,
 reusing the existing `usage_date` timezone. A 401 starts GitHub sign-in. Failures stay on the
 page with a retry control. The panel can be closed. It shows that day's date, input, output,
 requests, estimated cost, coverage, and compact agent and model splits, with honest empty,
 truncated, partial, and unpriced copy. The dashboard does not repeat the GitHub username in the
 page heading.
+
+Quota cards show one subscription, not one upload: an account collected on several Macs is one card
+carrying the reading that still describes it, with the reporting device and observation time below
+it and the other reporting devices named on a second line. The status pill uses the shared
+observation vocabulary, so a reading that aged out reads as Stale rather than as a current number.
 
 Device cards show display name, platform, app product/version, and compact last
 report/refresh/sync. A server-fresh healthy/current-or-empty report with no required or optional

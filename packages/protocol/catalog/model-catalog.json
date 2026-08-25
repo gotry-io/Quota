@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "revision": "official-2026-08-11-1",
   "models": [
     {
@@ -8,7 +8,7 @@
         {
           "reported_model": "GPT-5.5[1m]",
           "provider": "openai",
-          "client": "codex",
+          "agent": "codex",
           "effective_from": "2026-04-24"
         }
       ]

@@ -1,4 +1,5 @@
 <script lang="ts">
+import { remainingPercent } from "@gotry-io/quota-model";
 import { formatDate, formatQuotaRemaining } from "$lib/format";
 
 type WindowItem = {
@@ -32,7 +33,7 @@ function isBalanceOnly(window: WindowItem): boolean {
         {#if !balanceOnly}
           <div class="quota-track">
             <span
-              style:width={`${Math.max(0, Math.min(100, 100 - window.used_percent))}%`}
+              style:width={`${remainingPercent(window.used_percent)}%`}
               aria-hidden="true"
             ></span>
           </div>

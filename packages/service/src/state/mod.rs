@@ -4185,7 +4185,7 @@ mod tests {
             .expect("signed in");
         let detail = serde_json::json!({
             "range": {"from": "2026-08-13", "to": "2026-08-13"},
-            "usage": {"totals": {"total_tokens": 1}, "cost": {"status": "unavailable"}, "clients": []},
+            "usage": {"totals": {"total_tokens": 1}, "cost": {"status": "unavailable"}, "agents": []},
             "fallback_models": [],
             "incomplete": false,
             "details_truncated": false
@@ -4221,7 +4221,7 @@ mod tests {
         fs::create_dir_all(&root).expect("root");
         let store = StateStore::open(&root).expect("state");
         let value = serde_json::json!({
-            "schema_version": 1,
+            "schema_version": 2,
             "revision": "model-test-1",
             "models": [{
                 "canonical_id": "gpt-5.5",
@@ -4235,7 +4235,7 @@ mod tests {
         assert_eq!(store.model_catalog().expect("catalog"), Some(value.clone()));
 
         let invalid = serde_json::json!({
-            "schema_version": 1,
+            "schema_version": 2,
             "revision": "model-test-2",
             "models": [{
                 "canonical_id": "gpt-5.5",

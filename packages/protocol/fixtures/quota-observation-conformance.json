@@ -1,0 +1,693 @@
+{
+  "freshness": [
+    {
+      "name": "the first future window reset bounds the reading",
+      "now": "2026-08-24T10:00:00Z",
+      "snapshot": {
+        "provider": "cursor",
+        "account": {
+          "fingerprint": "fp-global",
+          "fingerprint_scope": "global"
+        },
+        "windows": [
+          {
+            "id": "weekly",
+            "title": "Weekly",
+            "used_percent": 40,
+            "resets_at": "2026-08-24T18:00:00Z",
+            "duration_seconds": 604800
+          },
+          {
+            "id": "monthly",
+            "title": "Monthly",
+            "used_percent": 10,
+            "resets_at": "2026-09-01T00:00:00Z",
+            "duration_seconds": 2592000
+          }
+        ],
+        "status": "available",
+        "observed_at": "2026-08-24T09:00:00Z"
+      },
+      "expected": {
+        "valid_until": "2026-08-24T18:00:00Z",
+        "status": "available"
+      }
+    },
+    {
+      "name": "a reading is spent at its boundary, not after it",
+      "now": "2026-08-24T18:00:00Z",
+      "snapshot": {
+        "provider": "cursor",
+        "account": {
+          "fingerprint": "fp-global",
+          "fingerprint_scope": "global"
+        },
+        "windows": [
+          {
+            "id": "weekly",
+            "title": "Weekly",
+            "used_percent": 40,
+            "resets_at": "2026-08-24T18:00:00Z",
+            "duration_seconds": 604800
+          },
+          {
+            "id": "monthly",
+            "title": "Monthly",
+            "used_percent": 10,
+            "resets_at": "2026-09-01T00:00:00Z",
+            "duration_seconds": 2592000
+          }
+        ],
+        "status": "available",
+        "observed_at": "2026-08-24T09:00:00Z"
+      },
+      "expected": {
+        "valid_until": "2026-08-24T18:00:00Z",
+        "status": "stale"
+      }
+    },
+    {
+      "name": "a reset beyond the maximum age falls back to the maximum age",
+      "now": "2026-08-24T10:00:00Z",
+      "snapshot": {
+        "provider": "codex",
+        "account": {
+          "fingerprint": "fp-global",
+          "fingerprint_scope": "global"
+        },
+        "windows": [
+          {
+            "id": "monthly",
+            "title": "Monthly",
+            "used_percent": 0,
+            "resets_at": "2026-09-21T14:51:37Z",
+            "duration_seconds": 2592000
+          }
+        ],
+        "status": "available",
+        "observed_at": "2026-08-22T14:51:36Z"
+      },
+      "expected": {
+        "valid_until": "2026-08-23T14:51:36Z",
+        "status": "stale"
+      }
+    },
+    {
+      "name": "a window without a reset falls back to its own cadence",
+      "now": "2026-08-24T10:00:00Z",
+      "snapshot": {
+        "provider": "cursor",
+        "account": {
+          "fingerprint": "fp-global",
+          "fingerprint_scope": "global"
+        },
+        "windows": [
+          {
+            "id": "weekly",
+            "title": "Weekly",
+            "used_percent": 40,
+            "duration_seconds": 604800
+          },
+          {
+            "id": "hourly",
+            "title": "Hourly",
+            "used_percent": 5,
+            "duration_seconds": 3600
+          }
+        ],
+        "status": "available",
+        "observed_at": "2026-08-24T09:30:00Z"
+      },
+      "expected": {
+        "valid_until": "2026-08-24T10:30:00Z",
+        "status": "available"
+      }
+    },
+    {
+      "name": "a reading that reports neither reset nor cadence ages out at the maximum",
+      "now": "2026-08-24T10:00:00Z",
+      "snapshot": {
+        "provider": "openrouter",
+        "account": {
+          "fingerprint": "fp-global",
+          "fingerprint_scope": "global"
+        },
+        "windows": [
+          {
+            "id": "balance",
+            "title": "Balance",
+            "used_percent": 0,
+            "remaining_value": 12.5,
+            "value_unit": "usd"
+          }
+        ],
+        "status": "available",
+        "observed_at": "2026-08-24T08:00:00Z"
+      },
+      "expected": {
+        "valid_until": "2026-08-25T08:00:00Z",
+        "status": "available"
+      }
+    },
+    {
+      "name": "a reset the reading already passed does not bound it",
+      "now": "2026-08-24T10:00:00Z",
+      "snapshot": {
+        "provider": "cursor",
+        "account": {
+          "fingerprint": "fp-global",
+          "fingerprint_scope": "global"
+        },
+        "windows": [
+          {
+            "id": "weekly",
+            "title": "Weekly",
+            "used_percent": 40,
+            "resets_at": "2026-08-24T08:00:00Z"
+          }
+        ],
+        "status": "available",
+        "observed_at": "2026-08-24T09:00:00Z"
+      },
+      "expected": {
+        "valid_until": "2026-08-25T09:00:00Z",
+        "status": "available"
+      }
+    },
+    {
+      "name": "a reported failure stands as reported rather than aging into stale",
+      "now": "2026-08-24T10:00:00Z",
+      "snapshot": {
+        "provider": "codex",
+        "account": {
+          "fingerprint": "fp-global",
+          "fingerprint_scope": "global"
+        },
+        "windows": [
+          {
+            "id": "monthly",
+            "title": "Monthly",
+            "used_percent": 0,
+            "resets_at": "2026-09-21T16:35:43Z",
+            "duration_seconds": 2592000
+          }
+        ],
+        "status": "error",
+        "observed_at": "2026-08-22T16:35:41Z"
+      },
+      "expected": {
+        "valid_until": "2026-08-23T16:35:41Z",
+        "status": "error"
+      }
+    }
+  ],
+  "merge": [
+    {
+      "name": "one account observed by three devices resolves to one subscription",
+      "now": "2026-08-24T10:00:00Z",
+      "observations": [
+        {
+          "device_id": "device-c",
+          "snapshot": {
+            "provider": "cursor",
+            "account": {
+              "fingerprint": "fp-cursor",
+              "fingerprint_scope": "global",
+              "label": "pv***@gmail.com",
+              "plan": "ultra"
+            },
+            "windows": [
+              {
+                "id": "weekly",
+                "title": "Weekly",
+                "used_percent": 30,
+                "duration_seconds": 604800
+              }
+            ],
+            "status": "available",
+            "observed_at": "2026-08-24T09:17:00Z"
+          }
+        },
+        {
+          "device_id": "device-a",
+          "snapshot": {
+            "provider": "cursor",
+            "account": {
+              "fingerprint": "fp-cursor",
+              "fingerprint_scope": "global",
+              "label": "pv***@gmail.com",
+              "plan": "ultra"
+            },
+            "windows": [
+              {
+                "id": "weekly",
+                "title": "Weekly",
+                "used_percent": 31,
+                "duration_seconds": 604800
+              }
+            ],
+            "status": "available",
+            "observed_at": "2026-08-24T09:46:00Z"
+          }
+        },
+        {
+          "device_id": "device-b",
+          "snapshot": {
+            "provider": "cursor",
+            "account": {
+              "fingerprint": "fp-cursor",
+              "fingerprint_scope": "global",
+              "label": "pv***@gmail.com",
+              "plan": "ultra"
+            },
+            "windows": [
+              {
+                "id": "weekly",
+                "title": "Weekly",
+                "used_percent": 32,
+                "duration_seconds": 604800
+              }
+            ],
+            "status": "available",
+            "observed_at": "2026-08-24T09:47:00Z"
+          }
+        }
+      ],
+      "expected": [
+        {
+          "identity": {
+            "provider": "cursor",
+            "fingerprint": "fp-cursor",
+            "scope": "global",
+            "source_id": null
+          },
+          "selected_device_id": "device-b",
+          "is_stale": false,
+          "sources": [
+            {
+              "device_id": "device-a",
+              "observed_at": "2026-08-24T09:46:00Z",
+              "is_stale": false
+            },
+            {
+              "device_id": "device-b",
+              "observed_at": "2026-08-24T09:47:00Z",
+              "is_stale": false
+            },
+            {
+              "device_id": "device-c",
+              "observed_at": "2026-08-24T09:17:00Z",
+              "is_stale": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "an older valid reading outranks a newer reading that is not current",
+      "now": "2026-08-24T10:00:00Z",
+      "observations": [
+        {
+          "device_id": "device-a",
+          "snapshot": {
+            "provider": "claude",
+            "account": {
+              "fingerprint": "fp-claude",
+              "fingerprint_scope": "global"
+            },
+            "windows": [
+              {
+                "id": "weekly",
+                "title": "Weekly",
+                "used_percent": 20,
+                "duration_seconds": 604800
+              }
+            ],
+            "status": "available",
+            "observed_at": "2026-08-24T08:00:00Z"
+          }
+        },
+        {
+          "device_id": "device-b",
+          "snapshot": {
+            "provider": "claude",
+            "account": {
+              "fingerprint": "fp-claude",
+              "fingerprint_scope": "global"
+            },
+            "windows": [
+              {
+                "id": "weekly",
+                "title": "Weekly",
+                "used_percent": 25,
+                "duration_seconds": 604800
+              }
+            ],
+            "status": "error",
+            "observed_at": "2026-08-24T09:00:00Z"
+          }
+        }
+      ],
+      "expected": [
+        {
+          "identity": {
+            "provider": "claude",
+            "fingerprint": "fp-claude",
+            "scope": "global",
+            "source_id": null
+          },
+          "selected_device_id": "device-a",
+          "is_stale": false,
+          "sources": [
+            {
+              "device_id": "device-a",
+              "observed_at": "2026-08-24T08:00:00Z",
+              "is_stale": false
+            },
+            {
+              "device_id": "device-b",
+              "observed_at": "2026-08-24T09:00:00Z",
+              "is_stale": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "when no reading is current the newest one still speaks for the subscription",
+      "now": "2026-08-24T10:00:00Z",
+      "observations": [
+        {
+          "device_id": "device-a",
+          "snapshot": {
+            "provider": "codex",
+            "account": {
+              "fingerprint": "fp-codex",
+              "fingerprint_scope": "global",
+              "label": "eg***@dhao.me",
+              "plan": "free"
+            },
+            "windows": [
+              {
+                "id": "monthly",
+                "title": "Monthly",
+                "used_percent": 0,
+                "resets_at": "2026-09-21T16:35:43Z",
+                "duration_seconds": 2592000
+              }
+            ],
+            "status": "error",
+            "observed_at": "2026-08-22T16:35:41Z"
+          }
+        },
+        {
+          "device_id": "device-b",
+          "snapshot": {
+            "provider": "codex",
+            "account": {
+              "fingerprint": "fp-codex",
+              "fingerprint_scope": "global",
+              "label": "eg***@dhao.me",
+              "plan": "free"
+            },
+            "windows": [
+              {
+                "id": "monthly",
+                "title": "Monthly",
+                "used_percent": 0,
+                "resets_at": "2026-09-21T14:51:37Z",
+                "duration_seconds": 2592000
+              }
+            ],
+            "status": "available",
+            "observed_at": "2026-08-22T14:51:36Z"
+          }
+        }
+      ],
+      "expected": [
+        {
+          "identity": {
+            "provider": "codex",
+            "fingerprint": "fp-codex",
+            "scope": "global",
+            "source_id": null
+          },
+          "selected_device_id": "device-a",
+          "is_stale": true,
+          "sources": [
+            {
+              "device_id": "device-a",
+              "observed_at": "2026-08-22T16:35:41Z",
+              "is_stale": true
+            },
+            {
+              "device_id": "device-b",
+              "observed_at": "2026-08-22T14:51:36Z",
+              "is_stale": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "a source-scoped fingerprint stays separate per reporting device",
+      "now": "2026-08-24T10:00:00Z",
+      "observations": [
+        {
+          "device_id": "device-a",
+          "snapshot": {
+            "provider": "grok",
+            "account": {
+              "fingerprint": "fp-source",
+              "fingerprint_scope": "source"
+            },
+            "windows": [
+              {
+                "id": "weekly",
+                "title": "Weekly",
+                "used_percent": 10,
+                "duration_seconds": 604800
+              }
+            ],
+            "status": "available",
+            "observed_at": "2026-08-24T09:00:00Z"
+          }
+        },
+        {
+          "device_id": "device-b",
+          "snapshot": {
+            "provider": "grok",
+            "account": {
+              "fingerprint": "fp-source",
+              "fingerprint_scope": "source"
+            },
+            "windows": [
+              {
+                "id": "weekly",
+                "title": "Weekly",
+                "used_percent": 90,
+                "duration_seconds": 604800
+              }
+            ],
+            "status": "available",
+            "observed_at": "2026-08-24T09:30:00Z"
+          }
+        }
+      ],
+      "expected": [
+        {
+          "identity": {
+            "provider": "grok",
+            "fingerprint": "fp-source",
+            "scope": "source",
+            "source_id": "device-a"
+          },
+          "selected_device_id": "device-a",
+          "is_stale": false,
+          "sources": [
+            {
+              "device_id": "device-a",
+              "observed_at": "2026-08-24T09:00:00Z",
+              "is_stale": false
+            }
+          ]
+        },
+        {
+          "identity": {
+            "provider": "grok",
+            "fingerprint": "fp-source",
+            "scope": "source",
+            "source_id": "device-b"
+          },
+          "selected_device_id": "device-b",
+          "is_stale": false,
+          "sources": [
+            {
+              "device_id": "device-b",
+              "observed_at": "2026-08-24T09:30:00Z",
+              "is_stale": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "two accounts of one provider on one device stay two subscriptions",
+      "now": "2026-08-24T10:00:00Z",
+      "observations": [
+        {
+          "device_id": "device-a",
+          "snapshot": {
+            "provider": "openrouter",
+            "account": {
+              "fingerprint": "fp-second",
+              "fingerprint_scope": "global",
+              "label": "OpenRouter \u00b7\u00b7\u00b72945"
+            },
+            "windows": [
+              {
+                "id": "balance",
+                "title": "Balance",
+                "used_percent": 0,
+                "remaining_value": 4,
+                "value_unit": "usd"
+              }
+            ],
+            "status": "available",
+            "observed_at": "2026-08-24T09:00:00Z"
+          }
+        },
+        {
+          "device_id": "device-a",
+          "snapshot": {
+            "provider": "openrouter",
+            "account": {
+              "fingerprint": "fp-first",
+              "fingerprint_scope": "global",
+              "label": "OpenRouter \u00b7\u00b7\u00b71111"
+            },
+            "windows": [
+              {
+                "id": "balance",
+                "title": "Balance",
+                "used_percent": 0,
+                "remaining_value": 9,
+                "value_unit": "usd"
+              }
+            ],
+            "status": "available",
+            "observed_at": "2026-08-24T09:00:00Z"
+          }
+        }
+      ],
+      "expected": [
+        {
+          "identity": {
+            "provider": "openrouter",
+            "fingerprint": "fp-first",
+            "scope": "global",
+            "source_id": null
+          },
+          "selected_device_id": "device-a",
+          "is_stale": false,
+          "sources": [
+            {
+              "device_id": "device-a",
+              "observed_at": "2026-08-24T09:00:00Z",
+              "is_stale": false
+            }
+          ]
+        },
+        {
+          "identity": {
+            "provider": "openrouter",
+            "fingerprint": "fp-second",
+            "scope": "global",
+            "source_id": null
+          },
+          "selected_device_id": "device-a",
+          "is_stale": false,
+          "sources": [
+            {
+              "device_id": "device-a",
+              "observed_at": "2026-08-24T09:00:00Z",
+              "is_stale": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "readings observed at the same instant resolve by device id",
+      "now": "2026-08-24T10:00:00Z",
+      "observations": [
+        {
+          "device_id": "device-b",
+          "snapshot": {
+            "provider": "deepseek",
+            "account": {
+              "fingerprint": "fp-deepseek",
+              "fingerprint_scope": "global"
+            },
+            "windows": [
+              {
+                "id": "balance",
+                "title": "Balance",
+                "used_percent": 0,
+                "remaining_value": 2,
+                "value_unit": "usd"
+              }
+            ],
+            "status": "available",
+            "observed_at": "2026-08-24T09:00:00Z"
+          }
+        },
+        {
+          "device_id": "device-a",
+          "snapshot": {
+            "provider": "deepseek",
+            "account": {
+              "fingerprint": "fp-deepseek",
+              "fingerprint_scope": "global"
+            },
+            "windows": [
+              {
+                "id": "balance",
+                "title": "Balance",
+                "used_percent": 0,
+                "remaining_value": 3,
+                "value_unit": "usd"
+              }
+            ],
+            "status": "available",
+            "observed_at": "2026-08-24T09:00:00Z"
+          }
+        }
+      ],
+      "expected": [
+        {
+          "identity": {
+            "provider": "deepseek",
+            "fingerprint": "fp-deepseek",
+            "scope": "global",
+            "source_id": null
+          },
+          "selected_device_id": "device-a",
+          "is_stale": false,
+          "sources": [
+            {
+              "device_id": "device-a",
+              "observed_at": "2026-08-24T09:00:00Z",
+              "is_stale": false
+            },
+            {
+              "device_id": "device-b",
+              "observed_at": "2026-08-24T09:00:00Z",
+              "is_stale": false
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

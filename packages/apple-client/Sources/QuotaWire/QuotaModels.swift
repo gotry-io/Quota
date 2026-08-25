@@ -145,43 +145,34 @@ public struct QuotaSnapshot: Codable, Equatable, Sendable {
   public let provider: ProviderID
   public let account: QuotaAccount
   public let windows: [QuotaWindow]
-  public let source: String
   public let status: QuotaStatus
   public let observedAt: Date
-  public let validUntil: Date?
 
   public init(
     provider: ProviderID,
     account: QuotaAccount,
     windows: [QuotaWindow],
-    source: String,
     status: QuotaStatus,
-    observedAt: Date,
-    validUntil: Date? = nil
+    observedAt: Date
   ) {
     self.provider = provider
     self.account = account
     self.windows = windows
-    self.source = source
     self.status = status
     self.observedAt = observedAt
-    self.validUntil = validUntil
   }
 
   public init(from decoder: Decoder) throws {
     try decoder.rejectUnknownWireKeys([
-      "provider", "account", "windows", "source", "status", "observedAt", "validUntil",
+      "provider", "account", "windows", "status", "observedAt",
     ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     provider = try container.decode(ProviderID.self, forKey: .provider)
     account = try container.decode(QuotaAccount.self, forKey: .account)
     windows = try container.decode([QuotaWindow].self, forKey: .windows)
-    source = try container.decode(String.self, forKey: .source)
     status = try container.decode(QuotaStatus.self, forKey: .status)
     observedAt = try container.decode(Date.self, forKey: .observedAt)
-    validUntil = try container.decodeIfPresent(Date.self, forKey: .validUntil)
-    guard WireValidation.isBillingDimension(source), windows.count <= 16,
-      windows.allSatisfy(\.isValid)
+    guard windows.count <= 16, windows.allSatisfy(\.isValid)
     else {
       throw DecodingError.dataCorruptedError(
         forKey: .windows,
@@ -195,15 +186,22 @@ public struct QuotaSnapshot: Codable, Equatable, Sendable {
     case provider
     case account
     case windows
-    case source
     case status
     case observedAt
-    case validUntil
   }
 }
 
 extension QuotaSnapshot: QuotaObservationFreshness {
   public var reportedState: QuotaObservationState { status.observationState }
+
+  public var validUntil: Date? {
+    QuotaObservationValidity.validUntil(
+      observedAt: observedAt,
+      windows: windows.lazy.map {
+        QuotaObservationWindow(resetsAt: $0.resetsAt, durationSeconds: $0.durationSeconds)
+      }
+    )
+  }
 }
 
 extension QuotaStatus {

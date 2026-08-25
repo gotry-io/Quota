@@ -70,15 +70,15 @@ describe("Usage summary", () => {
       true,
     );
 
-    expect(structured.clients).toMatchObject([
+    expect(structured.agents).toMatchObject([
       {
-        client: "claude_code",
+        agent: "claude_code",
         providers: [
           { provider: "anthropic", models: [{ model: "shared-model", totals: { messages: 1 } }] },
         ],
       },
       {
-        client: "codex",
+        agent: "codex",
         providers: [
           { provider: "openai", models: [{ model: "shared-model", totals: { messages: 1 } }] },
         ],

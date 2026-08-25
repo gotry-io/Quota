@@ -109,25 +109,39 @@ needs both. A device that fails to collect republishes its own last reading with
 found — `auth_required`, `unavailable`, `unsupported`, or `error` — so a failure it detects becomes
 a fact every client shows at its next refresh instead of one they wait out; the reading and its
 `observed_at` are untouched, because the numbers really are that old, and the status returns to
-`available` when collection recovers. Republishing happens only when the status changes, so a
-provider that stays broken does not rewrite the row every refresh.
+`available` when collection recovers. Only a reading that is still current is republished, which is
+also what bounds it: the restatement is no longer `available`, so it is no longer current and cannot
+be restated again. A reading that already aged out says nothing new, because every reader reached
+that verdict from the reading itself.
 
 Time covers what detection cannot: a device that stopped collecting entirely reports nothing at
-all. Every collected snapshot is therefore also stamped with `valid_until` at the collection
-boundary — the first window reset it reports, and at the latest a fixed maximum age. It is derived
-from the observation rather than reported by a provider, so it is computed once for every collector.
+all. Every observation therefore carries its own validity boundary — the first window reset it
+reports, its shortest window cadence when it reports no reset, and at the latest a fixed maximum
+age. Every input is part of the reading, so each reader derives the boundary from the snapshot
+instead of trusting one stamped onto it: a reading uploaded by any device, of any age, in any client
+version expires on the same terms. `packages/quota-model` owns the TypeScript rule,
+`packages/apple-shared` owns the Swift one, which each Apple observation type answers by conforming
+rather than by restating, and `packages/service`'s `observation` module owns the Rust one. A snapshot
+carrying the retired `valid_until` stamp is refused at the wire boundary rather than ignored.
 
-Rust returns the merged Overview directly. Global fingerprints merge local and account-device
-observations; source-scoped fingerprints remain separate. Account observations this device uploaded
-are dropped before the merge, because local collection is the only authority for this device:
-reading its own upload back would keep a rejected or removed local source on screen as another
-device's report. Selection favors a valid non-expired observation, then newest observation time,
-then local source, then stable source ID. Swift never reimplements this policy. Quota iOS, its widgets,
-and the website read account observations without that merge, so they apply the same expiry
-themselves: `packages/quota-model` owns the TypeScript rule and `packages/apple-shared` owns the
-Swift one, which each Apple observation type answers by conforming rather than by restating. A
-device that sleeps or loses a provider sign-in therefore stops presenting its last counters as
-current anywhere.
+Relay keeps one observation per reporting device and never deduplicates, so resolving them into the
+subscriptions a person reads is every reader's job, stated once in
+[ADR 0003](decisions/0003-observation-preserving-subscription-merge.md) and answered the same way by
+QuotaBar's service, the website, and Quota iOS with its widgets. Global fingerprints merge across
+observation sources; source-scoped fingerprints remain separate per source. Selection favors a valid
+non-expired observation, then newest observation time, then local source, then stable source ID —
+never when Relay last wrote the row, which a device re-uploading a reading it already knows moves
+without making that reading newer. QuotaBar additionally merges its local collection, and drops the
+account observations this device uploaded before the merge, because local collection is the only
+authority for this device: reading its own upload back would keep a rejected or removed local source
+on screen as another device's report. Rust returns that merged Overview directly and Swift never
+reimplements the policy. `packages/protocol/fixtures/quota-observation-conformance.json` states both
+rules as cases, and the Rust, TypeScript, and Swift implementations each answer that file.
+`wire-conformance.json` does the same for the contracts themselves, so a payload one runtime
+starts accepting cannot pass unnoticed by the others; see
+[ADR 0019](decisions/0019-one-statement-per-contract.md). A device
+that sleeps or loses a provider sign-in therefore stops presenting its last counters as current
+anywhere, and an account collected on several Macs reads as one subscription everywhere.
 
 ## Local collection and persistence
 
@@ -155,13 +169,12 @@ SweetCookieKit only acquires allowlisted Cookie candidates in Swift memory. Rust
 account validation, durable state, provider networking, and routine refresh. Linux QuotaCLI does
 not implement browser acquisition.
 
-The local provider catalog is broader than each managed protocol. Catalog `account_sync` declares
-whether a provider synchronizes, and `account_sync_protocol` records the first managed-data version
-that accepts it. Generated v2 IDs remain the closed set shipped by menubar-v0.0.9; generated v3 IDs
-add Cursor. New clients upload Cursor only to v3, while Relay keeps v2 routes isolated and filters
-Cursor from their responses. The private local collection schema continues to use the full catalog.
-The local SQLite v6 migration handles the shipped v2-to-v3 cutover: v2 Usage outbox payloads are
-promoted in place because v3 preserves their identity, sequence, coverage, and row invariants, while
+The local provider catalog is broader than the managed Account. Catalog `account_sync` declares
+whether a provider synchronizes, and the generated managed provider enum is exactly that set. The
+private local collection schema continues to use the full catalog.
+Local SQLite migrations carry staged work across each managed-data cutover: v6 promoted v2 Usage
+outbox payloads and v9 promotes v3 ones, in place, because each version preserves their identity,
+sequence, coverage, and row invariants, while
 the derived v2 Account summary and Account period caches are discarded and rebuilt from Relay. Raw
 indexed Usage facts, provider state, sessions, quota, and upload identity are not removed. Migration
 v7 adds only the replaceable last-completed diagnostics snapshot used by `diagnose`; migration v8
@@ -180,15 +193,15 @@ missing pricing never discards a valid fact.
 Bounded Usage detail responses may explicitly mark truncated coverage, breakdown, or unpriced-model
 detail; exact totals remain usable and clients surface that degradation.
 
-The local Usage report is a private v3 presentation contract, separate from managed-data v3 facts
+The local Usage report is a private v3 presentation contract, versioned independently of managed data
 and account summaries. It carries collection status, coverage, timezone, and the
 model-catalog revision. State snapshots separately carry the precomputed Today, 7 Days, 30 Days, and
-All summaries, each with exact totals, cost, and `clients[].providers[].models[]` detail. `total_tokens` is input plus output;
+All summaries, each with exact totals, cost, and `agents[].providers[].models[]` detail. `total_tokens` is input plus output;
 cache-read and cache-write tokens are named input subsets; reasoning is an output subset; and
 `messages` is the sum of normalized usage-bearing model output facts. It is not a session count, and
-sessions are not collected. The Rust report first groups facts by the agent client that emitted the
+sessions are not collected. The Rust report first groups facts by the agent that emitted the
 usage, then groups each model under the inference provider derived from the fact's billing channel;
-client and model text never choose or override that provider. QuotaBar renders client groups only on
+agent and model text never choose or override that provider. QuotaBar renders agent groups only on
 the Usage detail page; Overview remains quota-only. The local SQLite migration discards only
 incompatible derived Usage presentations; indexed facts and the managed outbox remain intact and
 rebuild the current v3 report on refresh.
@@ -212,17 +225,13 @@ Usage uploads, and D1. A catalog update therefore regroups existing raw rows the
 is built, without reparsing source files or rewriting fact rows. Resolved model breakdown keys use
 the stable canonical ID; unresolved rows retain their raw model text.
 
-Current native clients opt into `usage.clients[].providers[].models[]` on v3 account summaries with
-`usage_clients=1`. Relay derives this account-wide structure directly from retained normalized facts,
+Account summaries carry `usage.agents[].providers[].models[]`. Relay derives this account-wide
+structure directly from retained normalized facts,
 preserving the row-level client, billing-channel provider, and model relationship across Devices.
-The field remains omitted without the opt-in. It never appears on released v2 summaries unless a v2
-client explicitly requests it, and v2 still excludes Cursor. Clients never reconstruct ownership
-from independent breakdowns or model text.
+Clients never reconstruct ownership from independent breakdowns or model text.
 
-Billing channels added after menubar-v0.0.19 use the same shape, because that release already
-speaks v3 and cannot be separated by a protocol version. Summary and hourly responses narrow a
-newer channel to `unknown` unless the client sends `usage_channels=1`.
-[ADR 0012](decisions/0012-managed-data-v3.md) owns that rule; see
+Every billing channel Relay stores is reported as stored. A client that cannot represent a channel
+it does not know is a client that has to update, not a reason to rewrite facts on the way out; see
 [provider strategies](provider-collection.md) for the registered provider ids that resolve each
 channel.
 
@@ -273,7 +282,7 @@ PKCE route with the exact redirect `io.gotry.quota:/oauth/callback`. Its token e
 installation identity and Device fields and returns only an account session. It is not a collection
 Device, is absent from `PlatformSchema`, and never receives snapshot or Usage write authority. Quota
 iOS consumes that session through `packages/apple-client` and fetches
-`GET /api/v3/account/summary?device_health=1` for Today and read-only Device Health. The app process
+`GET /api/v4/account/summary` for Today and read-only Device Health. The app process
 alone holds OAuth and network authority.
 After a trusted summary is available it projects a non-secret `WidgetSnapshot` into the App Group
 `group.io.gotry.quota` for the embedded `QuotaWidgets` extension; the extension reads only that
@@ -291,10 +300,10 @@ deletion controls.
 
 After an authenticated Device completes a refresh, the service uploads a sanitized health snapshot
 on change or a bounded heartbeat. The Device token determines the row; D1 stores only the latest
-monotonic revision and uses server receipt time for freshness. QuotaBar, Quota Web, and Quota iOS
-request the strict `device_health=1` Account-summary shape and display health, version, platform, and
-last report/refresh/sync. The shipped default managed-data v3 response remains unchanged. A report
-older than the freshness window means only not recently active. Upload failure is local diagnostic
+monotonic revision and uses server receipt time for freshness. Every Account-summary Device carries `health`,
+required and nullable, so a Device that has never reported says so rather than being absent.
+QuotaBar, Quota Web, and Quota iOS display health, version, platform, and last
+report/refresh/sync. A report older than the freshness window means only not recently active. Upload failure is local diagnostic
 evidence and does not fail collection or synchronization. See
 [ADR 0015](decisions/0015-diagnostic-attempts-and-device-health.md).
 
@@ -311,8 +320,7 @@ unpriced outcome.
 
 QuotaRelay publishes the model catalog independently at `GET /api/v2/model/catalog`, with ETag
 validation and `public, max-age=300, must-revalidate` caching. Account summaries include the catalog
-revision only for current clients that explicitly opt in with `model_catalog=1`; strict older
-requests receive no new field. The Rust client stores the payload and ETag atomically with a
+revision. The Rust client stores the payload and ETag atomically with a
 last-known-good cache. Catalog fetch failure never blocks collection, upload, totals, or a report.
 
 ## Source and dependency rules
@@ -380,8 +388,8 @@ protocol + quota-model + relay-core
 ## Relay, Web, and deployment
 
 QuotaRelay mounts OAuth and Device control at `/oauth/v2` and `/api/v2`, quota/Usage managed data at
-both compatible `/api/v2` and current `/api/v3` routes, Better Auth at `/api/auth/v2`, and health
-routes including self-owned `/api/v3/device/health`. It authenticates each route with the minimum
+both compatible `/api/v2` and current `/api/v4` routes, Better Auth at `/api/auth/v2`, and health
+routes including self-owned `/api/v4/device/health`. It authenticates each route with the minimum
 account, device, or browser scope and performs Device/Account deletion, rotation/revocation, and
 Usage replacement in storage transactions. Relay serves the current Usage agents and pricing
 catalog without the ended 0.0.5 response variant; current clients explicitly send
@@ -395,10 +403,12 @@ cookie through `WebDocumentPort` and writes the signed-in header into the first 
 Session cookies remain HttpOnly. `/` offers the QuotaBar `.dmg` and Homebrew install command.
 GitHub sign-in is in the header; `/my` is a server redirect when unsigned and otherwise a
 streaming dashboard. Its document load starts the existing
-`GET /api/v3/account/summary?device_health=1` handler inside the composed Worker and reuses the
+`GET /api/v4/account/summary` handler inside the composed Worker and reuses the
 request's memoized Better Auth session, so Account data can resolve in parallel with hydration
 without a second browser round trip. The API schema and Relay/Web source boundary remain unchanged.
-`/u/{username}` is the public projection for that GitHub username. `/activate` approves or
+`/u/{username}` is the public projection for that GitHub username: one row per subscription,
+resolved by the same rule every reader applies and filtered to readings that still describe current
+quota, because the public shape carries no freshness of its own. `/activate` approves or
 denies native authorization. `/app` is a server redirect to `/my`. Better Auth owns GitHub
 login and browser sessions. Production Web and Worker deploy together only through
 `.github/workflows/deploy-cloudflare.yml`. The composition decision is

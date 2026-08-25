@@ -389,37 +389,39 @@
     )
   }
 
+  /// The Overview the service would return for this Account, resolved by the shared rule so
+  /// a visual fixture shows what the panel actually shows rather than one row per upload.
   private func overviewItems(
     summary: AccountSummary,
     now: Date
   ) -> [LocalServiceOverviewItem] {
-    summary.quota.map { observation in
-      let snapshot = observation.snapshot
-      let deviceID = observation.deviceID
-      let sourceID = "device:\(deviceID.utf8.count):\(deviceID)"
-      let displayName =
-        summary.devices.first { $0.deviceID == deviceID }?.displayName
-        ?? "Account device"
-      let source = LocalServiceOverviewSource(
-        sourceID: sourceID,
-        kind: .device,
-        deviceID: deviceID,
-        displayName: displayName,
-        observedAt: snapshot.observedAt,
-        isStale: snapshot.isStale(now: now)
-      )
+    func displayName(_ deviceID: String) -> String {
+      summary.devices.first { $0.deviceID == deviceID }?.displayName ?? "Account device"
+    }
+    return AccountQuotaSubscriptions.resolve(summary.quota, now: now).map { subscription in
+      let sources = subscription.sources.map { source in
+        LocalServiceOverviewSource(
+          sourceID: "device:\(source.deviceID)",
+          kind: .device,
+          deviceID: source.deviceID,
+          displayName: displayName(source.deviceID),
+          observedAt: source.observedAt,
+          isStale: source.isStale
+        )
+      }
+      let selectedSourceID = "device:\(subscription.selectedDeviceID)"
       return LocalServiceOverviewItem(
         identity: LocalServiceOverviewIdentity(
-          provider: snapshot.provider,
-          fingerprint: snapshot.account.fingerprint,
-          scope: snapshot.account.fingerprintScope == .global ? .global : .source,
-          sourceID: snapshot.account.fingerprintScope == .source ? sourceID : nil
+          provider: subscription.reading.provider,
+          fingerprint: subscription.identity.fingerprint,
+          scope: subscription.identity.sourceID == nil ? .global : .source,
+          sourceID: subscription.identity.sourceID.map { "device:\($0)" }
         ),
-        snapshot: snapshot,
-        sources: [source],
-        selectedSourceID: sourceID,
-        selectedSourceDisplayName: displayName,
-        isStale: source.isStale
+        snapshot: subscription.reading,
+        sources: sources,
+        selectedSourceID: selectedSourceID,
+        selectedSourceDisplayName: displayName(subscription.selectedDeviceID),
+        isStale: subscription.isStale
       )
     }
   }
@@ -430,7 +432,7 @@
   ) -> LocalUsageReport {
     let coverage = summary.coverage.map {
       LocalUsageCoverage(
-        client: $0.agent,
+        agent: $0.agent,
         startAt: $0.startAt,
         endAt: $0.endAt,
         status: $0.status
@@ -486,8 +488,7 @@
                   resetsAt: date.addingTimeInterval(4 * 86_400)
                 ),
               ],
-              observedAt: date.addingTimeInterval(-90),
-              validUntil: date.addingTimeInterval(300)
+              observedAt: date.addingTimeInterval(-90)
             )
           ]
         ),
@@ -507,8 +508,7 @@
                   resetsAt: date.addingTimeInterval(7_200)
                 )
               ],
-              observedAt: date.addingTimeInterval(-120),
-              validUntil: date.addingTimeInterval(300)
+              observedAt: date.addingTimeInterval(-120)
             )
           ]
         ),
@@ -528,8 +528,7 @@
                   resetsAt: date.addingTimeInterval(12 * 86_400)
                 )
               ],
-              observedAt: date.addingTimeInterval(-180),
-              validUntil: date.addingTimeInterval(300)
+              observedAt: date.addingTimeInterval(-180)
             )
           ]
         ),
@@ -547,14 +546,10 @@
     let observations = snapshots.enumerated().map { index, snapshot in
       AccountQuotaObservation(
         deviceID: index == 2 ? travelID : studioID,
-        sequence: 42,
-        capturedAt: snapshot.observedAt,
         snapshot: snapshot,
-        updatedAt: date
       )
     }
     return AccountSummary(
-      generatedAt: date,
       account: QuotaUserAccount(
         accountID: "account_visual_octocat",
         displayLabel: "octocat",
@@ -724,7 +719,7 @@
       modelCatalogRevision: summary.modelCatalogRevision,
       coverage: summary.coverage,
       breakdowns: summary.breakdowns,
-      clients: summary.breakdowns.enumerated().map { index, breakdown in
+      agents: summary.breakdowns.enumerated().map { index, breakdown in
         let totals = UsageSummaryTotals(breakdown.totals)
         let provider = index == 0 ? InferenceProvider.openai : .anthropic
         let client = index == 0 ? BillingAgent.codex : .claudeCode
@@ -733,8 +728,8 @@
           totals: totals,
           cost: breakdown.cost
         )
-        return LocalUsageClientSummary(
-          client: client,
+        return LocalUsageAgentSummary(
+          agent: client,
           totals: totals,
           cost: breakdown.cost,
           providers: [
@@ -760,7 +755,7 @@
       provider: provider,
       outcome: .success,
       snapshots: snapshots,
-      source: "visual_test_fixture",
+      source: nil,
       message: nil,
       sources: 1
     )
@@ -788,8 +783,7 @@
     label: String?,
     plan: String?,
     windows: [QuotaWindow],
-    observedAt: Date,
-    validUntil: Date?
+    observedAt: Date
   ) -> QuotaSnapshot {
     QuotaSnapshot(
       provider: provider,
@@ -800,10 +794,8 @@
         fingerprintScope: .global
       ),
       windows: windows,
-      source: "visual_test_fixture",
       status: .available,
-      observedAt: observedAt,
-      validUntil: validUntil
+      observedAt: observedAt
     )
   }
 

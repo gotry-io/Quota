@@ -1,5 +1,5 @@
 import {
-  type BillingAgentV3 as BillingAgent,
+  type BillingAgent,
   type BillingChannel,
   type ChannelSource,
   type ContextBucket,
@@ -13,49 +13,215 @@ import {
   MAXIMUM_MODEL_CATALOG_ALIASES,
   type ModelCatalog,
   ModelCatalogSchema,
-  type QuotaSnapshotV3 as QuotaSnapshot,
+  type FingerprintScope,
+  type QuotaSnapshot,
   type QuotaStatus,
   Rfc3339InstantSchema,
   type UsageCostAssumption,
   type UsageCostMode,
   type UsageCostOutcome,
   UsageCostOutcomeSchema,
-  type UsageHourlyFactV3 as UsageHourlyFact,
-  UsageHourlyFactV3Schema as UsageHourlyFactSchema,
+  type UsageHourlyFact,
+  UsageHourlyFactSchema,
   type UsageTokenTotals,
   UsageTokenTotalsSchema,
   type UsageUnpricedItem,
   type UsageUnpricedReason,
 } from "@gotry-io/quota-protocol";
 
-export function snapshotKey(snapshot: QuotaSnapshot): string {
-  return `${snapshot.provider}:${snapshot.account.fingerprint}`;
-}
-
 export function remainingPercent(usedPercent: number): number {
   return Math.max(0, Math.min(100, 100 - usedPercent));
 }
 
+/**
+ * How long an observation may claim to describe current quota when its own windows say
+ * nothing shorter. A device that stops collecting must stop answering for a live account.
+ */
+export const MAX_SNAPSHOT_VALIDITY_SECONDS = 86_400;
+
+/**
+ * The instant this observation stops describing current quota, in epoch milliseconds.
+ *
+ * The first window reset is the exact boundary: at it that window refills and the number
+ * the reading carries is wrong. Windows that report no reset fall back to their own
+ * cadence, and every observation ages out at {@link MAX_SNAPSHOT_VALIDITY_SECONDS}.
+ *
+ * Every input is part of the reading, so each reader derives the same boundary from the
+ * snapshot instead of trusting a value stamped onto it. A reader that depended on the
+ * stamp presented pre-stamp readings as current forever, which is the failure this
+ * derivation removes rather than patches.
+ */
+export function snapshotValidUntil(snapshot: QuotaSnapshot): number {
+  const observed = Date.parse(snapshot.observed_at);
+  const limit = observed + MAX_SNAPSHOT_VALIDITY_SECONDS * 1_000;
+  const resets: number[] = [];
+  const cadences: number[] = [];
+  for (const window of snapshot.windows) {
+    if (window.resets_at !== undefined) {
+      const reset = Date.parse(window.resets_at);
+      if (reset > observed) resets.push(reset);
+    }
+    if (window.duration_seconds !== undefined) {
+      cadences.push(observed + window.duration_seconds * 1_000);
+    }
+  }
+  const boundary = resets.length > 0 ? Math.min(...resets) : Math.min(...cadences);
+  return Math.min(boundary, limit);
+}
+
 export function isSnapshotStale(snapshot: QuotaSnapshot, now = new Date()): boolean {
-  return (
-    snapshot.status === "stale" ||
-    (snapshot.valid_until !== undefined && Date.parse(snapshot.valid_until) <= now.getTime())
-  );
+  // Negated rather than `<=` so a reading this cannot place in time reads as stale: an
+  // observation whose boundary is unknown is not one a person should be shown as current.
+  return snapshot.status === "stale" || !(snapshotValidUntil(snapshot) > now.getTime());
 }
 
 /**
  * The status to show for one account observation.
  *
- * The collecting device stamps `valid_until` on every snapshot it uploads: the first
- * window reset it knows about, and at the latest a fixed age. Past that instant the
- * counters no longer describe the account, so a device that stopped collecting reads as
- * stale instead of staying available forever. A status the device already reported
- * stands as reported.
+ * Past the observation's validity boundary the counters no longer describe the account, so
+ * a device that stopped collecting reads as stale instead of staying available forever. A
+ * status the device already reported stands as reported.
  */
 export function observedSnapshotStatus(snapshot: QuotaSnapshot, now = new Date()): QuotaStatus {
   return snapshot.status === "available" && isSnapshotStale(snapshot, now)
     ? "stale"
     : snapshot.status;
+}
+
+/**
+ * One subscription, addressed the way ADR 0003 addresses it.
+ *
+ * A `global` fingerprint identifies the same account wherever it was observed, so every
+ * device that reported it resolves to one subscription. A `source` fingerprint means
+ * nothing outside the source that produced it and therefore carries that source's id.
+ */
+export interface QuotaSubscriptionIdentity {
+  provider: string;
+  fingerprint: string;
+  scope: FingerprintScope;
+  source_id: string | null;
+}
+
+/** One device that reported a subscription, kept whether or not its reading is shown. */
+export interface QuotaObservationSource {
+  device_id: string;
+  observed_at: string;
+  is_stale: boolean;
+}
+
+export interface QuotaObservationInput {
+  device_id: string;
+  snapshot: QuotaSnapshot;
+}
+
+export interface MergedQuotaObservation {
+  identity: QuotaSubscriptionIdentity;
+  /** The one reading shown for this subscription; the others stay in {@link sources}. */
+  snapshot: QuotaSnapshot;
+  sources: QuotaObservationSource[];
+  selected_device_id: string;
+  is_stale: boolean;
+}
+
+export function quotaSubscriptionKey(identity: QuotaSubscriptionIdentity): string {
+  return [identity.provider, identity.fingerprint, identity.scope, identity.source_id ?? ""].join(
+    "\u001f",
+  );
+}
+
+/**
+ * The subscriptions behind a set of account observations, one entry each.
+ *
+ * Relay keeps one observation per reporting device and never deduplicates, so resolving
+ * them is every reader's job. Conflicting readings are not additive measurements: this
+ * selects one rather than combining values, and keeps every reporting device attached to
+ * the subscription so provenance survives the merge.
+ *
+ * Selection follows ADR 0003: a valid unexpired reading first, then the newest
+ * `observed_at`, then a deterministic device id. QuotaBar inserts locally collected
+ * readings ahead of the last step, because local collection is the only authority for the
+ * machine in front of you; a reader of uploaded observations has no local source and so
+ * cannot reach that step.
+ *
+ * `updated_at` deliberately takes no part. It records when Relay last wrote the row, which
+ * a device re-uploading an unchanged old reading moves without making that reading newer.
+ */
+export function mergeQuotaObservations(
+  observations: readonly QuotaObservationInput[],
+  now = new Date(),
+): MergedQuotaObservation[] {
+  const merged = new Map<string, MergedQuotaObservation>();
+  for (const observation of observations) {
+    const candidate = subscriptionCandidate(observation, now);
+    const key = quotaSubscriptionKey(candidate.identity);
+    const existing = merged.get(key);
+    if (!existing) {
+      merged.set(key, candidate);
+      continue;
+    }
+    if (isBetterObservation(candidate, existing)) {
+      existing.snapshot = candidate.snapshot;
+      existing.selected_device_id = candidate.selected_device_id;
+      existing.is_stale = candidate.is_stale;
+    }
+    existing.sources.push(...candidate.sources);
+  }
+  for (const subscription of merged.values()) {
+    subscription.sources.sort((left, right) => compareText(left.device_id, right.device_id));
+  }
+  return [...merged.values()].sort(compareIdentity);
+}
+
+function subscriptionCandidate(
+  observation: QuotaObservationInput,
+  now: Date,
+): MergedQuotaObservation {
+  const snapshot = observation.snapshot;
+  const scope = snapshot.account.fingerprint_scope;
+  const isStale = observedSnapshotStatus(snapshot, now) !== "available";
+  return {
+    identity: {
+      provider: snapshot.provider,
+      fingerprint: snapshot.account.fingerprint,
+      scope,
+      source_id: scope === "source" ? observation.device_id : null,
+    },
+    snapshot,
+    sources: [
+      {
+        device_id: observation.device_id,
+        observed_at: snapshot.observed_at,
+        is_stale: isStale,
+      },
+    ],
+    selected_device_id: observation.device_id,
+    is_stale: isStale,
+  };
+}
+
+function isBetterObservation(
+  incoming: MergedQuotaObservation,
+  existing: MergedQuotaObservation,
+): boolean {
+  if (incoming.is_stale !== existing.is_stale) return !incoming.is_stale;
+  const incomingObserved = Date.parse(incoming.snapshot.observed_at);
+  const existingObserved = Date.parse(existing.snapshot.observed_at);
+  if (incomingObserved !== existingObserved) return incomingObserved > existingObserved;
+  return compareText(incoming.selected_device_id, existing.selected_device_id) < 0;
+}
+
+function compareIdentity(left: MergedQuotaObservation, right: MergedQuotaObservation): number {
+  return (
+    compareText(left.identity.provider, right.identity.provider) ||
+    compareText(left.identity.fingerprint, right.identity.fingerprint) ||
+    compareText(left.identity.scope, right.identity.scope) ||
+    compareText(left.identity.source_id ?? "", right.identity.source_id ?? "")
+  );
+}
+
+function compareText(left: string, right: string): number {
+  if (left === right) return 0;
+  return left < right ? -1 : 1;
 }
 
 export interface NormalizedUsageEvent {
@@ -318,7 +484,7 @@ export function resolveModel(
         (alias) =>
           alias.reported_model === row.model &&
           alias.provider === provider &&
-          (alias.client === undefined || alias.client === row.agent) &&
+          (alias.agent === undefined || alias.agent === row.agent) &&
           (alias.effective_from === undefined || alias.effective_from <= date) &&
           (alias.effective_to === undefined || date < alias.effective_to),
       )
@@ -334,7 +500,7 @@ function aliasesOverlap(
   if (
     left.reported_model !== right.reported_model ||
     left.provider !== right.provider ||
-    (left.client !== undefined && right.client !== undefined && left.client !== right.client)
+    (left.agent !== undefined && right.agent !== undefined && left.agent !== right.agent)
   ) {
     return false;
   }

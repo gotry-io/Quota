@@ -300,10 +300,10 @@ struct AccountUsageView: View {
   private func presentedUsage(source: UsageSource) -> PresentedUsage? {
     guard let detail = model.usageDetail(source: source, period: period) else { return nil }
     let usage = detail.usage
-    let localModels = usage.clients.flatMap { client in
-      client.providers.flatMap { provider in
+    let localModels = usage.agents.flatMap { agent in
+      agent.providers.flatMap { provider in
         provider.models.map {
-          PresentedUsageModel($0, provider: provider.provider, client: client.client)
+          PresentedUsageModel($0, provider: provider.provider, agent: agent.agent)
         }
       }
     }
@@ -365,8 +365,8 @@ struct AccountUsageView: View {
       VStack(alignment: .leading, spacing: QuotaDesign.Spacing.xxs) {
         ForEach(models, id: \.id) { model in
           let title =
-            if duplicateNames.contains(model.model), let client = model.client {
-              "\(model.model) · \(UsageValueFormatter.agent(client))"
+            if duplicateNames.contains(model.model), let agent = model.agent {
+              "\(model.model) · \(UsageValueFormatter.agent(agent))"
           } else {
             model.model
           }
@@ -541,22 +541,22 @@ private struct PresentedUsageTotals: Equatable {
 
 private struct PresentedUsageModel: Equatable {
   let provider: InferenceProvider?
-  let client: BillingAgent?
+  let agent: BillingAgent?
   let model: String
   let totals: PresentedUsageTotals
   let cost: UsageCostOutcome
 
   var id: String {
-    "\(client?.rawValue ?? "account"):\(provider?.rawValue ?? "unknown"):\(model)"
+    "\(agent?.rawValue ?? "account"):\(provider?.rawValue ?? "unknown"):\(model)"
   }
 
   init(
     _ model: LocalUsageModelSummary,
     provider: InferenceProvider,
-    client: BillingAgent
+    agent: BillingAgent
   ) {
     self.provider = provider
-    self.client = client
+    self.agent = agent
     self.model = model.model
     totals = PresentedUsageTotals(model.totals)
     cost = model.cost
@@ -564,7 +564,7 @@ private struct PresentedUsageModel: Equatable {
 
   init(_ model: LocalUsageModelSummary) {
     provider = nil
-    client = nil
+    agent = nil
     self.model = model.model
     totals = PresentedUsageTotals(model.totals)
     cost = model.cost

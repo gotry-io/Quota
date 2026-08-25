@@ -7,7 +7,8 @@ struct OverviewView: View {
   @State private var confirmLogout = false
 
   var body: some View {
-    ScrollView {
+    let providerCards = model.providerCards
+    return ScrollView {
       VStack(alignment: .leading, spacing: 16) {
         if let banner = model.banner {
           StatusBanner(symbolName: banner.symbolName, text: banner.text)
@@ -15,13 +16,13 @@ struct OverviewView: View {
 
         accountContext
 
-        if model.providerCards.isEmpty {
+        if providerCards.isEmpty {
           emptyCard(
             title: "No quota reported yet.",
             detail: "Collection happens on a Mac or Linux device signed into this Account."
           )
         } else {
-          ForEach(model.providerCards) { card in
+          ForEach(providerCards) { card in
             ProviderQuotaCard(model: card)
           }
         }

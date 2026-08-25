@@ -310,7 +310,6 @@ fn collect_cli_usage(
             plan,
         },
         windows,
-        source: CLI_SOURCE,
         status: "available",
         observed_at: context.observed_at(),
     })
@@ -1123,7 +1122,6 @@ fn collect_with_credentials(
             plan,
         },
         windows,
-        source: SOURCE,
         status: "available",
         observed_at: context.observed_at(),
     })

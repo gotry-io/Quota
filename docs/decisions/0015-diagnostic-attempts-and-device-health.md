@@ -113,19 +113,14 @@ active** or **Unknown**, never an assertion that a sleeping, powered-off, or clo
 Recovery copy directs the user to the corresponding Device; one Device never requests credentials
 on behalf of another.
 
-Device Health is exposed through an explicit managed-data v3 read opt-in. The default
-`GET /api/v3/account/summary` response remains byte-shape compatible and contains no `health` key.
-Clients that request `device_health=1` strictly decode a Device shape where `health` is required but
-nullable. QuotaBar, Quota Web, and the read-only iOS client use the opt-in; iOS remains unable to
-write Device Health.
+Device Health was exposed through an explicit `device_health=1` read opt-in so the default summary
+stayed byte-shape compatible with released clients, and the native client retried once without its
+opt-ins when an older Relay rejected the query key.
 
-QuotaBar can be upgraded before the managed Relay deployment. The released Relay rejects the new
-query key with `400 invalid_request`, so the native client has one concrete compatibility path: when
-and only when it added the opt-in itself and receives that response, it retries once without the new
-opt-ins and projects each released Device to `health: null` before applying the same strict local
-validator. Network, authentication, malformed-response, and explicit caller errors do not fall back.
-This path exists only for the shipped deployment boundary and can be removed after the minimum Relay
-deployment supports Device Health.
+**Updated 2026-08-24:** [ADR 0018](0018-single-managed-data-contract.md) removed both. Every
+Account-summary Device carries `health`, required and nullable, and a Relay that rejects an opt-in
+this build sends is reported as the error it is rather than answered with a smaller summary. iOS
+remains unable to write Device Health.
 
 ## Consequences
 

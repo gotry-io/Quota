@@ -35,15 +35,15 @@ ETag atomically in a new append-only SQLite migration and keeps the last-known-g
 failure, a 304 without a cache, or invalid content never blocks collection, upload, totals, or report
 generation; without a catalog, raw model keys are used.
 
-Account summaries expose the revision only when a current client opts in with `model_catalog=1`, so
-released strict clients do not receive unknown fields. Swift decodes the optional revision and
-already-resolved breakdown key only; it does not resolve aliases or load the catalog. Diagnostics
-expose revision availability, never model names.
+Account summaries exposed the revision only behind a `model_catalog=1` opt-in so released strict
+clients did not receive unknown fields, and a native client retried once without its opt-ins when an
+older Relay rejected them. Swift decodes the optional revision and already-resolved breakdown key
+only; it does not resolve aliases or load the catalog. Diagnostics expose revision availability,
+never model names.
 
-During rollout, a 0.0.9 native client retries an account summary once without its automatically added
-`model_catalog=1` and `usage_clients=1` opt-ins only when a released Relay returns
-`400 invalid_request`. This narrow compatibility path is removed after QuotaBar and QuotaCLI 0.0.10
-complete their release window; other failures are not retried.
+**Updated 2026-08-24:** [ADR 0018](0018-single-managed-data-contract.md) removed the opt-ins and the
+retry. Account summaries always carry the catalog revision and the agent groups, and a rejected
+read is reported as the error it is.
 
 ## Consequences
 

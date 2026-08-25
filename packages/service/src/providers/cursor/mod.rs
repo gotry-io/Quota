@@ -163,7 +163,6 @@ fn collect_with_cookie(
             plan: bounded_identity(summary.get("membershipType"), 64),
         },
         windows,
-        source: SOURCE,
         status: "available",
         observed_at: context.observed_at(),
     })
@@ -418,7 +417,7 @@ mod tests {
     fn cursor_is_an_account_sync_catalog_provider() {
         assert!(ProviderId::ALL.contains(&ProviderId::Cursor));
         assert!(ProviderId::Cursor.metadata().account_sync);
-        assert_eq!(ProviderId::Cursor.metadata().account_sync_protocol, Some(3));
+        assert!(ProviderId::Cursor.syncs_to_account());
         assert_eq!(
             ProviderId::Cursor
                 .metadata()

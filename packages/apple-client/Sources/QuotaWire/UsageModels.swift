@@ -551,19 +551,19 @@ public struct LocalUsageProviderSummary: Codable, Equatable, Sendable {
   }
 }
 
-public struct LocalUsageClientSummary: Codable, Equatable, Sendable {
-  public let client: BillingAgent
+public struct LocalUsageAgentSummary: Codable, Equatable, Sendable {
+  public let agent: BillingAgent
   public let totals: UsageSummaryTotals
   public let cost: UsageCostOutcome
   public let providers: [LocalUsageProviderSummary]
 
   public init(
-    client: BillingAgent,
+    agent: BillingAgent,
     totals: UsageSummaryTotals,
     cost: UsageCostOutcome,
     providers: [LocalUsageProviderSummary]
   ) {
-    self.client = client
+    self.agent = agent
     self.totals = totals
     self.cost = cost
     self.providers = providers
@@ -574,15 +574,15 @@ public struct LocalUsageClientSummary: Codable, Equatable, Sendable {
   }
 
   public init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys(["client", "totals", "cost", "providers"])
+    try decoder.rejectUnknownWireKeys(["agent", "totals", "cost", "providers"])
     let container = try decoder.container(keyedBy: CodingKeys.self)
-    client = try container.decode(BillingAgent.self, forKey: .client)
+    agent = try container.decode(BillingAgent.self, forKey: .agent)
     totals = try container.decode(UsageSummaryTotals.self, forKey: .totals)
     cost = try container.decode(UsageCostOutcome.self, forKey: .cost)
     providers = try container.decode([LocalUsageProviderSummary].self, forKey: .providers)
     guard isValid else {
       throw DecodingError.dataCorruptedError(
-        forKey: .client,
+        forKey: .agent,
         in: container,
         debugDescription: "Invalid local Usage client summary."
       )
@@ -590,7 +590,7 @@ public struct LocalUsageClientSummary: Codable, Equatable, Sendable {
   }
 
   private enum CodingKeys: String, CodingKey {
-    case client
+    case agent
     case totals
     case cost
     case providers
@@ -742,7 +742,7 @@ public struct AccountUsageSummary: Codable, Equatable, Sendable {
   public let modelCatalogRevision: String?
   public let coverage: [UsageCoverageSummaryItem]
   public let breakdowns: [UsageBreakdown]
-  public let clients: [LocalUsageClientSummary]?
+  public let agents: [LocalUsageAgentSummary]?
   public let coverageTruncated: Bool?
   public let breakdownsTruncated: Bool?
 
@@ -753,7 +753,7 @@ public struct AccountUsageSummary: Codable, Equatable, Sendable {
     modelCatalogRevision: String? = nil,
     coverage: [UsageCoverageSummaryItem],
     breakdowns: [UsageBreakdown],
-    clients: [LocalUsageClientSummary]? = nil,
+    agents: [LocalUsageAgentSummary]? = nil,
     coverageTruncated: Bool? = nil,
     breakdownsTruncated: Bool? = nil
   ) {
@@ -763,14 +763,14 @@ public struct AccountUsageSummary: Codable, Equatable, Sendable {
     self.modelCatalogRevision = modelCatalogRevision
     self.coverage = coverage
     self.breakdowns = breakdowns
-    self.clients = clients
+    self.agents = agents
     self.coverageTruncated = coverageTruncated
     self.breakdownsTruncated = breakdownsTruncated
   }
 
   public init(from decoder: Decoder) throws {
     try decoder.rejectUnknownWireKeys([
-      "range", "totals", "cost", "modelCatalogRevision", "coverage", "breakdowns", "clients",
+      "range", "totals", "cost", "modelCatalogRevision", "coverage", "breakdowns", "agents",
       "coverageTruncated", "breakdownsTruncated",
     ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -780,7 +780,7 @@ public struct AccountUsageSummary: Codable, Equatable, Sendable {
     modelCatalogRevision = try container.decodeIfPresent(String.self, forKey: .modelCatalogRevision)
     coverage = try container.decode([UsageCoverageSummaryItem].self, forKey: .coverage)
     breakdowns = try container.decode([UsageBreakdown].self, forKey: .breakdowns)
-    clients = try container.decodeIfPresent([LocalUsageClientSummary].self, forKey: .clients)
+    agents = try container.decodeIfPresent([LocalUsageAgentSummary].self, forKey: .agents)
     coverageTruncated = try decodeTrueMarker(.coverageTruncated, from: container)
     breakdownsTruncated = try decodeTrueMarker(.breakdownsTruncated, from: container)
     guard isValid else {
@@ -800,7 +800,7 @@ public struct AccountUsageSummary: Codable, Equatable, Sendable {
     try container.encodeIfPresent(modelCatalogRevision, forKey: .modelCatalogRevision)
     try container.encode(coverage, forKey: .coverage)
     try container.encode(breakdowns, forKey: .breakdowns)
-    try container.encodeIfPresent(clients, forKey: .clients)
+    try container.encodeIfPresent(agents, forKey: .agents)
     try container.encodeIfPresent(coverageTruncated, forKey: .coverageTruncated)
     try container.encodeIfPresent(breakdownsTruncated, forKey: .breakdownsTruncated)
   }
@@ -817,7 +817,7 @@ public struct AccountUsageSummary: Codable, Equatable, Sendable {
       && coverage.count <= 2_048
       && coverage.allSatisfy(\.isValid)
       && breakdowns.count <= 1_000
-      && clients.map { $0.count <= 6 } != false
+      && agents.map { $0.count <= 6 } != false
   }
 
   private enum CodingKeys: String, CodingKey {
@@ -827,7 +827,7 @@ public struct AccountUsageSummary: Codable, Equatable, Sendable {
     case modelCatalogRevision
     case coverage
     case breakdowns
-    case clients
+    case agents
     case coverageTruncated
     case breakdownsTruncated
   }

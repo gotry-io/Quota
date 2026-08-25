@@ -719,7 +719,7 @@ struct LocalServiceUsageDetail: Decodable, Equatable, Sendable {
   var isValid: Bool {
     range.isValid && usage.isValid && fallbackModels.count <= 1_000
       && fallbackModels.allSatisfy(\.isValid)
-      && (usage.clients.isEmpty || fallbackModels.isEmpty)
+      && (usage.agents.isEmpty || fallbackModels.isEmpty)
   }
 }
 

@@ -1,7 +1,7 @@
 import {
   type DeviceHealthUploadRequest,
   IOS_OAUTH_CLIENT_ID,
-  QuotaSnapshotV3Schema as QuotaSnapshotSchema,
+  QuotaSnapshotSchema,
 } from "@gotry-io/quota-protocol";
 import {
   ACCOUNT_SCOPES,
@@ -152,6 +152,14 @@ export class D1AccountState implements AccountState {
            )`,
         )
         .bind(input.grant_expired_before, input.limit),
+      this.database
+        .prepare(
+          `DELETE FROM quota_snapshots WHERE rowid IN (
+             SELECT rowid FROM quota_snapshots WHERE observed_at <= ?1
+             ORDER BY observed_at ASC, rowid ASC LIMIT ?2
+           )`,
+        )
+        .bind(input.snapshot_observed_before, input.limit),
     ]);
   }
 
@@ -1231,13 +1239,22 @@ export class D1AccountState implements AccountState {
       )
       .bind(accountId)
       .all<SnapshotRow>();
-    return rows.results.map((row) => ({
-      device_id: row.device_id,
-      sequence: row.sequence,
-      captured_at: row.captured_at,
-      snapshot: QuotaSnapshotSchema.parse(JSON.parse(row.snapshot_json)),
-      updated_at: row.updated_at,
-    }));
+    // A stored reading this build cannot read is one reading, not the account. Dropping it
+    // keeps every other subscription — and the public profile — answerable while a device
+    // that still writes a retired shape is replaced or its rows age out.
+    return rows.results.flatMap((row) => {
+      const snapshot = QuotaSnapshotSchema.safeParse(JSON.parse(row.snapshot_json));
+      if (!snapshot.success) return [];
+      return [
+        {
+          device_id: row.device_id,
+          sequence: row.sequence,
+          captured_at: row.captured_at,
+          snapshot: snapshot.data,
+          updated_at: row.updated_at,
+        },
+      ];
+    });
   }
 
   async consumeRateLimit(input: RateLimitInput): Promise<RateLimitResult> {

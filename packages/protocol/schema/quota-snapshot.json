@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://quota.gotry.io/schema/quota-snapshot-v3.json",
-  "title": "Quota snapshot upload v3",
-  "$comment": "Device-scoped quota upload with the current managed provider catalog.",
+  "$id": "https://quota.gotry.io/schema/quota-snapshot.json",
+  "title": "Quota snapshot upload",
+  "$comment": "Device-scoped quota upload. The device token must match device_id and generation.",
   "type": "object",
   "properties": {
     "protocol_version": {
       "type": "number",
-      "const": 3
+      "const": 4
     },
     "device_id": {
       "type": "string",
@@ -95,24 +95,15 @@
             "$ref": "#/$defs/__schema3"
           }
         },
-        "source": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 64,
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$"
-        },
         "status": {
           "type": "string",
           "enum": ["available", "stale", "auth_required", "unavailable", "unsupported", "error"]
         },
         "observed_at": {
           "$ref": "#/$defs/__schema1"
-        },
-        "valid_until": {
-          "$ref": "#/$defs/__schema1"
         }
       },
-      "required": ["provider", "account", "windows", "source", "status", "observed_at"],
+      "required": ["provider", "account", "windows", "status", "observed_at"],
       "additionalProperties": false
     },
     "__schema3": {

@@ -88,7 +88,6 @@ fn collect_web_usage(
     let email = mapped.email.or_else(|| session.email.clone());
     let account_id = mapped.account_id.or_else(|| session.account_id.clone());
     Ok(snapshot(
-        WEB_SOURCE,
         &mapped.windows,
         plan.as_deref(),
         email.as_deref(),
@@ -232,7 +231,6 @@ mod tests {
         assert_eq!(scope, "source");
         assert_eq!(
             snapshot(
-                WEB_SOURCE,
                 &[],
                 None,
                 Some("Ada@Example.com"),

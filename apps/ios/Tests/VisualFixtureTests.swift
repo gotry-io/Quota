@@ -75,7 +75,6 @@ struct VisualFixtureParserTests {
       let model = AppModel.visualFixture(.content, now: now)
 
       #expect(model.fetchedAt == now.addingTimeInterval(-90))
-      #expect(model.summary?.generatedAt == now)
       #expect(model.summary?.account.createdAt == now.addingTimeInterval(-30 * 86_400))
 
       let codex = model.summary?.quota.first { $0.snapshot.provider == .codex }

@@ -55,7 +55,6 @@ pub fn collect(
             plan: Some("Credits".to_owned()),
         },
         windows,
-        source: SOURCE,
         status: "available",
         observed_at: context.observed_at(),
     })

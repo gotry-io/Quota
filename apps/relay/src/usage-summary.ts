@@ -6,10 +6,10 @@ import {
   resolveModel,
 } from "@gotry-io/quota-model";
 import {
-  type AccountUsageSummaryV3 as AccountUsageSummary,
-  AccountUsageSummaryV3Schema as AccountUsageSummarySchema,
+  type AccountUsageSummary,
+  AccountUsageSummarySchema,
   type InferenceProvider,
-  type LocalUsageClientSummary,
+  type LocalUsageAgentSummary,
   MAXIMUM_UNPRICED_ITEMS,
   MAXIMUM_USAGE_BREAKDOWNS,
   type ModelCatalog,
@@ -18,7 +18,7 @@ import {
   type UsageCostMode,
   type UsageCostOutcome,
   UsageCostOutcomeSchema,
-  type UsageHourlyFactV3 as UsageHourlyFact,
+  type UsageHourlyFact,
   type UsageTokenTotals,
   UsageTokenTotalsSchema,
   type UsageUnpricedItem,
@@ -75,8 +75,8 @@ export function buildUsageSummary(
         cost: boundedFoldPreparedUsageCosts(preparedCosts, group.rowIndexes),
       };
     });
-  const clientSummary = includeClients
-    ? buildUsageClients(result.rows, facts, preparedCosts, modelCatalog)
+  const agentSummary = includeClients
+    ? buildUsageAgents(result.rows, facts, preparedCosts, modelCatalog)
     : undefined;
   return boundedModelResult(() =>
     AccountUsageSummarySchema.parse({
@@ -85,10 +85,10 @@ export function buildUsageSummary(
       cost: boundedFoldPreparedUsageCosts(preparedCosts),
       coverage: result.coverage.map(coverageSummary),
       breakdowns,
-      ...(clientSummary ? { clients: clientSummary.clients } : {}),
+      ...(agentSummary ? { agents: agentSummary.agents } : {}),
       ...(modelCatalog ? { model_catalog_revision: modelCatalog.revision } : {}),
       ...(result.coverage_truncated ? { coverage_truncated: true } : {}),
-      ...(breakdownsTruncated || clientSummary?.modelsTruncated
+      ...(breakdownsTruncated || agentSummary?.modelsTruncated
         ? { breakdowns_truncated: true }
         : {}),
     }),
@@ -128,28 +128,28 @@ function coverageSummary(item: StoredUsageCoverage) {
   };
 }
 
-function buildUsageClients(
+function buildUsageAgents(
   rows: readonly StoredUsageHourlyFact[],
   facts: readonly UsageHourlyFact[],
   preparedCosts: PreparedUsageCosts,
   modelCatalog?: ModelCatalog,
-): { clients: LocalUsageClientSummary[]; modelsTruncated: boolean } {
-  const clients = new Map<string, UsageClientGroup>();
+): { agents: LocalUsageAgentSummary[]; modelsTruncated: boolean } {
+  const agents = new Map<string, UsageAgentGroup>();
   let modelCount = 0;
   let modelsTruncated = false;
   for (const [index, row] of rows.entries()) {
-    let client = clients.get(row.agent);
-    if (!client) {
-      client = { client: row.agent, rowIndexes: [], providers: new Map() };
-      clients.set(row.agent, client);
+    let agent = agents.get(row.agent);
+    if (!agent) {
+      agent = { agent: row.agent, rowIndexes: [], providers: new Map() };
+      agents.set(row.agent, agent);
     }
-    client.rowIndexes.push(index);
+    agent.rowIndexes.push(index);
 
     const providerID = inferenceProvider(row.billing_channel);
-    let provider = client.providers.get(providerID);
+    let provider = agent.providers.get(providerID);
     if (!provider) {
       provider = { provider: providerID, rowIndexes: [], models: new Map() };
-      client.providers.set(providerID, provider);
+      agent.providers.set(providerID, provider);
     }
     provider.rowIndexes.push(index);
 
@@ -168,13 +168,13 @@ function buildUsageClients(
   }
 
   return {
-    clients: [...clients.values()]
-      .sort((left, right) => left.client.localeCompare(right.client))
-      .map((client) => ({
-        client: client.client,
-        totals: summaryTotals(facts, client.rowIndexes),
-        cost: boundedFoldPreparedUsageCosts(preparedCosts, client.rowIndexes),
-        providers: [...client.providers.values()]
+    agents: [...agents.values()]
+      .sort((left, right) => left.agent.localeCompare(right.agent))
+      .map((agent) => ({
+        agent: agent.agent,
+        totals: summaryTotals(facts, agent.rowIndexes),
+        cost: boundedFoldPreparedUsageCosts(preparedCosts, agent.rowIndexes),
+        providers: [...agent.providers.values()]
           .sort((left, right) => left.provider.localeCompare(right.provider))
           .map((provider) => ({
             provider: provider.provider,
@@ -219,8 +219,8 @@ function summaryTotals(facts: readonly UsageHourlyFact[], indexes: readonly numb
   };
 }
 
-interface UsageClientGroup {
-  client: StoredUsageHourlyFact["agent"];
+interface UsageAgentGroup {
+  agent: StoredUsageHourlyFact["agent"];
   rowIndexes: number[];
   providers: Map<InferenceProvider, UsageProviderGroup>;
 }
