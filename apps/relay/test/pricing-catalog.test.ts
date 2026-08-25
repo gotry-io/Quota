@@ -1,5 +1,5 @@
 import { calculateUsageCost, validatePricingCatalog } from "@gotry-io/quota-model";
-import type { UsageHourlyFact } from "@gotry-io/quota-protocol";
+import type { DatedUsageRow } from "@gotry-io/quota-protocol";
 import { describe, expect, it } from "vitest";
 import { PRICING_CATALOG, PRICING_CATALOG_ETAG } from "../src/pricing-catalog.ts";
 
@@ -71,8 +71,7 @@ describe("managed pricing catalog", () => {
           [
             usageRow({
               model,
-              bucket_start_utc: `${date}T00:00:00Z`,
-              usage_date: date,
+              date,
               context_bucket,
               input_tokens: 1_000_000,
               output_tokens: 1_000_000,
@@ -111,13 +110,12 @@ describe("managed pricing catalog", () => {
   });
 
   it("prices Grok 4.6 only from its launch date", () => {
-    const row = (usage_date: string, context_bucket: UsageHourlyFact["context_bucket"]) =>
+    const row = (usage_date: string, context_bucket: DatedUsageRow["context_bucket"]) =>
       usageRow({
         agent: "grok",
         billing_channel: "xai_direct",
         model: "grok-4.6",
-        bucket_start_utc: `${usage_date}T00:00:00Z`,
-        usage_date,
+        date: usage_date,
         context_bucket,
         input_tokens: 1_000_000,
         output_tokens: 1_000_000,
@@ -308,8 +306,7 @@ describe("managed pricing catalog", () => {
           agent: "claude_code",
           billing_channel: "anthropic_direct",
           model: "claude-opus-4-6",
-          bucket_start_utc: "2026-03-12T00:00:00Z",
-          usage_date: "2026-03-12",
+          date: "2026-03-12",
           context_bucket: "gt_272k",
           input_tokens: 1_000_000,
           output_tokens: 1_000_000,
@@ -323,8 +320,7 @@ describe("managed pricing catalog", () => {
           agent: "claude_code",
           billing_channel: "anthropic_direct",
           model: "claude-opus-4-6",
-          bucket_start_utc: "2026-03-13T00:00:00Z",
-          usage_date: "2026-03-13",
+          date: "2026-03-13",
           context_bucket: "gt_272k",
           input_tokens: 1_000_000,
           output_tokens: 1_000_000,
@@ -342,8 +338,7 @@ describe("managed pricing catalog", () => {
         [
           usageRow({
             model: "gpt-5.2-codex",
-            bucket_start_utc: "2025-12-10T00:00:00Z",
-            usage_date: "2025-12-10",
+            date: "2025-12-10",
             input_tokens: 1,
           }),
         ],
@@ -373,11 +368,9 @@ describe("managed pricing catalog", () => {
   });
 });
 
-function usageRow(overrides: Partial<UsageHourlyFact> = {}): UsageHourlyFact {
+function usageRow(overrides: Partial<DatedUsageRow> = {}): DatedUsageRow {
   return {
-    bucket_start_utc: "2026-08-10T00:00:00Z",
-    usage_date: "2026-08-10",
-    usage_hour: 8,
+    date: "2026-08-10",
     agent: "codex",
     billing_channel: "openai_direct",
     channel_source: "agent_default",

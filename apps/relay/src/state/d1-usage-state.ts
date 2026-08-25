@@ -99,7 +99,10 @@ export class D1UsageState implements UsageState {
 
     const statements: D1PreparedStatement[] = [];
     for (const hour of accepted) {
-      statements.push(this.replaceHour(principal, upload.agent, hour));
+      statements.push(this.clearHour(principal, upload.agent, hour.bucket_start_utc));
+      if (hour.rows.length > 0) {
+        statements.push(this.insertHour(principal, upload.agent, hour));
+      }
     }
     for (const date of [...new Set(accepted.map((hour) => hour.bucket_start_utc.slice(0, 10)))]) {
       statements.push(
@@ -179,7 +182,21 @@ export class D1UsageState implements UsageState {
     return new Map(rows.results.map((row) => [row.bucket, row.scan_version]));
   }
 
-  private replaceHour(
+  private clearHour(
+    principal: DevicePrincipal,
+    agent: string,
+    bucket: string,
+  ): D1PreparedStatement {
+    return this.database
+      .prepare(
+        `DELETE FROM usage_hourly
+         WHERE device_id = ?1 AND agent = ?2 AND bucket_start_utc = ?3
+           AND ${deviceIsCurrent("?4", "?5")}`,
+      )
+      .bind(principal.device_id, agent, bucket, principal.account_id, principal.generation);
+  }
+
+  private insertHour(
     principal: DevicePrincipal,
     agent: string,
     hour: UsageUpload["hours"][number],
@@ -200,7 +217,7 @@ export class D1UsageState implements UsageState {
                 json_extract(item.value, '$.source_cost_microusd'),
                 json_extract(item.value, '$.source_cost_covered_requests')
          FROM json_each(?6) AS item
-         WHERE ${deviceIsCurrent}`,
+         WHERE ${deviceIsCurrent("?7", "?8")}`,
       )
       .bind(
         principal.device_id,
@@ -264,11 +281,13 @@ export class D1UsageState implements UsageState {
  * A device that was deleted, signed out, or moved to a new generation between the check and the
  * batch must not have this upload land. The batch is one transaction, so this guard decides it.
  */
-const deviceIsCurrent = `EXISTS (
+function deviceIsCurrent(account: string, generation: string): string {
+  return `EXISTS (
              SELECT 1 FROM devices
-             WHERE id = ?1 AND account_id = ?7 AND generation = ?8
+             WHERE id = ?1 AND account_id = ${account} AND generation = ${generation}
                AND signed_out_at IS NULL AND deleted_at IS NULL
            )`;
+}
 
 function nextUtcDate(date: string): string {
   return new Date(Date.parse(`${date}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10);

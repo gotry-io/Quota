@@ -2,9 +2,10 @@ import { applyD1Migrations, env } from "cloudflare:test";
 import type { D1Migration } from "@cloudflare/vitest-pool-workers";
 import {
   type DeviceAuthorizationResponse,
+  MAXIMUM_USAGE_PERIOD_LEAVES,
   type OAuthTokenResponse,
 } from "@gotry-io/quota-protocol";
-import type { DevicePrincipal, UsageSubmission } from "@gotry-io/relay-core";
+import type { DevicePrincipal, UsageUpload } from "@gotry-io/relay-core";
 import { beforeEach, describe, expect, inject, it } from "vitest";
 import { createWebAccountAuth, type WebAccountAuth } from "../src/account/better-auth.ts";
 import { D1EncryptedAuthStorage } from "../src/account/better-auth-storage.ts";
@@ -36,7 +37,7 @@ beforeEach(async () => {
 });
 
 describe("managed Relay on real Workers and D1", () => {
-  it("floors RFC3339 deletion watermarks with SQLite before accepting Usage", async () => {
+  it("refuses to rebuild an hour this device's deletion watermark covers", async () => {
     await env.DB.batch([
       env.DB.prepare(
         "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_watermark', 'subject_watermark', ?1, ?1)",
@@ -49,437 +50,130 @@ describe("managed Relay on real Workers and D1", () => {
              '2026-08-10T10:05:00Z', ?1, ?1)`,
       ).bind(now.toISOString()),
     ]);
-    const principal: DevicePrincipal = {
-      kind: "device",
-      session_id: "session_test",
-      family_id: "family_test",
-      account_id: "account_watermark",
-      device_id: "device_watermark",
-      generation: 2,
-      scopes: ["usage:write:self"],
-    };
-    const submission: UsageSubmission = {
-      protocol_version: 5,
-      submission_id: "submission_old",
-      device_id: "device_watermark",
-      generation: 2,
-      sequence: 0,
-      parser_revision: "parser_test",
-      aggregation_timezone: "UTC",
-      coverage: {
-        agent: "codex",
-        start_at: "2026-08-10T09:00:00.000Z",
-        end_at: "2026-08-10T10:00:00.000Z",
-        status: "complete",
-      },
-      rows: [],
-    };
     const usage = new D1UsageState(env.DB);
-    expect(await usage.recordUsage(principal, submission, now.toISOString())).toEqual({
-      outcome: "deleted_range",
+    const written = await usage.recordUsage(
+      devicePrincipal("watermark", 2),
+      usageUpload(
+        [
+          usageHour("2026-08-10T09:00:00Z", 1),
+          // The watermark falls inside this hour, so a new generation may rebuild it.
+          usageHour("2026-08-10T10:00:00Z", 1),
+        ],
+        2,
+      ),
+      now.toISOString(),
+    );
+
+    expect(written).toEqual({
+      outcome: "written",
+      accepted: ["2026-08-10T10:00:00Z"],
+      ignored: ["2026-08-10T09:00:00Z"],
     });
+    expect(
+      await env.DB.prepare(
+        "SELECT bucket_start_utc FROM usage_hourly WHERE device_id = 'device_watermark'",
+      ).all<{ bucket_start_utc: string }>(),
+    ).toMatchObject({ results: [{ bucket_start_utc: "2026-08-10T10:00:00Z" }] });
+  });
+
+  it("replaces an hour only for a scan that read it more recently", async () => {
+    await seedDevice("replace");
+    const usage = new D1UsageState(env.DB);
+    const principal = devicePrincipal("replace", 1);
+    const hour = "2026-08-10T10:00:00Z";
+    const models = async () =>
+      (
+        await env.DB.prepare(
+          "SELECT model FROM usage_hourly WHERE device_id = 'device_replace' ORDER BY model",
+        ).all<{ model: string }>()
+      ).results.map((row) => row.model);
+
     expect(
       await usage.recordUsage(
         principal,
-        {
-          ...submission,
-          submission_id: "submission_current",
-          coverage: {
-            ...submission.coverage,
-            start_at: "2026-08-10T10:00:00.000Z",
-            end_at: "2026-08-10T11:00:00.000Z",
-          },
-        },
+        usageUpload([usageHour(hour, 3, ["first-model"])]),
         now.toISOString(),
       ),
-    ).toMatchObject({ outcome: "accepted", next_sequence: 1 });
-  });
+    ).toEqual({ outcome: "written", accepted: [hour], ignored: [] });
+    expect(await models()).toEqual(["first-model"]);
 
-  it("decides one coverage verdict over every window the range spans", async () => {
-    await env.DB.batch([
-      env.DB.prepare(
-        "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_test', 'subject_test', ?1, ?1)",
-      ).bind(now.toISOString()),
-      env.DB.prepare(
-        `INSERT INTO devices (
-             id, account_id, installation_id_hash, generation, created_at, last_login_at
-           ) VALUES ('device_test', 'account_test', 'installation_test', 1, ?1, ?1)`,
-      ).bind(now.toISOString()),
-    ]);
-    const state = new D1UsageState(env.DB);
-    const query = {
-      start_at: "2026-06-01T00:00:00Z",
-      end_at: "2026-08-03T00:00:00Z",
-      limit: 1_000,
-    };
-
-    // A range no window covers is not silently complete.
-    expect((await state.queryAccountUsage("account_test", query)).coverage).toBe("none");
-
-    const window = (start: string, end: string, status: string, submission: string) =>
-      env.DB.prepare(
-        `INSERT INTO usage_coverage (
-             device_id, agent, start_at, end_at, status, parser_revision, submission_id, accepted_at
-           ) VALUES ('device_test', 'codex', ?1, ?2, ?3, 'parser_test', ?4, ?5)`,
-      ).bind(start, end, status, submission, now.toISOString());
-
-    await env.DB.batch([
-      window("2026-06-01T00:00:00Z", "2026-07-02T00:00:00Z", "complete", "submission_1"),
-      window("2026-07-02T00:00:00Z", "2026-08-02T00:00:00Z", "complete", "submission_2"),
-    ]);
-    expect((await state.queryAccountUsage("account_test", query)).coverage).toBe("complete");
-
-    // One incompletely scanned window anywhere in the range decides the whole answer.
-    await env.DB.batch([
-      window("2026-08-02T00:00:00Z", "2026-08-03T00:00:00Z", "partial", "submission_3"),
-    ]);
-    expect((await state.queryAccountUsage("account_test", query)).coverage).toBe("partial");
-
-    // A window outside the asked-for range does not.
+    // A newer scan of the same hour replaces every row it found before.
     expect(
-      (
-        await state.queryAccountUsage("account_test", {
-          ...query,
-          end_at: "2026-08-02T00:00:00Z",
-        })
-      ).coverage,
-    ).toBe("complete");
-  });
-
-  it("stores unknown as an explicit opaque model", async () => {
-    await env.DB.batch([
-      env.DB.prepare(
-        "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_legacy', 'subject_legacy', ?1, ?1)",
-      ).bind(now.toISOString()),
-      env.DB.prepare(
-        `INSERT INTO devices (
-           id, account_id, installation_id_hash, generation, created_at, last_login_at
-         ) VALUES ('device_legacy', 'account_legacy', 'installation_legacy', 1, ?1, ?1)`,
-      ).bind(now.toISOString()),
-    ]);
-    const principal: DevicePrincipal = {
-      kind: "device",
-      session_id: "session_legacy",
-      family_id: "family_legacy",
-      account_id: "account_legacy",
-      device_id: "device_legacy",
-      generation: 1,
-      scopes: ["usage:write:self"],
-    };
-    const submission = unknownModelSubmission();
-    const usage = new D1UsageState(env.DB);
-
-    expect(await usage.recordUsage(principal, submission, now.toISOString())).toMatchObject({
-      outcome: "accepted",
-      next_sequence: 1,
-    });
-    expect(await usage.recordUsage(principal, submission, now.toISOString())).toMatchObject({
-      outcome: "duplicate",
-      next_sequence: 1,
-    });
-    expect(
-      await env.DB.prepare(
-        "SELECT model FROM usage_hourly WHERE device_id = 'device_legacy'",
-      ).first("model"),
-    ).toBe("unknown");
-  });
-
-  it("merges explicit partial Usage without deleting facts and replaces it later", async () => {
-    await env.DB.batch([
-      env.DB.prepare(
-        "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_partial', 'subject_partial', ?1, ?1)",
-      ).bind(now.toISOString()),
-      env.DB.prepare(
-        `INSERT INTO devices (
-           id, account_id, installation_id_hash, generation, created_at, last_login_at
-         ) VALUES ('device_partial', 'account_partial', 'installation_partial', 1, ?1, ?1)`,
-      ).bind(now.toISOString()),
-    ]);
-    const principal: DevicePrincipal = {
-      kind: "device",
-      session_id: "session_partial",
-      family_id: "family_partial",
-      account_id: "account_partial",
-      device_id: "device_partial",
-      generation: 1,
-      scopes: ["usage:write:self"],
-    };
-    const usage = new D1UsageState(env.DB);
-    const first = usageSubmission(
-      "partial_first",
-      0,
-      "2026-08-10T10:00:00Z",
-      "2026-08-10T14:00:00Z",
-      [usageFact("gpt-5.5[1m]", "2026-08-10T10:00:00Z")],
-    );
-    expect(await usage.recordUsage(principal, first, now.toISOString())).toMatchObject({
-      outcome: "accepted",
-      next_sequence: 1,
-    });
-    const partial = {
-      ...usageSubmission("partial_merge", 1, "2026-08-10T11:00:00Z", "2026-08-10T13:00:00Z", [
-        usageFact("openrouter-3o[1m]", "2026-08-10T11:00:00Z"),
-      ]),
-      write_mode: "merge_partial" as const,
-      coverage: {
-        ...usageSubmission("partial_merge", 1, "2026-08-10T11:00:00Z", "2026-08-10T13:00:00Z", [])
-          .coverage,
-        status: "partial" as const,
-      },
-    };
-    expect(await usage.recordUsage(principal, partial, now.toISOString())).toMatchObject({
-      outcome: "accepted",
-      next_sequence: 2,
-    });
-    let result = await usage.queryAccountUsage("account_partial", {
-      device_id: "device_partial",
-      limit: 100,
-    });
-    expect(result.rows.map((row) => row.model)).toEqual(["gpt-5.5[1m]", "openrouter-3o[1m]"]);
-    expect(result.coverage).toBe("partial");
-
-    const complete = {
-      ...partial,
-      submission_id: "partial_complete",
-      sequence: 2,
-      write_mode: undefined,
-      coverage: { ...partial.coverage, status: "complete" as const },
-      rows: [],
-    };
-    expect(await usage.recordUsage(principal, complete, now.toISOString())).toMatchObject({
-      outcome: "accepted",
-      next_sequence: 3,
-    });
-    result = await usage.queryAccountUsage("account_partial", {
-      device_id: "device_partial",
-      limit: 100,
-    });
-    expect(result.rows.map((row) => row.model)).toEqual(["gpt-5.5[1m]"]);
-    expect(result.coverage).toBe("complete");
-
-    const exactPartial = {
-      ...partial,
-      submission_id: "partial_exact",
-      sequence: 3,
-      rows: [usageFact("exact-partial", "2026-08-10T11:00:00Z")],
-    };
-    expect(await usage.recordUsage(principal, exactPartial, now.toISOString())).toMatchObject({
-      outcome: "accepted",
-      next_sequence: 4,
-    });
-    result = await usage.queryAccountUsage("account_partial", {
-      device_id: "device_partial",
-      limit: 100,
-    });
-    expect(result.coverage).toBe("partial");
-  });
-
-  it("keeps multipart Usage invisible until all parts commit", async () => {
-    await env.DB.batch([
-      env.DB.prepare(
-        "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_multipart', 'subject_multipart', ?1, ?1)",
-      ).bind(now.toISOString()),
-      env.DB.prepare(
-        `INSERT INTO devices (
-           id, account_id, installation_id_hash, generation, created_at, last_login_at
-         ) VALUES ('device_multipart', 'account_multipart', 'installation_multipart', 1, ?1, ?1)`,
-      ).bind(now.toISOString()),
-    ]);
-    const principal: DevicePrincipal = {
-      kind: "device",
-      session_id: "session_multipart",
-      family_id: "family_multipart",
-      account_id: "account_multipart",
-      device_id: "device_multipart",
-      generation: 1,
-      scopes: ["usage:write:self"],
-    };
-    const usage = new D1UsageState(env.DB);
-    const common = {
-      protocol_version: 5 as const,
-      device_id: "device_multipart",
-      generation: 1,
-      parser_revision: "parser_multipart",
-      aggregation_timezone: "UTC",
-      coverage: {
-        agent: "codex" as const,
-        start_at: "2026-08-10T12:00:00Z",
-        end_at: "2026-08-10T13:00:00Z",
-        status: "complete" as const,
-      },
-    };
-    const partRows = Array.from({ length: 256 }, (_, index) =>
-      usageFact(`model-${index}`, "2026-08-10T12:00:00Z"),
-    );
-    const part0: UsageSubmission = {
-      ...common,
-      submission_id: "multipart_0",
-      sequence: 0,
-      rows: partRows.slice(0, 128),
-      multipart: { batch_id: "multipart_batch", part_index: 0, part_count: 2 },
-    };
-    const part1: UsageSubmission = {
-      ...common,
-      submission_id: "multipart_1",
-      sequence: 1,
-      rows: partRows.slice(128),
-      multipart: { batch_id: "multipart_batch", part_index: 1, part_count: 2 },
-    };
-    expect(await usage.recordUsage(principal, part0, now.toISOString())).toMatchObject({
-      outcome: "accepted",
-      next_sequence: 1,
-    });
-    expect(
-      await env.DB.prepare(
-        "SELECT COUNT(*) AS count FROM usage_hourly WHERE device_id = 'device_multipart'",
-      ).first("count"),
-    ).toBe(0);
-    const finalResults = await Promise.all(
-      Array.from({ length: 4 }, () => usage.recordUsage(principal, part1, now.toISOString())),
-    );
-    expect(finalResults.some((result) => result.outcome === "accepted")).toBe(true);
-    expect(
-      finalResults.every(
-        (result) =>
-          (result.outcome === "accepted" || result.outcome === "duplicate") &&
-          result.next_sequence === 2,
+      await usage.recordUsage(
+        principal,
+        usageUpload([usageHour(hour, 4, ["second-model"])]),
+        now.toISOString(),
       ),
-    ).toBe(true);
-    expect(
-      await env.DB.prepare(
-        "SELECT COUNT(*) AS count FROM usage_hourly WHERE device_id = 'device_multipart'",
-      ).first("count"),
-    ).toBe(256);
-    expect(
-      await env.DB.prepare("SELECT COUNT(*) AS count FROM usage_submission_parts").first("count"),
-    ).toBe(0);
-    expect(await usage.recordUsage(principal, part1, now.toISOString())).toMatchObject({
-      outcome: "duplicate",
-    });
+    ).toEqual({ outcome: "written", accepted: [hour], ignored: [] });
+    expect(await models()).toEqual(["second-model"]);
 
-    const conflictPart0: UsageSubmission = {
-      ...part0,
-      submission_id: "multipart_conflict_0",
-      sequence: 2,
-      rows: [usageFact("duplicate-model", "2026-08-10T12:00:00Z")],
-      multipart: { batch_id: "multipart_conflict", part_index: 0, part_count: 2 },
-    };
-    const conflictPart1: UsageSubmission = {
-      ...part1,
-      submission_id: "multipart_conflict_1",
-      sequence: 3,
-      rows: [usageFact("duplicate-model", "2026-08-10T12:00:00Z")],
-      multipart: { batch_id: "multipart_conflict", part_index: 1, part_count: 2 },
-    };
-    expect(await usage.recordUsage(principal, conflictPart0, now.toISOString())).toMatchObject({
-      outcome: "accepted",
-      next_sequence: 3,
-    });
-    const rejectedResults = await Promise.all(
-      Array.from({ length: 4 }, () =>
-        usage.recordUsage(principal, conflictPart1, now.toISOString()),
-      ),
-    );
-    expect(rejectedResults).toHaveLength(4);
-    for (const result of rejectedResults) {
-      expect(result).toMatchObject({
-        outcome: "rejected",
-        rejection_reason: "duplicate_fact_identity",
-        next_sequence: 4,
-      });
+    // An older or repeated scan is a comparison, not a write.
+    for (const version of [3, 4]) {
+      expect(
+        await usage.recordUsage(
+          principal,
+          usageUpload([usageHour(hour, version, ["third-model"])]),
+          now.toISOString(),
+        ),
+      ).toEqual({ outcome: "written", accepted: [], ignored: [hour] });
     }
+    expect(await models()).toEqual(["second-model"]);
+  });
+
+  it("keeps the daily rollup equal to the hours behind it", async () => {
+    await seedDevice("rollup");
+    const usage = new D1UsageState(env.DB);
+    const principal = devicePrincipal("rollup", 1);
+    await usage.recordUsage(
+      principal,
+      usageUpload([
+        usageHour("2026-08-09T23:00:00Z", 1, ["gpt-5.6-sol"]),
+        usageHour("2026-08-10T00:00:00Z", 1, ["gpt-5.6-sol"]),
+        usageHour("2026-08-10T01:00:00Z", 1, ["gpt-5.6-sol", "claude-opus-5"], true),
+      ]),
+      now.toISOString(),
+    );
+
+    expect(await dailyMismatch()).toEqual([]);
+    const daily = await env.DB.prepare(
+      `SELECT utc_date, model, requests, partial_hours FROM usage_daily
+       WHERE device_id = 'device_rollup' ORDER BY utc_date, model`,
+    ).all<{ utc_date: string; model: string; requests: number; partial_hours: number }>();
+    expect(daily.results).toEqual([
+      { utc_date: "2026-08-09", model: "gpt-5.6-sol", requests: 1, partial_hours: 0 },
+      { utc_date: "2026-08-10", model: "claude-opus-5", requests: 1, partial_hours: 1 },
+      { utc_date: "2026-08-10", model: "gpt-5.6-sol", requests: 2, partial_hours: 1 },
+    ]);
+
+    // Rescanning one hour rewrites only the dates that hour touches.
+    await usage.recordUsage(
+      principal,
+      usageUpload([usageHour("2026-08-10T01:00:00Z", 2, ["gpt-5.6-sol"])]),
+      now.toISOString(),
+    );
+    expect(await dailyMismatch()).toEqual([]);
     expect(
       await env.DB.prepare(
-        "SELECT COUNT(*) AS count FROM usage_hourly WHERE device_id = 'device_multipart'",
+        "SELECT COUNT(*) AS count FROM usage_daily WHERE device_id = 'device_rollup'",
       ).first("count"),
-    ).toBe(256);
+    ).toBe(2);
+  });
+
+  it("refuses an upload from a generation the device has moved past", async () => {
+    await seedDevice("stale");
+    const usage = new D1UsageState(env.DB);
+    expect(
+      await usage.recordUsage(
+        devicePrincipal("stale", 2),
+        usageUpload([usageHour("2026-08-10T10:00:00Z", 1)]),
+        now.toISOString(),
+      ),
+    ).toEqual({ outcome: "stale_device" });
     expect(
       await env.DB.prepare(
-        "SELECT COUNT(*) AS count FROM usage_submission_parts WHERE device_id = 'device_multipart' AND batch_id = 'multipart_conflict'",
+        "SELECT COUNT(*) AS count FROM usage_hourly WHERE device_id = 'device_stale'",
       ).first("count"),
     ).toBe(0);
-    expect(await usage.recordUsage(principal, conflictPart1, now.toISOString())).toMatchObject({
-      outcome: "rejected",
-      rejection_reason: "duplicate_fact_identity",
-      next_sequence: 4,
-    });
-
-    const partialCommon = {
-      ...common,
-      write_mode: "merge_partial" as const,
-      coverage: {
-        ...common.coverage,
-        status: "partial" as const,
-      },
-    };
-    const partialConflictPart0: UsageSubmission = {
-      ...partialCommon,
-      submission_id: "multipart_partial_conflict_0",
-      sequence: 4,
-      rows: [usageFact("partial-duplicate-model", "2026-08-10T12:00:00Z")],
-      multipart: {
-        batch_id: "multipart_partial_conflict",
-        part_index: 0,
-        part_count: 2,
-      },
-    };
-    const partialConflictPart1: UsageSubmission = {
-      ...partialCommon,
-      submission_id: "multipart_partial_conflict_1",
-      sequence: 5,
-      rows: [usageFact("partial-duplicate-model", "2026-08-10T12:00:00Z")],
-      multipart: {
-        batch_id: "multipart_partial_conflict",
-        part_index: 1,
-        part_count: 2,
-      },
-    };
-    expect(
-      await usage.recordUsage(principal, partialConflictPart0, now.toISOString()),
-    ).toMatchObject({
-      outcome: "accepted",
-      next_sequence: 5,
-    });
-    expect(
-      await usage.recordUsage(principal, partialConflictPart1, now.toISOString()),
-    ).toMatchObject({
-      outcome: "rejected",
-      rejection_reason: "duplicate_fact_identity",
-      next_sequence: 6,
-    });
-    expect(
-      await env.DB.prepare(
-        "SELECT COUNT(*) AS count FROM usage_hourly WHERE device_id = 'device_multipart'",
-      ).first("count"),
-    ).toBe(256);
-    expect(
-      await env.DB.prepare(
-        "SELECT COUNT(*) AS count FROM usage_submission_parts WHERE device_id = 'device_multipart' AND batch_id = 'multipart_partial_conflict'",
-      ).first("count"),
-    ).toBe(0);
-    expect(
-      await usage.recordUsage(principal, partialConflictPart1, now.toISOString()),
-    ).toMatchObject({
-      outcome: "rejected",
-      rejection_reason: "duplicate_fact_identity",
-      next_sequence: 6,
-    });
-
-    const afterConflict: UsageSubmission = {
-      ...common,
-      submission_id: "after_multipart_conflict",
-      sequence: 6,
-      coverage: {
-        ...common.coverage,
-        start_at: "2026-08-10T13:00:00Z",
-        end_at: "2026-08-10T14:00:00Z",
-      },
-      rows: [usageFact("after-conflict", "2026-08-10T13:00:00Z")],
-    };
-    expect(await usage.recordUsage(principal, afterConflict, now.toISOString())).toMatchObject({
-      outcome: "accepted",
-      next_sequence: 7,
-    });
   });
 
   it("serves every managed provider and agent from the one summary contract", async () => {
@@ -500,14 +194,13 @@ describe("managed Relay on real Workers and D1", () => {
            id, account_id, installation_id_hash, generation, created_at, last_login_at
          ) VALUES ('device_agents', 'account_agents', 'installation_agents', 1, ?1, ?1)`,
       ).bind(now.toISOString()),
-      usageFactInsert("codex", "openai_direct", "gpt-5.6-sol"),
-      usageFactInsert("grok", "xai_direct", "grok-4.5"),
-      usageFactInsert("cursor", "openai_direct", "cursor-small"),
+      usageDailyInsert("codex", "openai_direct", "gpt-5.6-sol"),
+      usageDailyInsert("grok", "xai_direct", "grok-4.5"),
+      usageDailyInsert("cursor", "openai_direct", "cursor-small"),
       env.DB.prepare(
         `INSERT INTO quota_snapshots (
-             device_id, provider, account_fingerprint, sequence, captured_at, observed_at,
-             snapshot_json, updated_at
-           ) VALUES ('device_agents', ?1, ?2, 0, ?3, ?3, ?4, ?3)`,
+             device_id, provider, account_fingerprint, observed_at, snapshot_json, updated_at
+           ) VALUES ('device_agents', ?1, ?2, ?3, ?4, ?3)`,
       ).bind(
         "codex",
         "codex_fingerprint",
@@ -516,9 +209,8 @@ describe("managed Relay on real Workers and D1", () => {
       ),
       env.DB.prepare(
         `INSERT INTO quota_snapshots (
-             device_id, provider, account_fingerprint, sequence, captured_at, observed_at,
-             snapshot_json, updated_at
-           ) VALUES ('device_agents', ?1, ?2, 0, ?3, ?3, ?4, ?3)`,
+             device_id, provider, account_fingerprint, observed_at, snapshot_json, updated_at
+           ) VALUES ('device_agents', ?1, ?2, ?3, ?4, ?3)`,
       ).bind(
         "cursor",
         "cursor_fingerprint",
@@ -527,69 +219,44 @@ describe("managed Relay on real Workers and D1", () => {
       ),
     ]);
 
-    const usageState = new D1UsageState(env.DB);
-    const filtered = await usageState.queryAccountUsage("account_agents", {
-      agents: ["codex", "claude_code"],
-      limit: 100,
-    });
-    const all = await usageState.queryAccountUsage("account_agents", {
-      agents: ["codex", "claude_code", "grok", "opencode", "pi", "cursor"],
-      limit: 100,
-    });
-
-    expect(filtered.rows.map((row) => row.agent)).toEqual(["codex"]);
-    expect(all.rows.map((row) => row.agent)).toEqual(["codex", "cursor", "grok"]);
-
-    const accountState = new D1AccountState(env.DB);
-    const hasher = new SecretHasher(secret);
-    const webAuth: WebAccountAuth = {
-      handler: async () => new Response(null, { status: 404 }),
-      beginGitHubSignIn: async () => new Response(null, { status: 302 }),
-      getSession: async () => ({
-        user: { id: "account_agents", name: "Quota Tester" },
-        session: {
-          id: "web_agents",
-          createdAt: now,
-          expiresAt: new Date(now.getTime() + 60_000),
-        },
-      }),
-    };
-    const app = createRelayApp({
-      state: accountState,
-      usageState,
-      accountService: new AccountService(accountState, hasher, secret),
-      webAuth,
-      hasher,
-      now: () => now,
-    });
+    const app = appFor("account_agents");
     const summary = (await (
-      await app.request("https://quota.gotry.io/api/v5/account/summary?usage_agents=all")
+      await app.request("https://quota.gotry.io/api/v6/account/summary")
     ).json()) as {
       protocol_version: number;
-      quota: Array<{ snapshot: { provider: string } }>;
-      usage: { totals: { requests: number } };
+      subscriptions: Array<{ provider: string }>;
+      usage: { all: { totals: { messages: number }; agents: Array<{ agent: string }> } };
     };
 
-    expect(summary).toMatchObject({ protocol_version: 5, usage: { totals: { requests: 3 } } });
-    expect(summary.quota.map((observation) => observation.snapshot.provider)).toEqual([
+    expect(summary).toMatchObject({ protocol_version: 6 });
+    expect(summary.usage.all.totals.messages).toBe(3);
+    expect(summary.usage.all.agents.map((agent) => agent.agent)).toEqual([
+      "codex",
+      "cursor",
+      "grok",
+    ]);
+    expect(summary.subscriptions.map((subscription) => subscription.provider)).toEqual([
       "codex",
       "cursor",
     ]);
+
     // The retired data routes are gone rather than kept answering an older shape, and they say
     // so as the one thing a caller on them can do: a version this deployment no longer serves
     // cannot be retried back into existence.
-    const retired = await app.request(
-      "https://quota.gotry.io/api/v3/account/summary?usage_agents=all",
-    );
-    expect(retired.status).toBe(404);
-    expect(await retired.json()).toMatchObject({ error: { code: "client_upgrade_required" } });
+    for (const retired of ["/api/v3/account/summary", "/api/v5/account/summary"]) {
+      const response = await app.request(`https://quota.gotry.io${retired}`);
+      expect(response.status).toBe(404);
+      expect(await response.json()).toMatchObject({
+        error: { code: "client_upgrade_required" },
+      });
+    }
 
     // A version this deployment does serve, spelled wrong, is a wrong path and stays one, so a
     // routing mistake of our own cannot hide behind an upgrade prompt.
     const wrong = await app.request("https://quota.gotry.io/api/v2/account/snapshots");
     expect(wrong.status).toBe(404);
     expect(await wrong.json()).toMatchObject({ error: { code: "not_found" } });
-    const mistyped = await app.request("https://quota.gotry.io/api/v5/account/sumary");
+    const mistyped = await app.request("https://quota.gotry.io/api/v6/account/sumary");
     expect(await mistyped.json()).toMatchObject({ error: { code: "not_found" } });
   });
 
@@ -603,21 +270,14 @@ describe("managed Relay on real Workers and D1", () => {
            id, account_id, installation_id_hash, generation, created_at, last_login_at, last_seen_at
          ) VALUES ('device_etag', 'account_etag', 'installation_etag', 1, ?1, ?1, ?1)`,
       ).bind(now.toISOString()),
-      usageFactInsertAt("device_etag", "2026-08-10T00:00:00Z", "2026-08-10"),
+      usageDailyInsert("codex", "openai_direct", "gpt-5.6-sol", {
+        deviceID: "device_etag",
+        date: "2026-08-10",
+      }),
     ]);
-    const usageState = new D1UsageState(env.DB);
-    const state = new D1AccountState(env.DB);
-    const hasher = new SecretHasher(secret);
-    const app = createRelayApp({
-      state,
-      usageState,
-      accountService: new AccountService(state, hasher, secret),
-      webAuth: webSessionFor("account_etag"),
-      hasher,
-      now: () => now,
-    });
+    const app = appFor("account_etag");
 
-    const summaryPath = "https://quota.gotry.io/api/v5/account/summary?usage_agents=all";
+    const summaryPath = "https://quota.gotry.io/api/v6/account/summary";
     const first = await app.request(summaryPath);
     expect(first.status).toBe(200);
     // `no-cache` is what makes the second request conditional at all: the browser may keep the
@@ -631,22 +291,21 @@ describe("managed Relay on real Workers and D1", () => {
     expect(unchanged.headers.get("ETag")).toBe(etag);
     expect(await unchanged.text()).toBe("");
 
-    // Two routes answer the same query string with different bodies, and a different range is a
-    // different answer, so neither may reuse the other's validator.
-    const usage = await app.request(
-      "https://quota.gotry.io/api/v5/account/usage/summary?usage_agents=all",
+    // Two routes answer with different bodies, and a different calendar names different days,
+    // so neither may reuse the other's validator.
+    const activity = await app.request(
+      "https://quota.gotry.io/api/v6/account/usage/activity?from=2026-08-01&to=2026-08-10",
     );
-    expect(usage.status).toBe(200);
-    expect(usage.headers.get("ETag")).not.toBe(etag);
-    const narrowed = await app.request(`${summaryPath}&from=2026-08-10&to=2026-08-10`);
-    expect(narrowed.headers.get("ETag")).not.toBe(etag);
+    expect(activity.status).toBe(200);
+    expect(activity.headers.get("ETag")).not.toBe(etag);
+    const elsewhere = await app.request(`${summaryPath}?tz=Asia/Singapore`);
+    expect(elsewhere.headers.get("ETag")).not.toBe(etag);
 
     // A new observation is a new answer even though no Usage fact moved.
     await env.DB.prepare(
       `INSERT INTO quota_snapshots (
-         device_id, provider, account_fingerprint, sequence, captured_at, observed_at,
-         snapshot_json, updated_at
-       ) VALUES ('device_etag', 'codex', 'fingerprint_etag', 0, ?1, ?1, ?2, ?1)`,
+         device_id, provider, account_fingerprint, observed_at, snapshot_json, updated_at
+       ) VALUES ('device_etag', 'codex', 'fingerprint_etag', ?1, ?2, ?1)`,
     )
       .bind(now.toISOString(), JSON.stringify(quotaSnapshotJson()))
       .run();
@@ -657,19 +316,20 @@ describe("managed Relay on real Workers and D1", () => {
     expect(afterUpload.headers.get("ETag")).not.toBe(etag);
 
     // A query key this route does not serve is still refused rather than validated.
-    const bogus = await app.request(`${summaryPath}&nonsense=1`, {
+    const bogus = await app.request(`${summaryPath}?nonsense=1`, {
       headers: { "If-None-Match": etag ?? "" },
     });
     expect(bogus.status).toBe(400);
     expect(bogus.headers.get("ETag")).toBeNull();
+    // So is a timezone that names no calendar.
+    expect((await app.request(`${summaryPath}?tz=Mars/Olympus_Mons`)).status).toBe(400);
   });
 
   it("reports every billing channel it stores without an opt-in", async () => {
     const channelFact = (channel: string, channelSource: string, model: string) =>
-      usageFactInsert("opencode", channel, model, {
+      usageDailyInsert("opencode", channel, model, {
         deviceID: "device_channels",
         channelSource,
-        timezone: "UTC",
       });
     await env.DB.batch([
       env.DB.prepare(
@@ -686,51 +346,19 @@ describe("managed Relay on real Workers and D1", () => {
       // producing a second `unknown` provider.
       channelFact("unknown", "unknown", "big-pickle"),
     ]);
-    const state = new D1AccountState(env.DB);
-    const hasher = new SecretHasher(secret);
-    const webAuth: WebAccountAuth = {
-      handler: async () => new Response(null, { status: 404 }),
-      beginGitHubSignIn: async () => new Response(null, { status: 302 }),
-      getSession: async () => ({
-        user: { id: "account_channels", name: "Quota Tester" },
-        session: {
-          id: "web_channels",
-          createdAt: now,
-          expiresAt: new Date(now.getTime() + 60_000),
-        },
-      }),
+    const app = appFor("account_channels");
+    const response = await app.request("https://quota.gotry.io/api/v6/account/summary");
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      usage: { all: { agents: Array<{ providers: Array<{ provider: string }> }> } };
     };
-    const app = createRelayApp({
-      state,
-      usageState: new D1UsageState(env.DB),
-      accountService: new AccountService(state, hasher, secret),
-      webAuth,
-      hasher,
-      now: () => now,
-    });
-    const providersFor = async (query: string) => {
-      const response = await app.request(`https://quota.gotry.io${query}`);
-      expect(response.status).toBe(200);
-      const body = (await response.json()) as {
-        usage: { agents?: Array<{ providers: Array<{ provider: string }> }> };
-      };
-      return (body.usage.agents ?? []).flatMap((agent) =>
-        agent.providers.map(({ provider }) => provider),
-      );
-    };
+    expect(
+      body.usage.all.agents.flatMap((agent) => agent.providers.map(({ provider }) => provider)),
+    ).toEqual(["deepseek", "moonshot", "unknown"]);
 
-    expect(await providersFor("/api/v5/account/summary?usage_agents=all")).toEqual([
-      "deepseek",
-      "moonshot",
-      "unknown",
-    ]);
     // The retired opt-in is not a query key any more.
     expect(
-      (
-        await app.request(
-          "https://quota.gotry.io/api/v5/account/summary?usage_agents=all&usage_channels=1",
-        )
-      ).status,
+      (await app.request("https://quota.gotry.io/api/v6/account/summary?usage_channels=1")).status,
     ).toBe(400);
   });
 
@@ -780,7 +408,7 @@ describe("managed Relay on real Workers and D1", () => {
     ).toBe(400);
   });
 
-  it("serves retained account history with client groups", async () => {
+  it("answers every retained day and the trailing windows the caller's calendar names", async () => {
     await env.DB.batch([
       env.DB.prepare(
         "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_history', 'account_history', ?1, ?1)",
@@ -790,83 +418,92 @@ describe("managed Relay on real Workers and D1", () => {
            id, account_id, installation_id_hash, generation, created_at, last_login_at
          ) VALUES ('device_history', 'account_history', 'installation_history', 1, ?1, ?1)`,
       ).bind(now.toISOString()),
-      usageFactInsertAt("device_history", "2025-01-01T00:00:00Z", "2025-01-01"),
-      usageFactInsertAt("device_history", "2026-08-09T00:00:00Z", "2026-08-09"),
-    ]);
-    const state = new D1AccountState(env.DB);
-    const hasher = new SecretHasher(secret);
-    const webAuth: WebAccountAuth = {
-      handler: async () => new Response(null, { status: 404 }),
-      beginGitHubSignIn: async () => new Response(null, { status: 302 }),
-      getSession: async () => ({
-        user: { id: "account_history", name: "Quota Tester" },
-        session: {
-          id: "web_history",
-          createdAt: now,
-          expiresAt: new Date(now.getTime() + 60_000),
-        },
+      usageDailyInsert("codex", "openai_direct", "gpt-5.6-sol", {
+        deviceID: "device_history",
+        date: "2025-01-01",
       }),
-    };
-    const app = createRelayApp({
-      state,
-      usageState: new D1UsageState(env.DB),
-      accountService: new AccountService(state, hasher, secret),
-      webAuth,
-      hasher,
-      now: () => now,
-    });
+      usageDailyInsert("codex", "openai_direct", "gpt-5.6-luna", {
+        deviceID: "device_history",
+        date: "2026-08-09",
+      }),
+      usageDailyInsert("codex", "openai_direct", "gpt-5.6-sol", {
+        deviceID: "device_history",
+        date: "2026-08-10",
+      }),
+    ]);
+    const app = appFor("account_history");
 
-    const current = (await (
-      await app.request("https://quota.gotry.io/api/v5/account/summary?usage_agents=all")
+    const summary = (await (
+      await app.request("https://quota.gotry.io/api/v6/account/summary")
     ).json()) as {
-      usage: {
-        range: { from: string; to: string };
-        totals: { requests: number };
-        breakdowns: Array<{ dimension: string }>;
-        agents?: unknown;
-      };
-    };
-    const structured = (await (
-      await app.request("https://quota.gotry.io/api/v5/account/summary?usage_agents=all")
-    ).json()) as {
-      usage: {
-        agents: Array<{
-          agent: string;
+      usage: Record<
+        string,
+        {
           totals: { messages: number };
-          providers: Array<{ provider: string; models: Array<{ model: string }> }>;
-        }>;
-      };
+          agents: Array<{ providers: Array<{ models: Array<{ model: string }> }> }>;
+        }
+      >;
+      pricing_revision: string;
+      model_catalog_revision: string;
     };
 
-    expect(current.usage).toMatchObject({
-      range: { from: "2025-01-01", to: "2026-08-09" },
-      totals: { requests: 2 },
-    });
-    // Client groups are part of the contract, not something a caller asks for.
-    expect(current.usage.agents).toMatchObject([
+    expect(summary.usage.today?.totals.messages).toBe(1);
+    expect(summary.usage.last_7_days?.totals.messages).toBe(2);
+    expect(summary.usage.last_30_days?.totals.messages).toBe(2);
+    expect(summary.usage.all?.totals.messages).toBe(3);
+    // The agent tree is part of the contract, not something a caller asks for.
+    expect(summary.usage.all?.agents).toMatchObject([
       { agent: "codex", providers: [{ provider: "openai" }] },
     ]);
-    expect(structured.usage.agents).toMatchObject([
-      {
-        agent: "codex",
-        totals: { messages: 2 },
-        providers: [{ provider: "openai", models: [{ model: "gpt-5.6-sol" }] }],
-      },
-    ]);
-    expect(current.usage.breakdowns.some(({ dimension }) => dimension === "usage_date")).toBe(true);
-    expect(current.usage.breakdowns.some(({ dimension }) => dimension === "bucket_start_utc")).toBe(
-      false,
-    );
+    expect(summary.pricing_revision).toEqual(expect.any(String));
+    expect(summary.model_catalog_revision).toEqual(expect.any(String));
+
+    const models = (
+      period:
+        | { agents: Array<{ providers: Array<{ models: Array<{ model: string }> }> }> }
+        | undefined,
+    ) =>
+      (period?.agents ?? []).flatMap((agent) =>
+        agent.providers.flatMap((provider) => provider.models.map((model) => model.model)),
+      );
+    expect(models(summary.usage.today)).toEqual(["gpt-5.6-sol"]);
+
+    // A calendar behind UTC moves which day `today` names without moving a stored day.
+    const behind = (await (
+      await app.request("https://quota.gotry.io/api/v6/account/summary?tz=America/Los_Angeles")
+    ).json()) as {
+      usage: Record<
+        string,
+        { agents: Array<{ providers: Array<{ models: Array<{ model: string }> }> }> }
+      >;
+    };
+    expect(models(behind.usage.today)).toEqual(["gpt-5.6-luna"]);
+
+    const activity = (await (
+      await app.request(
+        "https://quota.gotry.io/api/v6/account/usage/activity?from=2026-08-01&to=2026-08-10",
+      )
+    ).json()) as { days: Array<{ date: string; totals: { messages: number } }> };
+    expect(activity.days.map((day) => day.date)).toEqual(["2026-08-09", "2026-08-10"]);
+
+    // A range longer than the read answers, and a reversed one, are refused rather than capped.
     expect(
       (
         await app.request(
-          "https://quota.gotry.io/api/v5/account/summary?usage_agents=all&from=2025-01-01&to=2026-08-10",
+          "https://quota.gotry.io/api/v6/account/usage/activity?from=2024-01-01&to=2026-08-10",
         )
       ).status,
-    ).toBe(200);
+    ).toBe(400);
+    expect(
+      (
+        await app.request(
+          "https://quota.gotry.io/api/v6/account/usage/activity?from=2026-08-10&to=2026-08-01",
+        )
+      ).status,
+    ).toBe(400);
   });
 
-  it("marks high-cardinality summaries as truncated", async () => {
+  it("bounds a high-cardinality period without losing what it totals", async () => {
     const models = JSON.stringify(Array.from({ length: 1_001 }, (_, index) => index));
     await env.DB.batch([
       env.DB.prepare(
@@ -878,70 +515,39 @@ describe("managed Relay on real Workers and D1", () => {
          ) VALUES ('device_cardinality', 'account_cardinality', 'installation_cardinality', 1, ?1, ?1)`,
       ).bind(now.toISOString()),
       env.DB.prepare(
-        `INSERT INTO usage_hourly (
-           device_id, bucket_start_utc, usage_date, usage_hour, aggregation_timezone,
-           agent, billing_channel, channel_source, model, context_bucket,
+        `INSERT INTO usage_daily (
+           device_id, utc_date, agent, billing_channel, channel_source, model, context_bucket,
            service_tier, speed, inference_geo, input_tokens, cache_read_tokens,
            cache_write_5m_tokens, cache_write_1h_tokens, cache_write_inferred_tokens,
            output_tokens, reasoning_tokens, requests, web_search_requests, web_fetch_requests,
-           source_cost_microusd, source_cost_covered_requests
+           source_cost_microusd, source_cost_covered_requests, partial_hours
          )
-         SELECT 'device_cardinality', '2026-08-09T00:00:00Z', '2026-08-09', 0, 'UTC',
-                'codex', 'openai_direct', 'agent_default', 'model-' || value, 'le_128k',
-                'unknown', 'unknown', 'unknown', 10, 0, 0, 0, 0, 2, 0, 1, 0, 0, '1', 1
+         SELECT 'device_cardinality', '2026-08-09', 'codex', 'openai_direct', 'agent_default',
+                'model-' || value, 'le_128k', 'unknown', 'unknown', 'unknown',
+                10, 0, 0, 0, 0, 2, 0, 1, 0, 0, NULL, 0, 0
          FROM json_each(?1)`,
       ).bind(models),
     ]);
-    const state = new D1AccountState(env.DB);
-    const usageState = new D1UsageState(env.DB);
-    const hasher = new SecretHasher(secret);
-    const webAuth: WebAccountAuth = {
-      handler: async () => new Response(null, { status: 404 }),
-      beginGitHubSignIn: async () => new Response(null, { status: 302 }),
-      getSession: async () => ({
-        user: { id: "account_cardinality", name: "Quota Tester" },
-        session: {
-          id: "web_cardinality",
-          createdAt: now,
-          expiresAt: new Date(now.getTime() + 60_000),
-        },
-      }),
-    };
-    const app = createRelayApp({
-      state,
-      usageState,
-      accountService: new AccountService(state, hasher, secret),
-      webAuth,
-      hasher,
-      now: () => now,
-    });
+    const app = appFor("account_cardinality");
 
-    const summary = (await (
-      await app.request("https://quota.gotry.io/api/v5/account/summary?usage_agents=all")
-    ).json()) as {
-      usage: { breakdowns_truncated?: boolean; cost: { unpriced_truncated?: boolean } };
+    const response = await app.request("https://quota.gotry.io/api/v6/account/summary");
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      usage: {
+        all: {
+          totals: { messages: number };
+          cost: { unpriced_truncated?: boolean };
+          agents: Array<{ providers: Array<{ models: Array<{ model: string }> }> }>;
+        };
+      };
     };
-    expect(summary.usage.breakdowns_truncated).toBe(true);
-    expect(summary.usage.cost.unpriced_truncated).toBe(true);
-
-    const optedInResponse = await app.request(
-      "https://quota.gotry.io/api/v5/account/summary?usage_agents=all",
+    const leaves = body.usage.all.agents.flatMap((agent) =>
+      agent.providers.flatMap((provider) => provider.models),
     );
-    const optedIn = (await optedInResponse.json()) as {
-      usage: { model_catalog_revision?: string };
-    };
-    expect(optedInResponse.status).toBe(200);
-    expect(optedIn.usage.model_catalog_revision).toEqual(expect.any(String));
-    expect(
-      (await app.request("https://quota.gotry.io/api/v5/account/summary?model_catalog=0")).status,
-    ).toBe(400);
-    expect(
-      (
-        await app.request(
-          "https://quota.gotry.io/api/v5/account/usage/summary?usage_agents=all&from=2026-08-09&to=2026-08-09",
-        )
-      ).status,
-    ).toBe(200);
+    expect(body.usage.all.totals.messages).toBe(1_001);
+    expect(leaves.length).toBeLessThanOrEqual(MAXIMUM_USAGE_PERIOD_LEAVES);
+    expect(leaves.some((leaf) => leaf.model === "other")).toBe(true);
+    expect(body.usage.all.cost.unpriced_truncated).toBe(true);
   });
 
   it("stores Better Auth sessions encrypted behind hashed keys", async () => {
@@ -991,9 +597,8 @@ describe("managed Relay on real Workers and D1", () => {
       // A row a retired build wrote, still carrying the fields this contract removed.
       env.DB.prepare(
         `INSERT INTO quota_snapshots (
-             device_id, provider, account_fingerprint, sequence,
-             captured_at, observed_at, snapshot_json, updated_at
-           ) VALUES ('device_unreadable', 'codex', 'fingerprint', 1, ?1, ?1, ?2, ?1)`,
+             device_id, provider, account_fingerprint, observed_at, snapshot_json, updated_at
+           ) VALUES ('device_unreadable', 'codex', 'fingerprint', ?1, ?2, ?1)`,
       ).bind(
         now.toISOString(),
         JSON.stringify({
@@ -1008,9 +613,8 @@ describe("managed Relay on real Workers and D1", () => {
       ),
       env.DB.prepare(
         `INSERT INTO quota_snapshots (
-             device_id, provider, account_fingerprint, sequence,
-             captured_at, observed_at, snapshot_json, updated_at
-           ) VALUES ('device_unreadable', 'cursor', 'fingerprint', 1, ?1, ?1, ?2, ?1)`,
+             device_id, provider, account_fingerprint, observed_at, snapshot_json, updated_at
+           ) VALUES ('device_unreadable', 'cursor', 'fingerprint', ?1, ?2, ?1)`,
       ).bind(
         now.toISOString(),
         JSON.stringify({
@@ -1046,9 +650,8 @@ describe("managed Relay on real Workers and D1", () => {
     const snapshot = (provider: string, observedAt: string) =>
       env.DB.prepare(
         `INSERT INTO quota_snapshots (
-             device_id, provider, account_fingerprint, sequence,
-             captured_at, observed_at, snapshot_json, updated_at
-           ) VALUES ('device_retention', ?1, 'fingerprint', 1, ?2, ?2, '{}', ?3)`,
+             device_id, provider, account_fingerprint, observed_at, snapshot_json, updated_at
+           ) VALUES ('device_retention', ?1, 'fingerprint', ?2, '{}', ?3)`,
       ).bind(provider, observedAt, now.toISOString());
     await env.DB.batch([
       env.DB.prepare(
@@ -1071,37 +674,6 @@ describe("managed Relay on real Workers and D1", () => {
       "SELECT provider FROM quota_snapshots WHERE device_id = 'device_retention' ORDER BY provider",
     ).all<{ provider: string }>();
     expect(remaining.results.map((row) => row.provider)).toEqual(["codex"]);
-  });
-
-  it("keeps a Usage receipt only while a client could still be retrying it", async () => {
-    const receipt = (submissionID: string, sequence: number, acceptedAt: string) =>
-      env.DB.prepare(
-        `INSERT INTO usage_submissions (
-           device_id, submission_id, generation, sequence, request_digest,
-           usage_sync_revision, agent, start_at, end_at, accepted_at
-         ) VALUES ('device_receipts', ?1, 1, ?2, 'digest', 1, 'codex', ?3, ?3, ?3)`,
-      ).bind(submissionID, sequence, acceptedAt);
-    await env.DB.batch([
-      env.DB.prepare(
-        "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_receipts', 'subject_receipts', ?1, ?1)",
-      ).bind(now.toISOString()),
-      env.DB.prepare(
-        `INSERT INTO devices (
-           id, account_id, installation_id_hash, generation, created_at, last_login_at
-         ) VALUES ('device_receipts', 'account_receipts', 'installation_receipts', 1, ?1, ?1)`,
-      ).bind(now.toISOString()),
-      // Yesterday's upload: an outbox entry stuck behind a bad network is still this one.
-      receipt("submission_recent", 1, "2026-08-09T00:00:00.000Z"),
-      // A month old: the device's own sequence has moved on, and no client reuses that ID.
-      receipt("submission_ancient", 0, "2026-07-10T00:00:00.000Z"),
-    ]);
-
-    await new D1AccountState(env.DB).performMaintenance(accountMaintenanceInput(now));
-
-    const kept = await env.DB.prepare(
-      "SELECT submission_id FROM usage_submissions WHERE device_id = 'device_receipts'",
-    ).all<{ submission_id: string }>();
-    expect(kept.results.map((row) => row.submission_id)).toEqual(["submission_recent"]);
   });
 
   it("expires one rate-limit window without resetting that subject's live one", async () => {
@@ -1360,11 +932,8 @@ describe("managed Relay on real Workers and D1", () => {
       ).status,
     ).toBe(400);
     const envelope = {
-      protocol_version: 5,
-      device_id: tokens.device_id,
+      protocol_version: 6,
       generation: tokens.device_generation,
-      sequence: 0,
-      captured_at: now.toISOString(),
       snapshots: [
         {
           provider: "codex",
@@ -1375,21 +944,26 @@ describe("managed Relay on real Workers and D1", () => {
         },
       ],
     };
+    const uploaded = await app.request("https://quota.gotry.io/api/v6/device/snapshots", {
+      method: "PUT",
+      headers: deviceHeaders,
+      body: JSON.stringify(envelope),
+    });
+    expect(uploaded.status).toBe(200);
+    expect(await uploaded.json()).toMatchObject({ accepted: ["codex"], ignored: [] });
+    // The same reading again is a comparison, not a write, and says so.
+    const again = await app.request("https://quota.gotry.io/api/v6/device/snapshots", {
+      method: "PUT",
+      headers: deviceHeaders,
+      body: JSON.stringify(envelope),
+    });
+    expect(await again.json()).toMatchObject({ accepted: [], ignored: ["codex"] });
     expect(
       (
-        await app.request("https://quota.gotry.io/api/v5/device/snapshots", {
+        await app.request("https://quota.gotry.io/api/v6/device/snapshots", {
           method: "PUT",
           headers: deviceHeaders,
-          body: JSON.stringify(envelope),
-        })
-      ).status,
-    ).toBe(200);
-    expect(
-      (
-        await app.request("https://quota.gotry.io/api/v5/device/snapshots", {
-          method: "PUT",
-          headers: deviceHeaders,
-          body: JSON.stringify({ ...envelope, sequence: 1, uploaded_at: now.toISOString() }),
+          body: JSON.stringify({ ...envelope, uploaded_at: now.toISOString() }),
         })
       ).status,
     ).toBe(400);
@@ -1435,7 +1009,7 @@ describe("managed Relay on real Workers and D1", () => {
     expect((await app.request(callbackURL)).status).toBe(401);
     expect(
       (
-        await app.request("https://quota.gotry.io/api/v2/account/devices", {
+        await app.request("https://quota.gotry.io/api/v6/account/summary", {
           headers: { Origin: "https://quota.gotry.io" },
         })
       ).status,
@@ -1542,62 +1116,34 @@ describe("managed Relay on real Workers and D1", () => {
   });
 });
 
-function usageFactInsert(
-  agent: string,
-  channel: string,
-  model: string,
-  overrides: { deviceID?: string; channelSource?: string; timezone?: string } = {},
-): D1PreparedStatement {
-  return env.DB.prepare(
-    `INSERT INTO usage_hourly (
-         device_id, bucket_start_utc, usage_date, usage_hour, aggregation_timezone,
-         agent, billing_channel, channel_source, model, context_bucket,
-         service_tier, speed, inference_geo, input_tokens, cache_read_tokens,
-         cache_write_5m_tokens, cache_write_1h_tokens, cache_write_inferred_tokens,
-         output_tokens, reasoning_tokens, requests, web_search_requests, web_fetch_requests,
-         source_cost_microusd, source_cost_covered_requests
-       ) VALUES (
-         ?4, '2026-08-10T00:00:00Z', '2026-08-10', 8, ?5,
-         ?1, ?2, ?6, ?3, 'le_128k',
-         'unknown', 'unknown', 'unknown', 10, 0,
-         0, 0, 0, 2, 0, 1, 0, 0, NULL, 0
-       )`,
-  ).bind(
-    agent,
-    channel,
-    model,
-    overrides.deviceID ?? "device_agents",
-    overrides.timezone ?? "Asia/Singapore",
-    overrides.channelSource ?? "agent_default",
-  );
+async function seedDevice(name: string, generation = 1): Promise<void> {
+  await env.DB.batch([
+    env.DB.prepare(
+      `INSERT INTO accounts (id, identity_subject, created_at, updated_at)
+       VALUES ('account_${name}', 'subject_${name}', ?1, ?1)`,
+    ).bind(now.toISOString()),
+    env.DB.prepare(
+      `INSERT INTO devices (
+         id, account_id, installation_id_hash, generation, created_at, last_login_at
+       ) VALUES ('device_${name}', 'account_${name}', 'installation_${name}', ${generation}, ?1, ?1)`,
+    ).bind(now.toISOString()),
+  ]);
 }
 
-function usageFactInsertAt(
-  deviceID: string,
-  bucketStart: string,
-  usageDate: string,
-): D1PreparedStatement {
-  return env.DB.prepare(
-    `INSERT INTO usage_hourly (
-       device_id, bucket_start_utc, usage_date, usage_hour, aggregation_timezone,
-       agent, billing_channel, channel_source, model, context_bucket,
-       service_tier, speed, inference_geo, input_tokens, cache_read_tokens,
-       cache_write_5m_tokens, cache_write_1h_tokens, cache_write_inferred_tokens,
-       output_tokens, reasoning_tokens, requests, web_search_requests, web_fetch_requests,
-       source_cost_microusd, source_cost_covered_requests
-     ) VALUES (
-       ?1, ?2, ?3, 0, 'UTC', 'codex', 'openai_direct', 'agent_default',
-       'gpt-5.6-sol', 'le_128k', 'unknown', 'unknown', 'unknown', 10, 0,
-       0, 0, 0, 2, 0, 1, 0, 0, NULL, 0
-     )`,
-  ).bind(deviceID, bucketStart, usageDate);
-}
-
-function usageFact(model: string, bucket: string) {
+function devicePrincipal(name: string, generation: number): DevicePrincipal {
   return {
-    bucket_start_utc: bucket,
-    usage_date: bucket.slice(0, 10),
-    usage_hour: Number(bucket.slice(11, 13)),
+    kind: "device",
+    session_id: `session_${name}`,
+    family_id: `family_${name}`,
+    account_id: `account_${name}`,
+    device_id: `device_${name}`,
+    generation,
+    scopes: ["usage:write:self"],
+  };
+}
+
+function usageRow(model: string) {
+  return {
     agent: "codex" as const,
     billing_channel: "openai_direct" as const,
     channel_source: "agent_default" as const,
@@ -1620,73 +1166,97 @@ function usageFact(model: string, bucket: string) {
   };
 }
 
-function usageSubmission(
-  submissionID: string,
-  sequence: number,
-  startAt: string,
-  endAt: string,
-  rows: ReturnType<typeof usageFact>[],
-): UsageSubmission {
+function usageHour(
+  bucket: string,
+  scanVersion: number,
+  models: readonly string[] = ["gpt-5.6-sol"],
+  partial = false,
+) {
   return {
-    protocol_version: 5,
-    submission_id: submissionID,
-    device_id: "device_partial",
-    generation: 1,
-    sequence,
-    parser_revision: "parser_partial",
-    aggregation_timezone: "UTC",
-    coverage: {
-      agent: "codex",
-      start_at: startAt,
-      end_at: endAt,
-      status: "complete",
-    },
-    rows,
+    bucket_start_utc: bucket,
+    scan_version: scanVersion,
+    partial,
+    rows: models.map(usageRow),
   };
 }
 
-function unknownModelSubmission(): UsageSubmission {
-  return {
-    protocol_version: 5,
-    submission_id: "submission_unknown_model",
-    device_id: "device_legacy",
-    generation: 1,
-    sequence: 0,
-    parser_revision: "parser_unknown_model",
-    aggregation_timezone: "UTC",
-    coverage: {
-      agent: "codex",
-      start_at: "2026-08-09T10:00:00Z",
-      end_at: "2026-08-09T11:00:00Z",
-      status: "complete",
-    },
-    rows: [
-      {
-        bucket_start_utc: "2026-08-09T10:00:00Z",
-        usage_date: "2026-08-09",
-        usage_hour: 10,
-        agent: "codex",
-        billing_channel: "openai_direct",
-        channel_source: "agent_default",
-        model: "unknown",
-        context_bucket: "le_128k",
-        service_tier: "unknown",
-        speed: "unknown",
-        inference_geo: "unknown",
-        input_tokens: 10,
-        cache_read_tokens: 0,
-        cache_write_5m_tokens: 0,
-        cache_write_1h_tokens: 0,
-        cache_write_inferred_tokens: 0,
-        output_tokens: 2,
-        reasoning_tokens: 0,
-        requests: 1,
-        web_search_requests: 0,
-        web_fetch_requests: 0,
-        source_cost_covered_requests: 0,
-      },
-    ],
-  };
+function usageUpload(hours: ReturnType<typeof usageHour>[], generation = 1): UsageUpload {
+  return { protocol_version: 6, generation, agent: "codex", hours };
+}
+
+/**
+ * Every daily row that disagrees with the hours behind it.
+ *
+ * The read never opens `usage_hourly`, so the only thing keeping the two in step is the upload
+ * that maintains both. This is how a test says so.
+ */
+async function dailyMismatch(): Promise<unknown[]> {
+  const rolled = await env.DB.prepare(
+    `SELECT device_id, substr(bucket_start_utc, 1, 10) AS utc_date, agent, billing_channel,
+            channel_source, model, context_bucket, service_tier, speed, inference_geo,
+            SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens,
+            SUM(requests) AS requests, SUM(partial) AS partial_hours
+     FROM usage_hourly
+     GROUP BY device_id, substr(bucket_start_utc, 1, 10), agent, billing_channel,
+              channel_source, model, context_bucket, service_tier, speed, inference_geo
+     ORDER BY device_id, utc_date, agent, model`,
+  ).all<Record<string, unknown>>();
+  const stored = await env.DB.prepare(
+    `SELECT device_id, utc_date, agent, billing_channel, channel_source, model, context_bucket,
+            service_tier, speed, inference_geo, input_tokens, output_tokens, requests,
+            partial_hours
+     FROM usage_daily
+     ORDER BY device_id, utc_date, agent, model`,
+  ).all<Record<string, unknown>>();
+  const key = (row: Record<string, unknown>) => JSON.stringify(row);
+  const expected = rolled.results.map(key);
+  const actual = stored.results.map(key);
+  return [
+    ...expected.filter((row) => !actual.includes(row)),
+    ...actual.filter((row) => !expected.includes(row)),
+  ];
+}
+
+function usageDailyInsert(
+  agent: string,
+  channel: string,
+  model: string,
+  overrides: { deviceID?: string; channelSource?: string; date?: string } = {},
+): D1PreparedStatement {
+  return env.DB.prepare(
+    `INSERT INTO usage_daily (
+         device_id, utc_date, agent, billing_channel, channel_source, model, context_bucket,
+         service_tier, speed, inference_geo, input_tokens, cache_read_tokens,
+         cache_write_5m_tokens, cache_write_1h_tokens, cache_write_inferred_tokens,
+         output_tokens, reasoning_tokens, requests, web_search_requests, web_fetch_requests,
+         source_cost_microusd, source_cost_covered_requests, partial_hours
+       ) VALUES (
+         ?4, ?5, ?1, ?2, ?6, ?3, 'le_128k',
+         'unknown', 'unknown', 'unknown', 10, 0,
+         0, 0, 0, 2, 0, 1, 0, 0, NULL, 0, 0
+       )`,
+  ).bind(
+    agent,
+    channel,
+    model,
+    overrides.deviceID ?? "device_agents",
+    overrides.date ?? "2026-08-10",
+    overrides.channelSource ?? "agent_default",
+  );
+}
+
+/** An app answering as the signed-in owner of one account. */
+function appFor(accountId: string) {
+  const state = new D1AccountState(env.DB);
+  const hasher = new SecretHasher(secret);
+  return createRelayApp({
+    state,
+    usageState: new D1UsageState(env.DB),
+    accountService: new AccountService(state, hasher, secret),
+    webAuth: webSessionFor(accountId),
+    hasher,
+    now: () => now,
+  });
 }
 
 function webSessionFor(accountId: string): WebAccountAuth {
@@ -1706,12 +1276,10 @@ function webSessionFor(accountId: string): WebAccountAuth {
 
 function quotaSnapshotJson() {
   return {
-    protocol_version: 5,
     provider: "codex",
-    captured_at: now.toISOString(),
+    status: "available",
     observed_at: now.toISOString(),
-    valid_for_seconds: 3_600,
-    account: { fingerprint: "fingerprint_etag", label: "tester", plan: "Plus" },
+    account: { fingerprint: "fingerprint_etag", fingerprint_scope: "global", plan: "Plus" },
     windows: [
       {
         id: "weekly",

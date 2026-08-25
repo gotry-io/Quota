@@ -182,7 +182,7 @@ describe("quota-ios read-only account client", () => {
         .first("device_id"),
     ).toBeNull();
 
-    const summary = await harness.app.request("https://quota.gotry.io/api/v5/account/summary", {
+    const summary = await harness.app.request("https://quota.gotry.io/api/v6/account/summary", {
       headers: { Authorization: `Bearer ${tokens.account_session.access_token}` },
     });
     expect(summary.status).toBe(200);
@@ -448,7 +448,7 @@ describe("quota-ios read-only account client", () => {
 
     expect(
       (
-        await harness.app.request("https://quota.gotry.io/api/v5/device/snapshots", {
+        await harness.app.request("https://quota.gotry.io/api/v6/device/snapshots", {
           method: "PUT",
           headers,
           body: JSON.stringify({}),
@@ -457,7 +457,7 @@ describe("quota-ios read-only account client", () => {
     ).toBe(401);
     expect(
       (
-        await harness.app.request("https://quota.gotry.io/api/v5/device/usage", {
+        await harness.app.request("https://quota.gotry.io/api/v6/device/usage", {
           method: "PUT",
           headers,
           body: JSON.stringify({}),
@@ -578,12 +578,12 @@ describe("quota-ios read-only account client", () => {
     const iosAfterCli = await loginIos(harness);
     expect(IosOAuthTokenResponseSchema.parse(iosAfterCli).account_id).toBe(harness.accountId);
     expect(await deviceCount(harness.accountId)).toBe(1);
-    const summary = await harness.app.request("https://quota.gotry.io/api/v5/account/summary", {
+    const summary = await harness.app.request("https://quota.gotry.io/api/v6/account/summary", {
       headers: { Authorization: `Bearer ${iosAfterCli.account_session.access_token}` },
     });
-    const body = (await summary.json()) as { devices: { device_id: string; platform: string }[] };
+    const body = (await summary.json()) as { devices: { id: string; platform: string }[] };
     expect(body.devices).toHaveLength(1);
-    expect(body.devices[0]?.device_id).toBe(tokens.device_id);
+    expect(body.devices[0]?.id).toBe(tokens.device_id);
     expect(body.devices[0]?.platform).toBe("macos");
     expect(body.devices.some((device) => device.platform === "ios")).toBe(false);
   });
