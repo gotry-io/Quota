@@ -70,7 +70,7 @@ describe("browser sign-in through GitHub", () => {
     expect(handoff.attributes).toContain("Secure");
     expect(handoff.attributes).toContain("SameSite=Lax");
     expect(handoff.attributes).toContain("Max-Age=600");
-    expect(handoff.name).toBe("quota_oauth");
+    expect(handoff.name).toBe("__Host-quota_oauth");
 
     const callback = await relay.app.request(
       `${origin}/api/auth/github/callback?code=first-code&state=${encodeURIComponent(state)}`,
@@ -80,14 +80,14 @@ describe("browser sign-in through GitHub", () => {
     expect(callback.headers.get("location")).toBe("/my");
     expect(callback.headers.get("cache-control")).toBe("no-store");
     const cookies = setCookies(callback);
-    const session = cookies.get("quota_session");
+    const session = cookies.get("__Host-quota_session");
     expect(session?.attributes).toContain("HttpOnly");
     expect(session?.attributes).toContain("Secure");
     expect(session?.attributes).toContain("SameSite=Lax");
     expect(session?.attributes).toContain("Path=/");
     expect(session?.value).toMatch(/^qw_[A-Za-z0-9_-]{43}$/);
     // The sign-in in flight is finished, so what carried it is cleared in the same answer.
-    expect(cookies.get("quota_oauth")?.attributes).toContain("Max-Age=0");
+    expect(cookies.get("__Host-quota_oauth")?.attributes).toContain("Max-Age=0");
 
     // The exchange named the verifier from the cookie and Relay's own callback, and asked GitHub
     // for the profile once.
@@ -96,7 +96,7 @@ describe("browser sign-in through GitHub", () => {
     expect(github.tokenForm?.get("redirect_uri")).toBe(`${origin}/api/auth/github/callback`);
     expect(github.profileReads).toBe(1);
 
-    const sessionCookie = `quota_session=${session?.value}`;
+    const sessionCookie = `__Host-quota_session=${session?.value}`;
     const stored = await env.DB.prepare(
       "SELECT client_kind, device_id, refresh_token_hash, access_token_hash, authenticated_at FROM account_sessions",
     ).all<Record<string, unknown>>();
@@ -138,7 +138,7 @@ describe("browser sign-in through GitHub", () => {
     });
     expect(signedOut.status).toBe(200);
     expect(signedOut.headers.get("cache-control")).toBe("no-store");
-    expect(setCookies(signedOut).get("quota_session")?.attributes).toContain("Max-Age=0");
+    expect(setCookies(signedOut).get("__Host-quota_session")?.attributes).toContain("Max-Age=0");
     expect(
       (await relay.app.request(`${origin}/api/v2/account`, { headers: { Cookie: sessionCookie } }))
         .status,
@@ -210,7 +210,7 @@ describe("browser sign-in through GitHub", () => {
     const sealed = `${forged}.${await hasher.hash("oauth-handoff", forged)}`;
     const unreadable = await relay.app.request(
       `${origin}/api/auth/github/callback?code=late-code&state=${encodeURIComponent(state)}`,
-      { headers: { Cookie: `quota_oauth=${sealed}` } },
+      { headers: { Cookie: `__Host-quota_oauth=${sealed}` } },
     );
     expect(unreadable.status).toBe(400);
     expect(github.exchanges).toBe(0);
@@ -249,11 +249,11 @@ describe("browser sign-in through GitHub", () => {
       console.log = originalLog;
       console.error = originalError;
     }
-    const session = setCookies(callback).get("quota_session")?.value ?? "";
+    const session = setCookies(callback).get("__Host-quota_session")?.value ?? "";
     expect(session).toBeTruthy();
 
     const read = await relay.app.request(`${origin}/api/v2/account`, {
-      headers: { Cookie: `quota_session=${session}` },
+      headers: { Cookie: `__Host-quota_session=${session}` },
     });
     const body = await read.text();
     expect(body).not.toContain(session);
@@ -300,8 +300,10 @@ describe("browser sign-in through GitHub", () => {
   it("requires a same-origin request to sign out or delete the Account", async () => {
     const github = fakeGitHub();
     const relay = harness(github);
-    const session = setCookies(await signIn(relay, "same-origin-code")).get("quota_session")?.value;
-    const cookie = `quota_session=${session}`;
+    const session = setCookies(await signIn(relay, "same-origin-code")).get(
+      "__Host-quota_session",
+    )?.value;
+    const cookie = `__Host-quota_session=${session}`;
 
     expect(
       (
@@ -334,7 +336,9 @@ describe("browser sign-in through GitHub", () => {
     const github = fakeGitHub();
     const clock = { at: now };
     const relay = harness(github, () => clock.at);
-    const session = setCookies(await signIn(relay, "stale-code")).get("quota_session")?.value;
+    const session = setCookies(await signIn(relay, "stale-code")).get(
+      "__Host-quota_session",
+    )?.value;
     clock.at = new Date(now.getTime() + 10 * 60_000 + 1);
 
     expect(
@@ -342,7 +346,7 @@ describe("browser sign-in through GitHub", () => {
         await relay.app.request(`${origin}/api/v2/account`, {
           method: "DELETE",
           headers: {
-            Cookie: `quota_session=${session}`,
+            Cookie: `__Host-quota_session=${session}`,
             Origin: origin,
             "Sec-Fetch-Site": "same-origin",
           },
@@ -353,7 +357,7 @@ describe("browser sign-in through GitHub", () => {
     expect(
       (
         await relay.app.request(`${origin}/api/v2/account`, {
-          headers: { Cookie: `quota_session=${session}` },
+          headers: { Cookie: `__Host-quota_session=${session}` },
         })
       ).status,
     ).toBe(200);
@@ -362,20 +366,22 @@ describe("browser sign-in through GitHub", () => {
   it("deletes the Account, its Devices, and everything stored for them in one batch", async () => {
     const github = fakeGitHub();
     const relay = harness(github);
-    const session = setCookies(await signIn(relay, "delete-code")).get("quota_session")?.value;
+    const session = setCookies(await signIn(relay, "delete-code")).get(
+      "__Host-quota_session",
+    )?.value;
     const accountId = String(await env.DB.prepare("SELECT id FROM accounts").first("id"));
     await seedDeviceData(accountId);
 
     const deleted = await relay.app.request(`${origin}/api/v2/account`, {
       method: "DELETE",
       headers: {
-        Cookie: `quota_session=${session}`,
+        Cookie: `__Host-quota_session=${session}`,
         Origin: origin,
         "Sec-Fetch-Site": "same-origin",
       },
     });
     expect(deleted.status).toBe(204);
-    expect(setCookies(deleted).get("quota_session")?.attributes).toContain("Max-Age=0");
+    expect(setCookies(deleted).get("__Host-quota_session")?.attributes).toContain("Max-Age=0");
 
     for (const table of [
       "accounts",
@@ -395,7 +401,7 @@ describe("browser sign-in through GitHub", () => {
     expect(
       (
         await relay.app.request(`${origin}/api/v2/account`, {
-          headers: { Cookie: `quota_session=${session}` },
+          headers: { Cookie: `__Host-quota_session=${session}` },
         })
       ).status,
     ).toBe(401);

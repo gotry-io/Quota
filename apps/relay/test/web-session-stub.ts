@@ -22,7 +22,7 @@ export class SignedInWebSessionStub implements WebSessionPort {
     this.returnTo = returnTo;
     return {
       location: "https://github.com/login/oauth/authorize",
-      handoff: "quota_oauth=stub; Path=/api/auth/github; HttpOnly; Secure; SameSite=Lax",
+      handoff: "__Host-quota_oauth=stub; Path=/; HttpOnly; Secure; SameSite=Lax",
     };
   }
 
@@ -47,7 +47,10 @@ export class SignedInWebSessionStub implements WebSessionPort {
 /** A browser with no session at all. */
 export const signedOutWebSessions: WebSessionPort = {
   async beginSignIn() {
-    return { location: "https://github.com/login/oauth/authorize", handoff: "quota_oauth=stub" };
+    return {
+      location: "https://github.com/login/oauth/authorize",
+      handoff: "__Host-quota_oauth=stub",
+    };
   },
   async completeSignIn() {
     return { outcome: "rejected" };

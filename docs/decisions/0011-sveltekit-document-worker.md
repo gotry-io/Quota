@@ -20,7 +20,7 @@ must be the process that can already read the session cookie: the existing Relay
 Render Quota Web documents with SvelteKit on the existing `quota` Worker. Keep Hono, browser
 sessions, D1, OAuth, Usage aggregation, and domain policy in Relay.
 
-> Updated 2026-08-26: Better Auth is gone. `getViewer` reads the `quota_session` cookie against
+> Updated 2026-08-26: Better Auth is gone. `getViewer` reads the `__Host-quota_session` cookie against
 > `account_sessions` directly; the pairing below is unchanged in shape. See
 > [ADR 0025](0025-one-session-system.md).
 

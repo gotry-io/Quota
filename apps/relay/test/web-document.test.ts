@@ -67,7 +67,7 @@ describe("web document port", () => {
       webSessions: new SignedInWebSessionStub("account_1", now),
       now: () => now,
     });
-    expect(await port.getViewer(new Headers({ Cookie: "quota_session=secret" }))).toEqual({
+    expect(await port.getViewer(new Headers({ Cookie: "__Host-quota_session=secret" }))).toEqual({
       displayLabel: "octocat",
     });
 
@@ -76,7 +76,9 @@ describe("web document port", () => {
       webSessions: new SignedInWebSessionStub("account_gone", now),
       now: () => now,
     });
-    expect(await orphaned.getViewer(new Headers({ Cookie: "quota_session=secret" }))).toBeNull();
+    expect(
+      await orphaned.getViewer(new Headers({ Cookie: "__Host-quota_session=secret" })),
+    ).toBeNull();
   });
 });
 
@@ -91,8 +93,8 @@ describe("web document session", () => {
       },
     });
 
-    const first = sessions.authorize(new Headers({ Cookie: "quota_session=one" }), now);
-    const second = sessions.authorize(new Headers({ Cookie: "quota_session=one" }), now);
+    const first = sessions.authorize(new Headers({ Cookie: "__Host-quota_session=one" }), now);
+    const second = sessions.authorize(new Headers({ Cookie: "__Host-quota_session=one" }), now);
     expect(await first).toEqual(await second);
     expect(calls).toBe(1);
   });
@@ -109,7 +111,9 @@ describe("document SSR observability", () => {
     });
     expect(await memoized.hasViewer()).toBe(false);
     expect(await memoized.port.getViewer(new Headers())).toEqual({ displayLabel: "octocat" });
-    expect(await memoized.port.getViewer(new Headers({ Cookie: "quota_session=secret" }))).toEqual({
+    expect(
+      await memoized.port.getViewer(new Headers({ Cookie: "__Host-quota_session=secret" })),
+    ).toEqual({
       displayLabel: "octocat",
     });
     expect(calls).toBe(1);

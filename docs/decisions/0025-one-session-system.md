@@ -6,48 +6,48 @@
 
 ## Decision
 
-Relay owns the GitHub OAuth round trip and the session it opens. Better Auth, its dependency, and
-its six D1 tables are deleted; migration 0019 drops them and gives `account_sessions` a
-`client_kind` column so one table answers for `web`, `cli`, and `ios`.
+Relay owns the GitHub OAuth round trip and the session it opens. Better Auth, its dependency, and its
+six D1 tables are deleted; migration 0019 drops them and gives `account_sessions` a `client_kind`
+column so one table answers for `web`, `cli`, and `ios`.
 
-**Sign-in is three routes.** `GET /api/auth/github/start` mints a 256-bit `state` and a PKCE
-verifier, seals both — with the same-origin path to return to — in an HMAC-signed
-`quota_oauth` cookie good for ten minutes, and redirects to GitHub with `scope=` empty.
-`GET /api/auth/github/callback` compares `state` against that cookie, exchanges the code with the
-verifier inside a 20-second timeout, reads `GET /user` for a numeric id and login name, HMACs the
-id with `GITHUB_SUBJECT_KEY` into the Account id, writes one session row, sets
-`quota_session; HttpOnly; Secure; SameSite=Lax; Path=/`, clears the handoff, and returns the
-browser where it started. `POST /api/auth/logout` revokes the row and clears the cookie.
+**Sign-in is three routes.** `GET /api/auth/github/start` seals a 256-bit `state`, a PKCE verifier,
+and the same-origin path to return to in an HMAC-signed `__Host-quota_oauth` cookie good for ten
+minutes, then redirects to GitHub with `scope=` empty. `GET /api/auth/github/callback` compares
+`state` against that cookie, exchanges the code with the verifier inside a 20-second timeout, reads
+`GET /user` for a numeric id and login name, HMACs the id with `GITHUB_SUBJECT_KEY` into the Account
+id, writes one session row, sets `__Host-quota_session; HttpOnly; Secure; SameSite=Lax; Path=/`, and
+returns the browser where it started. `POST /api/auth/logout` revokes the row and clears the cookie.
 
-A missing, altered, expired, or mismatched handoff cookie is 400 with no session; so is a code
-GitHub will not spend twice. The GitHub access token is used for that one profile read and never
-stored. The session token is stored only as an HMAC under `web-access`, so a cookie cannot be
-replayed as a Bearer token and a native token cannot be replayed as a cookie.
+Both cookies take the `__Host-` prefix, which a browser honours only for a `Secure`, `Path=/` cookie
+with no `Domain`. That last condition is worth a wider path: a signed handoff proves Relay wrote it,
+not that this browser asked for it, so anything able to set a cookie for a sibling `gotry.io` host
+could otherwise plant a valid handoff and finish the sign-in as itself.
+
+A missing, altered, expired, or mismatched handoff is 400 with no session; so is a code GitHub will
+not spend twice. The GitHub access token is used for that one profile read and never stored, and the
+session token only as an HMAC under `web-access`, so a cookie cannot be replayed as a Bearer token
+or the reverse. Both HMACs use `QUOTA_SESSION_HASH_KEY` under new domain labels;
+`BETTER_AUTH_SECRET` is no longer read anywhere.
 
 **The Web principal is read, not synthesized.** `authorizeAccount` and `WebDocumentPort.getViewer`
-resolve `quota_session` against `account_sessions`. The ten-minute freshness rule that guards
+resolve the session cookie against `account_sessions`, and the ten-minute freshness rule guarding
 device-authorization decisions, Delete Device, and Delete Account reads that row's
 `authenticated_at`. Delete Account is one D1 batch over sessions, Devices, Device sessions,
-observations, hourly Usage, the daily rollup, login grants, and the Account.
-
-The signing key is `QUOTA_SESSION_HASH_KEY`, already Relay's credential-equality key, under new
-domain labels. `BETTER_AUTH_SECRET` is no longer read anywhere.
+observations, Usage, the daily rollup, login grants, and the Account.
 
 ## Why
 
-Two systems held a session, and every rule about one had to be restated across the seam: the
-Account row was upserted by a database hook, the Web principal was synthesized on each request from
-a foreign session, deletion ran through a foreign user record, and "is this session fresh enough"
-meant a timestamp neither table owned. A GitHub sign-in is one state, one verifier, one code, and
-one row. Writing those directly is less code than adapting a framework to them, and it removed the
-only encrypted-at-rest store, the only secondary session store, and about 1.6 MiB of Worker bundle.
+Two systems held a session, and every rule about one was restated across the seam: a database hook
+upserted the Account row, the Web principal was synthesized per request from a foreign session,
+deletion ran through a foreign user record, and "fresh enough" meant a timestamp neither table
+owned. A GitHub sign-in is one state, one verifier, one code, and one row; writing those directly is
+less code than adapting a framework to them, and it removed the only encrypted-at-rest store, the
+only secondary session store, and 1.6 MiB of Worker bundle.
 
 ## What was given up
 
-Additional identity providers, e-mail sign-in, and multi-factor are no longer a configuration
-change; each would be another start and callback route resolving to the same `accounts` row. That
-is the intended trade: Quota supports GitHub only, and said so before this change.
-
-A browser session does not rotate. The cookie is the whole credential for ninety days, revocable by
-sign-out, Delete Account, or expiry — the same lifetime Better Auth was configured for, without the
-refresh machinery it never used here.
+Another identity provider, e-mail sign-in, or multi-factor stops being a configuration change; each
+would be another start and callback route resolving to the same `accounts` row. Quota supports
+GitHub only, and said so before this change. A browser session also does not rotate: the cookie is
+the whole credential for ninety days, revocable by sign-out, Delete Account, or expiry — the
+lifetime Better Auth was configured for, without the refresh machinery it never used.

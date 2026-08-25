@@ -10,13 +10,20 @@ import {
   sha256Base64Url,
 } from "../security.ts";
 
-/** The browser's whole credential. It is opaque, HttpOnly, and stored only as an HMAC. */
-export const SESSION_COOKIE = "quota_session";
+/**
+ * The browser's whole credential. It is opaque, HttpOnly, and stored only as an HMAC.
+ *
+ * Both cookies carry the `__Host-` prefix, which a browser honours only when the cookie is
+ * `Secure`, `Path=/`, and carries no `Domain`. That last part is the point: without it, anything
+ * able to write a cookie for a sibling `*.gotry.io` host could plant one of these on this origin,
+ * which is how a signed handoff cookie still ends in a login-CSRF. The prefix costs a wider path
+ * on the handoff cookie, which is worth it.
+ */
+export const SESSION_COOKIE = "__Host-quota_session";
 /** What one sign-in in flight needs to remember. Nothing outside the GitHub round trip reads it. */
-export const HANDOFF_COOKIE = "quota_oauth";
+export const HANDOFF_COOKIE = "__Host-quota_oauth";
 /** Where the browser lands after GitHub, when the caller named nowhere safe. */
 export const DEFAULT_RETURN_PATH = "/my";
-const handoffCookiePath = "/api/auth/github";
 const handoffSeconds = 10 * 60;
 const webSessionSeconds = 90 * 24 * 60 * 60;
 const githubAuthorizeUrl = "https://github.com/login/oauth/authorize";
@@ -312,7 +319,7 @@ export function clearedSessionCookie(): string {
 }
 
 export function clearedHandoffCookie(): string {
-  return `${HANDOFF_COOKIE}=; Path=${handoffCookiePath}; Max-Age=0; HttpOnly; Secure; SameSite=Lax`;
+  return `${HANDOFF_COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax`;
 }
 
 function sessionCookie(token: string): string {
@@ -320,7 +327,7 @@ function sessionCookie(token: string): string {
 }
 
 function handoffCookie(value: string): string {
-  return `${HANDOFF_COOKIE}=${value}; Path=${handoffCookiePath}; Max-Age=${handoffSeconds}; HttpOnly; Secure; SameSite=Lax`;
+  return `${HANDOFF_COOKIE}=${value}; Path=/; Max-Age=${handoffSeconds}; HttpOnly; Secure; SameSite=Lax`;
 }
 
 function readCookie(header: string | null, name: string): string | null {

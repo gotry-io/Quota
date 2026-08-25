@@ -110,7 +110,10 @@ data requirements. Architecture and product behavior are defined in
   local clients never embed the GitHub client secret and never receive a GitHub access token.
 - Relay owns the browser sign-in end to end. `GET /api/auth/github/start` mints a 256-bit `state`
   and a PKCE verifier and puts both, with the same-origin path to return to, in one HMAC-signed
-  `quota_oauth` cookie that expires in ten minutes. The registered callback is
+  `__Host-quota_oauth` cookie that expires in ten minutes. Both browser cookies carry the `__Host-`
+  prefix, which a browser accepts only when the cookie is `Secure`, `Path=/`, and carries no
+  `Domain`, so nothing able to write a cookie for a sibling `gotry.io` host can plant one on this
+  origin. The registered callback is
   `https://quota.gotry.io/api/auth/github/callback`; it checks `state` against that cookie before
   spending the code, clears the cookie, and answers a callback with a missing, altered, expired, or
   mismatched cookie with 400 and no session. A code GitHub refuses to spend twice is the same 400.
@@ -164,7 +167,7 @@ data requirements. Architecture and product behavior are defined in
   revokes or rejects the token family. Store only HMACs of server session and grant secrets.
 - A browser session is one `account_sessions` row with `client_kind = 'web'` — the same table the
   native clients use, so there is one place a session expires, is revoked, or is swept. It has no
-  refresh token: `quota_session` is the whole credential, is `HttpOnly; Secure; SameSite=Lax;
+  refresh token: `__Host-quota_session` is the whole credential, is `HttpOnly; Secure; SameSite=Lax;
   Path=/`, and is stored only as an HMAC under its own label, so it cannot be presented as a Bearer
   token and a native token cannot be presented as a cookie. JavaScript never reads it, and it
   appears in no log or response body other than its own `Set-Cookie`.
@@ -310,7 +313,7 @@ data requirements. Architecture and product behavior are defined in
   Cloudflare secrets and must not be tracked. Each key has a distinct purpose and must contain
   sufficient entropy; do not reuse one secret across purposes. `QUOTA_SESSION_HASH_KEY` covers every
   credential Relay stores by equality, including the browser session token and the signature on the
-  `quota_oauth` handoff cookie, each under its own domain label.
+  `__Host-quota_oauth` handoff cookie, each under its own domain label.
 - Local builds, Linux `quotacli` build/tests, local D1 migrations, and Wrangler dry runs are
   verification. Do not deploy, apply remote migrations, publish packages, or change production
   secrets without explicit authorization.

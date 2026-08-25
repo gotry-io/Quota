@@ -54,9 +54,9 @@ named in [ADR 0025](../../docs/decisions/0025-one-session-system.md).
 Register the GitHub OAuth App callback as
 `https://quota.gotry.io/api/auth/github/callback`. QuotaRelay owns the browser sign-in itself:
 `GET /api/auth/github/start` seals a 256-bit `state` and a PKCE verifier in a signed ten-minute
-`quota_oauth` cookie and redirects to GitHub with no scope; the callback checks that cookie, spends
+`__Host-quota_oauth` cookie and redirects to GitHub with no scope; the callback checks that cookie, spends
 the code once, and opens one `account_sessions` row with `client_kind = 'web'` behind a
-`quota_session` cookie. `POST /api/auth/logout` revokes it, and `DELETE /api/v2/account` removes
+`__Host-quota_session` cookie. `POST /api/auth/logout` revokes it, and `DELETE /api/v2/account` removes
 the Account and everything stored for it in one D1 batch. See
 [ADR 0025](../../docs/decisions/0025-one-session-system.md). QuotaRelay also retains the native
 grants and their separate account/device token families. The registered `quota-ios` public client

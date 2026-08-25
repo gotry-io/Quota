@@ -428,7 +428,7 @@ client sends any more.
 Quota Web is a SvelteKit app. Hashed `/_app/immutable/*` CSS and JS stay asset-first. Document
 navigations run the existing Relay Worker first: `apps/relay/src/cloudflare.ts` stays Wrangler
 `main`, Hono keeps `/api`, `/oauth`, `/healthz`, and `/readyz`, and every other Worker-first
-request is rendered by SvelteKit `Server.respond`. The Worker reads the `quota_session` cookie
+request is rendered by SvelteKit `Server.respond`. The Worker reads the `__Host-quota_session` cookie
 through `WebDocumentPort` and writes the signed-in header into the first HTML byte.
 Session cookies remain HttpOnly. `/` offers the QuotaBar `.dmg` and Homebrew install command.
 GitHub sign-in is in the header; `/my` is a server redirect when unsigned and otherwise a
