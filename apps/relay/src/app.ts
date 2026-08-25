@@ -36,7 +36,7 @@ import {
   type RelayErrorEnvelope,
   SessionRefreshRequestSchema,
   SessionRefreshResponseSchema,
-  UsageDateRangeSchema,
+  UsageActivityRangeSchema,
   UsageUploadResponseSchema,
   UsageUploadSchema,
 } from "@gotry-io/quota-protocol";
@@ -582,7 +582,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     const principal = await accountReader(context, options, checkedAt);
     if (principal instanceof Response) return principal;
     if (!hasOnlyQueryKeys(context, ["from", "to"])) return invalidRequest(context);
-    const range = UsageDateRangeSchema.safeParse({
+    const range = UsageActivityRangeSchema.safeParse({
       from: context.req.query("from"),
       to: context.req.query("to"),
     });

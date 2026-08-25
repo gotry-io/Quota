@@ -4,9 +4,8 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import * as protocol from "../src/index.ts";
 import {
-  AccountQuotaResponseSchema,
   AccountSummarySchema,
-  AccountUsageResponseSchema,
+  AccountUsageActivityResponseSchema,
   BrowserLoginExchangeRequestSchema,
   DeviceAuthorizationRequestSchema,
   DeviceAuthorizationResponseSchema,
@@ -33,9 +32,8 @@ import {
   QuotaSnapshotEnvelopeSchema,
   QuotaSnapshotUploadResponseSchema,
   SessionRefreshResponseSchema,
-  UsageBreakdownSchema,
-  UsageHourlyFactSchema,
-  UsageSubmissionSchema,
+  UsageRowSchema,
+  UsageUploadSchema,
 } from "../src/index.ts";
 
 describe("quota protocol", () => {
@@ -54,7 +52,7 @@ describe("quota protocol", () => {
   });
 
   it("carries one managed-data version on quota and Usage", () => {
-    expect(MANAGED_DATA_PROTOCOL_VERSION).toBe(5);
+    expect(MANAGED_DATA_PROTOCOL_VERSION).toBe(6);
     expect(protocol.BILLING_AGENTS).toContain("cursor");
     const cursorEnvelope = { ...quotaEnvelope(), snapshots: [snapshot("cursor")] };
     expect(QuotaSnapshotEnvelopeSchema.safeParse(cursorEnvelope).success).toBe(true);
@@ -64,24 +62,29 @@ describe("quota protocol", () => {
       QuotaSnapshotEnvelopeSchema.safeParse({ ...cursorEnvelope, protocol_version: 2 }).success,
     ).toBe(false);
 
+    const upload = usageUpload();
     const cursorUsage = {
-      ...usageSubmission(),
-      coverage: { ...usageSubmission().coverage, agent: "cursor" as const },
-      rows: usageSubmission().rows.map((row) => ({ ...row, agent: "cursor" as const })),
+      ...upload,
+      agent: "cursor" as const,
+      hours: upload.hours.map((hour) => ({
+        ...hour,
+        rows: hour.rows.map((row) => ({ ...row, agent: "cursor" as const })),
+      })),
     };
-    expect(UsageSubmissionSchema.safeParse(cursorUsage).success).toBe(true);
-    expect(UsageSubmissionSchema.safeParse({ ...cursorUsage, protocol_version: 2 }).success).toBe(
+    expect(UsageUploadSchema.safeParse(cursorUsage).success).toBe(true);
+    expect(UsageUploadSchema.safeParse({ ...cursorUsage, protocol_version: 2 }).success).toBe(
       false,
     );
   });
 
-  it("refuses a summary Device that asserts something about its own health", () => {
+  it("refuses a summary Device that asserts something about itself", () => {
     const summary = accountSummary();
     expect(AccountSummarySchema.safeParse(summary).success).toBe(true);
-    // A Device says when it was last seen. Anything it claimed about itself is not the wire.
+    // A Device says when it was last seen and when its newest reading was taken. A status it
+    // decided for itself is not the wire.
     const claiming = {
       ...summary,
-      devices: summary.devices.map((device) => ({ ...device, health: null })),
+      devices: summary.devices.map((device) => ({ ...device, status: "active" })),
     };
     expect(AccountSummarySchema.safeParse(claiming).success).toBe(false);
   });
@@ -120,40 +123,32 @@ describe("quota protocol", () => {
     ).toBe(false);
     expect(
       QuotaSnapshotUploadResponseSchema.safeParse({
-        protocol_version: 5,
-        outcome: "accepted",
+        protocol_version: 6,
         device_id: "device_01",
         device_generation: 3,
-        accepted_sequence: 42,
-        next_snapshot_sequence: 43,
+        accepted: ["codex"],
+        ignored: ["cursor"],
       }).success,
     ).toBe(true);
   });
 
-  it("requires a reason only for a terminally rejected Usage upload", () => {
-    const rejected = {
-      protocol_version: 5,
-      outcome: "rejected",
+  it("answers a Usage upload with the hours it decided, and nothing else", () => {
+    const answered = {
+      protocol_version: 6,
       device_id: "device_01",
       device_generation: 3,
-      accepted_sequence: null,
-      next_sequence: 43,
-      usage_sync_revision: 9,
-      deleted_before: null,
-      rejection_reason: "duplicate_fact_identity",
+      accepted: ["2026-08-02T12:00:00Z"],
+      ignored: ["2026-08-02T11:00:00Z"],
     };
-    expect(protocol.UsageUploadResponseSchema.safeParse(rejected).success).toBe(true);
+    expect(protocol.UsageUploadResponseSchema.safeParse(answered).success).toBe(true);
+    // The sequence, the receipt, and the rejection reason all belonged to an append.
     expect(
-      protocol.UsageUploadResponseSchema.safeParse({
-        ...rejected,
-        rejection_reason: undefined,
-      }).success,
+      protocol.UsageUploadResponseSchema.safeParse({ ...answered, next_sequence: 43 }).success,
     ).toBe(false);
     expect(
       protocol.UsageUploadResponseSchema.safeParse({
-        ...rejected,
-        outcome: "accepted",
-        accepted_sequence: 42,
+        ...answered,
+        accepted: ["2026-08-02T12:30:00Z"],
       }).success,
     ).toBe(false);
   });
@@ -407,8 +402,6 @@ describe("quota protocol", () => {
       account_id: "account_01",
       device_id: "device_01",
       device_generation: 3,
-      next_snapshot_sequence: 42,
-      next_usage_sequence: 8,
       usage_deleted_before: null,
       usage_sync_revision: 9,
       account_session: token,
@@ -421,8 +414,6 @@ describe("quota protocol", () => {
         account_id: "account_01",
         device_id: "device_01",
         device_generation: 3,
-        next_snapshot_sequence: 42,
-        next_usage_sequence: 8,
         usage_deleted_before: "2026-08-01T01:23:45.678Z",
         usage_sync_revision: 9,
       }).success,
@@ -464,230 +455,188 @@ describe("quota protocol", () => {
     ).toBe(false);
   });
 
-  it("validates token conservation and source-cost coverage on hourly facts", () => {
-    const fact = usageFact();
-    expect(UsageHourlyFactSchema.safeParse(fact).success).toBe(true);
-    expect(UsageHourlyFactSchema.safeParse({ ...fact, cache_read_tokens: 1_001 }).success).toBe(
-      false,
-    );
-    expect(UsageHourlyFactSchema.safeParse({ ...fact, reasoning_tokens: 201 }).success).toBe(false);
+  it("validates token conservation and source-cost coverage on a row", () => {
+    const row = usageRow();
+    expect(UsageRowSchema.safeParse(row).success).toBe(true);
+    expect(UsageRowSchema.safeParse({ ...row, cache_read_tokens: 1_001 }).success).toBe(false);
+    expect(UsageRowSchema.safeParse({ ...row, reasoning_tokens: 201 }).success).toBe(false);
     expect(
-      UsageHourlyFactSchema.safeParse({
-        ...fact,
+      UsageRowSchema.safeParse({
+        ...row,
         source_cost_microusd: "1200",
         source_cost_covered_requests: 0,
       }).success,
     ).toBe(false);
     expect(
-      UsageHourlyFactSchema.safeParse({
-        ...fact,
+      UsageRowSchema.safeParse({
+        ...row,
         billing_channel: "unknown",
         channel_source: "explicit",
       }).success,
     ).toBe(false);
-    expect(UsageHourlyFactSchema.safeParse({ ...fact, model: "GPT-5.5[1m]" }).success).toBe(true);
-    expect(UsageHourlyFactSchema.safeParse({ ...fact, model: "unknown" }).success).toBe(true);
-    expect(UsageHourlyFactSchema.safeParse({ ...fact, model: "😀".repeat(128) }).success).toBe(
-      true,
-    );
-    expect(UsageHourlyFactSchema.safeParse({ ...fact, model: "😀".repeat(129) }).success).toBe(
-      false,
-    );
+    expect(UsageRowSchema.safeParse({ ...row, model: "GPT-5.5[1m]" }).success).toBe(true);
+    expect(UsageRowSchema.safeParse({ ...row, model: "unknown" }).success).toBe(true);
+    expect(UsageRowSchema.safeParse({ ...row, model: "😀".repeat(128) }).success).toBe(true);
+    expect(UsageRowSchema.safeParse({ ...row, model: "😀".repeat(129) }).success).toBe(false);
+    expect(UsageRowSchema.safeParse({ ...row, model: "model\u2028separator" }).success).toBe(true);
+    expect(UsageRowSchema.safeParse({ ...row, model: "model\nwith-control" }).success).toBe(false);
     expect(
-      UsageHourlyFactSchema.safeParse({ ...fact, model: "model\u2028separator" }).success,
+      UsageRowSchema.safeParse({ ...row, agent: "grok", billing_channel: "xai_direct" }).success,
     ).toBe(true);
-    expect(UsageHourlyFactSchema.safeParse({ ...fact, model: "model\nwith-control" }).success).toBe(
-      false,
-    );
+    expect(UsageRowSchema.safeParse({ ...row, prompt: "secret" }).success).toBe(false);
+    // A row is placed by the hour that carries it, so it names no instant of its own.
     expect(
-      UsageHourlyFactSchema.safeParse({
-        ...fact,
-        agent: "grok",
-        billing_channel: "xai_direct",
-      }).success,
-    ).toBe(true);
-    expect(UsageHourlyFactSchema.safeParse({ ...fact, prompt: "secret" }).success).toBe(false);
+      UsageRowSchema.safeParse({ ...row, bucket_start_utc: "2026-08-02T12:00:00Z" }).success,
+    ).toBe(false);
+    expect(UsageRowSchema.safeParse({ ...row, usage_date: "2026-08-02" }).success).toBe(false);
   });
 
-  it("uses the opaque model contract for model breakdown keys", () => {
-    const breakdown = {
-      dimension: "model" as const,
-      key: "GPT-5.5[1m]",
+  it("uses the opaque model contract for a period's model leaves", () => {
+    const period = {
       totals: emptyTotals(),
       cost: emptyCost(),
+      partial: false,
+      agents: [
+        {
+          agent: "codex",
+          providers: [
+            {
+              provider: "openai",
+              models: [{ model: "GPT-5.5[1m]", totals: emptyTotals(), cost: emptyCost() }],
+            },
+          ],
+        },
+      ],
     };
-    expect(UsageBreakdownSchema.safeParse(breakdown).success).toBe(true);
-    expect(UsageBreakdownSchema.safeParse({ ...breakdown, key: "😀".repeat(128) }).success).toBe(
-      true,
-    );
-    expect(UsageBreakdownSchema.safeParse({ ...breakdown, key: "😀".repeat(129) }).success).toBe(
+    expect(protocol.UsagePeriodSchema.safeParse(period).success).toBe(true);
+    const withModel = (model: string) => ({
+      ...period,
+      agents: [
+        {
+          agent: "codex",
+          providers: [
+            { provider: "openai", models: [{ model, totals: emptyTotals(), cost: emptyCost() }] },
+          ],
+        },
+      ],
+    });
+    expect(protocol.UsagePeriodSchema.safeParse(withModel("😀".repeat(128))).success).toBe(true);
+    expect(protocol.UsagePeriodSchema.safeParse(withModel("😀".repeat(129))).success).toBe(false);
+    expect(protocol.UsagePeriodSchema.safeParse(withModel("model\nwith-control")).success).toBe(
       false,
     );
+  });
+
+  it("bounds an upload by hours and by the rows inside one hour", () => {
+    const upload = usageUpload();
+    const hour = upload.hours[0];
+    expect(hour).toBeDefined();
+    expect(UsageUploadSchema.safeParse(upload).success).toBe(true);
+    const withRows = (count: number) => ({
+      ...upload,
+      hours: [
+        {
+          ...hour,
+          rows: Array.from({ length: count }, (_, index) => ({
+            ...usageRow(),
+            model: `model-${index}`,
+          })),
+        },
+      ],
+    });
     expect(
-      UsageBreakdownSchema.safeParse({ ...breakdown, key: "model\nwith-control" }).success,
-    ).toBe(false);
-    expect(
-      UsageBreakdownSchema.safeParse({
-        ...breakdown,
-        dimension: "device",
-        key: "d".repeat(128),
-      }).success,
+      UsageUploadSchema.safeParse(withRows(protocol.MAXIMUM_USAGE_ROWS_PER_HOUR)).success,
     ).toBe(true);
     expect(
-      UsageBreakdownSchema.safeParse({
-        ...breakdown,
-        dimension: "device",
-        key: "d".repeat(129),
-      }).success,
+      UsageUploadSchema.safeParse(withRows(protocol.MAXIMUM_USAGE_ROWS_PER_HOUR + 1)).success,
+    ).toBe(false);
+    const withHours = (count: number) => ({
+      ...upload,
+      hours: Array.from({ length: count }, (_, index) => ({
+        ...hour,
+        bucket_start_utc: new Date(Date.UTC(2026, 7, 2, 0) + index * 3_600_000)
+          .toISOString()
+          .replace(".000Z", "Z"),
+      })),
+    });
+    expect(
+      UsageUploadSchema.safeParse(withHours(protocol.MAXIMUM_USAGE_HOURS_PER_UPLOAD)).success,
+    ).toBe(true);
+    expect(
+      UsageUploadSchema.safeParse(withHours(protocol.MAXIMUM_USAGE_HOURS_PER_UPLOAD + 1)).success,
     ).toBe(false);
   });
 
-  it("requires canonical bounded UTC coverage and contained same-agent rows", () => {
-    const submission = usageSubmission();
-    expect(UsageSubmissionSchema.safeParse(submission).success).toBe(true);
-    expect(
-      UsageSubmissionSchema.safeParse({
-        ...submission,
-        rows: [{ ...submission.rows[0], model: "unknown" }],
-      }).success,
-    ).toBe(true);
-    expect(
-      UsageSubmissionSchema.safeParse({
-        ...submission,
-        rows: [{ ...submission.rows[0], model: "openrouter-3o[1m]" }],
-      }).success,
-    ).toBe(true);
-    expect(
-      UsageSubmissionSchema.safeParse({
-        ...submission,
-        rows: Array.from({ length: 65 }, (_, index) => ({
-          ...submission.rows[0],
-          model: `model-${index}`,
-        })),
-      }).success,
-    ).toBe(true);
-    expect(
-      UsageSubmissionSchema.safeParse({
-        ...submission,
-        write_mode: "merge_partial",
-        coverage: { ...submission.coverage, status: "partial" },
-        multipart: { batch_id: "batch_01", part_index: 0, part_count: 2 },
-      }).success,
-    ).toBe(true);
-    expect(
-      UsageSubmissionSchema.safeParse({
-        ...submission,
-        multipart: { batch_id: "batch_01", part_index: 0, part_count: 65 },
-      }).success,
-    ).toBe(false);
-    expect(
-      UsageSubmissionSchema.safeParse({
-        ...submission,
-        coverage: { ...submission.coverage, start_at: "2026-08-02T00:30:00Z" },
-      }).success,
-    ).toBe(false);
-    expect(
-      UsageSubmissionSchema.safeParse({
-        ...submission,
-        coverage: { ...submission.coverage, start_at: "2023-02-29T00:00:00Z" },
-      }).success,
-    ).toBe(false);
-    expect(
-      UsageSubmissionSchema.safeParse({
-        ...submission,
-        rows: [{ ...submission.rows[0], usage_hour: 12 }],
-      }).success,
-    ).toBe(false);
-    expect(
-      UsageSubmissionSchema.safeParse({
-        ...submission,
-        coverage: { ...submission.coverage, end_at: submission.coverage.start_at },
-      }).success,
-    ).toBe(false);
-    expect(
-      UsageSubmissionSchema.safeParse({
-        ...submission,
-        rows: [{ ...submission.rows[0], bucket_start_utc: submission.coverage.end_at }],
-      }).success,
-    ).toBe(false);
-    expect(
-      UsageSubmissionSchema.safeParse({
-        ...submission,
-        rows: [{ ...submission.rows[0], agent: "claude_code" }],
-      }).success,
-    ).toBe(false);
-    expect(
-      UsageSubmissionSchema.safeParse({
-        ...submission,
-        rows: [submission.rows[0], { ...submission.rows[0] }],
-      }).success,
-    ).toBe(false);
-  });
-
-  it("validates account quota and Usage as one normalized read summary", () => {
+  it("validates subscriptions and Usage as one normalized read summary", () => {
     expect(AccountSummarySchema.safeParse(accountSummary()).success).toBe(true);
     expect(
-      AccountQuotaResponseSchema.safeParse({
-        protocol_version: 5,
-        quota: accountSummary().quota,
+      AccountUsageActivityResponseSchema.safeParse({
+        protocol_version: 6,
+        days: [{ date: "2026-08-02", totals: emptyTotals(), cost: emptyCost(), partial: false }],
       }).success,
     ).toBe(true);
     expect(
-      AccountUsageResponseSchema.safeParse({
-        protocol_version: 5,
-        usage: accountSummary().usage,
+      AccountUsageActivityResponseSchema.safeParse({
+        protocol_version: 6,
+        days: [{ date: "2026-08-02", totals: emptyTotals(), cost: emptyCost() }],
       }).success,
-    ).toBe(true);
+    ).toBe(false);
+    const summary = accountSummary();
     expect(
-      AccountUsageResponseSchema.safeParse({
-        protocol_version: 5,
+      AccountSummarySchema.safeParse({
+        ...summary,
         usage: {
-          ...accountSummary().usage,
-          cost: {
-            ...emptyCost(),
-            status: "unavailable",
-            unpriced_rows: 2,
-            unpriced: [
-              {
-                billing_channel: "openai_direct",
-                model: "model-a",
-                reason: "unknown_model",
-                rows: 1,
-              },
-            ],
-            unpriced_truncated: true,
+          ...summary.usage,
+          all: {
+            ...summary.usage.all,
+            cost: {
+              ...emptyCost(),
+              status: "unavailable",
+              unpriced_rows: 2,
+              unpriced: [
+                {
+                  billing_channel: "openai_direct",
+                  model: "model-a",
+                  reason: "unknown_model",
+                  rows: 1,
+                },
+              ],
+              unpriced_truncated: true,
+            },
           },
         },
       }).success,
     ).toBe(true);
     expect(
-      AccountUsageResponseSchema.safeParse({
-        protocol_version: 5,
+      AccountSummarySchema.safeParse({
+        ...summary,
         usage: {
-          ...accountSummary().usage,
-          cost: { ...emptyCost(), unpriced_truncated: false },
+          ...summary.usage,
+          all: { ...summary.usage.all, cost: { ...emptyCost(), unpriced_truncated: false } },
         },
       }).success,
     ).toBe(false);
     expect(
       AccountSummarySchema.safeParse({
-        ...accountSummary(),
-        devices: [{ ...accountSummary().devices[0], owner_id: "owner_legacy" }],
+        ...summary,
+        devices: [{ ...summary.devices[0], owner_id: "owner_legacy" }],
+      }).success,
+    ).toBe(false);
+    // The observations a subscription was resolved from are not the read; the resolution is.
+    expect(
+      AccountSummarySchema.safeParse({
+        ...summary,
+        quota: [{ device_id: "device_01", snapshot: snapshot("codex") }],
       }).success,
     ).toBe(false);
   });
 
-  it("refuses a coverage window computed from a missing lower bound", () => {
-    const submission = usageSubmission();
+  it("refuses an hour computed from a missing lower bound", () => {
+    const upload = usageUpload();
     expect(
-      UsageSubmissionSchema.safeParse({
-        ...submission,
-        coverage: {
-          ...submission.coverage,
-          start_at: "1970-01-01T00:00:00Z",
-          end_at: "1970-02-01T00:00:00Z",
-        },
-        rows: [],
+      UsageUploadSchema.safeParse({
+        ...upload,
+        hours: [{ ...upload.hours[0], bucket_start_utc: "1970-01-01T00:00:00Z", rows: [] }],
       }).success,
     ).toBe(false);
     // The private local report states whatever range the app asked for and is not bounded here.
@@ -813,20 +762,14 @@ function snapshot(provider: "codex" | "claude" | "cursor") {
 
 function quotaEnvelope() {
   return {
-    protocol_version: 5 as const,
-    device_id: "device_01",
+    protocol_version: 6 as const,
     generation: 3,
-    sequence: 42,
-    captured_at: "2026-08-02T12:00:00Z",
     snapshots: [snapshot("codex")],
   };
 }
 
-function usageFact() {
+function usageRow() {
   return {
-    bucket_start_utc: "2026-08-02T12:00:00Z",
-    usage_date: "2026-08-02",
-    usage_hour: 20,
     agent: "codex" as const,
     billing_channel: "openai_direct" as const,
     channel_source: "agent_default" as const,
@@ -849,39 +792,31 @@ function usageFact() {
   };
 }
 
-function usageSubmission() {
+function usageUpload() {
   return {
-    protocol_version: 5 as const,
-    submission_id: "submission_01",
-    device_id: "device_01",
+    protocol_version: 6 as const,
     generation: 3,
-    sequence: 7,
-    parser_revision: "parser_1",
-    aggregation_timezone: "Asia/Singapore",
-    coverage: {
-      agent: "codex" as const,
-      start_at: "2026-08-02T12:00:00Z",
-      end_at: "2026-08-02T13:00:00Z",
-      status: "complete" as const,
-    },
-    rows: [usageFact()],
+    agent: "codex" as const,
+    hours: [
+      {
+        bucket_start_utc: "2026-08-02T12:00:00Z",
+        scan_version: 7,
+        partial: false,
+        rows: [usageRow()],
+      },
+    ],
   };
 }
 
 function emptyTotals() {
   return {
+    total_tokens: 0,
     input_tokens: 0,
-    cache_read_tokens: 0,
-    cache_write_5m_tokens: 0,
-    cache_write_1h_tokens: 0,
-    cache_write_inferred_tokens: 0,
     output_tokens: 0,
+    cache_read_input_tokens: 0,
+    cache_write_input_tokens: 0,
     reasoning_tokens: 0,
-    requests: 0,
-    web_search_requests: 0,
-    web_fetch_requests: 0,
-    source_cost_microusd: null,
-    source_cost_covered_requests: 0,
+    messages: 0,
   };
 }
 
@@ -900,9 +835,13 @@ function emptyCost() {
   };
 }
 
+function emptyPeriod() {
+  return { totals: emptyTotals(), cost: emptyCost(), partial: false, agents: [] };
+}
+
 function accountSummary() {
   return {
-    protocol_version: 5 as const,
+    protocol_version: 6 as const,
     account: {
       account_id: "account_01",
       display_label: "octocat",
@@ -910,25 +849,29 @@ function accountSummary() {
     },
     devices: [
       {
-        device_id: "device_01",
+        id: "device_01",
         display_name: "Kitchen Mac",
         platform: "macos" as const,
-        device_generation: 3,
-        status: "active" as const,
-        created_at: "2026-07-01T00:00:00Z",
-        last_login_at: "2026-08-01T00:00:00Z",
         last_seen_at: "2026-08-02T12:00:00Z",
-        signed_out_at: null,
+        last_observed_at: "2026-08-02T12:00:00Z",
       },
     ],
-    quota: [{ device_id: "device_01", snapshot: snapshot("codex") }],
+    subscriptions: [
+      {
+        key: "codex|codex-fixture|source|device_01",
+        provider: "codex" as const,
+        snapshot: snapshot("codex"),
+        sources: [{ device_id: "device_01", observed_at: "2026-08-02T12:00:00Z" }],
+      },
+    ],
     usage: {
-      range: { from: "2026-08-01", to: "2026-08-02" },
-      totals: emptyTotals(),
-      cost: emptyCost(),
-      coverage: "complete",
-      breakdowns: [],
+      today: emptyPeriod(),
+      last_7_days: emptyPeriod(),
+      last_30_days: emptyPeriod(),
+      all: emptyPeriod(),
     },
+    pricing_revision: "pricing_2026_08_02",
+    model_catalog_revision: "model_2026_08_02",
   };
 }
 

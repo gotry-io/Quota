@@ -7,40 +7,21 @@
   "properties": {
     "protocol_version": {
       "type": "number",
-      "const": 5
-    },
-    "device_id": {
-      "type": "string",
-      "minLength": 1,
-      "maxLength": 128,
-      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+      "const": 6
     },
     "generation": {
       "minimum": 1,
       "$ref": "#/$defs/__schema0"
     },
-    "sequence": {
-      "$ref": "#/$defs/__schema0"
-    },
-    "captured_at": {
-      "$ref": "#/$defs/__schema1"
-    },
     "snapshots": {
       "maxItems": 32,
       "type": "array",
       "items": {
-        "$ref": "#/$defs/__schema2"
+        "$ref": "#/$defs/__schema1"
       }
     }
   },
-  "required": [
-    "protocol_version",
-    "device_id",
-    "generation",
-    "sequence",
-    "captured_at",
-    "snapshots"
-  ],
+  "required": ["protocol_version", "generation", "snapshots"],
   "additionalProperties": false,
   "$defs": {
     "__schema0": {
@@ -49,12 +30,6 @@
       "maximum": 9007199254740991
     },
     "__schema1": {
-      "type": "string",
-      "maxLength": 64,
-      "format": "date-time",
-      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
-    },
-    "__schema2": {
       "type": "object",
       "properties": {
         "provider": {
@@ -92,7 +67,7 @@
           "maxItems": 16,
           "type": "array",
           "items": {
-            "$ref": "#/$defs/__schema3"
+            "$ref": "#/$defs/__schema2"
           }
         },
         "status": {
@@ -100,13 +75,13 @@
           "enum": ["available", "stale", "auth_required", "unavailable", "unsupported", "error"]
         },
         "observed_at": {
-          "$ref": "#/$defs/__schema1"
+          "$ref": "#/$defs/__schema3"
         }
       },
       "required": ["provider", "account", "windows", "status", "observed_at"],
       "additionalProperties": false
     },
-    "__schema3": {
+    "__schema2": {
       "type": "object",
       "properties": {
         "id": {
@@ -126,7 +101,7 @@
           "maximum": 100
         },
         "resets_at": {
-          "$ref": "#/$defs/__schema1"
+          "$ref": "#/$defs/__schema3"
         },
         "duration_seconds": {
           "$ref": "#/$defs/__schema0"
@@ -145,6 +120,12 @@
       },
       "required": ["id", "title", "used_percent"],
       "additionalProperties": false
+    },
+    "__schema3": {
+      "type": "string",
+      "maxLength": 64,
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
     }
   }
 }

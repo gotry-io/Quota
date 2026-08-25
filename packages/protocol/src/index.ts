@@ -771,6 +771,15 @@ export const UsageUploadSchema = z
         });
       }
       buckets.add(hour.bucket_start_utc);
+      for (const [rowIndex, row] of hour.rows.entries()) {
+        if (row.agent !== upload.agent) {
+          context.addIssue({
+            code: "custom",
+            path: ["hours", index, "rows", rowIndex, "agent"],
+            message: "Row agent must match the upload agent.",
+          });
+        }
+      }
     }
   });
 export type UsageUpload = z.infer<typeof UsageUploadSchema>;
@@ -913,9 +922,7 @@ export const LocalUsagePeriodSummarySchema = z
   .strict();
 export type LocalUsagePeriodSummary = z.infer<typeof LocalUsagePeriodSummarySchema>;
 
-/**
- * The dates an activity read may ask for. `to` names the last day it wants, inclusive.
- */
+/** A range of calendar dates. `to` names the last day it covers, inclusive. */
 export const UsageDateRangeSchema = z
   .object({
     from: UsageDateSchema,
@@ -923,20 +930,29 @@ export const UsageDateRangeSchema = z
   })
   .strict()
   .superRefine((range, context) => {
-    const from = Date.parse(`${range.from}T00:00:00Z`);
-    const to = Date.parse(`${range.to}T00:00:00Z`);
-    if (from > to) {
+    if (Date.parse(`${range.from}T00:00:00Z`) > Date.parse(`${range.to}T00:00:00Z`)) {
       context.addIssue({ code: "custom", path: ["to"], message: "to must not precede from." });
-    }
-    if ((to - from) / 86_400_000 + 1 > MAXIMUM_USAGE_ACTIVITY_DAYS) {
-      context.addIssue({
-        code: "custom",
-        path: ["to"],
-        message: `A range may span at most ${MAXIMUM_USAGE_ACTIVITY_DAYS} days.`,
-      });
     }
   });
 export type UsageDateRange = z.infer<typeof UsageDateRangeSchema>;
+
+/**
+ * The dates an activity read may ask for.
+ *
+ * The private local report states whatever range the app asked for, so the bound belongs to the
+ * read that has to answer it rather than to every range.
+ */
+export const UsageActivityRangeSchema = UsageDateRangeSchema.superRefine((range, context) => {
+  const days =
+    (Date.parse(`${range.to}T00:00:00Z`) - Date.parse(`${range.from}T00:00:00Z`)) / 86_400_000 + 1;
+  if (days > MAXIMUM_USAGE_ACTIVITY_DAYS) {
+    context.addIssue({
+      code: "custom",
+      path: ["to"],
+      message: `A range may span at most ${MAXIMUM_USAGE_ACTIVITY_DAYS} days.`,
+    });
+  }
+});
 
 export const LocalUsageReportStatusSchema = z.enum(["complete", "partial", "unavailable"]);
 export type LocalUsageReportStatus = z.infer<typeof LocalUsageReportStatusSchema>;

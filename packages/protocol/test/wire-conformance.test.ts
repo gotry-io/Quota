@@ -4,7 +4,7 @@ import {
   AccountSummaryReadSchema,
   AccountSummarySchema,
   QuotaSnapshotEnvelopeSchema,
-  UsageSubmissionSchema,
+  UsageUploadSchema,
 } from "../src/index.ts";
 
 type WireConformance = {
@@ -27,7 +27,7 @@ const conformance = conformanceJson as WireConformance;
 const schemas = {
   quota_snapshot_envelope: QuotaSnapshotEnvelopeSchema,
   account_summary: AccountSummaryReadSchema,
-  usage_submission: UsageSubmissionSchema,
+  usage_submission: UsageUploadSchema,
 };
 
 describe("wire conformance", () => {
