@@ -3475,7 +3475,17 @@ fn cache_needs_rebuild(error: &StateError) -> bool {
                 | SqliteErrorCode::CannotOpen
                 | SqliteErrorCode::OperationInterrupted
         ),
-        StateError::Sql(_) => true,
+        // The image no longer holds the shape this build reads: a column of the wrong type or
+        // name, or a statement SQLite will not prepare against it.
+        StateError::Sql(
+            rusqlite::Error::InvalidColumnType(..)
+            | rusqlite::Error::InvalidColumnName(_)
+            | rusqlite::Error::InvalidQuery
+            | rusqlite::Error::SqlInputError { .. },
+        ) => true,
+        // A row that is simply not there, and a value this build could not convert, are answers
+        // about one query. They are not a verdict on the file.
+        StateError::Sql(_) => false,
         _ => false,
     }
 }
