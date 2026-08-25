@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		1843EA48EF0230D16D1889C9 /* VisualFixtureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6DAB666C3AD5BBB5CEED76A7 /* VisualFixtureTests.swift */; };
+		20DF4041FFFB602E6630BF92 /* BackgroundTasks.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 383D78AB5F09A4248D36752A /* BackgroundTasks.framework */; };
 		2B6BF7BCF5EB68FCB2B6D100 /* QuotaRelay in Frameworks */ = {isa = PBXBuildFile; productRef = 22D5DB49A51494FAAAFCD9E6 /* QuotaRelay */; };
 		36AA8F7A68FF6D773AB89793 /* OverviewWidgetContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4DAC8211347AE27EFAF2A4DB /* OverviewWidgetContent.swift */; };
 		3CA35579C61CEBEA2255B6EE /* QuotaPresentation in Frameworks */ = {isa = PBXBuildFile; productRef = FFC79886986AE5BCDBF34729 /* QuotaPresentation */; };
@@ -40,6 +41,7 @@
 		C8EB7E95748A0F794077C115 /* ProviderQuotaCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 715109BDC79F55A51B6113F8 /* ProviderQuotaCard.swift */; };
 		CC18EA3EC0F6816AA0F2E3A9 /* StatusBanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 592AE2441A525DB2921A5FA2 /* StatusBanner.swift */; };
 		CF0106D41F578E1909080626 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5FCDA22B62B0D142212AA65 /* RootView.swift */; };
+		D4F6C9061D4E442A8156BF91 /* BackgroundRefresh.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3A92DE7F7321BA8D0CC1417 /* BackgroundRefresh.swift */; };
 		D94219C49FEE1E3ACE3F9A7E /* OverviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC67366D6301AC5644D841EB /* OverviewView.swift */; };
 		DDE6A6D1075A876C9DF0DA11 /* QuotaWire in Frameworks */ = {isa = PBXBuildFile; productRef = A16F5F6EF52A9473C084077F /* QuotaWire */; };
 		E0E82363C627689AE14A1F86 /* QuotaWidgetData in Frameworks */ = {isa = PBXBuildFile; productRef = B70030D1FC9A48DC801AAC2E /* QuotaWidgetData */; };
@@ -83,6 +85,7 @@
 		0217A9DC324748A19C8043BC /* apple-client */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "apple-client"; path = "../../packages/apple-client"; sourceTree = SOURCE_ROOT; };
 		032F85F69C9DBBC730CD0F7F /* ConnectAccountView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectAccountView.swift; sourceTree = "<group>"; };
 		0EE25721BF3B868D71E8EA28 /* WidgetSnapshotProjectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetSnapshotProjectionTests.swift; sourceTree = "<group>"; };
+		383D78AB5F09A4248D36752A /* BackgroundTasks.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = BackgroundTasks.framework; path = System/Library/Frameworks/BackgroundTasks.framework; sourceTree = SDKROOT; };
 		461882F5E872B7B48B7D4BF3 /* OverviewWidgetViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverviewWidgetViews.swift; sourceTree = "<group>"; };
 		4DAC8211347AE27EFAF2A4DB /* OverviewWidgetContent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverviewWidgetContent.swift; sourceTree = "<group>"; };
 		50438DF74EFAC847E8BA5A01 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
@@ -99,6 +102,7 @@
 		8425987F3D6831016C246ABC /* QuotaWidgets.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = QuotaWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		9F1B27F361B6F8E7353A7BA3 /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
 		9FA4486FDD676B13BB1A728D /* apple-shared */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "apple-shared"; path = "../../packages/apple-shared"; sourceTree = SOURCE_ROOT; };
+		A3A92DE7F7321BA8D0CC1417 /* BackgroundRefresh.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundRefresh.swift; sourceTree = "<group>"; };
 		A5FCDA22B62B0D142212AA65 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		A6C9CDBC80406B0970101D09 /* OverviewWidgetContentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverviewWidgetContentTests.swift; sourceTree = "<group>"; };
 		BA569843A5C8221A5E1B37F7 /* OverviewWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverviewWidget.swift; sourceTree = "<group>"; };
@@ -122,6 +126,7 @@
 				805C1F694D13482561E56977 /* QuotaAccount in Frameworks */,
 				93ED7CA9E53DBA0831F68102 /* QuotaWidgetData in Frameworks */,
 				FB4B6E45B0B674AE0EAE2533 /* QuotaPresentation in Frameworks */,
+				20DF4041FFFB602E6630BF92 /* BackgroundTasks.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -155,6 +160,7 @@
 			isa = PBXGroup;
 			children = (
 				50438DF74EFAC847E8BA5A01 /* AppModel.swift */,
+				A3A92DE7F7321BA8D0CC1417 /* BackgroundRefresh.swift */,
 				582B3F4380D3CB47833DC394 /* BrowserAuthenticator.swift */,
 				032F85F69C9DBBC730CD0F7F /* ConnectAccountView.swift */,
 				CC35C3F705ED31BF2268C093 /* Formatters.swift */,
@@ -209,6 +215,7 @@
 		90B59C1D81E8A127C7A00D27 /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
+				383D78AB5F09A4248D36752A /* BackgroundTasks.framework */,
 				9F1B27F361B6F8E7353A7BA3 /* SwiftUI.framework */,
 				D20ECC9117266738C855DB30 /* WidgetKit.framework */,
 			);
@@ -389,6 +396,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				E7D6D0B08F4795420BC6713F /* AppModel.swift in Sources */,
+				D4F6C9061D4E442A8156BF91 /* BackgroundRefresh.swift in Sources */,
 				BCC41879989EFE8E246E42F1 /* BrowserAuthenticator.swift in Sources */,
 				8E2336FC11600A345D6A4817 /* ConnectAccountView.swift in Sources */,
 				9E7A1AC1B14494BA2E4181F1 /* Formatters.swift in Sources */,
