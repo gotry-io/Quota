@@ -572,10 +572,13 @@ fn migration_v10(tx: &Transaction<'_>) -> Result<(), StateError> {
 /// have held would otherwise fail the whole copy, and a device that cannot open its state is a
 /// worse outcome than a device missing a line of history it could not read anyway.
 fn migration_v11(tx: &Transaction<'_>) -> Result<(), StateError> {
+    // The old indexes stay where they are: they belong to the renamed table and go with it.
+    // Dropping a table whose parent reference points at itself performs an implicit delete that
+    // fires `ON DELETE SET NULL` for every row, and without the parent index that is a scan per
+    // row — 31 seconds on this device's 27,755 attempts against 0.11 with the index in place.
+    // Their names come free for the new indexes once the old table is gone.
     tx.execute_batch(
         "ALTER TABLE diagnostic_attempts RENAME TO diagnostic_attempts_v10;
-         DROP INDEX IF EXISTS diagnostic_attempts_recent_idx;
-         DROP INDEX IF EXISTS diagnostic_attempts_parent_idx;
          CREATE TABLE diagnostic_attempts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             parent_refresh_id INTEGER REFERENCES diagnostic_attempts(id) ON DELETE SET NULL,
@@ -620,10 +623,7 @@ fn migration_v11(tx: &Transaction<'_>) -> Result<(), StateError> {
                    completed_at, duration_ms, outcome, code, recovery, metrics_json,
                    start_revision, end_revision
             FROM diagnostic_attempts_v10;
-         CREATE INDEX diagnostic_attempts_recent_idx
-            ON diagnostic_attempts(started_at DESC, id DESC);
-         CREATE INDEX diagnostic_attempts_parent_idx
-            ON diagnostic_attempts(parent_refresh_id, id);",
+",
     )?;
     // A row the copy could not take is one no reader could take either — the attempt log is
     // read whole, and a single unparseable code fails all of it.  Dropping it is a repair, but
@@ -641,7 +641,13 @@ fn migration_v11(tx: &Transaction<'_>) -> Result<(), StateError> {
             [],
         )?;
     }
-    tx.execute_batch("DROP TABLE diagnostic_attempts_v10;")?;
+    tx.execute_batch(
+        "DROP TABLE diagnostic_attempts_v10;
+         CREATE INDEX diagnostic_attempts_recent_idx
+            ON diagnostic_attempts(started_at DESC, id DESC);
+         CREATE INDEX diagnostic_attempts_parent_idx
+            ON diagnostic_attempts(parent_refresh_id, id);",
+    )?;
 
     // The persisted collection report is stamped with the contract it was written under, and
     // the app decodes the whole IPC state or none of it.  It is this device's own reading of
@@ -1478,6 +1484,48 @@ mod tests {
                 assert!(stored.is_null(), "{name}: {stored}");
             }
         }
+    }
+
+    /// Opening the store is on the app's request path, and a request that never answers is a
+    /// device with no data and no way forward. This ladder step took 75 seconds on an image
+    /// holding 27,755 attempts — past every timeout, on every launch, with nothing committed —
+    /// and one index dropped a few statements too early is what did it.
+    #[test]
+    fn the_ladder_stays_inside_a_launch() {
+        let mut conn = Connection::open_in_memory().expect("memory");
+        apply(&mut conn).expect("fresh");
+        conn.execute("DELETE FROM schema_migrations WHERE version = 11", [])
+            .expect("rewind");
+        {
+            let tx = conn.transaction().expect("transaction");
+            for index in 0..30_000 {
+                tx.execute(
+                    "INSERT INTO diagnostic_attempts(
+                        kind, trigger, source, mode, started_at, outcome, code, recovery,
+                        start_revision
+                     ) VALUES ('quota_collection', 'scheduled', 'this_device', 'required',
+                               '2026-08-25T00:00:00Z', 'failed', 'provider_error', 'retry', ?1)",
+                    params![index],
+                )
+                .expect("history");
+            }
+            tx.commit().expect("commit");
+        }
+
+        let started = std::time::Instant::now();
+        apply(&mut conn).expect("v11");
+        let elapsed = started.elapsed();
+
+        let kept: i64 = conn
+            .query_row("SELECT COUNT(*) FROM diagnostic_attempts", [], |row| {
+                row.get(0)
+            })
+            .expect("kept");
+        assert_eq!(kept, 30_000);
+        assert!(
+            elapsed < std::time::Duration::from_secs(10),
+            "the ladder took {elapsed:?} for {kept} attempts"
+        );
     }
 
     fn usage_submission(protocol_version: u64, submission_id: &str, agent: &str) -> Value {
