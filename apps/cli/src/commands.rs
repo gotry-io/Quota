@@ -182,31 +182,23 @@ fn run_status(options: StatusOptions, output: &mut dyn CliOutput) -> i32 {
             );
         }
     };
-    let repair = match load_repair(&context) {
-        Ok(repair) => repair,
+    let cache = match load_cache(&context) {
+        Ok(cache) => cache,
         Err(_) => {
             return report_failure(
                 Failure,
                 output,
-                "QuotaCLI could not read local repair state.",
+                "QuotaCLI could not read local cache state.",
             );
         }
     };
     if options.output.format == OutputFormat::Json {
-        write_json(
-            output,
-            &merge_repair(&value, &repair),
-            options.output.pretty,
-        );
+        write_json(output, &merge_cache(&value, &cache), options.output.pretty);
     } else {
-        render_repair_text(&repair, output);
+        render_cache_text(&cache, output);
         render_status_text(&value, output);
     }
-    if repair_blocks_cli(&repair) {
-        1
-    } else {
-        report_exit_code(&value)
-    }
+    report_exit_code(&value)
 }
 
 fn render_status_text(value: &Value, output: &mut dyn CliOutput) {
@@ -328,27 +320,23 @@ fn run_doctor(options: OutputOptions, output: &mut dyn CliOutput) -> i32 {
             );
         }
     };
-    let repair = match load_repair(&context) {
-        Ok(repair) => repair,
+    let cache = match load_cache(&context) {
+        Ok(cache) => cache,
         Err(_) => {
             return report_failure(
                 Failure,
                 output,
-                "QuotaCLI could not read local repair state.",
+                "QuotaCLI could not read local cache state.",
             );
         }
     };
     if options.format == OutputFormat::Json {
-        write_json(output, &merge_repair(&report, &repair), options.pretty);
+        write_json(output, &merge_cache(&report, &cache), options.pretty);
     } else {
-        render_repair_text(&repair, output);
+        render_cache_text(&cache, output);
         render_diagnostics_text(&report, output);
     }
-    if repair_blocks_cli(&repair) {
-        1
-    } else {
-        diagnostics_exit_code(&report)
-    }
+    diagnostics_exit_code(&report)
 }
 
 fn render_diagnostics_text(report: &Value, output: &mut dyn CliOutput) {
@@ -606,48 +594,36 @@ fn diagnostic_metrics_suffix(value: &Value) -> String {
     }
 }
 
-fn load_repair(context: &ServiceContext) -> Result<Value, Failure> {
-    repair_from_state(&invoke(context, Operation::GetState, json!({}))?)
+fn load_cache(context: &ServiceContext) -> Result<Value, Failure> {
+    cache_from_state(&invoke(context, Operation::GetState, json!({}))?)
 }
 
-fn repair_from_state(snapshot: &Value) -> Result<Value, Failure> {
-    snapshot.get("repair").cloned().ok_or(Failure)
+fn cache_from_state(snapshot: &Value) -> Result<Value, Failure> {
+    snapshot.get("cache").cloned().ok_or(Failure)
 }
 
-fn merge_repair(value: &Value, repair: &Value) -> Value {
+fn merge_cache(value: &Value, cache: &Value) -> Value {
     let mut object = match value {
         Value::Object(map) => map.clone(),
         _ => return value.clone(),
     };
-    object.insert("repair".to_owned(), repair.clone());
+    object.insert("cache".to_owned(), cache.clone());
     Value::Object(object)
 }
 
-fn repair_blocks_cli(repair: &Value) -> bool {
-    matches!(
-        repair.get("status").and_then(Value::as_str),
-        Some("repairing" | "stuck" | "failed")
-    )
-}
-
-fn render_repair_text(repair: &Value, output: &mut dyn CliOutput) {
-    let status = repair
-        .get("status")
-        .and_then(Value::as_str)
-        .unwrap_or("idle");
-    let phase = repair.get("phase").and_then(Value::as_str).unwrap_or("-");
-    let title = repair.get("title").and_then(Value::as_str).unwrap_or("-");
-    let stuck = repair
-        .get("stuck")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let elapsed = repair
-        .get("started_at")
+/// A cache that is still filling in is worth one line, and only while it is.  Everything it
+/// holds comes back on its own, so there is nothing here for a reader to act on.
+fn render_cache_text(cache: &Value, output: &mut dyn CliOutput) {
+    if cache.get("rebuilding").and_then(Value::as_bool) != Some(true) {
+        return;
+    }
+    let elapsed = cache
+        .get("reset_at")
         .and_then(Value::as_str)
         .and_then(elapsed_label)
         .unwrap_or_else(|| "-".to_owned());
     output.stdout(&format!(
-        "Repair: {status}\tphase={phase}\ttitle={title}\telapsed={elapsed}\tstuck={stuck}"
+        "Cache: rebuilding\telapsed={elapsed}\tUsage history is catching up."
     ));
 }
 
@@ -1332,49 +1308,27 @@ mod tests {
     }
 
     #[test]
-    fn missing_repair_object_is_an_error() {
-        assert!(repair_from_state(&json!({"ipc_version": 1})).is_err());
-        assert!(repair_from_state(&json!({"repair": {"status": "repairing"}})).is_ok());
+    fn missing_cache_object_is_an_error() {
+        assert!(cache_from_state(&json!({"ipc_version": 1})).is_err());
+        assert!(cache_from_state(&json!({"cache": {"rebuilding": false}})).is_ok());
     }
 
     #[test]
-    fn repair_print_and_exit_are_table_driven() {
-        let cases = [
-            ("idle", None, None, false),
-            (
-                "repairing",
-                Some("reindexing_usage"),
-                Some("Rebuilding Usage history"),
-                true,
-            ),
-            (
-                "stuck",
-                Some("preserving_account"),
-                Some("Repairing local data"),
-                true,
-            ),
-            (
-                "failed",
-                Some("rebuilding_storage"),
-                Some("Repairing local data"),
-                true,
-            ),
-        ];
-        for (status, phase, title, blocks) in cases {
-            let repair = json!({
-                "status": status,
-                "phase": phase,
-                "title": title,
-                "started_at": "2026-08-17T01:00:00Z",
-                "stuck": status == "stuck" || status == "failed"
-            });
-            let mut output = BufferOutput::default();
-            render_repair_text(&repair, &mut output);
-            assert_eq!(repair_blocks_cli(&repair), blocks);
-            assert!(output.stdout[0].contains(&format!("Repair: {status}")));
-            assert!(output.stdout[0].contains(&format!("phase={}", phase.unwrap_or("-"))));
-            assert!(output.stdout[0].contains(&format!("title={}", title.unwrap_or("-"))));
-        }
+    fn a_rebuilding_cache_is_the_only_one_worth_a_line() {
+        let mut settled = BufferOutput::default();
+        render_cache_text(
+            &json!({"rebuilding": false, "reset_at": null}),
+            &mut settled,
+        );
+        assert!(settled.stdout.is_empty());
+
+        let mut rebuilding = BufferOutput::default();
+        render_cache_text(
+            &json!({"rebuilding": true, "reset_at": "2026-08-17T01:00:00Z"}),
+            &mut rebuilding,
+        );
+        assert!(rebuilding.stdout[0].contains("Cache: rebuilding"));
+        assert!(rebuilding.stdout[0].contains("Usage history is catching up."));
     }
 
     #[test]
