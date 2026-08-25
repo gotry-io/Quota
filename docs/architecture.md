@@ -153,12 +153,16 @@ eight quota collectors and all six Usage parsers; the macOS and Linux entry poin
 Provider credentials remain provider-owned when available. Optional API-key provider overrides use
 the released shared owner-only configuration root and `providers.json`; QuotaBar sends secrets only
 over the child process's stdin, never argv or preferences. Environment variables remain supported
-inputs. Operational state has one owner: `state.sqlite` stores installation/account state, component
-last-good values, file index, normalized Usage facts, fixed-period presentation cache, pricing state,
-sequences, the durable outbox and Usage upload setting, and the single last-completed diagnostic
-snapshot plus bounded structured attempt journal. Unreadable or unwritable image handling and repair
-presentation are [ADR 0016](decisions/0016-local-service-self-repair.md). SQLite migrations are
-explicit and append-only.
+inputs. Operational state has one owner and two files
+([ADR 0021](decisions/0021-identity-store-and-disposable-cache.md)). `identity.sqlite` stores what
+this device cannot regenerate: installation, session, upload identity, the durable outbox, stored
+provider browser sessions, and preferences including the Usage upload setting. `cache.sqlite` stores
+what it can: component last-good values, the Usage file index and normalized facts, the fixed-period
+presentation cache, pricing and model catalog state, cached Account reads, the single last-completed
+diagnostic snapshot, and the bounded attempt journal. A cache SQLite refuses to read is deleted and
+rebuilt by the next refresh, and `get_state` reports `cache.rebuilding` until one complete Usage scan
+has run; an identity it refuses makes the device a new installation. Both schemas start at v1 and
+migrations are explicit and append-only.
 
 Catalog browser-session capability contains an HTTPS login URL, exact Cookie hosts/names, a
 browser-priority prefix, and `exclusive` when Settings should omit an official CLI sign-in command.
@@ -172,14 +176,10 @@ not implement browser acquisition.
 The local provider catalog is broader than the managed Account. Catalog `account_sync` declares
 whether a provider synchronizes, and the generated managed provider enum is exactly that set. The
 private local collection schema continues to use the full catalog.
-Local SQLite migrations carry staged work across each managed-data cutover: v6 promoted v2 Usage
-outbox payloads and v9 promotes v3 ones, in place, because each version preserves their identity,
-sequence, coverage, and row invariants, while
-the derived v2 Account summary and Account period caches are discarded and rebuilt from Relay. Raw
-indexed Usage facts, provider state, sessions, quota, and upload identity are not removed. Migration
-v7 adds only the replaceable last-completed diagnostics snapshot used by `diagnose`; migration v8
-adds the seven-day/50,000-completed-row diagnostic attempt journal and clears only the derived
-pre-Device-Health Account summary so strict upgraded clients cannot receive its old Device shape.
+A released single-file `state.sqlite` is imported into `identity.sqlite` once at startup — its
+installation, session, upload context, outbox, browser sessions, and Usage upload preference — and
+the released image is then removed. Nothing else comes across, because everything else it held is
+rebuilt by the first refresh.
 
 Usage indexing is the final file-level invalidation design. Each refresh performs bounded source
 discovery, records parser revision plus file identity, size, and modification time, skips unchanged

@@ -15,7 +15,9 @@ use typed `snake_case` models; revisioned events tell Swift when to reload state
 
 The Rust service returns persisted component state immediately, then performs startup collection in
 the background. It owns the five-minute schedule, providers, Usage, pricing, OAuth/account sync,
-SQLite, outbox, and local/account observation merge. QuotaBar owns presentation, provider visibility
+its owner-only identity store and disposable cache, outbox, and local/account observation merge.
+When it has to rebuild that cache, `get_state.cache.rebuilding` says so and Overview shows one
+notice until the next complete Usage scan. QuotaBar owns presentation, provider visibility
 and ordering preferences, native provider configuration fields, account actions, accessibility, and
 Launch at Login. Shared remaining-quota, plan/account label, compact count, Usage cost, and compact
 relative-age text come from [`packages/apple-shared`](../../packages/apple-shared), and the managed
@@ -92,8 +94,8 @@ Build the deterministic visual app with `pnpm build:menubar:visual`. It accepts:
 
 ```text
 --data-source fixture|live
---fixture loading|content|cached-refresh-error|empty|unavailable|repairing-durable|repairing-derived|stuck|failed
---route overview|settings|agents|provider-codex|provider-openrouter|provider-cursor|devices|usage|support|diagnostics|repair
+--fixture loading|content|cached-refresh-error|empty|unavailable|cache-rebuilding
+--route overview|settings|agents|provider-codex|provider-openrouter|provider-cursor|devices|usage|support|diagnostics
 --appearance system|light|dark
 --text-size standard|extra-large|accessibility
 ```

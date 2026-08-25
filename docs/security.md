@@ -51,20 +51,27 @@ data requirements. Architecture and product behavior are defined in
   QuotaBar Settings sends a new key only through the private child stdin; Swift never reads the file,
   persists the secret, places it on argv, or receives more than a masked tip. The Rust service
   validates and atomically rewrites the file.
-- Operational local state is owner-only `state.sqlite` under the same released user configuration
-  root. It lives outside the app bundle and survives ordinary reinstall. SQLite schema migrations are
-  explicit; a newer schema fails closed and requires an app upgrade. The first Rust launch imports
-  the released installation/session/cache/outbox/pricing JSON transactionally and removes source
-  files only after the imported state is readable. The bounded migration lifecycle is defined in
-  [ADR 0007](decisions/0007-rust-native-local-service.md). Salvage retains at most one owner-only
-  `state.sqlite.broken` and one `state.sqlite.good`; the service never writes a recovered SQL dump,
-  never uploads those files, and never includes their paths in diagnostics
-  ([ADR 0016](decisions/0016-local-service-self-repair.md)). The shared
-  `providers.json`/`ProviderConfigLock` path and OAuth `client_id=quotacli` remain current collection
-  interfaces. The registered `quota-ios` public client is a separate read-only Account interface.
-- SQLite migration v8 stores only the typed diagnostic attempt fields and bounded metrics defined by
+- Operational local state is two owner-only SQLite files under the same released user configuration
+  root, both at schema v1 ([ADR 0021](decisions/0021-identity-store-and-disposable-cache.md)). They
+  live outside the app bundle and survive ordinary reinstall.
+  - `identity.sqlite` holds what this device cannot regenerate: installation id, session, upload
+    identity, the staged upload outbox, stored provider browser sessions, and preferences. A newer
+    identity schema fails closed and requires an app upgrade. An identity the service cannot open, or
+    one missing its installation row, is deleted and recreated: the device becomes a new installation
+    and is signed out. It is never partially recovered.
+  - `cache.sqlite` holds everything derived from local log files, from Relay, or from the last
+    refresh. Any SQLite error on it other than busy, disk-full, or I/O deletes the file and recreates
+    it empty; the next refresh rebuilds it. Disk-full and I/O report `unavailable` and delete nothing.
+  - A released `state.sqlite` is imported into identity once at startup and then removed with every
+    sidecar beside it. The service never writes a recovered SQL dump, never copies rows out of an
+    image it could not read whole, never uploads either file, and never includes their paths in
+    diagnostics.
+  - The shared `providers.json`/`ProviderConfigLock` path and OAuth `client_id=quotacli` remain
+    current collection interfaces. The registered `quota-ios` public client is a separate read-only
+    Account interface.
+- The cache holds only the typed diagnostic attempt fields and bounded metrics defined by
   [ADR 0015](decisions/0015-diagnostic-attempts-and-device-health.md). Completed rows are retained for
-  seven days and capped at 50,000; running rows are recovered or finalized rather than pruned.
+  seven days and capped at 50,000; running rows are finalized at the next open rather than pruned.
 - QuotaBar's private service and Linux `quotacli` use the same owner-only configuration and state
   boundary. The Linux command is a foreground native binary; it is built and tested only and has no
   separate published credential or storage format.

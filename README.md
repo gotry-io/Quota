@@ -60,8 +60,9 @@ remain TypeScript. See the canonical
 integrity and diagnostic contract is [ADR 0008](docs/decisions/0008-data-integrity-and-diagnostics.md),
 report-time model identity is [ADR 0009](docs/decisions/0009-versioned-model-catalog.md),
 structured attempts, Support Report, and Device Health are
-[ADR 0015](docs/decisions/0015-diagnostic-attempts-and-device-health.md), local service self-repair is
-[ADR 0016](docs/decisions/0016-local-service-self-repair.md), and provider
+[ADR 0015](docs/decisions/0015-diagnostic-attempts-and-device-health.md), the split between an
+identity store and a disposable cache is
+[ADR 0021](docs/decisions/0021-identity-store-and-disposable-cache.md), and provider
 browser-session authentication is
 [ADR 0010](docs/decisions/0010-provider-browser-session-auth.md).
 
@@ -168,7 +169,8 @@ read-only `quota-ios` account OAuth client, a Quota iOS Connect Account / Today 
 non-secret App Group widget snapshot with an embedded WidgetKit extension, independent
 quota and Usage upload sequencing, D1 persistence and deletion watermarks, eight Rust quota collectors, six Rust
 Usage parsers with file-level incremental indexing, effective-dated cost calculation, owner-only
-local SQLite state and provider configuration, persistent private IPC, QuotaBar account/provider
+local SQLite state split into an identity store and a disposable cache, owner-only provider
+configuration, persistent private IPC, QuotaBar account/provider
 configuration UI, Sparkle in-app updates, fixed-window client-scoped account-or-local Usage
 detail, shareable remaining-quota/usage exports, and the Web account dashboard. Raw model
 identifiers remain opaque bounded provider text; a separately versioned catalog derives stable
@@ -180,7 +182,9 @@ last-completed refresh without treating absent optional setup as failure. A seve
 attempt journal supplies recent Support activity and canonical latest-attempt/success facts. Signed-in
 collection Devices upload only a sanitized latest health snapshot; QuotaBar, Web, and iOS opt into
 the compatible Account Device Health view with version, platform, and server-authoritative last
-report/refresh/sync state.
+report/refresh/sync state. A cache SQLite cannot read is deleted and rebuilt by the next refresh
+rather than salvaged; an identity it cannot read makes the Mac a new installation that asks to sign
+in again.
 
 Production GitHub OAuth and D1 deployment require the secrets documented by the managed Relay
 configuration. The checked-in deployment workflow is the only authorized production path.

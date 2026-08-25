@@ -1,5 +1,7 @@
 # ADR 0016: Local service self-repair
 
+> Status: Superseded by [ADR 0021](./0021-identity-store-and-disposable-cache.md) on 2026-08-25.
+
 - Status: Accepted
 - Date: 2026-08-17
 
