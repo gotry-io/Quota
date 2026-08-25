@@ -36,8 +36,13 @@ verification URL and user code, and polls Relay until the browser account flow a
 It never opens a browser or creates a loopback listener. Device codes and session tokens are never
 printed. Use a browser on another device to open the displayed URL when the CLI host has no GUI.
 
-`account summary` returns the fresh default calculated-cost view through the shared token-refresh
-and compare-and-swap state path.
+`account summary` returns one Account read: the account, its devices, the subscriptions Relay
+resolved from every device that reported them, and the four periods — Today, 7 Days, 30 Days, and
+All — in this host's own calendar. It goes through the shared token-refresh and compare-and-swap
+state path.
+
+`sync` runs one refresh and prints the local state it left behind: collected quota, the local Usage
+periods folded from this host's hourly facts, and the account read above under `account_summary`.
 
 `doctor` renders the shared service report. It lists the four surfaces — Quota Overview, this
 device's Usage, Account Usage, and Account — and the sources behind them: provider discovery and

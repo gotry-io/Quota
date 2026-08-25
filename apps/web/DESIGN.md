@@ -135,13 +135,12 @@ it cannot overflow the page. Leave and blur hide it. Narrow viewports scroll the
 so weekday labels stay readable and the page does not overflow.
 
 Choosing a day opens an inline details panel under the Activity card, not a modal. The dashboard
-owns selected, loading, error, and data state and fetches
-`GET /api/v5/account/usage/summary?usage_agents=all&cost_mode=calculate&model_catalog=1&from=YYYY-MM-DD&to=YYYY-MM-DD`,
-reusing the existing `usage_date` timezone. A 401 starts GitHub sign-in. Failures stay on the
-page with a retry control. The panel can be closed. It shows that day's date, input, output,
-requests, estimated cost, coverage, and compact agent and model splits, with honest empty,
-truncated, partial, and unpriced copy. The dashboard does not repeat the GitHub username in the
-page heading.
+owns selected, loading, error, and data state and reads that day from the activity range it already
+holds, which `GET /api/v6/account/usage/activity` answers in UTC days. A 401 starts GitHub sign-in.
+Failures stay on the page with a retry control. The panel can be closed. It shows that day's date,
+input, output, requests, estimated cost, and whether any hour behind it was scanned incompletely,
+with honest empty, partial, and unpriced copy. The dashboard does not repeat the GitHub username in
+the page heading.
 
 Quota cards show one subscription, not one upload: an account collected on several Macs is one card
 carrying the reading that still describes it, with the reporting device and observation time below

@@ -58,15 +58,19 @@ data requirements. Architecture and product behavior are defined in
   root, both at schema v1 ([ADR 0021](decisions/0021-identity-store-and-disposable-cache.md)). They
   live outside the app bundle and survive ordinary reinstall.
   - `identity.sqlite` holds what this device cannot regenerate: installation id, session, upload
-    identity, the staged upload outbox, stored provider browser sessions, and preferences. A newer
+    identity, the hours this device still owes its Account with the scan revision each carries,
+    the monotonic counter that revision comes from, stored provider browser sessions, and
+    preferences. A newer
     identity schema fails closed and requires an app upgrade. An identity the service cannot open, or
     one missing its installation row, is deleted and recreated: the device becomes a new installation
     and is signed out. It is never partially recovered.
   - `cache.sqlite` holds everything derived from local log files, from Relay, or from the last
     refresh. Any SQLite error on it other than busy, disk-full, or I/O deletes the file and recreates
     it empty; the next refresh rebuilds it. Disk-full and I/O report `unavailable` and delete nothing.
-  - A released `state.sqlite` is imported into identity once at startup and then removed with every
-    sidecar beside it. The service never writes a recovered SQL dump, never copies rows out of an
+  - A released `state.sqlite` hands over its installation, session, upload identity, browser
+    sessions, and Usage upload preference once at startup, and is then removed with every sidecar
+    beside it. Its staged uploads do not come across: they were requests in a contract this build
+    no longer speaks, and the first scan recomputes the hours behind them. The service never writes a recovered SQL dump, never copies rows out of an
     image it could not read whole, never uploads either file, and never includes their paths in
     diagnostics.
   - The shared `providers.json`/`ProviderConfigLock` path and OAuth `client_id=quotacli` remain
@@ -125,7 +129,7 @@ data requirements. Architecture and product behavior are defined in
   route and the exact custom-scheme redirect `io.gotry.quota:/oauth/callback`. The token exchange
   rejects `installation_id`, `device_display_name`, and `platform`. Relay issues only an account
   token family with `account:read` and `session:revoke:self`. It never creates a Device, Device
-  session, upload sequence, or installation record. Refresh is account-audience only and rotates
+  session, or installation record. Refresh is account-audience only and rotates
   with the same compare-and-swap rule. Those credentials use the `qia_`/`qiar_` prefixes and cannot
   be presented as `quotacli` `qa_`/`qar_` or `qd_`/`qdr_` tokens. These sessions cannot call Web-only
   management or destructive routes and cannot write snapshots or Usage. Quota iOS generates a
@@ -145,7 +149,7 @@ data requirements. Architecture and product behavior are defined in
   `ProtectedFileWidgetSnapshotStore` (atomic write,
   `completeFileProtectionUntilFirstUserAuthentication`, excluded from backup). The snapshot may
   contain display remaining-quota and Today token/cost fields; it must not contain account ids,
-  device ids, fingerprints, tokens, sequences, or raw sources. The WidgetKit extension reads that
+  device ids, fingerprints, tokens, or raw sources. The WidgetKit extension reads that
   file and reloads on app publish/clear only. It has no network, no Keychain, no Security framework
   usage, and no account wire/session modules. Missing, corrupt, or oversize files are treated as
   no-data. Logout, expired session, and absence of a trusted summary clear the snapshot. Both the

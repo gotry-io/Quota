@@ -140,8 +140,9 @@ never when Relay last wrote the row, which a device re-uploading a reading it al
 without making that reading newer. QuotaBar merges twice, not five ways: the resolved row against
 its own local collection, because local collection is the only authority for this device. Rust
 returns that merged Overview directly and Swift never reimplements the policy.
-`packages/protocol/fixtures/quota-observation-conformance.json` states both rules as cases, and the
-Relay and Rust implementations each answer that file.
+`packages/protocol/fixtures/quota-observation-conformance.json` states both rules as cases — `merge`
+for the resolution Relay performs, `two_way_merge` for the comparison the service makes afterwards —
+and each implementation answers the cases that are its own.
 `wire-conformance.json` does the same for the contracts themselves, so a payload one runtime
 starts accepting cannot pass unnoticed by the others; see
 [ADR 0019](decisions/0019-one-statement-per-contract.md). A device
@@ -160,11 +161,12 @@ the released shared owner-only configuration root and `providers.json`; QuotaBar
 over the child process's stdin, never argv or preferences. Environment variables remain supported
 inputs. Operational state has one owner and two files
 ([ADR 0021](decisions/0021-identity-store-and-disposable-cache.md)). `identity.sqlite` stores what
-this device cannot regenerate: installation, session, upload identity, the durable outbox, stored
-provider browser sessions, and preferences including the Usage upload setting. `cache.sqlite` stores
-what it can: component last-good values, the Usage file index and normalized facts, the fixed-period
-presentation cache, pricing and model catalog state, cached Account reads, the single last-completed
-diagnostic snapshot, and the bounded attempt journal. A cache SQLite refuses to read is deleted and
+this device cannot regenerate: installation, session, upload identity, the outbox of hours it still
+owes an Account, the monotonic scan revision those hours are stamped with, stored provider browser
+sessions, and preferences including the Usage upload setting. `cache.sqlite` stores what it can:
+component last-good values, the Usage file index and its normalized records, the hourly facts folded
+from them, the fixed-period presentation cache, pricing and model catalog state, cached Account
+reads, the single last-completed diagnostic snapshot, and the bounded attempt journal. A cache SQLite refuses to read is deleted and
 rebuilt by the next refresh, and `get_state` reports `cache.rebuilding` until one complete Usage scan
 has run; an identity it refuses makes the device a new installation. Both schemas start at v1 and
 migrations are explicit and append-only.
@@ -182,42 +184,50 @@ The local provider catalog is broader than the managed Account. Catalog `account
 whether a provider synchronizes, and the generated managed provider enum is exactly that set. The
 private local collection schema continues to use the full catalog.
 A released single-file `state.sqlite` is imported into `identity.sqlite` once at startup — its
-installation, session, upload context, outbox, browser sessions, and Usage upload preference — and
-the released image is then removed. Nothing else comes across, because everything else it held is
-rebuilt by the first refresh.
+installation, session, upload context, browser sessions, and Usage upload preference — and the
+released image is then removed. Nothing else comes across, because everything else it held is
+rebuilt by the first refresh, its staged uploads included: those were requests in a contract this
+build no longer speaks, and the first scan recomputes every hour behind them.
 
-Usage indexing is the final file-level invalidation design. Each refresh performs bounded source
-discovery, records parser revision plus file identity, size, and modification time, skips unchanged
-files, and transactionally replaces the normalized rows for changed files. Invalid records are
-isolated at record scope and unreadable files at file scope, so valid files and agents continue to
-upload. The SQLite file index is the sole invalidation mechanism: no watcher or byte-checkpoint
-dependency is part of the product. Model identifiers remain opaque bounded provider text, including
-punctuation, and missing pricing never discards a valid fact.
-An upload names whole UTC hours and each one carries the version of the scan behind it, so a scan
-that came up short is marked `partial` on the hour it describes rather than on a window beside it;
-see [ADR 0024](decisions/0024-hour-versioned-usage-and-daily-rollups.md). A managed read reports
-`partial` for a period when any hour behind it was scanned incompletely.
+Usage indexing is file-level invalidation. Each refresh performs bounded source discovery, records
+parser revision plus file identity, size, and modification time, and skips unchanged files. A file
+that only grew is read from the byte its last parse stopped on, confirmed by a digest of the four
+kibibytes before that point; a file that was rewritten or truncated fails that check and is read
+whole. A parser that carries context between lines never resumes. Invalid records are isolated at
+record scope and unreadable files at file scope, so valid files and agents continue to upload. The
+SQLite file index is the sole invalidation mechanism: no watcher is part of the product. Model
+identifiers remain opaque bounded provider text, including punctuation, and missing pricing never
+discards a valid fact.
+
+The hour is the unit ([ADR 0024](decisions/0024-hour-versioned-usage-and-daily-rollups.md)). A scan
+recomputes only the UTC hours whose records moved, folding each one from the records this device
+retains for it, and leaves an hour whose facts came out the same untouched. Each recomputed hour is
+stamped with a monotonic scan revision, and an upload names whole hours carrying it: Relay replaces
+an hour only for a strictly newer scan, so a retry is a comparison rather than a sequence. A scan
+that came up short is marked `partial` on the hour it describes, and a read reports `partial` for a
+period when any hour behind it was scanned incompletely. An hour past 512 distinct rows folds its
+smallest into `other` so its totals stay exact.
 Bounded Usage responses may still explicitly mark truncated unpriced-model detail, and a period's
 agent tree folds its smallest model leaves into `other` past 200 of them; exact totals remain
 usable and clients surface that degradation.
 
 The local Usage report is a private presentation contract carried inside the IPC state, so it names
 no version of its own and moves with `ipc_version`. It carries collection status, coverage,
-timezone, and the model-catalog revision. State snapshots separately carry the precomputed Today, 7 Days, 30 Days, and
+timezone, and the model-catalog revision. State snapshots separately carry the Today, 7 Days, 30 Days, and
 All summaries, each with exact totals, cost, and `agents[].providers[].models[]` detail. `total_tokens` is input plus output;
 cache-read and cache-write tokens are named input subsets; reasoning is an output subset; and
 `messages` is the sum of normalized usage-bearing model output facts. It is not a session count, and
 sessions are not collected. The Rust report first groups facts by the agent that emitted the
 usage, then groups each model under the inference provider derived from the fact's billing channel;
 agent and model text never choose or override that provider. QuotaBar renders agent groups only on
-the Usage detail page; Overview remains quota-only. The local SQLite migration discards only
-incompatible derived Usage presentations; indexed facts and the managed outbox remain intact and
-rebuild the current v3 report on refresh.
+the Usage detail page; Overview remains quota-only.
 
-Local periods are folded from the indexed facts once; signed-in Account periods use the dedicated
-Relay Usage Summary route and are committed
-only as a complete set. QuotaBar reads these values from `get_state`, so opening Usage and changing
-the period performs no collection or network request.
+Local periods are folded from the hourly facts with SQL at refresh time, so no read loads the record
+history. A day is a UTC day, and this device's own calendar decides which days Today, 7 Days, and 30
+Days name — the same rule the managed read follows, so the two sides of the panel agree. Signed-in
+Account periods arrive in the one Account read and are committed only as a complete set. QuotaBar
+reads these values from `get_state`, so opening Usage and changing the period performs no collection
+or network request.
 
 Local collection and report generation continue when Usage upload is disabled. The service neither
 stages nor drains the managed Usage outbox while disabled; pending local work is retained and resumes
@@ -409,8 +419,8 @@ QuotaRelay mounts OAuth and Device control at `/oauth/v2` and `/api/v2`, the man
 Usage data contract at `/api/v6`, Better Auth at `/api/auth/v2`, and the health routes. It
 authenticates each route with the minimum account, device, or browser scope and performs
 Device/Account deletion, rotation/revocation, and hour replacement with its daily rollup in storage
-transactions. An Account read carries every stored agent and channel with no opt-in query; only the
-released pricing-catalog route still accepts the `usage_agents=all` marker its clients send.
+transactions. An Account read carries every stored agent and channel with no opt-in query: the only thing it
+asks for is the caller's `tz`, because that decides which UTC days the four periods name.
 
 Quota Web is a SvelteKit app. Hashed `/_app/immutable/*` CSS and JS stay asset-first. Document
 navigations run the existing Relay Worker first: `apps/relay/src/cloudflare.ts` stays Wrangler

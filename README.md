@@ -49,13 +49,14 @@ Swift owns presentation, UI preferences, accessibility, and Launch at Login. Sha
 plan, count, cost, and compact-age copy lives in `packages/apple-shared`; wire decoding and Relay
 access stay in each app or `packages/apple-client`. Rust owns provider and
 Usage semantics, credentials, OAuth, Relay traffic, persistence, the durable Usage upload setting,
-outbox sequencing, merging local and account observations, and scheduling. QuotaRelay and Quota Web
+the hours it still owes an Account, the two-way merge of a resolved subscription against this Mac's
+own reading, and scheduling. QuotaRelay and Quota Web
 remain TypeScript. See the canonical
 [architecture](docs/architecture.md), [security baseline](docs/security.md),
 [provider strategies](docs/provider-collection.md),
 [CodexBar platform capability baseline](docs/codexbar-platform-capabilities.md), [native service decision](docs/decisions/0007-rust-native-local-service.md),
 [managed account decision](docs/decisions/0006-managed-account-device-usage.md),
-[managed-data v3](docs/decisions/0012-managed-data-v3.md),
+[managed-data v6](docs/decisions/0024-hour-versioned-usage-and-daily-rollups.md),
 [read-only iOS account client](docs/decisions/0013-readonly-ios-account-client.md),
 [non-secret iOS widget snapshot](docs/decisions/0014-nonsecret-ios-widget-snapshot.md), and
 [SvelteKit document Worker composition](docs/decisions/0011-sveltekit-document-worker.md). The data
@@ -174,15 +175,16 @@ read-only `quota-ios` account OAuth client, a Quota iOS Connect Account / Today 
 non-secret App Group widget snapshot with an embedded WidgetKit extension, hour-versioned Usage
 replacement with server-side daily rollups and resolved subscriptions,
 D1 persistence and deletion watermarks, eight Rust quota collectors, six Rust
-Usage parsers with file-level incremental indexing, effective-dated cost calculation, owner-only
+Usage parsers that read an appended log from where the last parse stopped, local hourly facts a scan
+recomputes only where records moved, effective-dated cost calculation, owner-only
 local SQLite state split into an identity store and a disposable cache, owner-only provider
 configuration, persistent private IPC, QuotaBar account/provider
 configuration UI, Sparkle in-app updates, fixed-window client-scoped account-or-local Usage
 detail, shareable remaining-quota/usage exports, and the Web account dashboard. Raw model
 identifiers remain opaque bounded provider text; a separately versioned catalog derives stable
 report keys without rewriting facts or changing pricing. Valid facts remain usable when pricing or
-model aliases are unknown. Record/file failures are isolated and complete uploads are partitioned
-losslessly, while partial scans do not replace remote facts. The service-owned report says how each
+model aliases are unknown. Record and file failures are isolated, and an hour carries the version of the scan behind it so a
+retry is a comparison rather than a sequence to keep in step. The service-owned report says how each
 surface is doing and which source explains it, in sentences the service writes, without treating
 absent optional setup as failure. A seven-day bounded local attempt journal supplies the recent work
 in a copied report and the canonical latest-attempt and latest-success facts; it is written

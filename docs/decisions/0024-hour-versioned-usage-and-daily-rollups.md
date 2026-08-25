@@ -36,6 +36,16 @@ D1 migration 0018 rebuilds `usage_hourly` on the new key with `scan_version = 0`
 `usage_daily`, drops `usage_coverage`, `usage_submissions`, and `usage_submission_parts`, and drops
 the sequence columns and snapshot digest those tables were checked against.
 
+## Local side
+
+The device keeps the same unit. `cache.sqlite` holds hourly facts on the same key; a scan
+recomputes only the hours whose records moved and leaves an hour whose facts came out the same
+alone, and the four periods fold from that table in SQL rather than from the record history. The
+scan revision lives in `identity.sqlite`, because the cache is disposable and the revision has to
+keep climbing across a rebuild. A log that only grew is read from the byte its last parse stopped
+on, confirmed by a digest of the four kibibytes before it. The outbox is keyed by `(agent, hour)`,
+so staging is a copy rather than a reservation and accepted and ignored are the same answer.
+
 ## Why
 
 Coverage windows, receipts, sequences, and multipart staging existed to make a stream of appends

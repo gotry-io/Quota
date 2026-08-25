@@ -2,6 +2,8 @@
 
 Quota is the native iOS 17+ account viewer. It signs in with the registered `quota-ios` public
 client and reads the GitHub Account's remaining quota and Today Usage from the fixed Relay origin.
+One read answers all of it: Relay resolves an account's readings into one subscription per key, so
+the app renders those rows rather than collapsing one card per reporting Mac.
 The app also publishes a non-secret App Group snapshot for Home Screen and Lock Screen widgets.
 
 ## Runtime boundary

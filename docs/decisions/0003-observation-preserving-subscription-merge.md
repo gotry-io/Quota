@@ -33,9 +33,10 @@ re-uploading a reading it already knows moves without making that reading newer,
 lets the most stale reading win.
 
 Only QuotaBar collects locally, so only its service can reach the local-source step. The order is
-stated once as `packages/protocol/fixtures/quota-observation-conformance.json`, which Relay's
-TypeScript implementation and the Rust one both answer, so neither can drift from the rule while
-still passing its own tests.
+stated once as `packages/protocol/fixtures/quota-observation-conformance.json`: its `merge` cases
+are the resolution Relay performs, and its `two_way_merge` cases are the comparison the Rust service
+makes afterwards. Each implementation answers the cases that are its own, so neither can drift from
+the rule while still passing its own tests.
 
 ## Rationale
 
