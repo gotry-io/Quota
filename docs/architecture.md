@@ -62,9 +62,9 @@ including precomputed Today, 7 Days, 30 Days, and All Usage periods, immediately
 independent status, last-good value, update time, error/recovery code, and refreshing flag for quota,
 Usage, account, and pricing. The service begins a background startup refresh once IPC is available,
 emits revisioned `state_changed` events, and schedules refreshes every five minutes; manual refresh
-uses the same single-flight path. stdin EOF or shutdown cancels work and ends the service, so nothing
-syncs after QuotaBar exits, and a second client acquires the owner lock only after the first releases
-it.
+uses the same single-flight path. QuotaBar sends `shutdown` as it terminates and stdin EOF says the
+same thing, so nothing syncs after QuotaBar exits and a second client acquires the owner lock only
+after the first releases it.
 
 The private `diagnose` operation is the single local diagnostic boundary for both products. Its
 `schema_version: 3` report evaluates the fixed Quota Overview, This Device Usage, Account Usage, and

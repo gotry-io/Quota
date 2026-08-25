@@ -30,7 +30,8 @@ wire types plus `ProviderID` from its `QuotaWire` module. Private IPC models, th
 local-report types, app-only provider behavior, and session/helper logic stay in this app; QuotaBar
 does not depend on QuotaRelay or QuotaAccount, because the local service owns Relay traffic here.
 The service persists the Usage upload preference so it applies before
-its startup refresh. Quitting the app closes stdin and stops the service and all synchronization.
+its startup refresh. Quitting sends the service a `shutdown`, then closes stdin, so the helper
+finishes what it was writing before its pipe disappears; all synchronization stops with it.
 
 Cursor is the only provider QuotaBar reads a browser session for, because it is the only one with
 no CLI sign-in and no API key. Before the first cookie read, a confirmation popup names the browser
