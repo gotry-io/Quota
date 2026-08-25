@@ -148,6 +148,7 @@ struct AccountDevicesView: View {
       case .macos: "macOS"
       case .linux: "Linux"
       case .windows: "Windows"
+      case .unknown: "Unknown"
       }
     var parts = [platform]
     if let activity = device.lastSeenAt ?? device.signedOutAt {

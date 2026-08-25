@@ -1,15 +1,16 @@
 import Foundation
 
-public enum BillingAgent: String, CaseIterable, Codable, Sendable {
+public enum BillingAgent: String, CaseIterable, Codable, Sendable, TolerantWireEnum {
   case codex
   case claudeCode = "claude_code"
   case grok
   case opencode
   case pi
   case cursor
+  case unknown
 }
 
-public enum BillingChannel: String, Codable, Sendable {
+public enum BillingChannel: String, Codable, Sendable, TolerantWireEnum {
   case openaiDirect = "openai_direct"
   case azureOpenAI = "azure_openai"
   case anthropicDirect = "anthropic_direct"
@@ -22,7 +23,7 @@ public enum BillingChannel: String, Codable, Sendable {
   case unknown
 }
 
-public enum InferenceProvider: String, CaseIterable, Codable, Sendable {
+public enum InferenceProvider: String, CaseIterable, Codable, Sendable, TolerantWireEnum {
   case openai
   case azureOpenAI = "azure_openai"
   case anthropic
@@ -69,7 +70,7 @@ public enum UsageCostStatus: String, Codable, Sendable {
   case unavailable
 }
 
-public enum UsageCostAssumption: String, Codable, Sendable {
+public enum UsageCostAssumption: String, Codable, Sendable, TolerantWireEnum {
   case agentDefaultChannel = "agent_default_channel"
   case modelAlias = "model_alias"
   case wildcardServiceTier = "wildcard_service_tier"
@@ -78,9 +79,10 @@ public enum UsageCostAssumption: String, Codable, Sendable {
   case wildcardContextBucket = "wildcard_context_bucket"
   case cacheWriteInferredRate = "cache_write_inferred_rate"
   case sourceReported = "source_reported"
+  case unknown
 }
 
-public enum UsageUnpricedReason: String, Codable, Sendable {
+public enum UsageUnpricedReason: String, Codable, Sendable, TolerantWireEnum {
   case unknownChannel = "unknown_channel"
   case unknownModel = "unknown_model"
   case outsideEffectiveRange = "outside_effective_range"
@@ -89,6 +91,7 @@ public enum UsageUnpricedReason: String, Codable, Sendable {
   case missingRate = "missing_rate"
   case incompleteSourceCost = "incomplete_source_cost"
   case invalidCatalog = "invalid_catalog"
+  case unknown
 }
 
 public enum CoverageStatus: String, Codable, Sendable {
@@ -96,13 +99,14 @@ public enum CoverageStatus: String, Codable, Sendable {
   case partial
 }
 
-public enum UsageBreakdownDimension: String, Codable, Sendable {
+public enum UsageBreakdownDimension: String, Codable, Sendable, TolerantWireEnum {
   case device
   case agent
   case model
   case billingChannel = "billing_channel"
   case usageDate = "usage_date"
   case bucketStartUTC = "bucket_start_utc"
+  case unknown
 }
 
 public struct UsageUnpricedItem: Codable, Equatable, Sendable {
@@ -120,7 +124,6 @@ public struct UsageUnpricedItem: Codable, Equatable, Sendable {
   }
 
   public init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys(["billingChannel", "model", "reason", "rows"])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     billingChannel = try container.decode(BillingChannel.self, forKey: .billingChannel)
     model = try container.decode(String.self, forKey: .model)
@@ -187,10 +190,6 @@ public struct UsageCostOutcome: Codable, Equatable, Sendable {
   }
 
   public init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys([
-      "mode", "basis", "status", "amountMicrousd", "catalogRevision", "calculatedRows",
-      "reportedRows", "unpricedRows", "assumptions", "unpriced", "unpricedTruncated",
-    ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     mode = try container.decode(UsageCostMode.self, forKey: .mode)
     basis = try container.decode(UsageCostBasis.self, forKey: .basis)
@@ -326,11 +325,6 @@ public struct UsageTokenTotals: Codable, Equatable, Sendable {
   }
 
   public init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys([
-      "inputTokens", "cacheReadTokens", "cacheWrite5MTokens", "cacheWrite1HTokens",
-      "cacheWriteInferredTokens", "outputTokens", "reasoningTokens", "requests",
-      "webSearchRequests", "webFetchRequests", "sourceCostMicrousd", "sourceCostCoveredRequests",
-    ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     inputTokens = try container.decode(Int.self, forKey: .inputTokens)
     cacheReadTokens = try container.decode(Int.self, forKey: .cacheReadTokens)
@@ -433,10 +427,6 @@ public struct UsageSummaryTotals: Codable, Equatable, Sendable {
   }
 
   public init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys([
-      "totalTokens", "inputTokens", "outputTokens", "cacheReadInputTokens",
-      "cacheWriteInputTokens", "reasoningTokens", "messages",
-    ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     totalTokens = try container.decode(Int.self, forKey: .totalTokens)
     inputTokens = try container.decode(Int.self, forKey: .inputTokens)
@@ -484,7 +474,6 @@ public struct LocalUsageModelSummary: Codable, Equatable, Sendable {
   }
 
   public init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys(["model", "totals", "cost"])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     model = try container.decode(String.self, forKey: .model)
     totals = try container.decode(UsageSummaryTotals.self, forKey: .totals)
@@ -528,7 +517,6 @@ public struct LocalUsageProviderSummary: Codable, Equatable, Sendable {
   }
 
   public init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys(["provider", "totals", "cost", "models"])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     provider = try container.decode(InferenceProvider.self, forKey: .provider)
     totals = try container.decode(UsageSummaryTotals.self, forKey: .totals)
@@ -575,7 +563,6 @@ public struct LocalUsageAgentSummary: Codable, Equatable, Sendable {
   }
 
   public init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys(["agent", "totals", "cost", "providers"])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     agent = try container.decode(BillingAgent.self, forKey: .agent)
     totals = try container.decode(UsageSummaryTotals.self, forKey: .totals)
@@ -617,7 +604,6 @@ public struct UsageBreakdown: Codable, Equatable, Sendable {
   }
 
   public init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys(["dimension", "key", "totals", "cost"])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     dimension = try container.decode(UsageBreakdownDimension.self, forKey: .dimension)
     key = try container.decode(String.self, forKey: .key)
@@ -647,10 +633,11 @@ public struct UsageBreakdown: Codable, Equatable, Sendable {
 
 /// How completely a read's range was scanned.  Readers have only ever asked whether anything
 /// was missed, so the answer travels instead of the windows it was derived from.
-public enum UsageCoverageVerdict: String, Codable, Equatable, Sendable {
+public enum UsageCoverageVerdict: String, Codable, Equatable, Sendable, TolerantWireEnum {
   case none
   case complete
   case partial
+  case unknown
 }
 
 public struct UsageDateRange: Codable, Equatable, Sendable {
@@ -663,7 +650,6 @@ public struct UsageDateRange: Codable, Equatable, Sendable {
   }
 
   public init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys(["from", "to"])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     from = try container.decode(String.self, forKey: .from)
     to = try container.decode(String.self, forKey: .to)
@@ -717,10 +703,6 @@ public struct AccountUsageSummary: Codable, Equatable, Sendable {
   }
 
   public init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys([
-      "range", "totals", "cost", "modelCatalogRevision", "coverage", "breakdowns", "agents",
-      "breakdownsTruncated",
-    ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     range = try container.decode(UsageDateRange.self, forKey: .range)
     totals = try container.decode(UsageTokenTotals.self, forKey: .totals)

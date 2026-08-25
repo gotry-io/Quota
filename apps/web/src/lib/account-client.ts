@@ -1,6 +1,6 @@
 import {
-  type AccountSummary,
-  AccountSummarySchema,
+  type AccountSummaryRead,
+  AccountSummaryReadSchema,
   DeviceAuthorizationDecisionRequestSchema,
   PROTOCOL_VERSION,
 } from "@gotry-io/quota-protocol";
@@ -79,7 +79,7 @@ function isAbortError(error: unknown): boolean {
 }
 
 export async function fetchAccountSummary(): Promise<
-  { status: "ok"; summary: AccountSummary } | { status: "unauthorized" } | { status: "error" }
+  { status: "ok"; summary: AccountSummaryRead } | { status: "unauthorized" } | { status: "error" }
 > {
   const response = await fetch(
     "/api/v5/account/summary?cost_mode=auto&usage_agents=all",
@@ -87,7 +87,7 @@ export async function fetchAccountSummary(): Promise<
   );
   if (response.status === 401) return { status: "unauthorized" };
   if (!response.ok) return { status: "error" };
-  const parsed = AccountSummarySchema.safeParse(await response.json());
+  const parsed = AccountSummaryReadSchema.safeParse(await response.json());
   return parsed.success ? { status: "ok", summary: parsed.data } : { status: "error" };
 }
 

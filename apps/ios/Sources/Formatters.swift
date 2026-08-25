@@ -8,7 +8,7 @@ enum QuotaFormat {
       remainingPercent: window.remainingPercent,
       remainingValue: window.remainingValue,
       hasLimit: window.limitValue != nil,
-      unit: window.valueUnit?.remainingUnit
+      unit: window.valueUnit.flatMap(\.remainingUnit)
     )
   }
 

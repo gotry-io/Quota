@@ -176,10 +176,10 @@ func decodesAccountSummaryWithUsageCost() throws {
       with: "\"usage\": {\n    \"extra\": true,\n    \"range\""
     ).utf8
   )
+  // A Relay newer than this build can name a field anywhere in a read, at any depth.
   #expect(String(decoding: nestedExtra, as: UTF8.self).contains("\"extra\""))
-  #expect(throws: DecodingError.self) {
-    _ = try QuotaWireCodec.makeDecoder().decode(AccountSummary.self, from: nestedExtra)
-  }
+  let tolerated = try QuotaWireCodec.makeDecoder().decode(AccountSummary.self, from: nestedExtra)
+  #expect(tolerated.usage.cost.catalogRevision == "pricing_1")
 }
 
 @Test
@@ -218,11 +218,11 @@ func accountDeviceActivityUsesTheNewerOfLastSeenAndLastReading() throws {
     "last_seen_at": "2026-08-15T08:00:05Z",
     "signed_out_at": NSNull(),
   ]
+  // A field the contract retired reads as any other field this build does not name: ignored.
   withHealth["health"] = NSNull()
-  #expect(throws: DecodingError.self) {
-    _ = try QuotaWireCodec.makeDecoder().decode(
-      AccountDevice.self, from: JSONSerialization.data(withJSONObject: withHealth))
-  }
+  let withRetiredField = try QuotaWireCodec.makeDecoder().decode(
+    AccountDevice.self, from: JSONSerialization.data(withJSONObject: withHealth))
+  #expect(withRetiredField.deviceID == "device_01")
 
   #expect(
     AccountDeviceActivity.status(for: try decodeDevice(), lastReadingAt: nil, now: now) == .active)
@@ -631,11 +631,10 @@ func decodesLocalUsagePeriodClientProviderModelSummary() throws {
     JSONSerialization.jsonObject(with: QuotaWireCodec.makeEncoder().encode(model))
       as? [String: Any])
   modelObject["client"] = "codex"
-  let duplicatedContext = try JSONSerialization.data(withJSONObject: modelObject)
-  #expect(throws: DecodingError.self) {
-    _ = try QuotaWireCodec.makeDecoder().decode(
-      LocalUsageModelSummary.self, from: duplicatedContext)
-  }
+  let retiredName = try JSONSerialization.data(withJSONObject: modelObject)
+  let readAnyway = try QuotaWireCodec.makeDecoder().decode(
+    LocalUsageModelSummary.self, from: retiredName)
+  #expect(readAnyway.model == model.model)
 
   var nestedExtraObject = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
   nestedExtraObject["extra"] = true

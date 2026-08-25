@@ -475,7 +475,7 @@ impl RelayClient {
 fn parse_device_authorization_response(
     value: &Value,
 ) -> Result<DeviceAuthorizationGrant, RelayError> {
-    validate_response_object(
+    require_response_fields(
         value,
         &[
             "protocol_version",
@@ -745,7 +745,7 @@ fn validate_snapshot_envelope(value: &Value) -> Result<(), RelayError> {
         .and_then(Value::as_array)
         .ok_or(RelayError::InvalidResponse)?
     {
-        validate_quota_snapshot(snapshot)?;
+        validate_quota_snapshot(snapshot, Wire::Sent)?;
     }
     Ok(())
 }
@@ -982,7 +982,7 @@ fn parse_utc_hour_value(value: &str) -> Result<chrono::DateTime<chrono::FixedOff
 }
 
 fn validate_snapshot_response(value: &Value) -> Result<(), RelayError> {
-    validate_response_object(
+    require_response_fields(
         value,
         &[
             "protocol_version",
@@ -1034,9 +1034,9 @@ fn validate_usage_response(value: &Value) -> Result<(), RelayError> {
     if outcome == Some("rejected") {
         let mut keys = base_keys.to_vec();
         keys.push("rejection_reason");
-        validate_response_object(value, &keys)?;
+        require_response_fields(value, &keys)?;
     } else {
-        validate_response_object(value, &base_keys)?;
+        require_response_fields(value, &base_keys)?;
     }
     if object.get("protocol_version").and_then(Value::as_i64) != Some(MANAGED_DATA_PROTOCOL)
         || !matches!(
@@ -1089,16 +1089,43 @@ fn validate_usage_response(value: &Value) -> Result<(), RelayError> {
     Ok(())
 }
 
-fn validate_response_object(value: &Value, keys: &[&str]) -> Result<(), RelayError> {
+/// Which side of the wire a payload is on.
+///
+/// What this device sends is checked against exactly the contract, because a payload Relay
+/// refuses blocks the outbox behind it. What it receives is checked for what this build reads:
+/// the Relay answering can be newer than the build asking, so a key this build cannot name, or
+/// an enum member it has never heard of, travels instead of discarding the read. See
+/// [ADR 0023](../../../../docs/decisions/0023-strict-writes-tolerant-reads.md).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Wire {
+    Sent,
+    Received,
+}
+
+/// A response object carries every field this build reads. It may carry more.
+fn require_response_fields(value: &Value, keys: &[&str]) -> Result<(), RelayError> {
     let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
-    if object.len() != keys.len() || keys.iter().any(|key| !object.contains_key(*key)) {
+    if keys.iter().any(|key| !object.contains_key(*key)) {
         return Err(RelayError::InvalidResponse);
     }
     Ok(())
 }
 
+/// A closed enum in a payload this build receives: bounded text, membership unchecked.
+fn valid_read_enum(value: Option<&str>) -> bool {
+    value.is_some_and(|value| valid_dimension(value, 64))
+}
+
+/// A closed enum in a payload that travels in either direction, checked as its direction allows.
+fn valid_wire_enum(value: Option<&str>, wire: Wire, members: &[&str]) -> bool {
+    match wire {
+        Wire::Sent => value.is_some_and(|value| members.contains(&value)),
+        Wire::Received => valid_read_enum(value),
+    }
+}
+
 fn validate_control_response(value: &Value) -> Result<(), RelayError> {
-    validate_response_object(
+    require_response_fields(
         value,
         &[
             "protocol_version",
@@ -1147,7 +1174,7 @@ fn validate_control_response(value: &Value) -> Result<(), RelayError> {
 }
 
 fn validate_account_summary(value: &Value) -> Result<(), RelayError> {
-    validate_response_object(
+    require_response_fields(
         value,
         &["protocol_version", "account", "devices", "quota", "usage"],
     )?;
@@ -1177,7 +1204,7 @@ fn validate_account_summary(value: &Value) -> Result<(), RelayError> {
 }
 
 fn validate_account_usage_response(value: &Value) -> Result<(), RelayError> {
-    validate_response_object(value, &["protocol_version", "usage"])?;
+    require_response_fields(value, &["protocol_version", "usage"])?;
     let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
     if object.get("protocol_version").and_then(Value::as_i64) != Some(MANAGED_DATA_PROTOCOL) {
         return Err(RelayError::InvalidResponse);
@@ -1186,7 +1213,7 @@ fn validate_account_usage_response(value: &Value) -> Result<(), RelayError> {
 }
 
 fn validate_account_record(value: &Value) -> Result<(), RelayError> {
-    validate_response_object(value, &["account_id", "display_label", "created_at"])?;
+    require_response_fields(value, &["account_id", "display_label", "created_at"])?;
     let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
     if !object
         .get("account_id")
@@ -1209,7 +1236,7 @@ fn validate_account_record(value: &Value) -> Result<(), RelayError> {
 }
 
 fn validate_account_device(value: &Value) -> Result<(), RelayError> {
-    validate_response_object(
+    require_response_fields(
         value,
         &[
             "device_id",
@@ -1236,15 +1263,12 @@ fn validate_account_device(value: &Value) -> Result<(), RelayError> {
             .get("display_name")
             .and_then(Value::as_str)
             .is_some_and(|value| valid_display(value, 128))
-        || !matches!(
-            object.get("platform").and_then(Value::as_str),
-            Some("macos" | "linux" | "windows")
-        )
+        || !valid_read_enum(object.get("platform").and_then(Value::as_str))
         || object
             .get("device_generation")
             .and_then(safe_positive_u64)
             .is_none()
-        || !matches!(status, Some("active" | "offline" | "signed_out"))
+        || !valid_read_enum(status)
         || !object
             .get("created_at")
             .and_then(Value::as_str)
@@ -1268,7 +1292,7 @@ fn validate_account_device(value: &Value) -> Result<(), RelayError> {
 }
 
 fn validate_quota_observation(value: &Value) -> Result<(), RelayError> {
-    validate_response_object(value, &["device_id", "snapshot"])?;
+    require_response_fields(value, &["device_id", "snapshot"])?;
     let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
     if !object
         .get("device_id")
@@ -1277,23 +1301,41 @@ fn validate_quota_observation(value: &Value) -> Result<(), RelayError> {
     {
         return Err(RelayError::InvalidResponse);
     }
-    validate_quota_snapshot(object.get("snapshot").ok_or(RelayError::InvalidResponse)?)
+    validate_quota_snapshot(
+        object.get("snapshot").ok_or(RelayError::InvalidResponse)?,
+        Wire::Received,
+    )
 }
 
-fn validate_quota_snapshot(value: &Value) -> Result<(), RelayError> {
+fn validate_quota_snapshot(value: &Value, wire: Wire) -> Result<(), RelayError> {
     let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
     let required = ["provider", "account", "windows", "status", "observed_at"];
-    if object.len() != required.len() || required.iter().any(|key| !object.contains_key(*key)) {
+    if required.iter().any(|key| !object.contains_key(*key))
+        || (wire == Wire::Sent && object.len() != required.len())
+    {
         return Err(RelayError::InvalidResponse);
     }
-    if !object
-        .get("provider")
-        .and_then(Value::as_str)
-        .and_then(crate::catalog::ProviderId::parse)
-        .is_some_and(crate::catalog::ProviderId::syncs_to_account)
-        || !matches!(
+    let provider = object.get("provider").and_then(Value::as_str);
+    // This device only uploads a provider the Account accepts; a reading it is handed for a
+    // provider this build has never heard of still belongs to the account it came from.
+    let named_provider = match wire {
+        Wire::Sent => provider
+            .and_then(crate::catalog::ProviderId::parse)
+            .is_some_and(crate::catalog::ProviderId::syncs_to_account),
+        Wire::Received => valid_read_enum(provider),
+    };
+    if !named_provider
+        || !valid_wire_enum(
             object.get("status").and_then(Value::as_str),
-            Some("available" | "stale" | "auth_required" | "unavailable" | "unsupported" | "error")
+            wire,
+            &[
+                "available",
+                "stale",
+                "auth_required",
+                "unavailable",
+                "unsupported",
+                "error",
+            ],
         )
         || !object
             .get("observed_at")
@@ -1302,26 +1344,29 @@ fn validate_quota_snapshot(value: &Value) -> Result<(), RelayError> {
     {
         return Err(RelayError::InvalidResponse);
     }
-    validate_quota_account(object.get("account").ok_or(RelayError::InvalidResponse)?)?;
+    validate_quota_account(
+        object.get("account").ok_or(RelayError::InvalidResponse)?,
+        wire,
+    )?;
     let windows = object
         .get("windows")
         .and_then(Value::as_array)
         .filter(|windows| windows.len() <= 16)
         .ok_or(RelayError::InvalidResponse)?;
     for window in windows {
-        validate_quota_window(window)?;
+        validate_quota_window(window, wire)?;
     }
     Ok(())
 }
 
-fn validate_quota_account(value: &Value) -> Result<(), RelayError> {
+fn validate_quota_account(value: &Value, wire: Wire) -> Result<(), RelayError> {
     let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
     let required = ["fingerprint", "fingerprint_scope"];
-    if (object.len() < required.len() || object.len() > required.len() + 2)
-        || required.iter().any(|key| !object.contains_key(*key))
-        || object
-            .keys()
-            .any(|key| !required.contains(&key.as_str()) && key != "label" && key != "plan")
+    if required.iter().any(|key| !object.contains_key(*key))
+        || (wire == Wire::Sent
+            && object
+                .keys()
+                .any(|key| !required.contains(&key.as_str()) && key != "label" && key != "plan"))
     {
         return Err(RelayError::InvalidResponse);
     }
@@ -1329,9 +1374,10 @@ fn validate_quota_account(value: &Value) -> Result<(), RelayError> {
         .get("fingerprint")
         .and_then(Value::as_str)
         .is_some_and(is_opaque)
-        || !matches!(
+        || !valid_wire_enum(
             object.get("fingerprint_scope").and_then(Value::as_str),
-            Some("global" | "source")
+            wire,
+            &["global", "source"],
         )
         || object.get("label").is_some_and(|value| {
             !value
@@ -1347,7 +1393,7 @@ fn validate_quota_account(value: &Value) -> Result<(), RelayError> {
     Ok(())
 }
 
-fn validate_quota_window(value: &Value) -> Result<(), RelayError> {
+fn validate_quota_window(value: &Value, wire: Wire) -> Result<(), RelayError> {
     let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
     let required = ["id", "title", "used_percent"];
     let optional = [
@@ -1357,12 +1403,11 @@ fn validate_quota_window(value: &Value) -> Result<(), RelayError> {
         "limit_value",
         "value_unit",
     ];
-    if object.len() < required.len()
-        || object.len() > required.len() + optional.len()
-        || required.iter().any(|key| !object.contains_key(*key))
-        || object
-            .keys()
-            .any(|key| !required.contains(&key.as_str()) && !optional.contains(&key.as_str()))
+    if required.iter().any(|key| !object.contains_key(*key))
+        || (wire == Wire::Sent
+            && object
+                .keys()
+                .any(|key| !required.contains(&key.as_str()) && !optional.contains(&key.as_str())))
     {
         return Err(RelayError::InvalidResponse);
     }
@@ -1390,9 +1435,9 @@ fn validate_quota_window(value: &Value) -> Result<(), RelayError> {
                 .as_f64()
                 .is_some_and(|number| number.is_finite() && number >= 0.0)
         })
-        || object
-            .get("value_unit")
-            .is_some_and(|value| !matches!(value.as_str(), Some("usd" | "credits" | "count")))
+        || object.get("value_unit").is_some_and(|value| {
+            !valid_wire_enum(value.as_str(), wire, &["usd", "credits", "count"])
+        })
     {
         return Err(RelayError::InvalidResponse);
     }
@@ -1402,19 +1447,8 @@ fn validate_quota_window(value: &Value) -> Result<(), RelayError> {
 fn validate_usage_summary(value: &Value) -> Result<(), RelayError> {
     let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
     let required = ["range", "totals", "cost", "coverage", "breakdowns"];
-    if object.len() < required.len()
-        || object.len() > required.len() + 3
-        || required.iter().any(|key| !object.contains_key(*key))
-        || object.keys().any(|key| {
-            !required.contains(&key.as_str())
-                && key != "breakdowns_truncated"
-                && key != "model_catalog_revision"
-                && key != "agents"
-        })
-        || !matches!(
-            object.get("coverage").and_then(Value::as_str),
-            Some("none" | "complete" | "partial")
-        )
+    if required.iter().any(|key| !object.contains_key(*key))
+        || !valid_read_enum(object.get("coverage").and_then(Value::as_str))
         || object
             .get("breakdowns_truncated")
             .is_some_and(|value| value != &Value::Bool(true))
@@ -1433,27 +1467,19 @@ fn validate_usage_summary(value: &Value) -> Result<(), RelayError> {
         .filter(|breakdowns| breakdowns.len() <= 1_000)
         .ok_or(RelayError::InvalidResponse)?;
     for breakdown in breakdowns {
-        validate_response_object(breakdown, &["dimension", "key", "totals", "cost"])?;
+        require_response_fields(breakdown, &["dimension", "key", "totals", "cost"])?;
         let object = breakdown.as_object().ok_or(RelayError::InvalidResponse)?;
         let dimension = object.get("dimension").and_then(Value::as_str);
         let key = object.get("key").and_then(Value::as_str);
-        if !matches!(
-            dimension,
-            Some(
-                "device"
-                    | "agent"
-                    | "model"
-                    | "billing_channel"
-                    | "usage_date"
-                    | "bucket_start_utc"
-            )
-        ) || !key.is_some_and(|value| {
-            if dimension == Some("model") {
-                valid_model_text(value)
-            } else {
-                valid_display(value, 128)
-            }
-        }) {
+        if !valid_read_enum(dimension)
+            || !key.is_some_and(|value| {
+                if dimension == Some("model") {
+                    valid_model_text(value)
+                } else {
+                    valid_display(value, 128)
+                }
+            })
+        {
             return Err(RelayError::InvalidResponse);
         }
         validate_usage_totals(object.get("totals").ok_or(RelayError::InvalidResponse)?)?;
@@ -1471,9 +1497,9 @@ fn validate_usage_agents(value: &Value) -> Result<(), RelayError> {
         .filter(|agents| agents.len() <= crate::usage::UsageAgent::ALL.len())
         .ok_or(RelayError::InvalidResponse)?;
     for agent in agents {
-        validate_response_object(agent, &["agent", "totals", "cost", "providers"])?;
+        require_response_fields(agent, &["agent", "totals", "cost", "providers"])?;
         let object = agent.as_object().ok_or(RelayError::InvalidResponse)?;
-        if !valid_billing_agent(object.get("agent").and_then(Value::as_str)) {
+        if !valid_read_enum(object.get("agent").and_then(Value::as_str)) {
             return Err(RelayError::InvalidResponse);
         }
         validate_usage_summary_totals(object.get("totals").ok_or(RelayError::InvalidResponse)?)?;
@@ -1484,9 +1510,9 @@ fn validate_usage_agents(value: &Value) -> Result<(), RelayError> {
             .filter(|providers| providers.len() <= crate::usage::InferenceProvider::ALL.len())
             .ok_or(RelayError::InvalidResponse)?;
         for provider in providers {
-            validate_response_object(provider, &["provider", "totals", "cost", "models"])?;
+            require_response_fields(provider, &["provider", "totals", "cost", "models"])?;
             let object = provider.as_object().ok_or(RelayError::InvalidResponse)?;
-            if !valid_inference_provider(object.get("provider").and_then(Value::as_str)) {
+            if !valid_read_enum(object.get("provider").and_then(Value::as_str)) {
                 return Err(RelayError::InvalidResponse);
             }
             validate_usage_summary_totals(
@@ -1499,7 +1525,7 @@ fn validate_usage_agents(value: &Value) -> Result<(), RelayError> {
                 .filter(|models| models.len() <= 1_000)
                 .ok_or(RelayError::InvalidResponse)?;
             for model in models {
-                validate_response_object(model, &["model", "totals", "cost"])?;
+                require_response_fields(model, &["model", "totals", "cost"])?;
                 let object = model.as_object().ok_or(RelayError::InvalidResponse)?;
                 if !object
                     .get("model")
@@ -1528,7 +1554,7 @@ fn validate_usage_summary_totals(value: &Value) -> Result<(), RelayError> {
         "reasoning_tokens",
         "messages",
     ];
-    validate_response_object(value, &keys)?;
+    require_response_fields(value, &keys)?;
     let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
     let count = |key: &str| object.get(key).and_then(safe_u64);
     let input = count("input_tokens").ok_or(RelayError::InvalidResponse)?;
@@ -1548,7 +1574,7 @@ fn validate_usage_summary_totals(value: &Value) -> Result<(), RelayError> {
 }
 
 fn validate_usage_date_range(value: &Value) -> Result<(), RelayError> {
-    validate_response_object(value, &["from", "to"])?;
+    require_response_fields(value, &["from", "to"])?;
     let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
     let from = object
         .get("from")
@@ -1583,7 +1609,7 @@ fn validate_usage_totals(value: &Value) -> Result<(), RelayError> {
         "source_cost_microusd",
         "source_cost_covered_requests",
     ];
-    validate_response_object(value, &keys)?;
+    require_response_fields(value, &keys)?;
     let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
     if keys[..keys.len() - 1]
         .iter()
@@ -1661,16 +1687,7 @@ fn validate_usage_cost(value: &Value) -> Result<(), RelayError> {
         "unpriced",
     ];
     let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
-    if object.len() < required_keys.len()
-        || object.len() > required_keys.len() + 1
-        || required_keys.iter().any(|key| !object.contains_key(*key))
-    {
-        return Err(RelayError::InvalidResponse);
-    }
-    if object
-        .keys()
-        .any(|key| key != "unpriced_truncated" && !required_keys.contains(&key.as_str()))
-    {
+    if required_keys.iter().any(|key| !object.contains_key(*key)) {
         return Err(RelayError::InvalidResponse);
     }
     if !matches!(
@@ -1702,21 +1719,10 @@ fn validate_usage_cost(value: &Value) -> Result<(), RelayError> {
         .and_then(Value::as_array)
         .filter(|values| values.len() <= 16)
         .ok_or(RelayError::InvalidResponse)?;
-    if assumptions.iter().any(|value| {
-        !matches!(
-            value.as_str(),
-            Some(
-                "agent_default_channel"
-                    | "model_alias"
-                    | "wildcard_service_tier"
-                    | "wildcard_speed"
-                    | "wildcard_inference_geo"
-                    | "wildcard_context_bucket"
-                    | "cache_write_inferred_rate"
-                    | "source_reported"
-            )
-        )
-    }) {
+    if assumptions
+        .iter()
+        .any(|value| !valid_read_enum(value.as_str()))
+    {
         return Err(RelayError::InvalidResponse);
     }
     if assumptions
@@ -1734,26 +1740,14 @@ fn validate_usage_cost(value: &Value) -> Result<(), RelayError> {
         .filter(|values| values.len() <= 100)
         .ok_or(RelayError::InvalidResponse)?;
     for item in unpriced {
-        validate_response_object(item, &["billing_channel", "model", "reason", "rows"])?;
+        require_response_fields(item, &["billing_channel", "model", "reason", "rows"])?;
         let item = item.as_object().ok_or(RelayError::InvalidResponse)?;
-        if !valid_billing_channel(item.get("billing_channel").and_then(Value::as_str))
+        if !valid_read_enum(item.get("billing_channel").and_then(Value::as_str))
             || !item
                 .get("model")
                 .and_then(Value::as_str)
                 .is_some_and(valid_model_text)
-            || !matches!(
-                item.get("reason").and_then(Value::as_str),
-                Some(
-                    "unknown_channel"
-                        | "unknown_model"
-                        | "outside_effective_range"
-                        | "unsupported_dimensions"
-                        | "ambiguous_price"
-                        | "missing_rate"
-                        | "incomplete_source_cost"
-                        | "invalid_catalog"
-                )
-            )
+            || !valid_read_enum(item.get("reason").and_then(Value::as_str))
             || item.get("rows").and_then(safe_positive_u64).is_none()
         {
             return Err(RelayError::InvalidResponse);
@@ -1821,7 +1815,7 @@ fn validate_session_refresh_response(
     // deletion watermarks are returned by the device sync endpoint, not by this OAuth route.
     let object = value.as_object().ok_or_else(BackendError::unavailable)?;
     if audience == "account" {
-        validate_response_object(
+        require_response_fields(
             value,
             &[
                 "protocol_version",
@@ -1833,7 +1827,7 @@ fn validate_session_refresh_response(
         )
         .map_err(|_| invalid_response_backend())?;
     } else {
-        validate_response_object(
+        require_response_fields(
             value,
             &[
                 "protocol_version",
@@ -2731,7 +2725,7 @@ fn refresh_session_family(
 
 fn session_from_token_response(response: &Value) -> Result<Value, RelayError> {
     let object = response.as_object().ok_or(RelayError::InvalidResponse)?;
-    validate_response_object(
+    require_response_fields(
         response,
         &[
             "protocol_version",
@@ -2808,7 +2802,7 @@ fn session_from_token_response(response: &Value) -> Result<Value, RelayError> {
 }
 
 fn validate_session_token(value: &Value) -> Result<(), RelayError> {
-    validate_response_object(
+    require_response_fields(
         value,
         &[
             "access_token",
@@ -3034,22 +3028,6 @@ fn valid_billing_agent(value: Option<&str>) -> bool {
     })
 }
 
-fn valid_billing_channel(value: Option<&str>) -> bool {
-    value.is_some_and(|value| {
-        crate::usage::BillingChannel::ALL
-            .iter()
-            .any(|channel| channel.as_str() == value)
-    })
-}
-
-fn valid_inference_provider(value: Option<&str>) -> bool {
-    value.is_some_and(|value| {
-        crate::usage::InferenceProvider::ALL
-            .iter()
-            .any(|provider| provider.as_str() == value)
-    })
-}
-
 fn invalid_response_backend() -> BackendError {
     BackendError {
         error: crate::protocol::IpcError::new(
@@ -3063,7 +3041,7 @@ fn validate_device_profile_response(
     value: &Value,
     expected_device_id: Option<&str>,
 ) -> Result<(), RelayError> {
-    validate_response_object(value, &["protocol_version", "status", "device_id"])?;
+    require_response_fields(value, &["protocol_version", "status", "device_id"])?;
     let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
     if object.get("protocol_version").and_then(Value::as_i64) != Some(CONTROL_PROTOCOL)
         || object.get("status").and_then(Value::as_str) != Some("updated")
@@ -3704,7 +3682,7 @@ mod tests {
             )
             .is_err()
         );
-        assert!(validate_quota_snapshot(&cursor).is_ok());
+        assert!(validate_quota_snapshot(&cursor, Wire::Sent).is_ok());
 
         assert!(
             snapshot_payload_from_quota_report(
@@ -3792,14 +3770,15 @@ mod tests {
         structured["usage"]["agents"][0]["totals"]["total_tokens"] = serde_json::json!(13);
         assert!(validate_account_summary(&structured).is_err());
 
+        // A Relay newer than this build can name a field it does not read; the read stands.
         let mut extra = value;
         extra["account"]["unexpected"] = serde_json::json!(true);
-        assert!(validate_account_summary(&extra).is_err());
+        assert!(validate_account_summary(&extra).is_ok());
     }
 
-    /// One statement per contract: the read validator names agents and inference providers by
-    /// asking the enums that define them, so a member added to the wire cannot be rejected here
-    /// as unknown.  A `moonshot` provider once failed every account read for this reason.
+    /// A read is never discarded over a member this build has not heard of. Every enum the wire
+    /// defines today is accepted, and so is one that does not exist yet: a `moonshot` provider
+    /// once failed every account read, and an unknown member is text to show, not a refusal.
     #[test]
     fn every_enum_member_the_wire_can_carry_is_accepted() {
         let totals = serde_json::json!({
@@ -3861,7 +3840,13 @@ mod tests {
         let mut unknown = summary;
         unknown["usage"]["agents"][0]["providers"][0]["provider"] =
             serde_json::json!("not_a_provider");
-        assert!(validate_account_summary(&unknown).is_err());
+        unknown["usage"]["agents"][0]["agent"] = serde_json::json!("an_agent_from_2027");
+        assert!(validate_account_summary(&unknown).is_ok());
+
+        // Shape is still shape: a member that is not bounded text is not a member.
+        let mut malformed = unknown;
+        malformed["usage"]["agents"][0]["agent"] = serde_json::json!(7);
+        assert!(validate_account_summary(&malformed).is_err());
     }
 
     /// One contract: a rejected read is reported as the error it is, and the request carries

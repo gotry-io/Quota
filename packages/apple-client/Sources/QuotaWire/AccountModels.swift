@@ -12,7 +12,6 @@ public struct QuotaUserAccount: Codable, Equatable, Sendable {
   }
 
   public init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys(["accountId", "displayLabel", "createdAt"])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     accountID = try container.decode(String.self, forKey: .accountID)
     displayLabel = try container.decode(String?.self, forKey: .displayLabel)
@@ -45,16 +44,18 @@ public struct QuotaUserAccount: Codable, Equatable, Sendable {
   }
 }
 
-public enum AccountDeviceStatus: String, Codable, Sendable {
+public enum AccountDeviceStatus: String, Codable, Sendable, TolerantWireEnum {
   case active
   case offline
   case signedOut = "signed_out"
+  case unknown
 }
 
-public enum AccountDevicePlatform: String, Codable, Sendable {
+public enum AccountDevicePlatform: String, Codable, Sendable, TolerantWireEnum {
   case macos
   case linux
   case windows
+  case unknown
 }
 
 public struct AccountDevice: Codable, Equatable, Identifiable, Sendable {
@@ -93,10 +94,6 @@ public struct AccountDevice: Codable, Equatable, Identifiable, Sendable {
   }
 
   public init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys([
-      "deviceId", "displayName", "platform", "deviceGeneration", "status", "createdAt",
-      "lastLoginAt", "lastSeenAt", "signedOutAt",
-    ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     deviceID = try container.decode(String.self, forKey: .deviceID)
     displayName = try container.decode(String.self, forKey: .displayName)
@@ -159,7 +156,6 @@ public struct AccountQuotaObservation: Codable, Equatable, Sendable {
   }
 
   public init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys(["deviceId", "snapshot"])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     deviceID = try container.decode(String.self, forKey: .deviceID)
     snapshot = try container.decode(QuotaSnapshot.self, forKey: .snapshot)
@@ -200,9 +196,6 @@ public struct AccountSummary: Codable, Equatable, Sendable {
   }
 
   public init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys([
-      "protocolVersion", "account", "devices", "quota", "usage",
-    ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     protocolVersion = try container.decode(Int.self, forKey: .protocolVersion)
     account = try container.decode(QuotaUserAccount.self, forKey: .account)
@@ -247,7 +240,6 @@ public struct CachedAccountSummary: Codable, Equatable, Sendable {
   }
 
   public init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys(["summary", "fetchedAt", "etag"])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     summary = try container.decode(AccountSummary.self, forKey: .summary)
     fetchedAt = try container.decode(Date.self, forKey: .fetchedAt)
@@ -261,7 +253,7 @@ public struct CachedAccountSummary: Codable, Equatable, Sendable {
   }
 }
 
-public enum RelayErrorCode: String, Codable, Sendable {
+public enum RelayErrorCode: String, Codable, Sendable, TolerantWireEnum {
   case invalidRequest = "invalid_request"
   case unauthorized
   case forbidden
@@ -278,6 +270,7 @@ public enum RelayErrorCode: String, Codable, Sendable {
   case clientUpgradeRequired = "client_upgrade_required"
   case conflict
   case internalError = "internal_error"
+  case unknown
 }
 
 public struct RelayErrorEnvelope: Decodable, Equatable, Sendable {
@@ -285,7 +278,6 @@ public struct RelayErrorEnvelope: Decodable, Equatable, Sendable {
   public let message: String
 
   public init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys(["error"])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     let error = try container.decode(ErrorBody.self, forKey: .error)
     code = error.code
@@ -297,7 +289,6 @@ public struct RelayErrorEnvelope: Decodable, Equatable, Sendable {
     let message: String
 
     init(from decoder: Decoder) throws {
-      try decoder.rejectUnknownWireKeys(["code", "message"])
       let container = try decoder.container(keyedBy: CodingKeys.self)
       code = try container.decode(RelayErrorCode.self, forKey: .code)
       message = try container.decode(String.self, forKey: .message)

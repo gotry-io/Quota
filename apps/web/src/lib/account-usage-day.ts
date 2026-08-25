@@ -1,7 +1,10 @@
-import { type AccountUsageSummary, AccountUsageResponseSchema } from "@gotry-io/quota-protocol";
+import {
+  type AccountUsageSummaryRead,
+  AccountUsageResponseReadSchema,
+} from "@gotry-io/quota-protocol";
 
 export type AccountUsageDayResult =
-  | { status: "ok"; usage: AccountUsageSummary }
+  | { status: "ok"; usage: AccountUsageSummaryRead }
   | { status: "unauthorized" }
   | { status: "error" }
   | { status: "aborted" };
@@ -22,6 +25,6 @@ export function parseAccountUsageDayResponse(
 ): Exclude<AccountUsageDayResult, { status: "aborted" }> {
   if (status === 401) return { status: "unauthorized" };
   if (status < 200 || status >= 300) return { status: "error" };
-  const parsed = AccountUsageResponseSchema.safeParse(body);
+  const parsed = AccountUsageResponseReadSchema.safeParse(body);
   return parsed.success ? { status: "ok", usage: parsed.data.usage } : { status: "error" };
 }

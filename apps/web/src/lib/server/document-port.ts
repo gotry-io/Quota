@@ -1,11 +1,11 @@
-import type { AccountSummary } from "@gotry-io/quota-protocol";
+import type { AccountSummaryRead } from "@gotry-io/quota-protocol";
 
 export interface WebDocumentViewer {
   displayLabel: string;
 }
 
 export type AccountSummaryDocumentResult =
-  | { status: "ok"; summary: AccountSummary }
+  | { status: "ok"; summary: AccountSummaryRead }
   | { status: "unauthorized" }
   | { status: "error" };
 

@@ -494,7 +494,6 @@ struct AccountUsageResponse: Decodable, Equatable, Sendable {
   let usage: AccountUsageSummary
 
   init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys(["protocolVersion", "usage"])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     protocolVersion = try container.decode(Int.self, forKey: .protocolVersion)
     usage = try container.decode(AccountUsageSummary.self, forKey: .usage)
@@ -518,7 +517,6 @@ struct AccountQuotaResponse: Decodable, Equatable, Sendable {
   let quota: [AccountQuotaObservation]
 
   init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys(["protocolVersion", "quota"])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     protocolVersion = try container.decode(Int.self, forKey: .protocolVersion)
     quota = try container.decode([AccountQuotaObservation].self, forKey: .quota)
@@ -560,10 +558,6 @@ struct QuotaSnapshotUploadResponse: Codable, Equatable, Sendable {
   }
 
   init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys([
-      "protocolVersion", "outcome", "deviceId", "deviceGeneration", "acceptedSequence",
-      "nextSnapshotSequence",
-    ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     protocolVersion = try container.decode(Int.self, forKey: .protocolVersion)
     outcome = try container.decode(QuotaSnapshotUploadOutcome.self, forKey: .outcome)
@@ -608,10 +602,6 @@ struct DeviceSyncResponse: Codable, Equatable, Sendable {
   }
 
   init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys([
-      "protocolVersion", "accountId", "deviceId", "deviceGeneration", "nextSnapshotSequence",
-      "nextUsageSequence", "usageDeletedBefore", "usageSyncRevision",
-    ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     protocolVersion = try container.decode(Int.self, forKey: .protocolVersion)
     accountID = try container.decode(String.self, forKey: .accountID)

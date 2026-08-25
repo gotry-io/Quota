@@ -83,6 +83,8 @@ enum UsageValueFormatter {
     case .opencode: "OpenCode"
     case .pi: "Pi"
     case .cursor: "Cursor"
+    // An agent this build has never heard of is named as what it is.
+    case .unknown: "Unknown"
     }
   }
 

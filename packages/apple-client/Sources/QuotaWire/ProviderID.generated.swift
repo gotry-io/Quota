@@ -3,8 +3,12 @@
 
 import Foundation
 
-public enum ProviderID: String, Codable, CaseIterable, Identifiable, Sendable {
-  // Every provider the managed Account accepts.
+/// A provider the managed Account accepts, or one this build has never heard of.
+///
+/// A reader may be older than the Relay answering it, so an id outside the catalog is kept as the
+/// text it arrived as and shown that way, rather than discarding the reading it came with. See
+/// [ADR 0023](../../../../docs/decisions/0023-strict-writes-tolerant-reads.md).
+public enum ProviderID: RawRepresentable, Codable, CaseIterable, Hashable, Identifiable, Sendable {
   case `codex`
   case `claude`
   case `grok`
@@ -13,6 +17,48 @@ public enum ProviderID: String, Codable, CaseIterable, Identifiable, Sendable {
   case `kimi`
   case `litellm`
   case `cursor`
+  case unknown(String)
+
+  /// Every provider this build knows. An unknown id is not one of them.
+  public static let allCases: [ProviderID] = [
+    .`codex`,
+    .`claude`,
+    .`grok`,
+    .`openrouter`,
+    .`deepseek`,
+    .`kimi`,
+    .`litellm`,
+    .`cursor`,
+  ]
+
+  public init?(rawValue: String) {
+    guard let known = Self.allCases.first(where: { $0.rawValue == rawValue }) else { return nil }
+    self = known
+  }
+
+  public init(from decoder: Decoder) throws {
+    let rawValue = try decoder.singleValueContainer().decode(String.self)
+    self = ProviderID(rawValue: rawValue) ?? .unknown(rawValue)
+  }
+
+  public func encode(to encoder: Encoder) throws {
+    var container = encoder.singleValueContainer()
+    try container.encode(rawValue)
+  }
+
+  public var rawValue: String {
+    switch self {
+    case .`codex`: "codex"
+    case .`claude`: "claude"
+    case .`grok`: "grok"
+    case .`openrouter`: "openrouter"
+    case .`deepseek`: "deepseek"
+    case .`kimi`: "kimi"
+    case .`litellm`: "litellm"
+    case .`cursor`: "cursor"
+    case .unknown(let rawValue): rawValue
+    }
+  }
 
   public var id: String { rawValue }
 
@@ -26,6 +72,7 @@ public enum ProviderID: String, Codable, CaseIterable, Identifiable, Sendable {
     case .`kimi`: "Kimi Code"
     case .`litellm`: "LiteLLM"
     case .`cursor`: "Cursor"
+    case .unknown(let rawValue): rawValue
     }
   }
 
@@ -39,7 +86,7 @@ public enum ProviderID: String, Codable, CaseIterable, Identifiable, Sendable {
     case .`kimi`: 5
     case .`litellm`: 6
     case .`cursor`: 7
+    case .unknown: Int.max
     }
   }
-
 }

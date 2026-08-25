@@ -1,4 +1,4 @@
-import type { AccountDevice, AccountQuotaObservation } from "@gotry-io/quota-protocol";
+import type { AccountDeviceRead, AccountQuotaObservationRead } from "@gotry-io/quota-protocol";
 
 export type DeviceActivityPresentation = {
   label: string;
@@ -15,8 +15,8 @@ const idleWithinMilliseconds = 24 * 60 * 60 * 1000;
  * is quiet, not broken, so nothing here claims a device is unhealthy.
  */
 export function deviceActivity(
-  device: AccountDevice,
-  observations: readonly AccountQuotaObservation[],
+  device: AccountDeviceRead,
+  observations: readonly AccountQuotaObservationRead[],
   now: Date = new Date(),
 ): DeviceActivityPresentation {
   const readings = observations

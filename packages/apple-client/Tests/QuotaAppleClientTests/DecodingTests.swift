@@ -3,22 +3,36 @@ import QuotaWire
 import Testing
 
 struct DecodingTests {
+  /// A read is what a client is handed, and the Relay handing it can be newer than this build.
+  /// A key this build does not name — one added since, or one the contract retired — is ignored,
+  /// and the reading it arrived with still lands. See
+  /// [ADR 0023](../../../../docs/decisions/0023-strict-writes-tolerant-reads.md).
   @Test
-  func aDeviceCarryingAnAssertionAboutItsOwnHealthIsRefused() throws {
-    // The Account device list says when a device was last seen. A device that also claimed to
-    // be healthy was one device speaking for another, and that key is no longer in the wire.
+  func aReadKeepsWhatItNamesAndIgnoresTheRest() throws {
     var device = Fixtures.accountDevice()
     device["health"] = NSNull()
-    #expect(throws: DecodingError.self) {
-      _ = try WireCodec.decode(
-        AccountSummary.self,
-        from: Fixtures.accountSummaryJSON(devices: [device])
-      )
-    }
+    var observation = Fixtures.quotaObservation()
+    var snapshot = observation["snapshot"] as! [String: Any]
+    snapshot["valid_until"] = "2026-12-31T00:00:00Z"
+    observation["snapshot"] = snapshot
+    let data = try Fixtures.accountSummaryJSON(quota: [observation], devices: [device])
+
+    var root = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+    root["generated_at"] = "2026-08-24T09:05:00Z"
+    var usage = root["usage"] as! [String: Any]
+    usage["settled_at"] = "2026-08-24T09:05:00Z"
+    root["usage"] = usage
+    let tolerated = try WireCodec.decode(
+      AccountSummary.self,
+      from: try JSONSerialization.data(withJSONObject: root)
+    )
+
+    #expect(tolerated.devices.first?.deviceID == Fixtures.accountDevice()["device_id"] as? String)
+    #expect(tolerated.quota.first?.snapshot.provider == .codex)
   }
 
   @Test
-  func decodesAccountSummaryAndRejectsUnknownFields() throws {
+  func decodesAccountSummary() throws {
     let data = try Fixtures.accountSummaryJSON(quota: [Fixtures.quotaObservation()])
     let summary = try WireCodec.decode(AccountSummary.self, from: data)
     #expect(summary.protocolVersion == WireCodec.managedDataProtocolVersion)
@@ -26,26 +40,13 @@ struct DecodingTests {
     #expect(summary.quota.first?.snapshot.provider == .codex)
     #expect(summary.quota.first?.snapshot.windows.first?.usedPercent == 29)
     #expect(summary.usage.cost.amountMicrousd == "3138")
-
-    var extra = try JSONSerialization.jsonObject(with: data) as! [String: Any]
-    extra["unexpected"] = true
-    let extraData = try JSONSerialization.data(withJSONObject: extra)
-    #expect(throws: DecodingError.self) {
-      _ = try WireCodec.decode(AccountSummary.self, from: extraData)
-    }
-
-    var nestedObject = try JSONSerialization.jsonObject(with: data) as! [String: Any]
-    var nestedUsage = nestedObject["usage"] as! [String: Any]
-    nestedUsage["extra"] = true
-    nestedObject["usage"] = nestedUsage
-    let nested = try JSONSerialization.data(withJSONObject: nestedObject)
-    #expect(throws: DecodingError.self) {
-      _ = try WireCodec.decode(AccountSummary.self, from: nested)
-    }
   }
 
+  /// A marker stated as `false` is a malformed value rather than a member this build has not
+  /// heard of, so it is still refused. A provider id outside this build's catalog is the other
+  /// case: it reads as itself and is shown as the text it arrived as.
   @Test
-  func rejectsFalseTruncationMarkersAndUnknownProviders() throws {
+  func rejectsFalseTruncationMarkersAndReadsUnknownProviders() throws {
     let falseMarker = try Fixtures.accountSummaryJSON(extraUsage: ["breakdowns_truncated": false])
     #expect(throws: DecodingError.self) {
       _ = try WireCodec.decode(AccountSummary.self, from: falseMarker)
@@ -53,28 +54,14 @@ struct DecodingTests {
 
     var snapshot = Fixtures.quotaObservation()
     var nested = snapshot["snapshot"] as! [String: Any]
-    nested["provider"] = "not_a_provider"
+    nested["provider"] = "a_provider_from_2027"
     snapshot["snapshot"] = nested
     let unknownProvider = try Fixtures.accountSummaryJSON(quota: [snapshot])
-    #expect(throws: DecodingError.self) {
-      _ = try WireCodec.decode(AccountSummary.self, from: unknownProvider)
-    }
-  }
-
-  /// A reading says how long it describes current quota through its own windows, so the
-  /// stamp devices used to upload is not part of a snapshot and is refused, not ignored.
-  @Test
-  func rejectsASnapshotCarryingTheRetiredValidityStamp() throws {
-    var observation = Fixtures.quotaObservation()
-    var snapshot = observation["snapshot"] as! [String: Any]
-    snapshot["valid_until"] = "2026-12-31T00:00:00Z"
-    observation["snapshot"] = snapshot
-    #expect(throws: DecodingError.self) {
-      _ = try WireCodec.decode(
-        AccountSummary.self,
-        from: Fixtures.accountSummaryJSON(quota: [observation])
-      )
-    }
+    let summary = try WireCodec.decode(AccountSummary.self, from: unknownProvider)
+    #expect(summary.quota.first?.snapshot.provider == .unknown("a_provider_from_2027"))
+    #expect(summary.quota.first?.snapshot.provider.displayName == "a_provider_from_2027")
+    #expect(!ProviderID.allCases.contains(.unknown("a_provider_from_2027")))
+    #expect(summary.quota.first?.snapshot.windows.first?.usedPercent == 29)
   }
 
   @Test
@@ -96,7 +83,7 @@ struct DecodingTests {
   }
 
   @Test
-  func decodesOptInClientsAndRejectsDeviceFieldsOnIOSTokens() throws {
+  func decodesAgentGroupsAndIgnoresFieldsMeantForAnotherClient() throws {
     let structured: [String: Any] = [
       "total_tokens": 1200,
       "input_tokens": 1000,
@@ -136,10 +123,11 @@ struct DecodingTests {
     let summary = try WireCodec.decode(AccountSummary.self, from: data)
     #expect(summary.usage.agents?.first?.providers.first?.models.first?.model == "gpt-5.6-sol")
 
+    // A response shaped for a different client carries keys this one does not read. It reads
+    // the session it came for and leaves the rest alone.
     let tokens = try Fixtures.tokenResponse(extra: ["device_id": "device_01"])
-    #expect(throws: DecodingError.self) {
-      _ = try WireCodec.decode(IosOAuthTokenResponse.self, from: tokens)
-    }
+    #expect(try WireCodec.decode(IosOAuthTokenResponse.self, from: tokens).accountSession
+      .accessToken.hasPrefix("qia_"))
 
     let deviceRefresh = try Fixtures.refreshResponse(extra: [
       "device_session": [
@@ -149,9 +137,8 @@ struct DecodingTests {
         "refresh_expires_at": "2026-11-01T12:00:00Z",
       ]
     ])
-    #expect(throws: DecodingError.self) {
-      _ = try WireCodec.decode(AccountSessionRefreshResponse.self, from: deviceRefresh)
-    }
+    #expect(try WireCodec.decode(AccountSessionRefreshResponse.self, from: deviceRefresh)
+      .accountSession.accessToken.hasPrefix("qia_"))
 
     let validTokens = try WireCodec.decode(
       IosOAuthTokenResponse.self,

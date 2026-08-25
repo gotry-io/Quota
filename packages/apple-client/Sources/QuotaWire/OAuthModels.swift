@@ -19,9 +19,6 @@ public struct SessionToken: Codable, Equatable, Sendable {
   }
 
   public init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys([
-      "accessToken", "accessExpiresAt", "refreshToken", "refreshExpiresAt",
-    ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     accessToken = try container.decode(String.self, forKey: .accessToken)
     accessExpiresAt = try container.decode(Date.self, forKey: .accessExpiresAt)
@@ -51,9 +48,6 @@ public struct IosOAuthTokenResponse: Decodable, Equatable, Sendable {
   public let accountSession: SessionToken
 
   public init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys([
-      "protocolVersion", "tokenType", "accountId", "accountSession",
-    ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     protocolVersion = try container.decode(Int.self, forKey: .protocolVersion)
     tokenType = try container.decode(String.self, forKey: .tokenType)
@@ -151,9 +145,6 @@ public struct AccountSessionRefreshResponse: Decodable, Equatable, Sendable {
   public let accountSession: SessionToken
 
   public init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys([
-      "protocolVersion", "tokenType", "tokenAudience", "accountId", "accountSession",
-    ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     protocolVersion = try container.decode(Int.self, forKey: .protocolVersion)
     tokenType = try container.decode(String.self, forKey: .tokenType)
@@ -224,9 +215,6 @@ public struct AccountSession: Codable, Equatable, Sendable {
   }
 
   public init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys([
-      "accountId", "accessToken", "accessExpiresAt", "refreshToken", "refreshExpiresAt",
-    ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     accountID = try container.decode(String.self, forKey: .accountID)
     accessToken = try container.decode(String.self, forKey: .accessToken)

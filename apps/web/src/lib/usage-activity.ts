@@ -1,8 +1,4 @@
-import type {
-  UsageBreakdown,
-  UsageCostOutcome,
-  UsageCoverageVerdict,
-} from "@gotry-io/quota-protocol";
+import type { UsageBreakdownRead } from "@gotry-io/quota-protocol";
 import { activityLevel, formatCount, safeAdd, WEB_LOCALE } from "./format.ts";
 
 export const ACTIVITY_WEEKDAY_LABELS = ["", "Mon", "", "Wed", "", "Fri", ""] as const;
@@ -24,7 +20,7 @@ export type ActivityDay = {
   tokens: number;
   input_tokens: number;
   output_tokens: number;
-  cost: UsageCostOutcome | null;
+  cost: UsageBreakdownRead["cost"] | null;
   tooltip: string;
 };
 
@@ -53,9 +49,12 @@ export type UsageActivityModel = {
   monthLabels: ActivityMonthLabel[];
 };
 
-export type ActivityCostView = Pick<UsageCostOutcome, "status" | "amount_microusd" | "basis">;
+export type ActivityCostView = Pick<
+  UsageBreakdownRead["cost"],
+  "status" | "amount_microusd" | "basis"
+>;
 
-export function usageDateBreakdowns(items: readonly UsageBreakdown[]): UsageBreakdown[] {
+export function usageDateBreakdowns(items: readonly UsageBreakdownRead[]): UsageBreakdownRead[] {
   return items.filter((item) => item.dimension === "usage_date");
 }
 
@@ -117,7 +116,7 @@ export function formatActivityTooltip(input: {
   return `${date} · ${tokens} · ${formatActivityPrice(input.cost)} API-equivalent · ${tooltipSemantics(input.cost)}`;
 }
 
-export function usageDayCoverageLabel(coverage: UsageCoverageVerdict): string {
+export function usageDayCoverageLabel(coverage: string): string {
   switch (coverage) {
     case "none":
       return "No coverage reported";
@@ -125,6 +124,9 @@ export function usageDayCoverageLabel(coverage: UsageCoverageVerdict): string {
       return "Complete";
     case "partial":
       return "Partial";
+    // A verdict this build has not heard of still names itself; it is not a reason to stop.
+    default:
+      return "Unknown";
   }
 }
 
@@ -147,7 +149,7 @@ export function usageDayNotices(usage: {
 }
 
 export function buildUsageActivityModel(
-  breakdowns: readonly UsageBreakdown[],
+  breakdowns: readonly UsageBreakdownRead[],
   range: ActivityRange,
   today: string,
 ): UsageActivityModel {
@@ -202,7 +204,7 @@ function utcDate(value: string): Date {
 }
 
 function totalsByDate(
-  breakdowns: readonly UsageBreakdown[],
+  breakdowns: readonly UsageBreakdownRead[],
   range: ActivityRange,
 ): Map<
   string,
@@ -211,7 +213,7 @@ function totalsByDate(
     tokens: number;
     input_tokens: number;
     output_tokens: number;
-    cost: UsageCostOutcome;
+    cost: UsageBreakdownRead["cost"];
   }
 > {
   const map = new Map<
@@ -221,7 +223,7 @@ function totalsByDate(
       tokens: number;
       input_tokens: number;
       output_tokens: number;
-      cost: UsageCostOutcome;
+      cost: UsageBreakdownRead["cost"];
     }
   >();
   for (const breakdown of usageDateBreakdowns(breakdowns)) {

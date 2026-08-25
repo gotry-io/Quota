@@ -27,6 +27,7 @@ extension ProviderID {
     case .`kimi`: false
     case .`litellm`: false
     case .`cursor`: false
+    case .unknown: false
     }
   }
 
@@ -41,6 +42,7 @@ extension ProviderID {
     case .`kimi`: "Configure in QuotaBar"
     case .`litellm`: "Configure in QuotaBar"
     case .`cursor`: "Sign in with browser"
+    case .unknown(let rawValue): rawValue
     }
   }
 
@@ -54,6 +56,7 @@ extension ProviderID {
     case .`kimi`: "kimi"
     case .`litellm`: "litellm"
     case .`cursor`: "cursor"
+    case .unknown(let rawValue): rawValue
     }
   }
 
@@ -76,6 +79,7 @@ extension ProviderID {
     case .`kimi`: false
     case .`litellm`: true
     case .`cursor`: false
+    case .unknown: false
     }
   }
 
@@ -89,6 +93,7 @@ extension ProviderID {
     case .`kimi`: false
     case .`litellm`: true
     case .`cursor`: false
+    case .unknown: false
     }
   }
 
@@ -102,6 +107,7 @@ extension ProviderID {
     case .`kimi`: false
     case .`litellm`: true
     case .`cursor`: false
+    case .unknown: false
     }
   }
 
@@ -140,6 +146,7 @@ extension ProviderID {
       cookieNames: ["WorkosCursorSessionToken", "__Secure-next-auth.session-token", "next-auth.session-token", "wos-session", "__Secure-wos-session", "authjs.session-token", "__Secure-authjs.session-token"],
       browserPriority: ["safari", "chrome", "edge", "brave", "arc", "dia", "chromium", "firefox"],
       exclusive: true)
+    case .unknown: nil
     }
   }
 }

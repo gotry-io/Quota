@@ -60,6 +60,8 @@ const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const NONNEGATIVE_INTEGER_PATTERN = /^(?:0|[1-9]\d*)$/;
 const DECIMAL_PATTERN = /^(?:0|[1-9]\d*)(?:\.\d{1,12})?$/;
 const PKCE_VERIFIER_PATTERN = /^[A-Za-z0-9._~-]{43,128}$/;
+// A wire enum member, as a reader takes it: lowercase snake_case, bounded, membership unchecked.
+const WIRE_ENUM_PATTERN = /^[a-z][a-z0-9_]*$/;
 
 const SafeNonnegativeIntegerSchema = z.number().int().min(0).max(MAXIMUM_SAFE_INTEGER);
 const SafePositiveIntegerSchema = SafeNonnegativeIntegerSchema.min(1);
@@ -267,6 +269,19 @@ export const AccountSchema = z
   .strict();
 export type Account = z.infer<typeof AccountSchema>;
 
+function validateDeviceSignOut(
+  device: { status: string; signed_out_at: string | null },
+  context: z.RefinementCtx,
+) {
+  if ((device.status === "signed_out") !== (device.signed_out_at !== null)) {
+    context.addIssue({
+      code: "custom",
+      path: ["signed_out_at"],
+      message: "signed_out status and signed_out_at must agree.",
+    });
+  }
+}
+
 export const DeviceStatusSchema = z.enum(["active", "offline", "signed_out"]);
 export type DeviceStatus = z.infer<typeof DeviceStatusSchema>;
 
@@ -283,15 +298,7 @@ export const AccountDeviceSchema = z
     signed_out_at: Rfc3339InstantSchema.nullable(),
   })
   .strict()
-  .superRefine((device, context) => {
-    if ((device.status === "signed_out") !== (device.signed_out_at !== null)) {
-      context.addIssue({
-        code: "custom",
-        path: ["signed_out_at"],
-        message: "signed_out status and signed_out_at must agree.",
-      });
-    }
-  });
+  .superRefine(validateDeviceSignOut);
 export type AccountDevice = z.infer<typeof AccountDeviceSchema>;
 
 export const AccountResponseSchema = z
@@ -1138,6 +1145,118 @@ export const AccountSummarySchema = z
   .strict();
 export type AccountSummary = z.infer<typeof AccountSummarySchema>;
 
+/**
+ * What a client takes from a managed read.
+ *
+ * Every schema above states the contract exactly, which is how Relay — the producer — fails its
+ * own tests for a key it never stated. A client reads across a version boundary: the Relay it
+ * talks to can be newer than the build doing the reading. So a reader keeps the keys it knows,
+ * carries the ones it does not, and never discards a payload over an enum member it has not
+ * heard of. A verdict the payload derives from its own numbers — the cost basis and status —
+ * stays closed, because a value outside that set contradicts the payload rather than extending
+ * it. See [ADR 0023](../../../docs/decisions/0023-strict-writes-tolerant-reads.md).
+ */
+const ReadEnumSchema = z.string().min(1).max(64).regex(WIRE_ENUM_PATTERN);
+
+const QuotaWindowReadSchema = QuotaWindowSchema.extend({
+  value_unit: ReadEnumSchema.optional(),
+}).loose();
+
+const QuotaAccountReadSchema = QuotaAccountSchema.extend({
+  fingerprint_scope: ReadEnumSchema,
+}).loose();
+
+const QuotaSnapshotReadSchema = QuotaSnapshotSchema.extend({
+  provider: ReadEnumSchema,
+  status: ReadEnumSchema,
+  account: QuotaAccountReadSchema,
+  windows: z.array(QuotaWindowReadSchema).max(MAXIMUM_WINDOWS_PER_SNAPSHOT),
+}).loose();
+export type QuotaSnapshotRead = z.infer<typeof QuotaSnapshotReadSchema>;
+
+const AccountQuotaObservationReadSchema = AccountQuotaObservationSchema.extend({
+  snapshot: QuotaSnapshotReadSchema,
+}).loose();
+export type AccountQuotaObservationRead = z.infer<typeof AccountQuotaObservationReadSchema>;
+
+const AccountDeviceReadSchema = z
+  .looseObject({
+    ...AccountDeviceSchema.shape,
+    platform: ReadEnumSchema,
+    status: ReadEnumSchema,
+  })
+  .superRefine(validateDeviceSignOut);
+export type AccountDeviceRead = z.infer<typeof AccountDeviceReadSchema>;
+
+const UsageUnpricedItemReadSchema = UsageUnpricedItemSchema.extend({
+  billing_channel: ReadEnumSchema,
+  reason: ReadEnumSchema,
+}).loose();
+
+const UsageCostOutcomeReadSchema = z
+  .looseObject({
+    ...UsageCostOutcomeSchema.shape,
+    assumptions: z.array(ReadEnumSchema).max(16),
+    unpriced: z.array(UsageUnpricedItemReadSchema).max(MAXIMUM_UNPRICED_ITEMS),
+  })
+  .superRefine(validateCostOutcome);
+
+const UsageTokenTotalsReadSchema = UsageTokenTotalsSchema.loose();
+const UsageSummaryTotalsReadSchema = UsageSummaryTotalsSchema.loose();
+
+const LocalUsageModelSummaryReadSchema = LocalUsageModelSummarySchema.extend({
+  totals: UsageSummaryTotalsReadSchema,
+  cost: UsageCostOutcomeReadSchema,
+}).loose();
+
+const LocalUsageProviderSummaryReadSchema = LocalUsageProviderSummarySchema.extend({
+  provider: ReadEnumSchema,
+  totals: UsageSummaryTotalsReadSchema,
+  cost: UsageCostOutcomeReadSchema,
+  models: z.array(LocalUsageModelSummaryReadSchema).max(MAXIMUM_USAGE_BREAKDOWNS),
+}).loose();
+
+const LocalUsageAgentSummaryReadSchema = LocalUsageAgentSummarySchema.extend({
+  agent: ReadEnumSchema,
+  totals: UsageSummaryTotalsReadSchema,
+  cost: UsageCostOutcomeReadSchema,
+  providers: z.array(LocalUsageProviderSummaryReadSchema).max(MAXIMUM_USAGE_BREAKDOWNS),
+}).loose();
+
+/**
+ * A reader takes a breakdown by whatever dimension it names, so it cannot discriminate on that
+ * name the way the producer's union does. `key` is bounded text under either branch.
+ */
+const UsageBreakdownReadSchema = z.looseObject({
+  dimension: ReadEnumSchema,
+  key: z.string().min(1).max(128),
+  totals: UsageTokenTotalsReadSchema,
+  cost: UsageCostOutcomeReadSchema,
+});
+export type UsageBreakdownRead = z.infer<typeof UsageBreakdownReadSchema>;
+
+const AccountUsageSummaryReadSchema = AccountUsageSummarySchema.extend({
+  range: UsageDateRangeSchema.loose(),
+  totals: UsageTokenTotalsReadSchema,
+  cost: UsageCostOutcomeReadSchema,
+  coverage: ReadEnumSchema,
+  breakdowns: z.array(UsageBreakdownReadSchema).max(MAXIMUM_USAGE_BREAKDOWNS),
+  agents: z.array(LocalUsageAgentSummaryReadSchema).max(MAXIMUM_USAGE_BREAKDOWNS).optional(),
+}).loose();
+export type AccountUsageSummaryRead = z.infer<typeof AccountUsageSummaryReadSchema>;
+
+export const AccountUsageResponseReadSchema = AccountUsageResponseSchema.extend({
+  usage: AccountUsageSummaryReadSchema,
+}).loose();
+
+export const AccountSummaryReadSchema = AccountSummarySchema.extend({
+  account: AccountSchema.loose(),
+  devices: z.array(AccountDeviceReadSchema).max(256),
+  quota: z.array(AccountQuotaObservationReadSchema).max(8_192),
+  usage: AccountUsageSummaryReadSchema,
+}).loose();
+export type AccountSummaryRead = z.infer<typeof AccountSummaryReadSchema>;
+
 export const QuotaSnapshotUploadResponseSchema = z
   .object({
     protocol_version: z.literal(MANAGED_DATA_PROTOCOL_VERSION),
@@ -1489,7 +1608,17 @@ function validateUsageCounts(
 }
 
 function validateCostOutcome(
-  outcome: z.infer<typeof UsageCostOutcomeSchema>,
+  outcome: {
+    basis: string;
+    status: string;
+    amount_microusd: string | null;
+    calculated_rows: number;
+    reported_rows: number;
+    unpriced_rows: number;
+    unpriced_truncated?: true | undefined;
+    unpriced: readonly { rows: number }[];
+    assumptions: readonly string[];
+  },
   context: z.RefinementCtx,
 ) {
   const pricedRows = outcome.calculated_rows + outcome.reported_rows;

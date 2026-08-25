@@ -1,4 +1,8 @@
-import type { QuotaStatus, UsageCostOutcome } from "@gotry-io/quota-protocol";
+/**
+ * These take the fields they read rather than a whole contract type, because a reader may be
+ * shown a member this build has never heard of. See ADR 0023.
+ */
+type CostView = { amount_microusd: string | null; status: string; basis: string };
 import { remainingPercent } from "@gotry-io/quota-model";
 
 export const WEB_LOCALE = "en-US";
@@ -10,14 +14,14 @@ export function formatCount(value: number): string {
   }).format(value);
 }
 
-export function formatCost(cost: UsageCostOutcome): string {
+export function formatCost(cost: CostView): string {
   if (cost.amount_microusd === null) return "—";
   const cents = (BigInt(cost.amount_microusd) + 5_000n) / 10_000n;
   const amount = `${new Intl.NumberFormat(WEB_LOCALE).format(cents / 100n)}.${(cents % 100n).toString().padStart(2, "0")}`;
   return `${cost.status === "partial" ? "≥ " : ""}$${amount}`;
 }
 
-export function costCoverage(cost: UsageCostOutcome): string {
+export function costCoverage(cost: CostView): string {
   if (cost.status === "unavailable") return "Unpriced";
   const basis = cost.basis === "calculated" ? "estimated" : cost.basis;
   return cost.status === "complete" ? `${basis} · complete` : `${basis} · priced subset only`;
@@ -112,7 +116,7 @@ export function activityLevel(value: number, maximum: number): number {
  * A source that cannot read is the same problem wherever it runs, so these match what the
  * Apple clients say about a failure on the machine in front of you.
  */
-export function observedSnapshotStatusLabel(status: QuotaStatus): string {
+export function observedSnapshotStatusLabel(status: string): string {
   switch (status) {
     case "available":
       return "Available";
@@ -126,5 +130,8 @@ export function observedSnapshotStatusLabel(status: QuotaStatus): string {
       return "Unsupported";
     case "error":
       return "Can’t refresh";
+    // A status this build has not heard of still names itself; it is not a reason to stop.
+    default:
+      return "Unknown";
   }
 }

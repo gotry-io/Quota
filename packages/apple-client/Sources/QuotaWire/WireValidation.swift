@@ -111,3 +111,19 @@ public enum WireValidation {
     (48...57).contains(byte) || (65...90).contains(byte) || (97...122).contains(byte)
   }
 }
+
+/// A truncation marker is present only when it is `true`; the wire never states it as `false`.
+public func decodeTrueMarker<Key: CodingKey>(
+  _ key: Key,
+  from container: KeyedDecodingContainer<Key>
+) throws -> Bool? {
+  guard container.contains(key) else { return nil }
+  guard try container.decode(Bool.self, forKey: key) else {
+    throw DecodingError.dataCorruptedError(
+      forKey: key,
+      in: container,
+      debugDescription: "Truncation markers must be true."
+    )
+  }
+  return true
+}

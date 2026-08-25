@@ -1,5 +1,5 @@
 <script lang="ts">
-import type { AccountSummary, UsageBreakdown } from "@gotry-io/quota-protocol";
+import type { AccountSummaryRead, UsageBreakdownRead } from "@gotry-io/quota-protocol";
 import {
   ACTIVITY_WEEKDAY_LABELS,
   buildUsageActivityModel,
@@ -12,8 +12,8 @@ let {
   selectedDate = null,
   onSelectDate,
 }: {
-  breakdowns: UsageBreakdown[];
-  range: AccountSummary["usage"]["range"];
+  breakdowns: UsageBreakdownRead[];
+  range: AccountSummaryRead["usage"]["range"];
   selectedDate?: string | null;
   onSelectDate: (date: string) => void;
 } = $props();

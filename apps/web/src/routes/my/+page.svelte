@@ -1,9 +1,9 @@
 <script lang="ts">
 import type {
-  AccountDevice,
-  AccountSummary,
-  AccountUsageSummary,
-  UsageBreakdown,
+  AccountDeviceRead,
+  AccountSummaryRead,
+  AccountUsageSummaryRead,
+  UsageBreakdownRead,
 } from "@gotry-io/quota-protocol";
 import type { AccountSummaryDocumentResult } from "$lib/server/document-port";
 import {
@@ -38,7 +38,7 @@ import type { PageProps } from "./$types";
 
 let { data }: PageProps = $props();
 
-let summary = $state<AccountSummary | null>(null);
+let summary = $state<AccountSummaryRead | null>(null);
 /**
  * One card per subscription, not per upload. Relay keeps every reporting device's
  * observation; ADR 0003 resolves them to the one reading a person is asking about.
@@ -54,7 +54,7 @@ let activityMessage = $state("Loading Usage activity…");
 let selectedDate = $state<string | null>(null);
 let dayLoading = $state(false);
 let dayError = $state<string | null>(null);
-let dayUsage = $state<AccountUsageSummary | null>(null);
+let dayUsage = $state<AccountUsageSummaryRead | null>(null);
 let dayRequest = 0;
 let dayAbort: AbortController | null = null;
 
@@ -82,7 +82,7 @@ function applySummaryResult(result: AccountSummaryDocumentResult): void {
   loadError = null;
 }
 
-async function onDeleteDevice(device: AccountDevice, event: Event): Promise<void> {
+async function onDeleteDevice(device: AccountDeviceRead, event: Event): Promise<void> {
   if (!window.confirm(`Delete ${device.display_name} and all of its Quota and Usage data?`)) {
     return;
   }
@@ -131,11 +131,11 @@ function otherReportingDevices(subscription: MergedQuotaObservation): string {
     .join(", ");
 }
 
-function agentBreakdowns(items: UsageBreakdown[]): UsageBreakdown[] {
+function agentBreakdowns(items: UsageBreakdownRead[]): UsageBreakdownRead[] {
   return items.filter((item) => item.dimension === "agent");
 }
 
-function modelBreakdowns(items: UsageBreakdown[]): UsageBreakdown[] {
+function modelBreakdowns(items: UsageBreakdownRead[]): UsageBreakdownRead[] {
   return items.filter((item) => item.dimension === "model");
 }
 

@@ -1,5 +1,5 @@
 <script lang="ts">
-import type { AccountUsageSummary, UsageBreakdown } from "@gotry-io/quota-protocol";
+import type { AccountUsageSummaryRead, UsageBreakdownRead } from "@gotry-io/quota-protocol";
 import { formatActivityDate, usageDayCoverageLabel, usageDayNotices } from "$lib/usage-activity";
 import { agentDisplayName, costCoverage, formatCost, formatCount } from "$lib/format";
 
@@ -14,7 +14,7 @@ let {
   date: string;
   loading: boolean;
   error: string | null;
-  usage: AccountUsageSummary | null;
+  usage: AccountUsageSummaryRead | null;
   onRetry: () => void;
   onClose: () => void;
 } = $props();
@@ -23,7 +23,7 @@ const notices = $derived(usage ? usageDayNotices(usage) : []);
 const agents = $derived(usage ? usage.breakdowns.filter((item) => item.dimension === "agent") : []);
 const models = $derived(usage ? usage.breakdowns.filter((item) => item.dimension === "model") : []);
 
-function rowKey(item: UsageBreakdown): string {
+function rowKey(item: UsageBreakdownRead): string {
   return `${item.dimension}:${item.key}`;
 }
 </script>

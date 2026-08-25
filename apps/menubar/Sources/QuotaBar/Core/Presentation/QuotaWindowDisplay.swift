@@ -9,7 +9,7 @@ extension QuotaWindow {
     RemainingQuotaFormat.absolute(
       remainingValue: remainingValue,
       hasLimit: limitValue != nil,
-      unit: valueUnit?.remainingUnit
+      unit: valueUnit.flatMap(\.remainingUnit)
     )
   }
 
@@ -20,7 +20,7 @@ extension QuotaWindow {
       remainingPercent: remainingPercent,
       remainingValue: remainingValue,
       hasLimit: limitValue != nil,
-      unit: valueUnit?.remainingUnit
+      unit: valueUnit.flatMap(\.remainingUnit)
     )
   }
 

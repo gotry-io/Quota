@@ -13,9 +13,7 @@ import {
   MAXIMUM_MODEL_CATALOG_ALIASES,
   type ModelCatalog,
   ModelCatalogSchema,
-  type FingerprintScope,
-  type QuotaSnapshot,
-  type QuotaStatus,
+  type QuotaSnapshotRead,
   Rfc3339InstantSchema,
   type UsageCostAssumption,
   type UsageCostMode,
@@ -51,7 +49,7 @@ export const MAX_SNAPSHOT_VALIDITY_SECONDS = 86_400;
  * stamp presented pre-stamp readings as current forever, which is the failure this
  * derivation removes rather than patches.
  */
-export function snapshotValidUntil(snapshot: QuotaSnapshot): number {
+export function snapshotValidUntil(snapshot: QuotaSnapshotRead): number {
   const observed = Date.parse(snapshot.observed_at);
   const limit = observed + MAX_SNAPSHOT_VALIDITY_SECONDS * 1_000;
   const resets: number[] = [];
@@ -69,7 +67,7 @@ export function snapshotValidUntil(snapshot: QuotaSnapshot): number {
   return Math.min(boundary, limit);
 }
 
-export function isSnapshotStale(snapshot: QuotaSnapshot, now = new Date()): boolean {
+export function isSnapshotStale(snapshot: QuotaSnapshotRead, now = new Date()): boolean {
   // Negated rather than `<=` so a reading this cannot place in time reads as stale: an
   // observation whose boundary is unknown is not one a person should be shown as current.
   return snapshot.status === "stale" || !(snapshotValidUntil(snapshot) > now.getTime());
@@ -82,7 +80,7 @@ export function isSnapshotStale(snapshot: QuotaSnapshot, now = new Date()): bool
  * a device that stopped collecting reads as stale instead of staying available forever. A
  * status the device already reported stands as reported.
  */
-export function observedSnapshotStatus(snapshot: QuotaSnapshot, now = new Date()): QuotaStatus {
+export function observedSnapshotStatus(snapshot: QuotaSnapshotRead, now = new Date()): string {
   return snapshot.status === "available" && isSnapshotStale(snapshot, now)
     ? "stale"
     : snapshot.status;
@@ -98,7 +96,7 @@ export function observedSnapshotStatus(snapshot: QuotaSnapshot, now = new Date()
 export interface QuotaSubscriptionIdentity {
   provider: string;
   fingerprint: string;
-  scope: FingerprintScope;
+  scope: string;
   source_id: string | null;
 }
 
@@ -111,13 +109,13 @@ export interface QuotaObservationSource {
 
 export interface QuotaObservationInput {
   device_id: string;
-  snapshot: QuotaSnapshot;
+  snapshot: QuotaSnapshotRead;
 }
 
 export interface MergedQuotaObservation {
   identity: QuotaSubscriptionIdentity;
   /** The one reading shown for this subscription; the others stay in {@link sources}. */
-  snapshot: QuotaSnapshot;
+  snapshot: QuotaSnapshotRead;
   sources: QuotaObservationSource[];
   selected_device_id: string;
   is_stale: boolean;

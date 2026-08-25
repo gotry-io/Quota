@@ -140,7 +140,7 @@ private struct WidgetSnapshotCandidate {
       windowTitle: windowTitle,
       remainingPercent: remainingPercent,
       remainingValue: window.remainingValue,
-      unit: window.valueUnit.map(mapUnit),
+      unit: window.valueUnit.flatMap(mapUnit),
       hasLimit: hasLimit,
       resetsAt: window.resetsAt,
       state: WidgetQuotaState(snapshot.reportedState),
@@ -148,11 +148,13 @@ private struct WidgetSnapshotCandidate {
     )
   }
 
-  private func mapUnit(_ unit: QuotaValueUnit) -> WidgetQuotaUnit {
+  /// `nil` for a unit this build cannot name; the widget then shows the number without one.
+  private func mapUnit(_ unit: QuotaValueUnit) -> WidgetQuotaUnit? {
     switch unit {
     case .usd: .usd
     case .credits: .credits
     case .count: .count
+    case .unknown: nil
     }
   }
 }

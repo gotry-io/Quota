@@ -96,7 +96,6 @@ fn is_false(value: &bool) -> bool {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
 pub struct PricingRates {
     pub uncached_input_per_million: Option<String>,
     pub cache_read_per_million: Option<String>,
@@ -142,7 +141,6 @@ impl PricingRates {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
 pub struct PricingCatalogEntry {
     pub entry_id: String,
     pub billing_channel: BillingChannel,
@@ -160,8 +158,11 @@ pub struct PricingCatalogEntry {
     pub verified_at: String,
 }
 
+/// The catalog as Relay serves it.
+///
+/// A catalog carrying a field this build does not read is still a catalog; refusing it would
+/// leave every cost unpriced over a key nothing here looks at. See ADR 0023.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
 pub struct PricingCatalog {
     pub protocol_version: u8,
     pub revision: String,
@@ -946,6 +947,23 @@ mod tests {
             PricingCatalogValidationIssue::DuplicateEntryId { .. } => "duplicate_entry_id",
             PricingCatalogValidationIssue::AmbiguousEntries { .. } => "ambiguous_entries",
         }
+    }
+
+    /// A catalog from a Relay newer than this build still prices what this build understands.
+    #[test]
+    fn a_catalog_naming_a_field_this_build_does_not_read_is_still_a_catalog() {
+        let root = fixture();
+        let mut document = root
+            .get("catalogs")
+            .and_then(Value::as_object)
+            .and_then(|catalogs| catalogs.get("exact"))
+            .cloned()
+            .expect("catalog fixture");
+        document["issued_by"] = json!("a Relay from 2027");
+        document["entries"][0]["notes"] = json!("why this rate moved");
+        let result = validate_pricing_catalog(&document);
+        assert!(result.catalog.is_some(), "{:?}", result.issues);
+        assert!(result.issues.is_empty(), "{:?}", result.issues);
     }
 
     #[test]

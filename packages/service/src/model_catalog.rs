@@ -16,7 +16,6 @@ pub const MAX_MODEL_CATALOG_ALIASES_PER_MODEL: usize = 32;
 pub const MAX_MODEL_CATALOG_ALIASES: usize = 4_096;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
 pub struct ModelCatalogAlias {
     pub reported_model: String,
     pub provider: InferenceProvider,
@@ -29,14 +28,12 @@ pub struct ModelCatalogAlias {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
 pub struct ModelCatalogModel {
     pub canonical_id: String,
     pub aliases: Vec<ModelCatalogAlias>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
 pub struct ModelCatalog {
     pub schema_version: u8,
     pub revision: String,
