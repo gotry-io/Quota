@@ -411,6 +411,9 @@ actor LocalServiceClient: LocalServiceServing {
       return
     }
     await close(error: LocalServiceClientError.connectionClosed, keepingReadyWaiters: true)
+    // A request that arrived while the silent helper was being stopped may already have started
+    // its own; that one owns the connection, and the waiters kept above are waiting on it.
+    guard process == nil else { return }
     do {
       try launch(isRetriedStart: true)
     } catch {
@@ -674,24 +677,32 @@ actor LocalServiceClient: LocalServiceServing {
     }
   }
 
-  /// Asks the helper to exit, insists if it will not, and reaps it. Running off the actor's task
-  /// keeps the grace period intact even when the caller was cancelled on its way here.
+  /// Asks the helper to exit, insists if it will not, and waits for it to be reaped. Running off
+  /// the actor's task keeps the grace period intact even when the caller was cancelled on its way
+  /// here.
   private nonisolated static func stop(_ process: Process, after grace: Duration) async {
     await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
       DispatchQueue.global(qos: .userInitiated).async {
         if process.isRunning {
           process.terminate()
-          let deadline = Date().addingTimeInterval(grace.timeInterval)
-          while process.isRunning, Date() < deadline {
-            usleep(5_000)
-          }
-          if process.isRunning {
-            kill(process.processIdentifier, SIGKILL)
-          }
+          waitForExit(of: process, upTo: grace)
         }
-        process.waitUntilExit()
+        if process.isRunning {
+          kill(process.processIdentifier, SIGKILL)
+          waitForExit(of: process, upTo: grace)
+        }
         continuation.resume()
       }
+    }
+  }
+
+  /// `Process.waitUntilExit` runs the calling thread's run loop, and a dispatch worker's run loop
+  /// never receives the child's termination, so it can block for the process lifetime. Foundation
+  /// reaps the child on its own thread, so observing that is both correct and bounded.
+  private nonisolated static func waitForExit(of process: Process, upTo limit: Duration) {
+    let deadline = Date().addingTimeInterval(limit.timeInterval)
+    while process.isRunning, Date() < deadline {
+      usleep(5_000)
     }
   }
 }
