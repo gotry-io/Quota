@@ -666,7 +666,10 @@ actor LocalServiceClient: LocalServiceServing {
         stoppingTask = nil
       }
     }
-    if waitingForReader {
+    // The exit above closed the helper's end of the pipe, which is what ends the reader's
+    // blocking read. Waiting for it here proves no thread is left on that descriptor — but only
+    // a helper that really is gone can end it, so a survivor is never waited for.
+    if waitingForReader, closed.process?.isRunning != true {
       await closed.reader?.value
     }
     for continuation in closed.pending {
