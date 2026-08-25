@@ -2,7 +2,7 @@
 
 Runtime schemas for QuotaBar's Rust local service, managed QuotaRelay, Swift `Codable` models, and
 the registered `quota-ios` account client. OAuth and Device control remain released v2; quota,
-Usage, and Account summary use managed-data v4. `quota-ios` adds client-specific authorization-code
+Usage, and Account summary use managed-data v5. `quota-ios` adds client-specific authorization-code
 and account-session payloads on the v2 OAuth contract; the released `quotacli` request and response
 shapes are unchanged.
 

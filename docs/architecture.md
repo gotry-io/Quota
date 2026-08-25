@@ -190,7 +190,10 @@ record scope and unreadable files at file scope, so valid files and agents conti
 SQLite file index is the sole invalidation mechanism: no watcher or byte-checkpoint dependency is part
 of the product. Model identifiers remain opaque bounded provider text, including punctuation, and
 missing pricing never discards a valid fact.
-Bounded Usage detail responses may explicitly mark truncated coverage, breakdown, or unpriced-model
+A managed read states how completely its range was scanned as one verdict — none, complete, or
+partial — decided over every window the range spans, rather than returning the windows themselves;
+see [ADR 0020](decisions/0020-coverage-is-a-verdict.md).
+Bounded Usage detail responses may still explicitly mark truncated breakdown or unpriced-model
 detail; exact totals remain usable and clients surface that degradation.
 
 The local Usage report is a private v3 presentation contract, versioned independently of managed data

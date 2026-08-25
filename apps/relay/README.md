@@ -2,11 +2,11 @@
 
 QuotaRelay is the managed Cloudflare Worker + D1 account and usage service for
 `https://quota.gotry.io`. It serves v2 GitHub account, native-client OAuth, Device control, and
-public catalog APIs alongside the managed-data v4 quota/Usage data APIs. It renders Quota Web documents through SvelteKit
+public catalog APIs alongside the managed-data v5 quota/Usage data APIs. It renders Quota Web documents through SvelteKit
 `Server.respond` as described in [ADR 0011](../../docs/decisions/0011-sveltekit-document-worker.md).
 There is no self-hosted or SQLite runtime.
 
-QuotaBar and Quota Web speak managed-data v4, the only data contract this Worker serves. A client
+QuotaBar and Quota Web speak managed-data v5, the only data contract this Worker serves. A client
 that speaks an older shape is refused rather than translated; see
 [ADR 0018](../../docs/decisions/0018-single-managed-data-contract.md).
 
