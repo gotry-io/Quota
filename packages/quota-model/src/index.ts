@@ -673,7 +673,7 @@ export function prepareUsageCosts(
     }
 
     const canUseReported =
-      (mode === "reported" || (mode === "auto" && calculated?.reason !== "invalid_catalog")) &&
+      (mode === "reported" || mode === "auto") &&
       row.source_cost_microusd !== undefined &&
       row.source_cost_covered_requests === row.requests;
     if (canUseReported) {

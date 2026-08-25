@@ -1452,6 +1452,32 @@ fn local_summary_caps_model_detail_without_failing_totals() {
     assert_eq!(summary.totals.messages, (MAX_USAGE_MODELS + 1) as u64);
 }
 
+/// One model can be part catalog-priced and part source-reported, and the model row is
+/// where a reader looks to see which.  Folding both into one number without saying so makes
+/// a figure the catalog only half explains look like one it computed.
+#[test]
+fn a_model_priced_from_both_sources_says_so_at_the_model_level() {
+    let catalog = pricing_catalog(vec![pricing_entry("gpt-5-standard")]);
+    assert!(validate_pricing_catalog_value(&catalog));
+    let calculated = test_fact_with_input("2026-08-02T12:00:00Z", "gpt-5", 1_000_000);
+    let reported = UsageHourlyFact {
+        // The same model, at a speed the catalog has no entry for.
+        speed: "fast".into(),
+        source_cost_microusd: Some("4200".into()),
+        source_cost_covered_requests: 1,
+        ..test_fact("2026-08-02T13:00:00Z", "gpt-5")
+    };
+    let summary =
+        build_local_usage_summary(&[calculated, reported], Some(&catalog), None).expect("summary");
+    let model = &summary.agents[0].providers[0].models[0];
+    assert_eq!(model.model, "gpt-5");
+    assert_eq!(model.cost.basis, UsageCostBasis::Mixed);
+    assert_eq!(model.cost.calculated_rows, 1);
+    assert_eq!(model.cost.reported_rows, 1);
+    assert_eq!(model.cost.status, UsageCostStatus::Complete);
+    assert_eq!(summary.cost.basis, UsageCostBasis::Mixed);
+}
+
 #[test]
 fn model_key_collision_keeps_canonical_and_raw_groups_separate() {
     let catalog = serde_json::from_value::<crate::model_catalog::ModelCatalog>(json!({

@@ -37,7 +37,8 @@ type PricingConformanceFixture = {
   }>;
   cost: Array<{
     name: string;
-    catalog: string;
+    /** `null` states the case where no catalog is available at all. */
+    catalog: string | null;
     mode: "calculate" | "auto" | "reported";
     rows: string[];
     expected: Record<string, unknown>;
@@ -80,7 +81,7 @@ describe("pricing conformance", () => {
       const rows = testCase.rows.map((name) => pricingConformance.rows[name]!);
       const actual = calculateUsageCost(
         rows,
-        pricingConformance.catalogs[testCase.catalog]!,
+        testCase.catalog === null ? null : pricingConformance.catalogs[testCase.catalog]!,
         testCase.mode,
       );
       expect(actual, testCase.name).toEqual(testCase.expected);

@@ -396,8 +396,12 @@ pub fn prepare_usage_costs(
             });
             continue;
         }
-        let can_use_reported = matches!(mode, UsageCostMode::Reported)
-            || (mode == UsageCostMode::Auto && catalog_valid.is_some());
+        // The provider's own figure is worth using in `auto` whenever the catalog could
+        // not price the row — because it is missing, because it is invalid, or because it
+        // does not cover this row.  Requiring a valid catalog first meant a device that had
+        // never fetched one reported no cost at all, while every row it held carried the
+        // amount the provider had already charged.
+        let can_use_reported = matches!(mode, UsageCostMode::Reported | UsageCostMode::Auto);
         if can_use_reported
             && row.source_cost_microusd.is_some()
             && row.source_cost_covered_requests == row.requests
@@ -1008,6 +1012,48 @@ mod tests {
         }
     }
 
+    /// A catalog this device has not fetched yet is no reason to say nothing about money
+    /// the provider has already charged for.  `auto` used to require a valid catalog before
+    /// it would look at the source's own figure, so a device with no catalog reported no
+    /// cost at all while every row it held carried one.
+    #[test]
+    fn auto_uses_the_source_cost_when_no_catalog_can_price_the_row() {
+        let root = fixture();
+        let reported = row(&root, "cost_reported");
+        let outcome =
+            calculate_usage_cost(std::slice::from_ref(&reported), None, UsageCostMode::Auto)
+                .expect("cost outcome");
+        assert_eq!(outcome.basis, UsageCostBasis::Reported);
+        assert_ne!(outcome.status, UsageCostStatus::Unavailable);
+        assert_eq!(outcome.status, UsageCostStatus::Complete);
+        assert_eq!(outcome.amount_microusd.as_deref(), Some("1234"));
+        assert_eq!(outcome.catalog_revision, None);
+        assert_eq!(outcome.assumptions, [UsageCostAssumption::SourceReported]);
+
+        // A catalog that does not validate is the same situation as none at all.
+        let invalid = catalog(&root, "duplicate");
+        assert!(!validate_catalog(&invalid).valid);
+        assert_eq!(
+            calculate_usage_cost(
+                std::slice::from_ref(&reported),
+                Some(&invalid),
+                UsageCostMode::Auto
+            )
+            .expect("cost outcome")
+            .amount_microusd
+            .as_deref(),
+            Some("1234")
+        );
+
+        // `calculate` still refuses to report a figure it did not compute.
+        assert_eq!(
+            calculate_usage_cost(&[reported], None, UsageCostMode::Calculate)
+                .expect("cost outcome")
+                .status,
+            UsageCostStatus::Unavailable
+        );
+    }
+
     #[test]
     fn pricing_cost_matches_shared_fixture() {
         let root = fixture();
@@ -1017,10 +1063,12 @@ mod tests {
             .expect("cost cases")
         {
             let name = case.get("name").and_then(Value::as_str).expect("cost name");
-            let catalog_name = case
+            // A case with no catalog states the one thing a catalog cannot: what the
+            // source itself reported.
+            let catalog = case
                 .get("catalog")
                 .and_then(Value::as_str)
-                .expect("cost catalog");
+                .map(|name| catalog(&root, name));
             let mode: UsageCostMode =
                 serde_json::from_value(case.get("mode").cloned().expect("cost mode"))
                     .expect("cost mode value");
@@ -1033,8 +1081,7 @@ mod tests {
                 .collect::<Vec<_>>();
             let expected = case.get("expected").expect("cost expected");
             let actual = serde_json::to_value(
-                calculate_usage_cost(&rows, Some(&catalog(&root, catalog_name)), mode)
-                    .expect("cost outcome"),
+                calculate_usage_cost(&rows, catalog.as_ref(), mode).expect("cost outcome"),
             )
             .expect("serialize cost outcome");
             assert_eq!(&actual, expected, "{name}");
