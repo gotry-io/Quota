@@ -81,6 +81,23 @@ Use semantic roles from `QuotaDesign.Typography`:
 Dynamic Type scales semantic text roles. Utility symbols keep their optical sizes, while their hit
 targets stay at least 28pt. Technical strings and chevrons never receive primary-text emphasis.
 
+## Menu bar item
+
+The item is the product's first sentence: the tightest number is legible without opening anything.
+It is the template mark plus the remaining percent of the most constrained current subscription —
+the smallest remaining percent across every window of every Overview reading that still describes
+live quota. A reading the source reported as failed, or one the shared freshness rule has aged out,
+answers for nothing. Balance-only windows have no budget to be a percent of and never set it.
+
+The status bar renders a template image, so low quota cannot be said in color; below 10% remaining
+the text takes a `!` prefix. Digits are monospaced so the item does not twitch as the number moves.
+When nothing current is left to report, the item is the mark alone.
+
+**Menu Bar Display** in Settings chooses **Icon**, **Percent**, or **Icon and percent** (the
+default), persisted in UserDefaults. **Percent** still falls back to the mark alone when there is no
+percent to show, because an item with no content cannot be clicked. VoiceOver announces **QuotaBar**
+and the remaining percent.
+
 ## Shell
 
 The header shows:
@@ -124,8 +141,14 @@ Render the service-provided Overview in saved catalog order. Each provider row m
 account observations; Rust has already merged global identities and selected one freshest valid
 observation. Swift never repeats that policy. Never add or average percentages across devices.
 
-Overview shows quota only. Usage totals, models, messages, and cost remain on the Usage detail page in
-Settings and never create or extend an Overview provider group.
+Overview is quota, plus one line of what today cost. Provider groups carry quota only: models,
+messages, and period totals stay on the Usage detail page in Settings and never create or extend an
+Overview provider group.
+
+Pinned below the scrolling provider list, one quiet line reads `Today · $12.34 · 1.2M tokens` from
+the Usage source the Usage page would show. Cost drops out when the day is unpriced; the line does
+not appear at all when there are no tokens, and never when a page state owns the body. VoiceOver
+reads the exact counts rather than the compact ones.
 
 Each quota observation shows:
 
@@ -210,7 +233,9 @@ Do not add a separate account-management row; the signed-in account label is tha
 
 Quota contains the **Usage** and **Agents** destinations. The Usage root summary uses account-wide
 totals while signed in with Usage sync enabled, and local totals otherwise. General contains the
-native mini **Launch at Login** and **Sync Usage** switches followed by the **Support** destination.
+**Menu Bar Display** choice, the native mini **Launch at Login** and **Sync Usage** switches, then
+the **Support** destination. Menu Bar Display uses the same compact trailing menu as the Usage
+source control.
 Support contains Diagnostics, Feedback, Website, version, and **Check for Updates**. That row
 opens Sparkle's standard updater. Sparkle also checks on a daily schedule after launch. Diagnostics
 remains backed by the private `diagnose` operation and shows the report's independent operation, data,
