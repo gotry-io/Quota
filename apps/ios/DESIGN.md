@@ -117,8 +117,9 @@ Shared rules:
   `0s`).
 - `widgetURL` is `io.gotry.quota:/overview`.
 - Placeholder is a redacted/skeleton overview. Missing, corrupt, or oversize snapshot files show
-  safe **No data yet** copy. Timelines refresh about every fifteen minutes so ages advance; there is
-  no extension network or background task.
+  safe **No data yet** copy. Timelines refresh about every fifteen minutes so ages advance; the
+  extension never fetches. The app republishes the snapshot on a foreground refresh and on a
+  background app refresh it asks for no sooner than every thirty minutes.
 
 ## Liquid Glass (main app)
 
