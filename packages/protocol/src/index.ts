@@ -27,7 +27,7 @@ export {
 /** OAuth, Device authorization and control, Account metadata, and the catalogs. */
 export const PROTOCOL_VERSION = 2 as const;
 /** Quota, Usage, and Account summary between a Device and Relay. */
-export const MANAGED_DATA_PROTOCOL_VERSION = 4 as const;
+export const MANAGED_DATA_PROTOCOL_VERSION = 5 as const;
 /** The private local Usage report the service hands its own app. */
 export const LOCAL_USAGE_PROTOCOL_VERSION = 3 as const;
 /** The private local quota collection report the service hands its own app. */
@@ -1082,11 +1082,15 @@ export const UsageBreakdownSchema = z.discriminatedUnion("dimension", [
 ]);
 export type UsageBreakdown = z.infer<typeof UsageBreakdownSchema>;
 
-export const UsageCoverageSummaryItemSchema = z
-  .object({ device_id: OpaqueIdSchema, ...coverageFields })
-  .strict()
-  .superRefine(validateCoverageRange);
-export type UsageCoverageSummaryItem = z.infer<typeof UsageCoverageSummaryItemSchema>;
+/**
+ * How completely a read's range was scanned.
+ *
+ * Every reader of a managed read has only ever asked whether anything was missed, so the
+ * answer travels instead of the windows it was derived from: `none` when no window covers
+ * the range at all, `partial` when any window was scanned incompletely, `complete` otherwise.
+ */
+export const UsageCoverageVerdictSchema = z.enum(["none", "complete", "partial"]);
+export type UsageCoverageVerdict = z.infer<typeof UsageCoverageVerdictSchema>;
 
 export const UsageDateRangeSchema = z
   .object({
@@ -1109,10 +1113,9 @@ export const AccountUsageSummarySchema = z
     totals: UsageTokenTotalsSchema,
     cost: UsageCostOutcomeSchema,
     model_catalog_revision: OpaqueIdSchema.optional(),
-    coverage: z.array(UsageCoverageSummaryItemSchema).max(MAXIMUM_USAGE_COVERAGE_ITEMS),
+    coverage: UsageCoverageVerdictSchema,
     breakdowns: z.array(UsageBreakdownSchema).max(MAXIMUM_USAGE_BREAKDOWNS),
     agents: z.array(LocalUsageAgentSummarySchema).max(BillingAgentSchema.options.length).optional(),
-    coverage_truncated: z.literal(true).optional(),
     breakdowns_truncated: z.literal(true).optional(),
   })
   .strict();
@@ -1220,13 +1223,11 @@ export const AccountUsageHourlyResponseSchema = z
     start_at: UtcHourSchema,
     end_at: UtcHourSchema,
     facts: z.array(AccountUsageHourlyFactSchema).max(MAXIMUM_USAGE_READ_ROWS),
-    coverage: z.array(UsageCoverageSummaryItemSchema).max(MAXIMUM_USAGE_COVERAGE_ITEMS),
+    coverage: UsageCoverageVerdictSchema,
     cost: UsageCostOutcomeSchema,
-    coverage_truncated: z.literal(true).optional(),
   })
   .strict()
   .superRefine((response, context) => {
-    validateCoverageRange(response, context);
     const start = Date.parse(response.start_at);
     const end = Date.parse(response.end_at);
     for (const [index, fact] of response.facts.entries()) {

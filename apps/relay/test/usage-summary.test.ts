@@ -8,7 +8,7 @@ describe("Usage summary", () => {
   it("folds a production-sized result into all six breakdowns without recomputing rows", () => {
     const rows = Array.from({ length: 796 }, usageRow);
     const summary = buildUsageSummary(
-      { rows, coverage: [], truncated: false },
+      { rows, coverage: "complete", truncated: false },
       { from: "2026-07-12", to: "2026-08-10" },
       "calculate",
       PRICING_CATALOG,
@@ -39,7 +39,7 @@ describe("Usage summary", () => {
   it("summarizes retained history without an hourly breakdown", () => {
     const rows = Array.from({ length: 1_500 }, usageRow);
     const summary = buildUsageSummary(
-      { rows, coverage: [], truncated: false },
+      { rows, coverage: "complete", truncated: false },
       { from: "2026-02-01", to: "2026-08-10" },
       "calculate",
       PRICING_CATALOG,
@@ -61,7 +61,7 @@ describe("Usage summary", () => {
       source_cost_covered_requests: 1,
     }));
     const structured = buildUsageSummary(
-      { rows, coverage: [], truncated: false },
+      { rows, coverage: "complete", truncated: false },
       { from: "2026-08-10", to: "2026-08-10" },
       "reported",
       PRICING_CATALOG,
@@ -92,7 +92,7 @@ describe("Usage summary", () => {
       return { ...row, source_cost_microusd: "1", source_cost_covered_requests: 1 };
     });
     const summary = buildUsageSummary(
-      { rows, coverage: [], truncated: false },
+      { rows, coverage: "complete", truncated: false },
       { from: "2026-07-12", to: "2026-08-10" },
       "reported",
       PRICING_CATALOG,
@@ -107,7 +107,7 @@ describe("Usage summary", () => {
     const row = usageRow(null, 0, false);
     row.model = "provider:model[1m]";
     const summary = buildUsageSummary(
-      { rows: [row], coverage: [], truncated: false },
+      { rows: [row], coverage: "complete", truncated: false },
       { from: "2026-08-10", to: "2026-08-10" },
       "reported",
       PRICING_CATALOG,
@@ -122,7 +122,7 @@ describe("Usage summary", () => {
       const row = usageRow(null, 0, false);
       row.model = model;
       const summary = buildUsageSummary(
-        { rows: [row], coverage: [], truncated: false },
+        { rows: [row], coverage: "complete", truncated: false },
         { from: "2026-08-10", to: "2026-08-10" },
         "reported",
         PRICING_CATALOG,
@@ -137,7 +137,7 @@ describe("Usage summary", () => {
       row.model = model;
       expect(() =>
         buildUsageSummary(
-          { rows: [row], coverage: [], truncated: false },
+          { rows: [row], coverage: "complete", truncated: false },
           { from: "2026-08-10", to: "2026-08-10" },
           "reported",
           PRICING_CATALOG,
@@ -154,14 +154,14 @@ describe("Usage summary", () => {
       source_cost_covered_requests: 1,
     };
     const raw = buildUsageSummary(
-      { rows: [row], coverage: [], truncated: false },
+      { rows: [row], coverage: "complete", truncated: false },
       { from: "2026-08-10", to: "2026-08-10" },
       "reported",
       PRICING_CATALOG,
       false,
     );
     const normalized = buildUsageSummary(
-      { rows: [row], coverage: [], truncated: false },
+      { rows: [row], coverage: "complete", truncated: false },
       { from: "2026-08-10", to: "2026-08-10" },
       "reported",
       PRICING_CATALOG,
@@ -174,7 +174,7 @@ describe("Usage summary", () => {
     expect(normalized.model_catalog_revision).toBe(MODEL_CATALOG.revision);
 
     const calculated = buildUsageSummary(
-      { rows: [row], coverage: [], truncated: false },
+      { rows: [row], coverage: "complete", truncated: false },
       { from: "2026-08-10", to: "2026-08-10" },
       "calculate",
       PRICING_CATALOG,
@@ -198,7 +198,7 @@ describe("Usage summary", () => {
     };
     const summarize = (modelCatalog: typeof MODEL_CATALOG) =>
       buildUsageSummary(
-        { rows: [row], coverage: [], truncated: false },
+        { rows: [row], coverage: "complete", truncated: false },
         { from: "2026-08-10", to: "2026-08-10" },
         "reported",
         PRICING_CATALOG,
@@ -221,7 +221,7 @@ describe("Usage summary", () => {
       { ...usageRow(null, 1, false), model: "GPT-5.5" },
     ];
     const summary = buildUsageSummary(
-      { rows, coverage: [], truncated: false },
+      { rows, coverage: "complete", truncated: false },
       { from: "2026-08-10", to: "2026-08-10" },
       "reported",
       PRICING_CATALOG,

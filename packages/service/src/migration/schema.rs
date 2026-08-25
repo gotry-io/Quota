@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use crate::state::StateError;
 
-const CURRENT_SCHEMA: i64 = 9;
+const CURRENT_SCHEMA: i64 = 10;
 
 pub fn apply(conn: &mut Connection) -> Result<(), StateError> {
     conn.execute_batch(
@@ -35,6 +35,7 @@ pub fn apply(conn: &mut Connection) -> Result<(), StateError> {
             7 => migration_v7(&tx)?,
             8 => migration_v8(&tx)?,
             9 => migration_v9(&tx)?,
+            10 => migration_v10(&tx)?,
             _ => return Err(StateError::InvalidState),
         }
         tx.execute(
@@ -482,6 +483,62 @@ fn migration_v9(tx: &Transaction<'_>) -> Result<(), StateError> {
     Ok(())
 }
 
+/// Managed data v5: a read states how completely its range was scanned instead of listing the
+/// windows the answer was derived from, and the local Usage detail no longer restates display
+/// breakdowns the per-agent summary already carries.
+///
+/// Staged uploads are promoted in place so queued work survives; the presentations built from
+/// the retired shapes are discarded, because both are caches this build rebuilds on its next
+/// refresh and the app decodes the whole IPC state or none of it.
+fn migration_v10(tx: &Transaction<'_>) -> Result<(), StateError> {
+    let mut statement = tx.prepare(
+        "SELECT submission_id, payload_json FROM usage_outbox
+         WHERE json_extract(payload_json, '$.protocol_version') = 4
+         ORDER BY submission_id",
+    )?;
+    let outbox = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(statement);
+
+    for (submission_id, raw) in outbox {
+        let mut payload: Value = serde_json::from_str(&raw)?;
+        payload["protocol_version"] = Value::from(5);
+        tx.execute(
+            "UPDATE usage_outbox SET payload_json = ?1 WHERE submission_id = ?2",
+            params![serde_json::to_string(&payload)?, submission_id],
+        )?;
+    }
+
+    let account = tx
+        .query_row(
+            "SELECT value_json FROM components WHERE name = 'account'",
+            [],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()?
+        .flatten();
+    if let Some(raw) = account {
+        let mut value: Value = serde_json::from_str(&raw)?;
+        let cached_version = value
+            .get("account_summary")
+            .and_then(|summary| summary.get("protocol_version"))
+            .and_then(Value::as_i64);
+        if cached_version.is_some_and(|version| version < 5) {
+            value["account_summary"] = Value::Null;
+            tx.execute(
+                "UPDATE components SET value_json = ?1 WHERE name = 'account'",
+                [serde_json::to_string(&value)?],
+            )?;
+        }
+    }
+    // Every cached period carries the retired `fallback_models` key, local ones included.
+    tx.execute("DELETE FROM usage_period_cache", [])?;
+    Ok(())
+}
+
 /// Removes the stamp and the collector name from every reading in a persisted value.
 ///
 /// A reading is recognised by its own shape rather than by a path, because it appears at
@@ -573,7 +630,7 @@ mod tests {
             .expect("v1 rows")
             .collect::<Result<Vec<_>, _>>()
             .expect("v1 values");
-        assert_eq!(fresh_versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        assert_eq!(fresh_versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
         assert_eq!(fresh_versions, v1_versions);
         assert_eq!(
             columns(&fresh, "usage_period_cache"),
@@ -764,13 +821,10 @@ mod tests {
         assert_eq!(account["account_id"], "account");
         assert!(account["account_summary"].is_null());
         assert_eq!(
-            conn.query_row(
-                "SELECT COUNT(*) FROM usage_period_cache WHERE source = 'local'",
-                [],
-                |row| row.get::<_, i64>(0),
-            )
-            .expect("local periods"),
-            1
+            conn.query_row("SELECT COUNT(*) FROM usage_period_cache", [], |row| row
+                .get::<_, i64>(0),)
+                .expect("periods"),
+            0
         );
         assert_eq!(
             conn.query_row(
@@ -930,17 +984,13 @@ mod tests {
                 .expect("session epoch"),
             7
         );
-        // Locally derived periods are this device's own work and survive; the Account
-        // presentation is a response and is rebuilt from the first read on the current
-        // managed-data version.
+        // Both presentations are caches of a shape this build no longer speaks, so the ladder
+        // discards them and the next refresh rebuilds them from facts this device still holds.
         assert_eq!(
-            conn.query_row(
-                "SELECT COUNT(*) FROM usage_period_cache WHERE source = 'local'",
-                [],
-                |row| row.get::<_, i64>(0)
-            )
-            .expect("local period count"),
-            1
+            conn.query_row("SELECT COUNT(*) FROM usage_period_cache", [], |row| row
+                .get::<_, i64>(0))
+                .expect("period count"),
+            0
         );
         assert_eq!(
             conn.query_row(
@@ -1065,7 +1115,7 @@ mod tests {
             .expect("rows")
             .collect::<Result<Vec<_>, _>>()
             .expect("values");
-        assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
     }
 
     fn columns_after_fresh_apply(table: &str) -> Vec<String> {

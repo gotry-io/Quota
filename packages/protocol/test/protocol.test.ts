@@ -59,7 +59,7 @@ describe("quota protocol", () => {
   });
 
   it("carries one managed-data version on quota and Usage", () => {
-    expect(MANAGED_DATA_PROTOCOL_VERSION).toBe(4);
+    expect(MANAGED_DATA_PROTOCOL_VERSION).toBe(5);
     expect(protocol.BILLING_AGENTS).toContain("cursor");
     const cursorEnvelope = { ...quotaEnvelope(), snapshots: [snapshot("cursor")] };
     expect(QuotaSnapshotEnvelopeSchema.safeParse(cursorEnvelope).success).toBe(true);
@@ -126,7 +126,7 @@ describe("quota protocol", () => {
     ).toBe(false);
     expect(
       QuotaSnapshotUploadResponseSchema.safeParse({
-        protocol_version: 4,
+        protocol_version: 5,
         outcome: "accepted",
         device_id: "device_01",
         device_generation: 3,
@@ -138,7 +138,7 @@ describe("quota protocol", () => {
 
   it("requires a reason only for a terminally rejected Usage upload", () => {
     const rejected = {
-      protocol_version: 4,
+      protocol_version: 5,
       outcome: "rejected",
       device_id: "device_01",
       device_generation: 3,
@@ -637,19 +637,19 @@ describe("quota protocol", () => {
     expect(AccountSummarySchema.safeParse(accountSummary()).success).toBe(true);
     expect(
       AccountQuotaResponseSchema.safeParse({
-        protocol_version: 4,
+        protocol_version: 5,
         quota: accountSummary().quota,
       }).success,
     ).toBe(true);
     expect(
       AccountUsageResponseSchema.safeParse({
-        protocol_version: 4,
+        protocol_version: 5,
         usage: accountSummary().usage,
       }).success,
     ).toBe(true);
     expect(
       AccountUsageHourlyResponseSchema.safeParse({
-        protocol_version: 4,
+        protocol_version: 5,
         start_at: "2026-08-02T12:00:00Z",
         end_at: "2026-08-02T13:00:00Z",
         facts: [
@@ -659,15 +659,7 @@ describe("quota protocol", () => {
             aggregation_timezone: "Asia/Singapore",
           },
         ],
-        coverage: [
-          {
-            device_id: "device_01",
-            agent: "codex",
-            start_at: "2026-08-02T12:00:00Z",
-            end_at: "2026-08-02T13:00:00Z",
-            status: "complete",
-          },
-        ],
+        coverage: "complete",
         cost: {
           ...emptyCost(),
           status: "unavailable",
@@ -685,7 +677,7 @@ describe("quota protocol", () => {
     ).toBe(true);
     expect(
       AccountUsageResponseSchema.safeParse({
-        protocol_version: 4,
+        protocol_version: 5,
         usage: {
           ...accountSummary().usage,
           cost: {
@@ -707,7 +699,7 @@ describe("quota protocol", () => {
     ).toBe(true);
     expect(
       AccountUsageResponseSchema.safeParse({
-        protocol_version: 4,
+        protocol_version: 5,
         usage: {
           ...accountSummary().usage,
           cost: { ...emptyCost(), unpriced_truncated: false },
@@ -827,7 +819,7 @@ function snapshot(provider: "codex" | "claude" | "cursor") {
 
 function quotaEnvelope() {
   return {
-    protocol_version: 4 as const,
+    protocol_version: 5 as const,
     device_id: "device_01",
     generation: 3,
     sequence: 42,
@@ -865,7 +857,7 @@ function usageFact() {
 
 function usageSubmission() {
   return {
-    protocol_version: 4 as const,
+    protocol_version: 5 as const,
     submission_id: "submission_01",
     device_id: "device_01",
     generation: 3,
@@ -916,7 +908,7 @@ function emptyCost() {
 
 function accountSummary() {
   return {
-    protocol_version: 4 as const,
+    protocol_version: 5 as const,
     account: {
       account_id: "account_01",
       display_label: "octocat",
@@ -941,7 +933,7 @@ function accountSummary() {
       range: { from: "2026-08-01", to: "2026-08-02" },
       totals: emptyTotals(),
       cost: emptyCost(),
-      coverage: [],
+      coverage: "complete",
       breakdowns: [],
     },
   };

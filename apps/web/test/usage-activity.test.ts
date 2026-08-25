@@ -266,15 +266,11 @@ test("day notices describe empty, truncated, and partial coverage honestly", () 
     usageDayNotices({
       totals: { input_tokens: 10, output_tokens: 2, requests: 1 },
       breakdowns: [{}],
-      coverage_truncated: true,
       breakdowns_truncated: true,
     }),
-    ["Some coverage windows were omitted.", "Some agent or model rows were omitted."],
+    ["Some agent or model rows were omitted."],
   );
-  assert.equal(usageDayCoverageLabel([], false), "No coverage reported");
-  assert.equal(usageDayCoverageLabel([{ status: "complete" }], false), "Complete");
-  assert.equal(
-    usageDayCoverageLabel([{ status: "complete" }, { status: "partial" }], true),
-    "Partial · truncated",
-  );
+  assert.equal(usageDayCoverageLabel("none"), "No coverage reported");
+  assert.equal(usageDayCoverageLabel("complete"), "Complete");
+  assert.equal(usageDayCoverageLabel("partial"), "Partial");
 });

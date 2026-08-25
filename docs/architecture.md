@@ -282,7 +282,7 @@ PKCE route with the exact redirect `io.gotry.quota:/oauth/callback`. Its token e
 installation identity and Device fields and returns only an account session. It is not a collection
 Device, is absent from `PlatformSchema`, and never receives snapshot or Usage write authority. Quota
 iOS consumes that session through `packages/apple-client` and fetches
-`GET /api/v4/account/summary` for Today and read-only Device Health. The app process
+`GET /api/v5/account/summary` for Today and read-only Device Health. The app process
 alone holds OAuth and network authority.
 After a trusted summary is available it projects a non-secret `WidgetSnapshot` into the App Group
 `group.io.gotry.quota` for the embedded `QuotaWidgets` extension; the extension reads only that
@@ -388,8 +388,8 @@ protocol + quota-model + relay-core
 ## Relay, Web, and deployment
 
 QuotaRelay mounts OAuth and Device control at `/oauth/v2` and `/api/v2`, quota/Usage managed data at
-both compatible `/api/v2` and current `/api/v4` routes, Better Auth at `/api/auth/v2`, and health
-routes including self-owned `/api/v4/device/health`. It authenticates each route with the minimum
+both compatible `/api/v2` and current `/api/v5` routes, Better Auth at `/api/auth/v2`, and health
+routes including self-owned `/api/v5/device/health`. It authenticates each route with the minimum
 account, device, or browser scope and performs Device/Account deletion, rotation/revocation, and
 Usage replacement in storage transactions. Relay serves the current Usage agents and pricing
 catalog without the ended 0.0.5 response variant; current clients explicitly send
@@ -403,7 +403,7 @@ cookie through `WebDocumentPort` and writes the signed-in header into the first 
 Session cookies remain HttpOnly. `/` offers the QuotaBar `.dmg` and Homebrew install command.
 GitHub sign-in is in the header; `/my` is a server redirect when unsigned and otherwise a
 streaming dashboard. Its document load starts the existing
-`GET /api/v4/account/summary` handler inside the composed Worker and reuses the
+`GET /api/v5/account/summary` handler inside the composed Worker and reuses the
 request's memoized Better Auth session, so Account data can resolve in parallel with hydration
 without a second browser round trip. The API schema and Relay/Web source boundary remain unchanged.
 `/u/{username}` is the public projection for that GitHub username: one row per subscription,

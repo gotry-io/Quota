@@ -219,14 +219,14 @@ impl RelayClient {
 
     pub fn upload_device_health(&self, token: &str, payload: &Value) -> Result<Value, RelayError> {
         validate_device_health_upload(payload)?;
-        let response = self.put_json("/api/v4/device/health", payload, token, 200)?;
+        let response = self.put_json("/api/v5/device/health", payload, token, 200)?;
         validate_device_health_response(&response)?;
         Ok(response)
     }
 
     pub fn upload_snapshot(&self, token: &str, envelope: &Value) -> Result<Value, RelayError> {
         validate_snapshot_envelope(envelope)?;
-        let response = self.put_json("/api/v4/device/snapshots", envelope, token, 200)?;
+        let response = self.put_json("/api/v5/device/snapshots", envelope, token, 200)?;
         validate_snapshot_response(&response)?;
         Ok(response)
     }
@@ -235,7 +235,7 @@ impl RelayClient {
         validate_usage_submission(submission)?;
         let response = self.request(
             self.client
-                .put(self.url("/api/v4/device/usage"))
+                .put(self.url("/api/v5/device/usage"))
                 .header(CONTENT_TYPE, "application/json")
                 .header(ACCEPT, "application/json")
                 .header(AUTHORIZATION, bearer(token)),
@@ -254,11 +254,11 @@ impl RelayClient {
     }
 
     pub fn account_summary(&self, token: &str, query: &str) -> Result<Value, RelayError> {
-        self.account_usage_query("/api/v4/account/summary", token, query)
+        self.account_usage_query("/api/v5/account/summary", token, query)
     }
 
     pub fn account_usage_summary(&self, token: &str, query: &str) -> Result<Value, RelayError> {
-        let response = self.account_usage_query("/api/v4/account/usage/summary", token, query)?;
+        let response = self.account_usage_query("/api/v5/account/usage/summary", token, query)?;
         validate_account_usage_response(&response)?;
         response
             .get("usage")
@@ -1523,20 +1523,20 @@ fn validate_usage_summary(value: &Value) -> Result<(), RelayError> {
     let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
     let required = ["range", "totals", "cost", "coverage", "breakdowns"];
     if object.len() < required.len()
-        || object.len() > required.len() + 4
+        || object.len() > required.len() + 3
         || required.iter().any(|key| !object.contains_key(*key))
         || object.keys().any(|key| {
             !required.contains(&key.as_str())
                 && key != "breakdowns_truncated"
-                && key != "coverage_truncated"
                 && key != "model_catalog_revision"
                 && key != "agents"
         })
+        || !matches!(
+            object.get("coverage").and_then(Value::as_str),
+            Some("none" | "complete" | "partial")
+        )
         || object
             .get("breakdowns_truncated")
-            .is_some_and(|value| value != &Value::Bool(true))
-        || object
-            .get("coverage_truncated")
             .is_some_and(|value| value != &Value::Bool(true))
         || object
             .get("model_catalog_revision")
@@ -1547,14 +1547,6 @@ fn validate_usage_summary(value: &Value) -> Result<(), RelayError> {
     validate_usage_date_range(object.get("range").ok_or(RelayError::InvalidResponse)?)?;
     validate_usage_totals(object.get("totals").ok_or(RelayError::InvalidResponse)?)?;
     validate_usage_cost(object.get("cost").ok_or(RelayError::InvalidResponse)?)?;
-    let coverage = object
-        .get("coverage")
-        .and_then(Value::as_array)
-        .filter(|coverage| coverage.len() <= 2_048)
-        .ok_or(RelayError::InvalidResponse)?;
-    for item in coverage {
-        validate_usage_coverage_item(item)?;
-    }
     let breakdowns = object
         .get("breakdowns")
         .and_then(Value::as_array)
@@ -1940,30 +1932,6 @@ fn validate_usage_cost(value: &Value) -> Result<(), RelayError> {
     Ok(())
 }
 
-fn validate_usage_coverage_item(value: &Value) -> Result<(), RelayError> {
-    validate_response_object(
-        value,
-        &["device_id", "agent", "start_at", "end_at", "status"],
-    )?;
-    let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
-    let start = parse_utc_hour(object.get("start_at"))?;
-    let end = parse_utc_hour(object.get("end_at"))?;
-    if !object
-        .get("device_id")
-        .and_then(Value::as_str)
-        .is_some_and(is_opaque)
-        || !valid_billing_agent(object.get("agent").and_then(Value::as_str))
-        || end <= start
-        || !matches!(
-            object.get("status").and_then(Value::as_str),
-            Some("complete" | "partial")
-        )
-    {
-        return Err(RelayError::InvalidResponse);
-    }
-    Ok(())
-}
-
 fn validate_session_refresh_response(
     value: &Value,
     session: &Value,
@@ -2238,7 +2206,7 @@ impl AccountManager {
     }
 
     pub fn account_usage(&self, query: &str, cancel: &AtomicBool) -> Result<Value, BackendError> {
-        // /api/v4/account/usage/summary still materializes hourly facts with a 1_000-row
+        // /api/v5/account/usage/summary still materializes hourly facts with a 1_000-row
         // cap and returns 413 for a 30-day window. Account summary uses the 100_000-row path.
         let (summary, _) = self.read_account_summary(query, cancel)?;
         summary
@@ -3525,10 +3493,9 @@ mod tests {
             "range": {"from": "2026-08-10", "to": "2026-08-10"},
             "totals": totals,
             "cost": cost,
-            "coverage": [],
+            "coverage": "complete",
             "breakdowns": [],
-            "breakdowns_truncated": true,
-            "coverage_truncated": true
+            "breakdowns_truncated": true
         });
         summary["cost"]["unpriced_rows"] = serde_json::json!(1);
         summary["cost"]["unpriced_truncated"] = serde_json::json!(true);
@@ -3539,7 +3506,11 @@ mod tests {
             "cost": summary["cost"].clone()
         }]);
         assert!(validate_usage_summary(&summary).is_ok());
-        summary["coverage_truncated"] = serde_json::json!(false);
+        summary["breakdowns_truncated"] = serde_json::json!(false);
+        assert!(validate_usage_summary(&summary).is_err());
+        summary["breakdowns_truncated"] = serde_json::json!(true);
+        // A verdict is one of three words; the windows it was derived from are not an answer.
+        summary["coverage"] = serde_json::json!([]);
         assert!(validate_usage_summary(&summary).is_err());
     }
 
@@ -3880,7 +3851,7 @@ mod tests {
                 "range": {"from": "2026-08-09", "to": "2026-08-10"},
                 "totals": valid_totals(),
                 "cost": valid_cost(),
-                "coverage": [],
+                "coverage": "complete",
                 "breakdowns": []
             }
         });
@@ -3983,7 +3954,7 @@ mod tests {
                 "range": {"from": "2026-08-09", "to": "2026-08-10"},
                 "totals": valid_totals(),
                 "cost": valid_cost(),
-                "coverage": [],
+                "coverage": "complete",
                 "breakdowns": [],
                 "agents": agents
             }

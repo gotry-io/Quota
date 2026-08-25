@@ -1,4 +1,8 @@
-import type { UsageBreakdown, UsageCostOutcome } from "@gotry-io/quota-protocol";
+import type {
+  UsageBreakdown,
+  UsageCostOutcome,
+  UsageCoverageVerdict,
+} from "@gotry-io/quota-protocol";
 import { activityLevel, formatCount, safeAdd, WEB_LOCALE } from "./format.ts";
 
 export const ACTIVITY_WEEKDAY_LABELS = ["", "Mon", "", "Wed", "", "Fri", ""] as const;
@@ -113,21 +117,20 @@ export function formatActivityTooltip(input: {
   return `${date} · ${tokens} · ${formatActivityPrice(input.cost)} API-equivalent · ${tooltipSemantics(input.cost)}`;
 }
 
-export function usageDayCoverageLabel(
-  coverage: readonly { status: string }[],
-  truncated = false,
-): string {
-  if (coverage.length === 0) {
-    return truncated ? "No coverage list · truncated" : "No coverage reported";
+export function usageDayCoverageLabel(coverage: UsageCoverageVerdict): string {
+  switch (coverage) {
+    case "none":
+      return "No coverage reported";
+    case "complete":
+      return "Complete";
+    case "partial":
+      return "Partial";
   }
-  const label = coverage.every((item) => item.status === "complete") ? "Complete" : "Partial";
-  return truncated ? `${label} · truncated` : label;
 }
 
 export function usageDayNotices(usage: {
   totals: { input_tokens: number; output_tokens: number; requests: number };
   breakdowns: readonly unknown[];
-  coverage_truncated?: true | undefined;
   breakdowns_truncated?: true | undefined;
 }): string[] {
   const notices: string[] = [];
@@ -139,7 +142,6 @@ export function usageDayNotices(usage: {
   ) {
     notices.push("No Usage has been synced for this day.");
   }
-  if (usage.coverage_truncated) notices.push("Some coverage windows were omitted.");
   if (usage.breakdowns_truncated) notices.push("Some agent or model rows were omitted.");
   return notices;
 }

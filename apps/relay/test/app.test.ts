@@ -2,9 +2,7 @@ import { applyD1Migrations, env } from "cloudflare:test";
 import type { D1Migration } from "@cloudflare/vitest-pool-workers";
 import {
   type DeviceAuthorizationResponse,
-  MAXIMUM_USAGE_COVERAGE_HOURS,
   type OAuthTokenResponse,
-  UsageCoverageSummaryItemSchema,
 } from "@gotry-io/quota-protocol";
 import type { DevicePrincipal, UsageSubmission } from "@gotry-io/relay-core";
 import { beforeEach, describe, expect, inject, it } from "vitest";
@@ -61,7 +59,7 @@ describe("managed Relay on real Workers and D1", () => {
       scopes: ["usage:write:self"],
     };
     const submission: UsageSubmission = {
-      protocol_version: 4,
+      protocol_version: 5,
       submission_id: "submission_old",
       device_id: "device_watermark",
       generation: 2,
@@ -97,7 +95,7 @@ describe("managed Relay on real Workers and D1", () => {
     ).toMatchObject({ outcome: "accepted", next_sequence: 1 });
   });
 
-  it("keeps adjacent Usage coverage inside the wire range limit", async () => {
+  it("decides one coverage verdict over every window the range spans", async () => {
     await env.DB.batch([
       env.DB.prepare(
         "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_test', 'subject_test', ?1, ?1)",
@@ -107,43 +105,45 @@ describe("managed Relay on real Workers and D1", () => {
              id, account_id, installation_id_hash, generation, created_at, last_login_at
            ) VALUES ('device_test', 'account_test', 'installation_test', 1, ?1, ?1)`,
       ).bind(now.toISOString()),
-      env.DB.prepare(
-        `INSERT INTO usage_coverage (
-             device_id, agent, start_at, end_at, parser_revision, submission_id, accepted_at
-           ) VALUES ('device_test', 'codex', '2026-06-01T00:00:00Z',
-             '2026-07-02T00:00:00Z', 'parser_test', 'submission_1', ?1)`,
-      ).bind(now.toISOString()),
-      env.DB.prepare(
-        `INSERT INTO usage_coverage (
-             device_id, agent, start_at, end_at, parser_revision, submission_id, accepted_at
-           ) VALUES ('device_test', 'codex', '2026-07-02T00:00:00Z',
-             '2026-08-02T00:00:00Z', 'parser_test', 'submission_2', ?1)`,
-      ).bind(now.toISOString()),
     ]);
-
-    const result = await new D1UsageState(env.DB).queryAccountUsage("account_test", {
+    const state = new D1UsageState(env.DB);
+    const query = {
       start_at: "2026-06-01T00:00:00Z",
       end_at: "2026-08-03T00:00:00Z",
       limit: 1_000,
-    });
+    };
 
-    expect(result.truncated).toBe(false);
-    expect(result.coverage).toHaveLength(2);
-    for (const item of result.coverage) {
-      expect(
-        UsageCoverageSummaryItemSchema.safeParse({
-          device_id: item.device_id,
-          agent: item.agent,
-          start_at: item.start_at,
-          end_at: item.end_at,
-          status: item.status,
-        }).success,
-      ).toBe(true);
-      expect(item.status).toBe("complete");
-      expect((Date.parse(item.end_at) - Date.parse(item.start_at)) / 3_600_000).toBeLessThanOrEqual(
-        MAXIMUM_USAGE_COVERAGE_HOURS,
-      );
-    }
+    // A range no window covers is not silently complete.
+    expect((await state.queryAccountUsage("account_test", query)).coverage).toBe("none");
+
+    const window = (start: string, end: string, status: string, submission: string) =>
+      env.DB.prepare(
+        `INSERT INTO usage_coverage (
+             device_id, agent, start_at, end_at, status, parser_revision, submission_id, accepted_at
+           ) VALUES ('device_test', 'codex', ?1, ?2, ?3, 'parser_test', ?4, ?5)`,
+      ).bind(start, end, status, submission, now.toISOString());
+
+    await env.DB.batch([
+      window("2026-06-01T00:00:00Z", "2026-07-02T00:00:00Z", "complete", "submission_1"),
+      window("2026-07-02T00:00:00Z", "2026-08-02T00:00:00Z", "complete", "submission_2"),
+    ]);
+    expect((await state.queryAccountUsage("account_test", query)).coverage).toBe("complete");
+
+    // One incompletely scanned window anywhere in the range decides the whole answer.
+    await env.DB.batch([
+      window("2026-08-02T00:00:00Z", "2026-08-03T00:00:00Z", "partial", "submission_3"),
+    ]);
+    expect((await state.queryAccountUsage("account_test", query)).coverage).toBe("partial");
+
+    // A window outside the asked-for range does not.
+    expect(
+      (
+        await state.queryAccountUsage("account_test", {
+          ...query,
+          end_at: "2026-08-02T00:00:00Z",
+        })
+      ).coverage,
+    ).toBe("complete");
   });
 
   it("stores unknown as an explicit opaque model", async () => {
@@ -236,7 +236,7 @@ describe("managed Relay on real Workers and D1", () => {
       limit: 100,
     });
     expect(result.rows.map((row) => row.model)).toEqual(["gpt-5.5[1m]", "openrouter-3o[1m]"]);
-    expect(result.coverage.map((item) => item.status)).toEqual(["complete", "partial", "complete"]);
+    expect(result.coverage).toBe("partial");
 
     const complete = {
       ...partial,
@@ -255,11 +255,7 @@ describe("managed Relay on real Workers and D1", () => {
       limit: 100,
     });
     expect(result.rows.map((row) => row.model)).toEqual(["gpt-5.5[1m]"]);
-    expect(result.coverage.map((item) => item.status)).toEqual([
-      "complete",
-      "complete",
-      "complete",
-    ]);
+    expect(result.coverage).toBe("complete");
 
     const exactPartial = {
       ...partial,
@@ -275,7 +271,7 @@ describe("managed Relay on real Workers and D1", () => {
       device_id: "device_partial",
       limit: 100,
     });
-    expect(result.coverage.map((item) => item.status)).toEqual(["complete", "partial", "complete"]);
+    expect(result.coverage).toBe("partial");
   });
 
   it("keeps multipart Usage invisible until all parts commit", async () => {
@@ -300,7 +296,7 @@ describe("managed Relay on real Workers and D1", () => {
     };
     const usage = new D1UsageState(env.DB);
     const common = {
-      protocol_version: 4 as const,
+      protocol_version: 5 as const,
       device_id: "device_multipart",
       generation: 1,
       parser_revision: "parser_multipart",
@@ -567,14 +563,14 @@ describe("managed Relay on real Workers and D1", () => {
       now: () => now,
     });
     const summary = (await (
-      await app.request("https://quota.gotry.io/api/v4/account/summary?usage_agents=all")
+      await app.request("https://quota.gotry.io/api/v5/account/summary?usage_agents=all")
     ).json()) as {
       protocol_version: number;
       quota: Array<{ snapshot: { provider: string } }>;
       usage: { totals: { requests: number } };
     };
 
-    expect(summary).toMatchObject({ protocol_version: 4, usage: { totals: { requests: 3 } } });
+    expect(summary).toMatchObject({ protocol_version: 5, usage: { totals: { requests: 3 } } });
     expect(summary.quota.map((observation) => observation.snapshot.provider)).toEqual([
       "codex",
       "cursor",
@@ -641,7 +637,7 @@ describe("managed Relay on real Workers and D1", () => {
       );
     };
 
-    expect(await providersFor("/api/v4/account/summary?usage_agents=all")).toEqual([
+    expect(await providersFor("/api/v5/account/summary?usage_agents=all")).toEqual([
       "deepseek",
       "moonshot",
       "unknown",
@@ -650,7 +646,7 @@ describe("managed Relay on real Workers and D1", () => {
     expect(
       (
         await app.request(
-          "https://quota.gotry.io/api/v4/account/summary?usage_agents=all&usage_channels=1",
+          "https://quota.gotry.io/api/v5/account/summary?usage_agents=all&usage_channels=1",
         )
       ).status,
     ).toBe(400);
@@ -739,7 +735,7 @@ describe("managed Relay on real Workers and D1", () => {
     });
 
     const current = (await (
-      await app.request("https://quota.gotry.io/api/v4/account/summary?usage_agents=all")
+      await app.request("https://quota.gotry.io/api/v5/account/summary?usage_agents=all")
     ).json()) as {
       usage: {
         range: { from: string; to: string };
@@ -749,7 +745,7 @@ describe("managed Relay on real Workers and D1", () => {
       };
     };
     const structured = (await (
-      await app.request("https://quota.gotry.io/api/v4/account/summary?usage_agents=all")
+      await app.request("https://quota.gotry.io/api/v5/account/summary?usage_agents=all")
     ).json()) as {
       usage: {
         agents: Array<{
@@ -782,7 +778,7 @@ describe("managed Relay on real Workers and D1", () => {
     expect(
       (
         await app.request(
-          "https://quota.gotry.io/api/v4/account/summary?usage_agents=all&from=2025-01-01&to=2026-08-10",
+          "https://quota.gotry.io/api/v5/account/summary?usage_agents=all&from=2025-01-01&to=2026-08-10",
         )
       ).status,
     ).toBe(200);
@@ -839,7 +835,7 @@ describe("managed Relay on real Workers and D1", () => {
     });
 
     const summary = (await (
-      await app.request("https://quota.gotry.io/api/v4/account/summary?usage_agents=all")
+      await app.request("https://quota.gotry.io/api/v5/account/summary?usage_agents=all")
     ).json()) as {
       usage: { breakdowns_truncated?: boolean; cost: { unpriced_truncated?: boolean } };
     };
@@ -847,7 +843,7 @@ describe("managed Relay on real Workers and D1", () => {
     expect(summary.usage.cost.unpriced_truncated).toBe(true);
 
     const optedInResponse = await app.request(
-      "https://quota.gotry.io/api/v4/account/summary?usage_agents=all",
+      "https://quota.gotry.io/api/v5/account/summary?usage_agents=all",
     );
     const optedIn = (await optedInResponse.json()) as {
       usage: { model_catalog_revision?: string };
@@ -855,12 +851,12 @@ describe("managed Relay on real Workers and D1", () => {
     expect(optedInResponse.status).toBe(200);
     expect(optedIn.usage.model_catalog_revision).toEqual(expect.any(String));
     expect(
-      (await app.request("https://quota.gotry.io/api/v4/account/summary?model_catalog=0")).status,
+      (await app.request("https://quota.gotry.io/api/v5/account/summary?model_catalog=0")).status,
     ).toBe(400);
     expect(
       (
         await app.request(
-          "https://quota.gotry.io/api/v4/account/usage/summary?usage_agents=all&from=2026-08-09&to=2026-08-09",
+          "https://quota.gotry.io/api/v5/account/usage/summary?usage_agents=all&from=2026-08-09&to=2026-08-09",
         )
       ).status,
     ).toBe(200);
@@ -1417,7 +1413,7 @@ function usageSubmission(
   rows: ReturnType<typeof usageFact>[],
 ): UsageSubmission {
   return {
-    protocol_version: 4,
+    protocol_version: 5,
     submission_id: submissionID,
     device_id: "device_partial",
     generation: 1,
@@ -1436,7 +1432,7 @@ function usageSubmission(
 
 function unknownModelSubmission(): UsageSubmission {
   return {
-    protocol_version: 4,
+    protocol_version: 5,
     submission_id: "submission_unknown_model",
     device_id: "device_legacy",
     generation: 1,

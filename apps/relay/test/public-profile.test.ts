@@ -56,15 +56,7 @@ function usageSummary(): AccountUsageSummary {
     range: { from: "2026-08-01", to: "2026-08-13" },
     totals: emptyTotals,
     cost: emptyCost,
-    coverage: [
-      {
-        device_id: "device_secret",
-        agent: "codex",
-        start_at: "2026-08-13T00:00:00Z",
-        end_at: "2026-08-13T01:00:00Z",
-        status: "complete",
-      },
-    ],
+    coverage: "complete",
     breakdowns: [
       {
         dimension: "model",

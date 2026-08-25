@@ -704,22 +704,18 @@ struct LocalServiceUsageUploadSetting: Decodable, Sendable {
 struct LocalServiceUsageDetail: Decodable, Equatable, Sendable {
   let range: UsageDateRange
   let usage: LocalUsagePeriodSummary
-  let fallbackModels: [LocalUsageModelSummary]
   let incomplete: Bool
   let detailsTruncated: Bool
 
   private enum CodingKeys: String, CodingKey {
     case range
     case usage
-    case fallbackModels
     case incomplete
     case detailsTruncated
   }
 
   var isValid: Bool {
-    range.isValid && usage.isValid && fallbackModels.count <= 1_000
-      && fallbackModels.allSatisfy(\.isValid)
-      && (usage.agents.isEmpty || fallbackModels.isEmpty)
+    range.isValid && usage.isValid
   }
 }
 
@@ -780,12 +776,11 @@ extension LocalServiceUsagePeriodValues {
 extension LocalServiceUsageDetail {
   init(from decoder: Decoder) throws {
     try decoder.rejectUnknownWireKeys([
-      "range", "usage", "fallbackModels", "incomplete", "detailsTruncated",
+      "range", "usage", "incomplete", "detailsTruncated",
     ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     range = try container.decode(UsageDateRange.self, forKey: .range)
     usage = try container.decode(LocalUsagePeriodSummary.self, forKey: .usage)
-    fallbackModels = try container.decode([LocalUsageModelSummary].self, forKey: .fallbackModels)
     incomplete = try container.decode(Bool.self, forKey: .incomplete)
     detailsTruncated = try container.decode(Bool.self, forKey: .detailsTruncated)
     guard isValid else {

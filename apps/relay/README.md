@@ -11,9 +11,9 @@ that speaks an older shape is refused rather than translated; see
 [ADR 0018](../../docs/decisions/0018-single-managed-data-contract.md).
 
 Authenticated collection Devices publish only their own latest sanitized Device Health at
-`PUT /api/v4/device/health`. D1 uses the monotonic diagnostics refresh revision to reject delayed
+`PUT /api/v5/device/health`. D1 uses the monotonic diagnostics refresh revision to reject delayed
 older reports and server receipt time for freshness; Device/Account deletion cascades the row.
-Every Device on `GET /api/v4/account/summary` carries a required nullable `health` field; a Device
+Every Device on `GET /api/v5/account/summary` carries a required nullable `health` field; a Device
 that has never reported says so rather than being absent. Relay stores no health history. See
 [ADR 0015](../../docs/decisions/0015-diagnostic-attempts-and-device-health.md).
 

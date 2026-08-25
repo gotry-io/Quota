@@ -9,7 +9,7 @@ public enum QuotaProtocol {
   /// OAuth, Device authorization and control, Account metadata, and the catalogs.
   public static let control = 2
   /// Quota, Usage, and Account summary between a Device and Relay.
-  public static let managedData = 4
+  public static let managedData = 5
   /// The private local Usage report the service hands its own app.
   public static let localUsage = 3
   /// The private local quota collection report the service hands its own app.

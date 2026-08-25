@@ -273,16 +273,7 @@ final class MenuBarViewModel {
             agents: usage.agents ?? [],
             modelsTruncated: usage.breakdownsTruncated
           ),
-          fallbackModels: usage.agents == nil
-            ? usage.breakdowns.filter { $0.dimension == .model }.map {
-              LocalUsageModelSummary(
-                model: $0.key,
-                totals: UsageSummaryTotals($0.totals),
-                cost: $0.cost
-              )
-            }
-            : [],
-          incomplete: usage.coverage.contains { $0.status == .partial },
+          incomplete: usage.coverage == .partial,
           detailsTruncated: usage.hasTruncatedDetails
         )
         let values = LocalServiceUsagePeriodValues(

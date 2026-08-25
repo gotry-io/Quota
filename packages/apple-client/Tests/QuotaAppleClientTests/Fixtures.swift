@@ -35,7 +35,7 @@ enum Fixtures {
       "range": ["from": from, "to": to],
       "totals": tokenTotals(),
       "cost": completeCost(),
-      "coverage": [],
+      "coverage": "complete",
       "breakdowns": [],
     ]
   }
@@ -88,7 +88,7 @@ enum Fixtures {
       usage[key] = value
     }
     var object: [String: Any] = [
-      "protocol_version": 4,
+      "protocol_version": 5,
       "account": [
         "account_id": accountID,
         "display_label": "octocat",
