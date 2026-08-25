@@ -27,18 +27,17 @@ D1, OAuth, Usage aggregation, and domain policy in Relay.
   Worker-first request is a SvelteKit document. Hashed `/_app/immutable/*`, `/schema/*`, and the
   listed static images stay asset-first.
 - `apps/web` owns the `WebDocumentPort` type. Relay implements it. SvelteKit `Platform` has no
-  `env`, `DB`, or secrets. Document loads may call `getViewer` and `lookupPublicProfile` only.
+  `env`, `DB`, or secrets. Document loads may call `getViewer` only.
 - `getViewer` is the same pairing as `authorizeAccount`: session cookie present, then
   `getSession`, then `getAccount`. It returns `{ displayLabel }` only.
-- `/my` Usage, public-profile payloads, login, logout, and mutations stay on existing HTTP APIs.
-  Document SSR must not run Usage aggregation. One `/u/{slug}` page view consumes two
-  `public-profile` limiter tokens (document existence + JSON payload) by design.
+- `/my` Usage, login, logout, and mutations stay on existing HTTP APIs. Document SSR must not run
+  Usage aggregation.
 - There is no dual SPA + SvelteKit runtime. Rollback is revert on `main` and let
   `deploy-cloudflare.yml` republish.
 
 ## Consequences
 
-- First HTML byte of `/`, `/my`, `/activate`, and `/u/{username}` already has the correct header.
+- First HTML byte of `/`, `/my`, and `/activate` already has the correct header.
   Unsigned `/my` is a server redirect to `/`. `/app` is a server redirect to `/my`.
 - `pnpm dev:web` is HMR. `QUOTA_DEV_VIEWER` is a `dev === true` server stub for header QA, not a
   session. Browser GitHub login on localhost remains unavailable because the origin and Secure
@@ -89,8 +88,7 @@ Session cookies stay HttpOnly. JavaScript never reads them. Display labels are t
 no-store` with `ETag` stripped. `document_ssr` / `document_ssr_failed` logs may contain only
 `path`, `status`, and `has_viewer`. They must not contain cookies, account ids, display labels, or
 secrets. `getViewer` is memoized once per document request. A thrown render returns generic 500
-HTML with the same cache headers. Public-profile document lookups share the JSON limiter.
-Invalid slugs that `normalizePublicSlug` rejects do not consume it.
+HTML with the same cache headers.
 
 ## Alternatives considered
 

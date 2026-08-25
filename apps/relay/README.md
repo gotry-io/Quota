@@ -41,7 +41,10 @@ client is a read-only Account login: Authorization Code with PKCE and the exact 
 checked-in Worker enables Cloudflare `nodejs_compat`, which Better Auth's runtime requires.
 
 Each keyed secret is independent and must contain at least 32 random characters. OAuth and session
-routes return `Cache-Control: no-store`; only the versioned pricing catalog is publicly cacheable.
+routes return `Cache-Control: no-store`; only the versioned pricing and model catalogs are publicly
+cacheable. `GET /api/v5/account/summary` and `GET /api/v5/account/usage/summary` are
+`private, no-cache` with a strong `ETag`, and answer a matching `If-None-Match` with 304 before
+running any Usage query.
 Production migration and deployment remain workflow-owned and must not be run manually without
 explicit authorization.
 
@@ -52,5 +55,7 @@ date intervals preserve known historical changes. Unknown models and missing com
 unpriced; wildcard dimension matches and the inferred-cache approximation remain explicit in the
 calculation assumptions.
 
-Readiness probes and the hourly Worker schedule run the bounded credential cleanup defined in
-[`docs/security.md`](../../docs/security.md).
+Readiness probes and the hourly Worker schedule run the bounded credential, Usage-receipt, and
+quota-observation cleanup defined in [`docs/security.md`](../../docs/security.md). An unhandled
+request failure writes one `relay_request_failed` line carrying only the path, the status, and the
+error's class name.

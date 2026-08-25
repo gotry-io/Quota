@@ -4,7 +4,6 @@ import { beforeEach, describe, expect, inject, it } from "vitest";
 import { memoizeWebAccountAuthSession } from "../src/account/better-auth.ts";
 import { createWebDocumentPort, hasWebSessionCookie } from "../src/account/web-document-port.ts";
 import { isRelayApiPath } from "../src/relay-paths.ts";
-import { SecretHasher } from "../src/security.ts";
 import { D1AccountState } from "../src/state/d1-account-state.ts";
 import {
   documentSsrFailureResponse,
@@ -19,7 +18,6 @@ declare module "vitest" {
   }
 }
 
-const secret = "test-secret-that-is-long-enough-for-hmac-and-aes";
 const now = new Date("2026-08-10T00:00:00.000Z");
 
 beforeEach(async () => {
@@ -36,7 +34,6 @@ describe("document routing helpers", () => {
     expect(isRelayApiPath("/readyz")).toBe(true);
     expect(isRelayApiPath("/")).toBe(false);
     expect(isRelayApiPath("/my")).toBe(false);
-    expect(isRelayApiPath("/u/octocat")).toBe(false);
   });
 
   it("clones cache headers onto a new response", () => {
@@ -68,7 +65,6 @@ describe("web document port", () => {
       .run();
     const port = createWebDocumentPort({
       state,
-      hasher: new SecretHasher(secret),
       webAuth: {
         handler: async () => new Response(null, { status: 404 }),
         beginGitHubSignIn: async () => new Response(null, { status: 404 }),
@@ -77,49 +73,12 @@ describe("web document port", () => {
           session: { id: "session_1", createdAt: now, expiresAt: now },
         }),
       },
-      now: () => now,
     });
     expect(await port.getViewer(new Headers())).toBeNull();
     const viewer = await port.getViewer(
       new Headers({ Cookie: "__Secure-quota.session_token=secret" }),
     );
     expect(viewer).toEqual({ displayLabel: "octocat" });
-  });
-
-  it("does not consume the public-profile limiter for slugs normalizePublicSlug rejects", async () => {
-    const state = new D1AccountState(env.DB);
-    const port = createWebDocumentPort({
-      state,
-      hasher: new SecretHasher(secret),
-      webAuth: {
-        handler: async () => new Response(null, { status: 404 }),
-        beginGitHubSignIn: async () => new Response(null, { status: 404 }),
-        getSession: async () => null,
-      },
-      now: () => now,
-    });
-    expect(await port.lookupPublicProfile("***")).toEqual({ status: "missing" });
-    expect(await port.lookupPublicProfile("---")).toEqual({ status: "missing" });
-  });
-
-  it("shares the public-profile bucket across document lookups", async () => {
-    const state = new D1AccountState(env.DB);
-    const port = createWebDocumentPort({
-      state,
-      hasher: new SecretHasher(secret),
-      webAuth: {
-        handler: async () => new Response(null, { status: 404 }),
-        beginGitHubSignIn: async () => new Response(null, { status: 404 }),
-        getSession: async () => null,
-      },
-      now: () => now,
-    });
-    for (let index = 0; index < 120; index += 1) {
-      const result = await port.lookupPublicProfile("not a slug");
-      expect(result.status).toBe("missing");
-    }
-    const limited = await port.lookupPublicProfile("not a slug");
-    expect(limited.status).toBe("rate_limited");
   });
 });
 
@@ -153,9 +112,6 @@ describe("document SSR observability", () => {
         calls += 1;
         return { displayLabel: "octocat" };
       },
-      async lookupPublicProfile() {
-        return { status: "missing" };
-      },
     });
     expect(await memoized.hasViewer()).toBe(false);
     expect(await memoized.port.getViewer(new Headers())).toEqual({ displayLabel: "octocat" });
@@ -174,9 +130,6 @@ describe("document SSR observability", () => {
       async getViewer() {
         calls += 1;
         throw new Error("session store unavailable");
-      },
-      async lookupPublicProfile() {
-        return { status: "missing" };
       },
     });
     await expect(memoized.port.getViewer(new Headers())).rejects.toThrow(
@@ -201,9 +154,6 @@ describe("document SSR observability", () => {
           async getViewer() {
             calls += 1;
             throw new Error("session store unavailable");
-          },
-          async lookupPublicProfile() {
-            return { status: "missing" };
           },
         },
         async (document) => {
@@ -242,9 +192,6 @@ describe("document SSR observability", () => {
         {
           async getViewer() {
             return { displayLabel: "octocat" };
-          },
-          async lookupPublicProfile() {
-            return { status: "missing" };
           },
         },
         async (document) => {

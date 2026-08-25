@@ -101,12 +101,12 @@ public actor AccountClient {
           error: .notSignedIn
         )
       }
-      let summary = try await fetchSummary(allowRefresh: true)
+      let read = try await fetchSummary(cached: cached, allowRefresh: true)
       let fetchedAt = now()
-      let snapshot = CachedAccountSummary(summary: summary, fetchedAt: fetchedAt)
-      try summaryStore.save(snapshot)
+      try summaryStore.save(
+        CachedAccountSummary(summary: read.summary, fetchedAt: fetchedAt, etag: read.etag))
       return AccountRefreshResult(
-        summary: summary,
+        summary: read.summary,
         fetchedAt: fetchedAt,
         fromCache: false
       )
@@ -170,30 +170,56 @@ public actor AccountClient {
     )
   }
 
-  private func fetchSummary(allowRefresh: Bool) async throws -> AccountSummary {
+  /// The summary this read leaves current, and the validator it is current at.
+  ///
+  /// `cached` is the account-bound stored read, so its validator is only ever offered back for
+  /// the account the session belongs to.
+  private func fetchSummary(
+    cached: CachedAccountSummary?,
+    allowRefresh: Bool
+  ) async throws -> (summary: AccountSummary, etag: String?) {
     guard let session = try sessionStore.load() else {
       throw AccountClientError.notSignedIn
     }
+    let held = cached?.summary.account.accountID == session.accountID ? cached : nil
     let today = todayDate()
     do {
-      let summary = try await relay.fetchAccountSummary(
+      let read = try await relay.fetchAccountSummary(
         from: today,
         to: today,
-        accessToken: session.accessToken
+        accessToken: session.accessToken,
+        etag: held?.etag
       )
-      return try bound(summary, to: session)
+      return try resolve(read, held: held, session: session)
     } catch RelayClientError.unauthorized where allowRefresh {
       let refreshed = try await refreshSessionAfterUnauthorized()
-      let summary = try await relay.fetchAccountSummary(
+      let read = try await relay.fetchAccountSummary(
         from: today,
         to: today,
-        accessToken: refreshed.accessToken
+        accessToken: refreshed.accessToken,
+        etag: held?.etag
       )
-      return try bound(summary, to: refreshed)
+      return try resolve(read, held: held, session: refreshed)
     } catch let error as AccountClientError {
       throw error
     } catch let error as RelayClientError {
       throw AccountClientError.relay(error)
+    }
+  }
+
+  private func resolve(
+    _ read: AccountSummaryRead,
+    held: CachedAccountSummary?,
+    session: AccountSession
+  ) throws -> (summary: AccountSummary, etag: String?) {
+    switch read {
+    case .modified(let summary, let etag):
+      return (try bound(summary, to: session), etag)
+    case .unchanged(let etag):
+      // A 304 the caller cannot honour would be answering from nothing; it can only happen if
+      // the stored read was dropped between offering its validator and reading the reply.
+      guard let held else { throw AccountClientError.relay(.invalidResponse) }
+      return (try bound(held.summary, to: session), etag)
     }
   }
 

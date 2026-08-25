@@ -301,6 +301,18 @@ generation. Disabling Usage upload is a local Device preference: native Usage pr
 local-only, while already uploaded account history remains subject to the existing Device and Account
 deletion controls.
 
+`GET /api/v5/account/summary` and `GET /api/v5/account/usage/summary` are conditional reads. Each
+carries a strong `ETag` over an account version stamp, the request's full query string, and the
+pricing and model catalog revisions, and is `Cache-Control: private, no-cache` so a caller may hold
+the body as long as it revalidates. The stamp is three aggregates over the devices, quota
+observation, and Device Health rows the response projects; a matching `If-None-Match` returns 304
+before any Usage query runs. Document and `__data.json` responses stay `private, no-store`.
+
+The Rust service and the Quota iOS client both read conditionally. Each stores the response with
+the ETag it is current at in one transaction, keyed by Account, and treats a 304 as that stored
+response rather than as a failure: the account component keeps the value the previous read
+produced. Signing out drops the stored reads with the session.
+
 After an authenticated Device completes a refresh, the service uploads a sanitized health snapshot
 on change or a bounded heartbeat. The Device token determines the row; D1 stores only the latest
 monotonic revision and uses server receipt time for freshness. Every Account-summary Device carries `health`,
@@ -409,10 +421,8 @@ streaming dashboard. Its document load starts the existing
 `GET /api/v5/account/summary` handler inside the composed Worker and reuses the
 request's memoized Better Auth session, so Account data can resolve in parallel with hydration
 without a second browser round trip. The API schema and Relay/Web source boundary remain unchanged.
-`/u/{username}` is the public projection for that GitHub username: one row per subscription,
-resolved by the same rule every reader applies and filtered to readings that still describe current
-quota, because the public shape carries no freshness of its own. `/activate` approves or
-denies native authorization. `/app` is a server redirect to `/my`. Better Auth owns GitHub
+Every page requires a session; Quota Web publishes no account data anonymously. `/activate` approves
+or denies native authorization. `/app` is a server redirect to `/my`. Better Auth owns GitHub
 login and browser sessions. Production Web and Worker deploy together only through
 `.github/workflows/deploy-cloudflare.yml`. The composition decision is
 [ADR 0011](decisions/0011-sveltekit-document-worker.md).

@@ -27,11 +27,9 @@ pnpm --filter @gotry-io/quota-web build
 Worker. Browser GitHub login on localhost is not available.
 
 `/my` is the GitHub-backed account dashboard and `/activate` approves or denies a native-client
-device authorization grant. Unsigned `/my` visits are a server redirect home. Public pages are
-`/u/{github-username}`. A successful public-page view consumes two `public-profile` limiter
-tokens (HTML existence + JSON payload); after 60 views / 10 minutes the HTML can remain 200
-while the JSON returns 429. `/app` shipped in 0.0.4, so it remains a single bookmark redirect to
-`/my`; new links and OAuth callbacks use `/my`. Better Auth owns GitHub sign-in, browser sessions,
+device authorization grant. Unsigned `/my` visits are a server redirect home. Every page requires a
+session; Quota Web publishes no account data anonymously. `/app` shipped in 0.0.4, so it remains a
+single bookmark redirect to `/my`; new links and OAuth callbacks use `/my`. Better Auth owns GitHub sign-in, browser sessions,
 sign-out, OAuth state/PKCE, account deletion, and standard auth-route origin validation. Quota's
 authorization decision and Device deletion routes additionally require a recent session and an
 exact same-origin request.

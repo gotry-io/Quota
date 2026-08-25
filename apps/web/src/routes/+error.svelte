@@ -9,8 +9,6 @@ import { page } from "$app/state";
       <h1 id="error-title">
         {#if page.status === 404}
           This page is unavailable.
-        {:else if page.status === 429}
-          Too many requests. Retry later.
         {:else}
           Quota could not load this page.
         {/if}
@@ -19,9 +17,7 @@ import { page } from "$app/state";
   </div>
   <p class="hero-summary">
     {#if page.status === 404}
-      This profile is private or does not exist.
-    {:else if page.status === 429}
-      Public profile lookups are rate-limited. Wait and try again.
+      This page does not exist.
     {:else}
       Refresh to try again.
     {/if}

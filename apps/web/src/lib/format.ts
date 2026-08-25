@@ -94,15 +94,6 @@ export function formatAbsoluteRemaining(window: {
   return `${formatCount(window.remaining_value)}${window.value_unit === "credits" ? " credits" : ""}`;
 }
 
-export function formatPublicCost(status: string, amountMicrousd: string | null): string {
-  if (status === "unavailable" || amountMicrousd === null) return "— unpriced";
-  return new Intl.NumberFormat(WEB_LOCALE, {
-    style: "currency",
-    currency: "USD",
-    maximumFractionDigits: 2,
-  }).format(Number(amountMicrousd) / 1_000_000);
-}
-
 export function safeAdd(...values: number[]): number {
   return Math.min(
     Number.MAX_SAFE_INTEGER,

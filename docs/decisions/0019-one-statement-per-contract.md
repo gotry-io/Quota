@@ -29,10 +29,9 @@ span bound.
 
 **Each contract carries its own version.** `PROTOCOL_VERSION` (control), 
 `MANAGED_DATA_PROTOCOL_VERSION` (quota, Usage, Account summary), `LOCAL_USAGE_PROTOCOL_VERSION`
-(private local Usage report), `LOCAL_COLLECTION_PROTOCOL_VERSION` (private local collection
-report), and `PUBLIC_PROFILE_PROTOCOL_VERSION` (the unauthenticated projection) are named
-separately and named once per runtime. The local collection report and the public profile had
-been pinned to the control-plane constant, which would have forced them to move whenever it did.
+(private local Usage report), and `LOCAL_COLLECTION_PROTOCOL_VERSION` (private local collection
+report) are named separately and named once per runtime. The local collection report had been
+pinned to the control-plane constant, which would have forced it to move whenever it did.
 
 **The restatements answer one judge.** `packages/protocol/fixtures/wire-conformance.json`
 states each contract as accepted and refused payloads. The zod schema, the Rust validators in

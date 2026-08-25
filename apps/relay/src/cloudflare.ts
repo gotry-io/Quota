@@ -53,14 +53,19 @@ export default {
       document: createWebDocumentPort({
         webAuth,
         state,
-        hasher,
         async getAccountSummary(headers) {
           try {
             const url = new URL(
               "/api/v5/account/summary?cost_mode=auto&usage_agents=all",
               request.url,
             );
-            const response = await relay.fetch(new Request(url, { headers }));
+            // The document request's headers carry the session, and nothing else here should
+            // travel with them: a conditional header meant for a page the browser holds would
+            // make this internal read answer 304, which is not a summary.
+            const forwarded = new Headers(headers);
+            forwarded.delete("If-None-Match");
+            forwarded.delete("If-Modified-Since");
+            const response = await relay.fetch(new Request(url, { headers: forwarded }));
             if (response.status === 401) return { status: "unauthorized" };
             if (!response.ok) return { status: "error" };
             const parsed = AccountSummarySchema.safeParse(await response.json());

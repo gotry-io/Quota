@@ -1,14 +1,10 @@
 import type { AccountState } from "@gotry-io/relay-core";
 import type {
-  PublicProfileDocumentResult,
   AccountSummaryDocumentResult,
   WebDocumentPort,
   WebDocumentViewer,
 } from "../../../web/src/lib/server/document-port.ts";
-import { normalizePublicSlug } from "../public-profile.ts";
-import type { SecretHasher } from "../security.ts";
 import type { WebAccountAuth } from "./better-auth.ts";
-import { consumeNamedRateLimit, publicProfileRateLimit } from "./rate-limit.ts";
 
 const sessionCookiePattern = /(?:^|;\s*)(?:__Secure-)?quota\.session_token=/;
 
@@ -18,12 +14,9 @@ export function hasWebSessionCookie(cookieHeader: string | null): boolean {
 
 export function createWebDocumentPort(input: {
   webAuth: WebAccountAuth;
-  state: Pick<AccountState, "getAccount" | "getAccountByPublicSlug" | "consumeRateLimit">;
-  hasher: SecretHasher;
+  state: Pick<AccountState, "getAccount">;
   getAccountSummary?: (headers: Headers) => Promise<AccountSummaryDocumentResult>;
-  now?: () => Date;
 }): WebDocumentPort {
-  const now = input.now ?? (() => new Date());
   const getAccountSummary = input.getAccountSummary;
   return {
     async getViewer(headers: Headers): Promise<WebDocumentViewer | null> {
@@ -42,22 +35,5 @@ export function createWebDocumentPort(input: {
           },
         }
       : {}),
-    async lookupPublicProfile(username: string): Promise<PublicProfileDocumentResult> {
-      const slug = normalizePublicSlug(username);
-      if (!slug) return { status: "missing" };
-      const limited = await consumeNamedRateLimit(
-        input.state,
-        input.hasher,
-        "public-profile",
-        slug,
-        publicProfileRateLimit,
-        now(),
-      );
-      if (!limited.allowed) {
-        return { status: "rate_limited", retryAfterSeconds: limited.retryAfterSeconds };
-      }
-      const account = await input.state.getAccountByPublicSlug(slug);
-      return account ? { status: "exists" } : { status: "missing" };
-    },
   };
 }

@@ -21,8 +21,7 @@ async function copyBrew(): Promise<void> {
       <h1 id="hero-title">Know what you have left.</h1>
       <p class="hero-summary">
         QuotaBar shows remaining Codex, Claude, Grok, Cursor, and API-key quota from the menu bar.
-        Usage stays on your machines unless you sync an account. Optionally publish a public page at
-        /u/your-github-username.
+        Usage stays on your machines unless you sync an account.
       </p>
       <div class="hero-actions">
         <a

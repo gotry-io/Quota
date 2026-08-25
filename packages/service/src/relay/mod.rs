@@ -253,17 +253,37 @@ impl RelayClient {
         Ok(response)
     }
 
-    pub fn account_summary(&self, token: &str, query: &str) -> Result<Value, RelayError> {
-        self.account_usage_query("/api/v5/account/summary", token, query)
+    /// Reads the Account summary, offering the validator the caller already holds.
+    ///
+    /// Returns the ETag this read is now current at, and the body only when the server sent
+    /// one. `None` means 304: the caller's stored summary is still the answer, and nothing on
+    /// the account changed enough to be worth aggregating Usage for.
+    pub fn account_summary(
+        &self,
+        token: &str,
+        query: &str,
+        etag: Option<&str>,
+    ) -> Result<(Option<String>, Option<Value>), RelayError> {
+        self.account_usage_query("/api/v5/account/summary", token, query, etag)
     }
 
-    pub fn account_usage_summary(&self, token: &str, query: &str) -> Result<Value, RelayError> {
-        let response = self.account_usage_query("/api/v5/account/usage/summary", token, query)?;
+    pub fn account_usage_summary(
+        &self,
+        token: &str,
+        query: &str,
+        etag: Option<&str>,
+    ) -> Result<(Option<String>, Option<Value>), RelayError> {
+        let (next_etag, response) =
+            self.account_usage_query("/api/v5/account/usage/summary", token, query, etag)?;
+        let Some(response) = response else {
+            return Ok((next_etag, None));
+        };
         validate_account_usage_response(&response)?;
-        response
+        let usage = response
             .get("usage")
             .cloned()
-            .ok_or(RelayError::InvalidResponse)
+            .ok_or(RelayError::InvalidResponse)?;
+        Ok((next_etag, Some(usage)))
     }
 
     fn account_usage_query(
@@ -271,7 +291,8 @@ impl RelayClient {
         path: &str,
         token: &str,
         query: &str,
-    ) -> Result<Value, RelayError> {
+        etag: Option<&str>,
+    ) -> Result<(Option<String>, Option<Value>), RelayError> {
         let mut parts = query
             .split('&')
             .filter(|part| !part.is_empty())
@@ -280,7 +301,7 @@ impl RelayClient {
         if !parts.iter().any(|part| part.starts_with("usage_agents=")) {
             parts.push("usage_agents=all".to_owned());
         }
-        self.get_json(&format!("{path}?{}", parts.join("&")), token, 200)
+        self.conditional_get_json(&format!("{path}?{}", parts.join("&")), token, etag)
     }
 
     pub fn pricing_catalog(
@@ -330,6 +351,39 @@ impl RelayClient {
                 .headers(headers),
             None,
             None,
+        )?;
+        let next_etag = response
+            .headers()
+            .get(ETAG)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        if response.status().as_u16() == 304 {
+            return Ok((next_etag, None));
+        }
+        let response = check_status(response, 200)?;
+        Ok((next_etag, Some(read_json(response)?)))
+    }
+
+    fn conditional_get_json(
+        &self,
+        path: &str,
+        token: &str,
+        etag: Option<&str>,
+    ) -> Result<(Option<String>, Option<Value>), RelayError> {
+        let mut headers = HeaderMap::new();
+        if let Some(etag) = etag {
+            headers.insert(
+                IF_NONE_MATCH,
+                HeaderValue::from_str(etag).map_err(|_| RelayError::InvalidResponse)?,
+            );
+        }
+        let response = self.request(
+            self.client
+                .get(self.url(path))
+                .header(AUTHORIZATION, bearer(token))
+                .headers(headers),
+            None,
+            Some(token),
         )?;
         let next_etag = response
             .headers()
@@ -2250,18 +2304,64 @@ impl AccountManager {
         self.ensure_fresh_session(&mut session, &mut session_epoch, "device")?;
         let account_token =
             self.ensure_fresh_session(&mut session, &mut session_epoch, "account")?;
-        let summary = self
+        let account_id = session
+            .get("account")
+            .and_then(|account| account.get("account_id"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        // The stored answer to this exact read, if there is one. Offering its validator is what
+        // lets an unchanged account cost one conditional request instead of a full aggregation.
+        let cached = if account_id.is_empty() {
+            None
+        } else {
+            self.state
+                .account_read_cache(&account_id, query)
+                .ok()
+                .flatten()
+        };
+        let (next_etag, body) = self
             .client
-            .account_summary(&account_token, query)
+            .account_summary(
+                &account_token,
+                query,
+                cached.as_ref().map(|(etag, _)| etag.as_str()),
+            )
             .map_err(|error| BackendError {
                 error: relay_error_for_backend(error),
             })?;
-        validate_account_summary(&summary).map_err(|_| BackendError {
-            error: crate::protocol::IpcError::new(
-                crate::protocol::ErrorCode::InvalidResponse,
-                crate::protocol::RecoveryAction::Retry,
-            ),
-        })?;
+        let summary = match body {
+            Some(summary) => {
+                validate_account_summary(&summary).map_err(|_| BackendError {
+                    error: crate::protocol::IpcError::new(
+                        crate::protocol::ErrorCode::InvalidResponse,
+                        crate::protocol::RecoveryAction::Retry,
+                    ),
+                })?;
+                if !account_id.is_empty() {
+                    let _ = self.state.commit_account_read(
+                        &account_id,
+                        query,
+                        next_etag.as_deref(),
+                        &summary,
+                    );
+                }
+                summary
+            }
+            // 304. The server is asserting the stored body is still the answer, so this read
+            // costs nothing and the previous account component value stands unchanged.
+            None => match cached {
+                Some((_, summary)) => summary,
+                None => {
+                    return Err(BackendError {
+                        error: crate::protocol::IpcError::new(
+                            crate::protocol::ErrorCode::InvalidResponse,
+                            crate::protocol::RecoveryAction::Retry,
+                        ),
+                    });
+                }
+            },
+        };
         if !self
             .state
             .active_session_at_epoch(session_epoch)
@@ -3995,7 +4095,7 @@ mod tests {
         )]);
         let client = RelayClient::for_test(&origin).expect("test client");
 
-        let result = client.account_summary("account-token", "cost_mode=calculate");
+        let result = client.account_summary("account-token", "cost_mode=calculate", None);
 
         assert!(matches!(
             result,
@@ -4166,6 +4266,102 @@ mod tests {
         assert!(matches!(result, Err(RelayError::Timeout)));
     }
 
+    /// One contract: a 304 is an answer, not a failure. The account component keeps exactly the
+    /// value the previous read produced, and the second request is the one that says so.
+    #[test]
+    fn an_unchanged_account_read_keeps_the_previous_summary() {
+        let summary = serde_json::json!({
+            "protocol_version": MANAGED_DATA_PROTOCOL,
+            "account": {
+                "account_id": "account_1",
+                "display_label": "octocat",
+                "created_at": "2026-08-09T00:00:00Z"
+            },
+            "devices": [],
+            "quota": [],
+            "usage": {
+                "range": {"from": "2026-08-09", "to": "2026-08-10"},
+                "totals": valid_totals(),
+                "cost": valid_cost(),
+                "coverage": "complete",
+                "breakdowns": []
+            }
+        });
+        let (origin, server) = spawn_mock_server(vec![
+            http_json_with_etag(200, "\"stamp-one\"", &summary),
+            http_not_modified("\"stamp-one\""),
+        ]);
+        let root =
+            std::env::temp_dir().join(format!("quota-account-etag-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(crate::state::StateStore::open(&root).expect("state"));
+        state
+            .write_session_json(&serde_json::json!({
+                "schema_version": 1,
+                "status": "active",
+                "account_id": "account_1",
+                "device_id": "device_1",
+                "device_generation": 1,
+                "account": {
+                    "account_id": "account_1",
+                    "access_token": "qa_access",
+                    "access_expires_at": "2099-01-01T00:00:00Z",
+                    "refresh_token": "qar_refresh",
+                    "refresh_expires_at": "2099-01-01T00:00:00Z"
+                },
+                "device": {
+                    "account_id": "account_1",
+                    "device_id": "device_1",
+                    "device_generation": 1,
+                    "access_token": "qd_access",
+                    "access_expires_at": "2099-01-01T00:00:00Z",
+                    "refresh_token": "qdr_refresh",
+                    "refresh_expires_at": "2099-01-01T00:00:00Z"
+                }
+            }))
+            .expect("session");
+        let manager = AccountManager::new(
+            Arc::new(RelayClient::for_test(&origin).expect("test client")),
+            Arc::clone(&state),
+            "Test Mac".to_owned(),
+        );
+
+        let cancel = AtomicBool::new(false);
+        let first = manager
+            .refresh_account_state(&cancel)
+            .expect("first account read");
+        let second = manager
+            .refresh_account_state(&cancel)
+            .expect("conditional account read");
+        assert_eq!(first, second);
+        assert_eq!(second["account_summary"], summary);
+
+        let sent = server.join().expect("mock server");
+        assert_eq!(sent.len(), 2, "{sent:?}");
+        assert!(!sent[0].to_ascii_lowercase().contains("if-none-match"));
+        assert!(
+            sent[1]
+                .to_ascii_lowercase()
+                .contains("if-none-match: \"stamp-one\""),
+            "{}",
+            sent[1]
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn http_not_modified(etag: &str) -> String {
+        format!("HTTP/1.1 304 Not Modified\r\nETag: {etag}\r\nConnection: close\r\n\r\n")
+    }
+
+    fn http_json_with_etag(status: u16, etag: &str, value: &Value) -> String {
+        let body = serde_json::to_vec(value).expect("json");
+        format!(
+            "HTTP/1.1 {status} OK\r\nContent-Type: application/json\r\nETag: {etag}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            String::from_utf8(body).expect("utf8")
+        )
+    }
+
     fn http_json(status: u16, retry_after: Option<u64>, value: &Value) -> String {
         let body = serde_json::to_vec(value).expect("json");
         let reason = match status {
@@ -4184,8 +4380,8 @@ mod tests {
         )
     }
 
-    /// Joining the handle yields each request's start line, so a test can assert the query the
-    /// client actually sent.
+    /// Joining the handle yields each request's head, so a test can assert the query and the
+    /// headers the client actually sent.
     fn spawn_mock_server(responses: Vec<String>) -> (String, thread::JoinHandle<Vec<String>>) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("mock listener");
         let address = listener.local_addr().expect("mock address");
@@ -4198,13 +4394,7 @@ mod tests {
                     .expect("mock timeout");
                 let mut request = [0_u8; 8_192];
                 let read = stream.read(&mut request).unwrap_or(0);
-                recorded.push(
-                    String::from_utf8_lossy(&request[..read])
-                        .lines()
-                        .next()
-                        .unwrap_or_default()
-                        .to_owned(),
-                );
+                recorded.push(String::from_utf8_lossy(&request[..read]).into_owned());
                 stream
                     .write_all(response.as_bytes())
                     .expect("mock response");

@@ -32,10 +32,7 @@ export const MANAGED_DATA_PROTOCOL_VERSION = 5 as const;
 export const LOCAL_USAGE_PROTOCOL_VERSION = 3 as const;
 /** The private local quota collection report the service hands its own app. */
 export const LOCAL_COLLECTION_PROTOCOL_VERSION = 3 as const;
-/** The unauthenticated public profile projection. */
-export const PUBLIC_PROFILE_PROTOCOL_VERSION = 2 as const;
 export const MAXIMUM_SNAPSHOTS_PER_ENVELOPE = 32;
-export const MAXIMUM_PUBLIC_PROFILE_QUOTA = 32;
 export const MAXIMUM_WINDOWS_PER_SNAPSHOT = 16;
 export const MAXIMUM_USAGE_ROWS_PER_SUBMISSION = 2_048;
 export const MAXIMUM_USAGE_COVERAGE_HOURS = 24 * 31;
@@ -1221,75 +1218,6 @@ export const AccountSummarySchema = z
   })
   .strict();
 export type AccountSummary = z.infer<typeof AccountSummarySchema>;
-
-export const PublicProfileSlugSchema = z.string().regex(/^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/);
-export type PublicProfileSlug = z.infer<typeof PublicProfileSlugSchema>;
-
-export const PublicProfileSettingsSchema = z
-  .object({
-    protocol_version: z.literal(PROTOCOL_VERSION),
-    enabled: z.boolean(),
-    slug: PublicProfileSlugSchema.nullable(),
-  })
-  .strict();
-export type PublicProfileSettings = z.infer<typeof PublicProfileSettingsSchema>;
-
-export const PublicProfileUpdateRequestSchema = z
-  .object({
-    protocol_version: z.literal(PROTOCOL_VERSION),
-    enabled: z.boolean(),
-    slug: PublicProfileSlugSchema.optional(),
-  })
-  .strict();
-export type PublicProfileUpdateRequest = z.infer<typeof PublicProfileUpdateRequestSchema>;
-
-export const PublicQuotaWindowSchema = z
-  .object({
-    title: z.string().trim().min(1).max(128),
-    used_percent: z.number().finite().min(0).max(100),
-    remaining_value: z.number().finite().optional(),
-    limit_value: z.number().finite().nonnegative().optional(),
-    value_unit: QuotaValueUnitSchema.optional(),
-  })
-  .strict();
-export type PublicQuotaWindow = z.infer<typeof PublicQuotaWindowSchema>;
-
-export const PublicQuotaProviderSchema = z
-  .object({
-    provider: LocalProviderIdSchema,
-    plan: z.string().trim().min(1).max(64).nullable(),
-    windows: z.array(PublicQuotaWindowSchema).max(MAXIMUM_WINDOWS_PER_SNAPSHOT),
-  })
-  .strict();
-export type PublicQuotaProvider = z.infer<typeof PublicQuotaProviderSchema>;
-
-export const PublicUsageModelSchema = z
-  .object({
-    name: ModelSchema,
-    tokens: SafeNonnegativeIntegerSchema,
-  })
-  .strict();
-export type PublicUsageModel = z.infer<typeof PublicUsageModelSchema>;
-
-export const PublicProfileSchema = z
-  .object({
-    protocol_version: z.literal(PUBLIC_PROFILE_PROTOCOL_VERSION),
-    username: PublicProfileSlugSchema,
-    display_label: z.string().trim().min(1).max(128).nullable(),
-    quota: z.array(PublicQuotaProviderSchema).max(MAXIMUM_PUBLIC_PROFILE_QUOTA),
-    usage: z
-      .object({
-        range: UsageDateRangeSchema,
-        input_tokens: SafeNonnegativeIntegerSchema,
-        output_tokens: SafeNonnegativeIntegerSchema,
-        cost_status: UsageCostStatusSchema,
-        amount_microusd: z.string().max(32).regex(NONNEGATIVE_INTEGER_PATTERN).nullable(),
-        models: z.array(PublicUsageModelSchema).max(5),
-      })
-      .strict(),
-  })
-  .strict();
-export type PublicProfile = z.infer<typeof PublicProfileSchema>;
 
 export const QuotaSnapshotUploadResponseSchema = z
   .object({

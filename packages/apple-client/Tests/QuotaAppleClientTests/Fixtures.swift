@@ -295,6 +295,10 @@ final class ScriptedTransport: HTTPTransport, @unchecked Sendable {
   var recordedBodies: [Data] {
     lock.withLock { $0.bodies }
   }
+
+  var recordedIfNoneMatch: [String?] {
+    lock.withLock { $0.requests.map { $0.value(forHTTPHeaderField: "If-None-Match") } }
+  }
 }
 
 struct FixedEntropy: RandomBytesGenerating {

@@ -56,8 +56,8 @@ describe("composed Worker documents", () => {
     expect(nested.headers.get("Location")).toBe("/my");
   });
 
-  it("returns a document 404 for unknown public slugs without leaking Usage totals", async () => {
-    const response = await fetchDocument("/u/nobody-here");
+  it("returns a document 404 for an unknown path without leaking Usage totals", async () => {
+    const response = await fetchDocument("/nobody-here");
     const html = await response.text();
     expect(response.status).toBe(404);
     expect(html).toMatch(/unavailable|does not exist/i);
@@ -116,33 +116,9 @@ describe("composed Worker documents", () => {
     expect(payload).toContain("account_id");
     expect(payload).not.toMatch(/session_token|credential|access_token/);
   });
-
-  it("serves an existing public profile document", async () => {
-    const response = await renderDocument(
-      "/u/octocat",
-      fakePort({ displayLabel: null, profile: "exists" }),
-    );
-    expect(response.status).toBe(200);
-    const html = await response.text();
-    expect(html).toContain("Public profile");
-  });
-
-  it("returns Retry-After on a rate-limited public profile document", async () => {
-    const response = await renderDocument(
-      "/u/octocat",
-      fakePort({ displayLabel: null, profile: "rate_limited" }),
-    );
-    expect(response.status).toBe(429);
-    expect(response.headers.get("Retry-After")).toBe("12");
-    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
-  });
 });
 
-function fakePort(input: {
-  displayLabel: string | null;
-  profile?: "exists" | "missing" | "rate_limited";
-  summary?: boolean;
-}): WebDocumentPort {
+function fakePort(input: { displayLabel: string | null; summary?: boolean }): WebDocumentPort {
   return {
     async getViewer() {
       return input.displayLabel === null ? null : { displayLabel: input.displayLabel };
@@ -154,12 +130,6 @@ function fakePort(input: {
           },
         }
       : {}),
-    async lookupPublicProfile() {
-      if (input.profile === "rate_limited") {
-        return { status: "rate_limited", retryAfterSeconds: 12 };
-      }
-      return { status: input.profile === "exists" ? "exists" : "missing" };
-    },
   };
 }
 

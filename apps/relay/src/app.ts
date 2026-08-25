@@ -29,15 +29,13 @@ import {
   PROTOCOL_VERSION,
   type PricingCatalog,
   PricingCatalogSchema,
-  PublicProfileSchema,
-  PublicProfileSettingsSchema,
-  PublicProfileUpdateRequestSchema,
   QuotaSnapshotEnvelopeSchema,
   QuotaSnapshotUploadResponseSchema,
   type RelayErrorCode,
   type RelayErrorEnvelope,
   SessionRefreshRequestSchema,
   SessionRefreshResponseSchema,
+  type UsageCostMode,
   UsageCostModeSchema,
   UsageDateRangeSchema,
   UsageSubmissionSchema,
@@ -55,7 +53,7 @@ import type {
 import { type Context, Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import type { WebAccountAuth } from "./account/better-auth.ts";
-import { consumeNamedRateLimit, publicProfileRateLimit } from "./account/rate-limit.ts";
+import { consumeNamedRateLimit } from "./account/rate-limit.ts";
 import {
   AccountFlowError,
   type AccountService,
@@ -64,8 +62,7 @@ import {
 } from "./account/service.ts";
 import { managedServiceInfo } from "./config.ts";
 import { PRICING_CATALOG, PRICING_CATALOG_ETAG } from "./pricing-catalog.ts";
-import { normalizePublicSlug, publicProfileFromAccount } from "./public-profile.ts";
-import { bearerToken, type SecretHasher } from "./security.ts";
+import { bearerToken, canonicalRequestDigest, type SecretHasher } from "./security.ts";
 import { buildUsageSummary, UsageSummaryLimitError } from "./usage-summary.ts";
 
 const maximumCredentialBodyBytes = 64 * 1024;
@@ -85,6 +82,15 @@ const expiredSessionRetentionMilliseconds = 7 * 24 * 60 * 60 * 1000;
  * and still bounds what an account accumulates from a provider it no longer collects.
  */
 const quotaSnapshotRetentionMilliseconds = 7 * 24 * 60 * 60 * 1000;
+/**
+ * How long an accepted Usage receipt stays available to recognize a retry.
+ *
+ * A client drains its outbox continuously and reuses the submission ID only while that entry
+ * is still pending, so a retry a week later is not a retry any more. Past this window the
+ * device's own sequence is the check, and a stale submission fails closed with a conflict
+ * rather than being written twice.
+ */
+const usageReceiptRetentionMilliseconds = 7 * 24 * 60 * 60 * 1000;
 const maintenanceBatchLimit = 100;
 
 function requireValidPricingCatalog(value: PricingCatalog): PricingCatalog {
@@ -109,7 +115,6 @@ const rateLimits = {
   token: { limit: 180, windowSeconds: 10 * 60 },
   sessionMutation: { limit: 60, windowSeconds: 10 * 60 },
   destructiveMutation: { limit: 10, windowSeconds: 60 * 60 },
-  publicProfile: publicProfileRateLimit,
 } as const;
 
 interface StrictSchema<Output> {
@@ -137,6 +142,9 @@ export function accountMaintenanceInput(checkedAt: Date): AccountMaintenanceInpu
     session_revoked_before: retainedAfter,
     snapshot_observed_before: new Date(
       checkedAt.getTime() - quotaSnapshotRetentionMilliseconds,
+    ).toISOString(),
+    usage_receipt_accepted_before: new Date(
+      checkedAt.getTime() - usageReceiptRetentionMilliseconds,
     ).toISOString(),
     limit: maintenanceBatchLimit,
   };
@@ -555,16 +563,24 @@ export function createRelayApp(options: RelayAppOptions): Hono {
   });
 
   app.get("/api/v5/account/summary", async (context) => {
-    const principal = await accountReader(context, options, now());
+    const checkedAt = now();
+    const principal = await accountReader(context, options, checkedAt);
     if (principal instanceof Response) return principal;
-    const selected = await accountUsageQuery(
+    const request = parseAccountUsageRequest(context, checkedAt, true);
+    if (request instanceof Response) return request;
+    const conditional = await answerConditionally(context, principal, options, {
+      catalogRevision: catalog.revision,
+      modelCatalogRevision: modelCatalog.revision,
+      checkedAt,
+    });
+    if (conditional) return conditional;
+    const selected = await runAccountUsageQuery(
       context,
       principal,
       options,
       catalog,
       modelCatalog,
-      now(),
-      true,
+      request,
     );
     if (selected instanceof Response) return selected;
     const [account, devices, stored, deviceHealth] = await Promise.all([
@@ -578,7 +594,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
       return resultLimit(context);
     }
     const quota = stored.map(publicObservation);
-    const publicDevices = devices.map((device) => publicDevice(device, now()));
+    const publicDevices = devices.map((device) => publicDevice(device, checkedAt));
     const healthByDevice = new Map(deviceHealth.map((health) => [health.device_id, health]));
     const response = {
       protocol_version: MANAGED_DATA_PROTOCOL_VERSION,
@@ -593,129 +609,28 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     return context.json(AccountSummarySchema.parse(response));
   });
 
-  app.get("/api/v2/account/public-profile", async (context) => {
-    const principal = await accountReader(context, options, now());
-    if (principal instanceof Response) {
-      return principal;
-    }
-    const account = await options.state.getAccount(principal.account_id);
-    if (!account) {
-      return unauthorized(context);
-    }
-    const slug = normalizePublicSlug(account.display_label ?? "");
-    return context.json(
-      PublicProfileSettingsSchema.parse({
-        protocol_version: PROTOCOL_VERSION,
-        enabled: true,
-        slug,
-      }),
-    );
-  });
-
-  app.put("/api/v2/account/public-profile", async (context) => {
-    const principal = await authorizeAccount(context, options, "account:manage", now());
-    if (principal instanceof Response) {
-      return principal;
-    }
-    const originError = requireWebOrigin(context, principal);
-    if (originError) {
-      return originError;
-    }
-    const body = await parseJSON(context, PublicProfileUpdateRequestSchema);
-    if (body instanceof Response) {
-      return body;
-    }
-    const account = await options.state.getAccount(principal.account_id);
-    if (!account) {
-      return unauthorized(context);
-    }
-    const slug = normalizePublicSlug(account.display_label ?? "");
-    if (!slug) {
-      return invalidRequest(context);
-    }
-    const outcome = await options.state.setPublicProfile(
-      principal.account_id,
-      true,
-      slug,
-      now().toISOString(),
-    );
-    if (outcome === "conflict") {
-      return relayError(context, 409, "conflict", "That public username is already in use.");
-    }
-    return context.json(
-      PublicProfileSettingsSchema.parse({
-        protocol_version: PROTOCOL_VERSION,
-        enabled: true,
-        slug,
-      }),
-    );
-  });
-
-  app.get("/api/v2/public/profiles/:username", async (context) => {
-    const username = context.req.param("username");
-    const slug = normalizePublicSlug(username ?? "");
-    if (!slug) {
-      return notFound(context);
-    }
-    const limited = await enforceRateLimit(
-      context,
-      options.state,
-      options.hasher,
-      "public-profile",
-      slug,
-      rateLimits.publicProfile,
-      now(),
-    );
-    if (limited) {
-      return limited;
-    }
-    const account = await options.state.getAccountByPublicSlug(slug);
-    if (!account) {
-      return notFound(context);
-    }
-    const snapshots = await options.state.listLatestSnapshots(account.id);
-    const usageRows = await options.usageState.queryAccountUsage(account.id, {
-      agents: BILLING_AGENTS,
-      limit: maximumAccountUsageSummaryRows,
-    });
-    if (usageRows.truncated) {
-      return resultLimit(context);
-    }
-    const today = now().toISOString().slice(0, 10);
-    const usage = buildUsageSummary(
-      usageRows,
-      retainedUsageRange(usageRows.rows, today),
-      "calculate",
-      catalog,
-      false,
-    );
-    return context.json(
-      PublicProfileSchema.parse(
-        publicProfileFromAccount({
-          slug,
-          displayLabel: account.display_label,
-          snapshots,
-          usage,
-          now: now(),
-        }),
-      ),
-    );
-  });
-
   for (const path of ["/api/v5/account/usage", "/api/v5/account/usage/summary"]) {
     app.get(path, async (context) => {
-      const principal = await accountReader(context, options, now());
+      const checkedAt = now();
+      const principal = await accountReader(context, options, checkedAt);
       if (principal instanceof Response) {
         return principal;
       }
-      const selected = await accountUsageQuery(
+      const request = parseAccountUsageRequest(context, checkedAt, false);
+      if (request instanceof Response) return request;
+      const conditional = await answerConditionally(context, principal, options, {
+        catalogRevision: catalog.revision,
+        modelCatalogRevision: modelCatalog.revision,
+        checkedAt,
+      });
+      if (conditional) return conditional;
+      const selected = await runAccountUsageQuery(
         context,
         principal,
         options,
         catalog,
         modelCatalog,
-        now(),
-        false,
+        request,
       );
       return selected instanceof Response
         ? selected
@@ -1045,21 +960,41 @@ export function createRelayApp(options: RelayAppOptions): Hono {
         )
       : notFound(context),
   );
-  app.onError((_error, context) =>
-    relayError(context, 500, "internal_error", "QuotaRelay could not complete the request."),
-  );
+  // An unhandled failure is invisible unless it is written down, and a 500 that says nothing
+  // about which route produced it cannot be acted on. The error's own name is the most it may
+  // carry: its message can quote a request body, a bound parameter, or a token.
+  app.onError((error, context) => {
+    console.error(
+      JSON.stringify({
+        event: "relay_request_failed",
+        path: new URL(context.req.url).pathname,
+        status: 500,
+        error: error instanceof Error ? error.name : "Error",
+      }),
+    );
+    return relayError(context, 500, "internal_error", "QuotaRelay could not complete the request.");
+  });
   return app;
 }
 
-async function accountUsageQuery(
+interface AccountUsageRequest {
+  range: { from: string; to: string } | null;
+  mode: UsageCostMode;
+  deviceId: string | undefined;
+  defaultTo: string;
+}
+
+/**
+ * Everything about an Account Usage read that can be decided from the request alone.
+ *
+ * It runs before the conditional answer so a request naming a query key this route does not
+ * serve is still refused rather than answered from a cache validator.
+ */
+function parseAccountUsageRequest(
   context: Context,
-  principal: AccountPrincipal,
-  options: RelayAppOptions,
-  catalog: PricingCatalog,
-  modelCatalog: ModelCatalog,
   checkedAt: Date,
   allByDefault: boolean,
-) {
+): AccountUsageRequest | Response {
   if (!hasOnlyQueryKeys(context, ["from", "to", "device_id", "cost_mode", "usage_agents"])) {
     return invalidRequest(context);
   }
@@ -1084,18 +1019,77 @@ async function accountUsageQuery(
   if (range?.success === false || !mode.success) {
     return invalidRequest(context);
   }
-  const deviceId = context.req.query("device_id");
+  return {
+    range: range?.success ? range.data : null,
+    mode: mode.data,
+    deviceId: context.req.query("device_id"),
+    defaultTo,
+  };
+}
+
+/**
+ * Stamps the Account read with its validator and answers a matching conditional request.
+ *
+ * A client polls these two routes on a timer and the answer is almost always the one it
+ * already holds. Comparing three aggregates is far cheaper than folding every retained Usage
+ * fact again, so the validator is computed first and a match returns before any Usage query
+ * runs. `no-cache` rather than `no-store`: a browser may keep the body as long as it asks
+ * before showing it, which is what makes the conditional request possible at all.
+ */
+async function answerConditionally(
+  context: Context,
+  principal: AccountPrincipal,
+  options: RelayAppOptions,
+  input: { catalogRevision: string; modelCatalogRevision: string; checkedAt: Date },
+): Promise<Response | null> {
+  const url = new URL(context.req.url);
+  const stamp = await options.state.accountVersionStamp(
+    principal.account_id,
+    new Date(input.checkedAt.getTime() - activeDeviceMilliseconds).toISOString(),
+  );
+  const entity = await canonicalRequestDigest({
+    // Two routes answer the same query string with different bodies, so the path is part of
+    // the identity. A range the caller did not pin rolls over at UTC midnight with no write
+    // behind it, so the day it was computed for is too. The Account is in the digest because
+    // two empty Accounts have the same stamp, and a client that switched between them must
+    // not be told its held body still applies.
+    account: principal.account_id,
+    path: url.pathname,
+    query: url.search,
+    stamp,
+    pricing_revision: input.catalogRevision,
+    model_catalog_revision: input.modelCatalogRevision,
+    utc_date:
+      url.searchParams.has("from") && url.searchParams.has("to")
+        ? null
+        : input.checkedAt.toISOString().slice(0, 10),
+  });
+  const etag = `"${entity}"`;
+  context.header("ETag", etag);
+  context.header("Cache-Control", "private, no-cache");
+  return context.req.header("If-None-Match") === etag ? context.body(null, 304) : null;
+}
+
+async function runAccountUsageQuery(
+  context: Context,
+  principal: AccountPrincipal,
+  options: RelayAppOptions,
+  catalog: PricingCatalog,
+  modelCatalog: ModelCatalog,
+  request: AccountUsageRequest,
+) {
+  const deviceId = request.deviceId;
   if (deviceId && !(await options.state.accountOwnsVisibleDevice(principal.account_id, deviceId))) {
     return notFound(context);
   }
   const result = await options.usageState.queryAccountUsage(principal.account_id, {
     ...(deviceId ? { device_id: deviceId } : {}),
     agents: BILLING_AGENTS,
-    ...(range?.success
+    ...(request.range
       ? {
-          from: range.data.from,
-          to: range.data.to,
-          ...usageDateUtcBounds(range.data),
+          from: request.range.from,
+          to: request.range.to,
+          ...usageDateUtcBounds(request.range),
         }
       : {}),
     limit: maximumAccountUsageSummaryRows,
@@ -1107,8 +1101,8 @@ async function accountUsageQuery(
     return {
       summary: buildUsageSummary(
         result,
-        range?.success ? range.data : retainedUsageRange(result.rows, defaultTo),
-        mode.data,
+        request.range ?? retainedUsageRange(result.rows, request.defaultTo),
+        request.mode,
         catalog,
         false,
         modelCatalog,

@@ -41,7 +41,8 @@ test("homepage introduces QuotaBar and both install paths", () => {
   assert.match(styles, /light-dark\(/);
   assert.match(styles, /grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/);
   assert.doesNotMatch(landing, /id="export-quota"/);
-  assert.doesNotMatch(landing, /id="public-profile-form"/);
+  assert.doesNotMatch(landing, /\/u\//);
+  assert.doesNotMatch(html, /\/u\//);
   assert.doesNotMatch(html, /__quotaAccountRequest/);
   assert.doesNotMatch(html, /data-session/);
 });

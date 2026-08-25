@@ -42,18 +42,9 @@ The site has four surfaces:
    Worker starts `GET /api/v5/account/summary` internally, reuses the resolved Better Auth session,
    and streams the typed result into the page. The browser fetch is only a development or retry
    path; it is not the production first-load path. Unsigned visits to `/my` are a server redirect to
-   `/`. A successful `/u/{slug}` page view consumes two `public-profile` limiter tokens (document
-   existence plus the JSON payload); after 60 views / 10 minutes the HTML can remain 200 while the
-   JSON returns 429. The shipped `/app`
-   bookmark is a single redirect to `/my`. Every signed-in GitHub account is public at
-   `/u/{github-username}`. The dashboard has no public-page visibility control.
-3. `/u/{username}` is the public remaining-quota and usage view for that GitHub username. It shows
-   one card per subscription, the same unit the dashboard shows, so a provider with two accounts
-   reads as two cards rather than one silently chosen for the viewer; a reading that is no longer
-   current is not published at all. It never includes device ids, fingerprints, credentials, or
-   private identifiers, so two cards of one provider are told apart by their plan and numbers.
-   Unknown usernames show a plain unavailable state.
-4. `/activate` approves or denies a released native-client device authorization code.
+   `/`. The shipped `/app` bookmark is a single redirect to `/my`. Account data is never published
+   without a session.
+3. `/activate` approves or denies a released native-client device authorization code.
 
 GitHub is the only sign-in action. There is no Relay selection, pairing group, owner capability,
 provider-secret form, server administration, or self-hosted setup in the Web UI.

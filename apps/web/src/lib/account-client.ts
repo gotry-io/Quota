@@ -3,8 +3,6 @@ import {
   AccountSummarySchema,
   DeviceAuthorizationDecisionRequestSchema,
   PROTOCOL_VERSION,
-  type PublicProfile,
-  PublicProfileSchema,
 } from "@gotry-io/quota-protocol";
 import {
   type AccountUsageDayResult,
@@ -91,18 +89,6 @@ export async function fetchAccountSummary(): Promise<
   if (!response.ok) return { status: "error" };
   const parsed = AccountSummarySchema.safeParse(await response.json());
   return parsed.success ? { status: "ok", summary: parsed.data } : { status: "error" };
-}
-
-export async function fetchPublicProfile(
-  username: string,
-): Promise<{ status: "ok"; profile: PublicProfile } | { status: "missing" } | { status: "error" }> {
-  const response = await fetch(`/api/v2/public/profiles/${encodeURIComponent(username)}`, {
-    redirect: "error",
-    headers: { Accept: "application/json" },
-  });
-  if (response.status === 404) return { status: "missing" };
-  const parsed = PublicProfileSchema.safeParse(await response.json());
-  return parsed.success ? { status: "ok", profile: parsed.data } : { status: "error" };
 }
 
 export async function deleteDevice(deviceId: string): Promise<"ok" | "reauth" | "error"> {

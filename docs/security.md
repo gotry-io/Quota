@@ -35,10 +35,8 @@ data requirements. Architecture and product behavior are defined in
   in owner-only SQLite. Failed validation/commit preserves the old session; disconnect removes it
   transactionally.
 - Quota Web and the Quota iOS `quota-ios` account client receive normalized account data only. They
-  do not discover local credentials or logs.
-  Public `/u/{username}` pages use the GitHub username as the public id and expose remaining quota
-  windows plus aggregated usage totals. They never include device ids, fingerprints, credentials,
-  cookies, raw logs, prompts, or paths. Unknown usernames return not found.
+  do not discover local credentials or logs. Relay publishes no account projection without an
+  authenticated principal.
 
 ## Local credentials and identity
 
@@ -74,6 +72,10 @@ data requirements. Architecture and product behavior are defined in
   `QUOTA_INSTALLATION_KEY`; the raw installation ID must not be logged or used as a global account
   identifier. Switching to a different Account sets a new upload lower bound so earlier local
   history is not copied into that Account.
+- Account reads answer a conditional request from a version stamp over the rows they project, never
+  from a cached body. A 304 asserts only that those rows and the pricing and model catalog revisions
+  are unchanged; it is issued to the authenticated principal that asked, and the responses are
+  `private, no-cache` so no shared cache may hold them.
 - Account and device sessions are separate credential families. Persist each token with its
   audience, authoritative Account/Device IDs, Device generation, and absolute expiry. A response
   whose principal does not match local state fails closed.
@@ -120,8 +122,9 @@ data requirements. Architecture and product behavior are defined in
   `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`. UserDefaults may hold UI preferences only. The
   HTTPS client is fixed to `https://quota.gotry.io`, attaches Bearer only to that origin, refuses
   redirects, uses a 20-second timeout and a 1 MiB response limit, and performs one single-flight
-  account refresh after 401. Last-good cache stores only the decoded Account summary and fetched
-  time in protected app storage. Its Account id must match the current Keychain session before the
+  account refresh after 401. Last-good cache stores only the decoded Account summary, its fetched
+  time, and the ETag that read is current at, in protected app storage. That validator is offered
+  back only for the Account the current session belongs to. Its Account id must match the current Keychain session before the
   cache is displayed or used as a fallback; orphaned or mismatched cache is cleared. Logout clears
   the session and the cache.
 - Quota iOS widgets use App Group `group.io.gotry.quota` only. The app target alone performs OAuth,
@@ -273,12 +276,16 @@ data requirements. Architecture and product behavior are defined in
   response, never in D1.
 - Retained business data is limited to Account/Device lifecycle metadata, each Device's latest
   bounded health snapshot, normalized quota observations, sparse hourly Usage facts, complete
-  coverage, idempotency receipts, and bounded rate limits. Device/Account deletion cascades health;
+  coverage, idempotency receipts, and bounded rate limits. A Usage receipt is retained for seven
+  days, long enough to recognize a retry a client could still be holding; past that the Device's own
+  upload sequence is the check and a stale submission fails closed. Device/Account deletion cascades health;
   Relay retains no health history. Calculated cost is derived from the canonical catalog; it is not
   persisted as an invoice.
 - Rate limits use fixed-window counters keyed by hashes of action and subject. Managed anonymous
   network subjects may use only Cloudflare's trusted connecting-IP metadata. Readiness probes and
-  the hourly Worker schedule delete at most 100 expired rows from each credential table per run.
+  the hourly Worker schedule delete at most 100 expired rows from each credential, receipt, and
+  observation table per run; consuming a limit collects at most 100 expired counters inline. Every
+  such delete addresses whole rows, so expiring one fixed window never resets a subject's live one.
   Expired login grants, Better Auth encrypted sessions, and rate-limit counters are eligible
   immediately. Expired or revoked native account/device sessions remain for seven days so logout
   retries stay diagnosable without allowing those credentials to authenticate.

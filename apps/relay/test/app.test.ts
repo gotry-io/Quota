@@ -593,6 +593,77 @@ describe("managed Relay on real Workers and D1", () => {
     expect(await mistyped.json()).toMatchObject({ error: { code: "not_found" } });
   });
 
+  it("answers an unchanged Account read from its validator instead of folding Usage again", async () => {
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_etag', 'subject_etag', ?1, ?1)",
+      ).bind(now.toISOString()),
+      env.DB.prepare(
+        `INSERT INTO devices (
+           id, account_id, installation_id_hash, generation, created_at, last_login_at, last_seen_at
+         ) VALUES ('device_etag', 'account_etag', 'installation_etag', 1, ?1, ?1, ?1)`,
+      ).bind(now.toISOString()),
+      usageFactInsertAt("device_etag", "2026-08-10T00:00:00Z", "2026-08-10"),
+    ]);
+    const usageState = new D1UsageState(env.DB);
+    const state = new D1AccountState(env.DB);
+    const hasher = new SecretHasher(secret);
+    const app = createRelayApp({
+      state,
+      usageState,
+      accountService: new AccountService(state, hasher, secret),
+      webAuth: webSessionFor("account_etag"),
+      hasher,
+      now: () => now,
+    });
+
+    const summaryPath = "https://quota.gotry.io/api/v5/account/summary?usage_agents=all";
+    const first = await app.request(summaryPath);
+    expect(first.status).toBe(200);
+    // `no-cache` is what makes the second request conditional at all: the browser may keep the
+    // body as long as it revalidates before showing it.
+    expect(first.headers.get("Cache-Control")).toBe("private, no-cache");
+    const etag = first.headers.get("ETag");
+    expect(etag).toMatch(/^"[0-9a-f]{64}"$/);
+
+    const unchanged = await app.request(summaryPath, { headers: { "If-None-Match": etag ?? "" } });
+    expect(unchanged.status).toBe(304);
+    expect(unchanged.headers.get("ETag")).toBe(etag);
+    expect(await unchanged.text()).toBe("");
+
+    // Two routes answer the same query string with different bodies, and a different range is a
+    // different answer, so neither may reuse the other's validator.
+    const usage = await app.request(
+      "https://quota.gotry.io/api/v5/account/usage/summary?usage_agents=all",
+    );
+    expect(usage.status).toBe(200);
+    expect(usage.headers.get("ETag")).not.toBe(etag);
+    const narrowed = await app.request(`${summaryPath}&from=2026-08-10&to=2026-08-10`);
+    expect(narrowed.headers.get("ETag")).not.toBe(etag);
+
+    // A new observation is a new answer even though no Usage fact moved.
+    await env.DB.prepare(
+      `INSERT INTO quota_snapshots (
+         device_id, provider, account_fingerprint, sequence, captured_at, observed_at,
+         snapshot_json, updated_at
+       ) VALUES ('device_etag', 'codex', 'fingerprint_etag', 0, ?1, ?1, ?2, ?1)`,
+    )
+      .bind(now.toISOString(), JSON.stringify(quotaSnapshotJson()))
+      .run();
+    const afterUpload = await app.request(summaryPath, {
+      headers: { "If-None-Match": etag ?? "" },
+    });
+    expect(afterUpload.status).toBe(200);
+    expect(afterUpload.headers.get("ETag")).not.toBe(etag);
+
+    // A query key this route does not serve is still refused rather than validated.
+    const bogus = await app.request(`${summaryPath}&nonsense=1`, {
+      headers: { "If-None-Match": etag ?? "" },
+    });
+    expect(bogus.status).toBe(400);
+    expect(bogus.headers.get("ETag")).toBeNull();
+  });
+
   it("reports every billing channel it stores without an opt-in", async () => {
     const channelFact = (channel: string, channelSource: string, model: string) =>
       usageFactInsert("opencode", channel, model, {
@@ -958,6 +1029,19 @@ describe("managed Relay on real Workers and D1", () => {
     expect(stored.map((observation) => observation.snapshot.provider)).toEqual(["cursor"]);
   });
 
+  it("no longer stores anything an unauthenticated reader could have asked for", async () => {
+    const columns = await env.DB.prepare("PRAGMA table_info(accounts)").all<{ name: string }>();
+    const names = columns.results.map((column) => column.name);
+    expect(names).not.toContain("public_profile_enabled");
+    expect(names).not.toContain("public_profile_slug");
+    const indexes = await env.DB.prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'accounts'",
+    ).all<{ name: string }>();
+    expect(indexes.results.map((index) => index.name)).not.toContain(
+      "accounts_public_profile_slug",
+    );
+  });
+
   it("keeps a sleeping device's reading and deletes one nothing will read again", async () => {
     const snapshot = (provider: string, observedAt: string) =>
       env.DB.prepare(
@@ -987,6 +1071,73 @@ describe("managed Relay on real Workers and D1", () => {
       "SELECT provider FROM quota_snapshots WHERE device_id = 'device_retention' ORDER BY provider",
     ).all<{ provider: string }>();
     expect(remaining.results.map((row) => row.provider)).toEqual(["codex"]);
+  });
+
+  it("keeps a Usage receipt only while a client could still be retrying it", async () => {
+    const receipt = (submissionID: string, sequence: number, acceptedAt: string) =>
+      env.DB.prepare(
+        `INSERT INTO usage_submissions (
+           device_id, submission_id, generation, sequence, request_digest,
+           usage_sync_revision, agent, start_at, end_at, accepted_at
+         ) VALUES ('device_receipts', ?1, 1, ?2, 'digest', 1, 'codex', ?3, ?3, ?3)`,
+      ).bind(submissionID, sequence, acceptedAt);
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_receipts', 'subject_receipts', ?1, ?1)",
+      ).bind(now.toISOString()),
+      env.DB.prepare(
+        `INSERT INTO devices (
+           id, account_id, installation_id_hash, generation, created_at, last_login_at
+         ) VALUES ('device_receipts', 'account_receipts', 'installation_receipts', 1, ?1, ?1)`,
+      ).bind(now.toISOString()),
+      // Yesterday's upload: an outbox entry stuck behind a bad network is still this one.
+      receipt("submission_recent", 1, "2026-08-09T00:00:00.000Z"),
+      // A month old: the device's own sequence has moved on, and no client reuses that ID.
+      receipt("submission_ancient", 0, "2026-07-10T00:00:00.000Z"),
+    ]);
+
+    await new D1AccountState(env.DB).performMaintenance(accountMaintenanceInput(now));
+
+    const kept = await env.DB.prepare(
+      "SELECT submission_id FROM usage_submissions WHERE device_id = 'device_receipts'",
+    ).all<{ submission_id: string }>();
+    expect(kept.results.map((row) => row.submission_id)).toEqual(["submission_recent"]);
+  });
+
+  it("expires one rate-limit window without resetting that subject's live one", async () => {
+    const state = new D1AccountState(env.DB);
+    const counter = (startedAt: string, expiresAt: string) =>
+      env.DB.prepare(
+        `INSERT INTO rate_limit_counters (key_hash, window_started_at, window_expires_at, request_count)
+         VALUES ('subject_hash', ?1, ?2, 5)`,
+      ).bind(startedAt, expiresAt);
+    await env.DB.batch([
+      counter("2026-08-09T23:00:00.000Z", "2026-08-09T23:10:00.000Z"),
+      counter("2026-08-10T00:00:00.000Z", "2026-08-10T00:10:00.000Z"),
+    ]);
+
+    // Consuming the live window also collects expired rows; the live counter must survive, or
+    // an exhausted subject buys a fresh allowance by making one more request.
+    const result = await state.consumeRateLimit({
+      key_hash: "subject_hash",
+      window_started_at: "2026-08-10T00:00:00.000Z",
+      window_expires_at: "2026-08-10T00:10:00.000Z",
+      checked_at: now.toISOString(),
+      limit: 10,
+    });
+    expect(result.allowed).toBe(true);
+    const exhausted = await state.consumeRateLimit({
+      key_hash: "subject_hash",
+      window_started_at: "2026-08-10T00:00:00.000Z",
+      window_expires_at: "2026-08-10T00:10:00.000Z",
+      checked_at: now.toISOString(),
+      limit: 6,
+    });
+    expect(exhausted.allowed).toBe(false);
+    const rows = await env.DB.prepare(
+      "SELECT window_started_at FROM rate_limit_counters ORDER BY window_started_at",
+    ).all<{ window_started_at: string }>();
+    expect(rows.results.map((row) => row.window_started_at)).toEqual(["2026-08-10T00:00:00.000Z"]);
   });
 
   it("uses Better Auth's standard GitHub redirect and stores no provider token", async () => {
@@ -1480,6 +1631,40 @@ function unknownModelSubmission(): UsageSubmission {
         web_search_requests: 0,
         web_fetch_requests: 0,
         source_cost_covered_requests: 0,
+      },
+    ],
+  };
+}
+
+function webSessionFor(accountId: string): WebAccountAuth {
+  return {
+    handler: async () => new Response(null, { status: 404 }),
+    beginGitHubSignIn: async () => new Response(null, { status: 302 }),
+    getSession: async () => ({
+      user: { id: accountId, name: "Quota Tester" },
+      session: {
+        id: `web_${accountId}`,
+        createdAt: now,
+        expiresAt: new Date(now.getTime() + 60_000),
+      },
+    }),
+  };
+}
+
+function quotaSnapshotJson() {
+  return {
+    protocol_version: 5,
+    provider: "codex",
+    captured_at: now.toISOString(),
+    observed_at: now.toISOString(),
+    valid_for_seconds: 3_600,
+    account: { fingerprint: "fingerprint_etag", label: "tester", plan: "Plus" },
+    windows: [
+      {
+        id: "weekly",
+        title: "Weekly",
+        used_percent: 25,
+        resets_at: new Date(now.getTime() + 86_400_000).toISOString(),
       },
     ],
   };

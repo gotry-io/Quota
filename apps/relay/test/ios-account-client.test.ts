@@ -519,19 +519,6 @@ describe("quota-ios read-only account client", () => {
     ).toBe(403);
     expect(
       (
-        await harness.app.request("https://quota.gotry.io/api/v2/account/public-profile", {
-          method: "PUT",
-          headers: {
-            ...headers,
-            Origin: "https://quota.gotry.io",
-            "Sec-Fetch-Site": "same-origin",
-          },
-          body: JSON.stringify({ protocol_version: 2, enabled: true }),
-        })
-      ).status,
-    ).toBe(403);
-    expect(
-      (
         await harness.app.request("https://quota.gotry.io/oauth/v2/device/code", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
