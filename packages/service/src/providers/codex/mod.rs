@@ -1,27 +1,19 @@
 use crate::catalog::ProviderId;
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::fs;
-use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
-use std::sync::{Arc, atomic::AtomicBool};
-use std::thread;
-use std::time::{Duration, Instant};
 
 use super::common::{
     CollectionContext, ErrorCategory, HttpClient, LOCAL_FILE_LIMIT, ProviderError, ProviderSession,
     QuotaAccount, QuotaSnapshot, QuotaWindow, ValidatedBrowserSession, account_identity,
     clamp_percent, collect_official_or_browser, decode_jwt_payload, discover_official_or_browser,
-    is_executable_file, mask_email, number, obj_get, obj_get_any, parse_date, read_bounded_file,
-    slug, string,
+    mask_email, number, obj_get, obj_get_any, parse_date, read_bounded_file, slug, string,
 };
 
 mod web;
 
 pub const SOURCE_API: &str = "chatgpt_usage_api";
 pub const SOURCE_PAT: &str = "codex_pat_usage_api";
-pub const SOURCE_RPC: &str = "codex_app_server";
 pub const USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
 pub const WHOAMI_URL: &str = "https://auth.openai.com/api/accounts/v1/user-auth-credential/whoami";
 
@@ -92,34 +84,8 @@ fn collect_local(context: &CollectionContext) -> Result<QuotaSnapshot, ProviderE
         .oauth
         .ok_or_else(|| ProviderError::new(ErrorCategory::AuthRequired, SOURCE_API))?;
     let identity = extract_identity(&credentials);
-    let direct = collect_api(&credentials, &identity, context, SOURCE_API);
-    match direct {
-        Ok(Some(snapshot)) => return Ok(snapshot),
-        Err(error) if error.category == ErrorCategory::Error => return Err(error),
-        Err(error)
-            if matches!(
-                error.category,
-                ErrorCategory::AuthRequired
-                    | ErrorCategory::Unavailable
-                    | ErrorCategory::Unsupported
-            ) =>
-        {
-            let direct_auth = error.category == ErrorCategory::AuthRequired;
-            match collect_rpc(&identity, context) {
-                Ok(snapshot) => return Ok(snapshot),
-                // Reading this account directly already proved it needs a new sign-in. A
-                // fallback that also fails cannot disprove that, whatever it calls its own
-                // failure, and only the sign-in the reader is told to do will fix either one.
-                Err(_) if direct_auth => {
-                    return Err(ProviderError::new(ErrorCategory::AuthRequired, SOURCE_API));
-                }
-                Err(fallback) => return Err(fallback),
-            }
-        }
-        Ok(None) => {}
-        Err(error) => return Err(error),
-    }
-    collect_rpc(&identity, context)
+    collect_api(&credentials, &identity, context, SOURCE_API)?
+        .ok_or_else(|| ProviderError::new(ErrorCategory::Unavailable, SOURCE_API))
 }
 
 fn load_auth(context: &CollectionContext) -> Option<AuthMaterial> {
@@ -386,22 +352,6 @@ pub(super) fn map_usage(value: &Value) -> MappedUsage {
     }
 }
 
-fn map_rpc(value: &Value) -> MappedUsage {
-    let root = value
-        .get("rateLimits")
-        .or_else(|| value.get("rate_limits"))
-        .unwrap_or(value);
-    let plan = obj_get_any(root, &["planType", "plan_type"]).and_then(|v| string(Some(v)));
-    let primary = obj_get(root, "primary").and_then(|v| map_window(v, "five_hour", "5 hour"));
-    let secondary = obj_get(root, "secondary").and_then(|v| map_window(v, "weekly", "Weekly"));
-    let windows = normalize_primary_secondary(primary, secondary);
-    MappedUsage {
-        plan,
-        windows,
-        ..Default::default()
-    }
-}
-
 const FIVE_HOUR_SECONDS: u64 = 18_000;
 const WEEKLY_SECONDS: u64 = 604_800;
 const MONTHLY_SECONDS: u64 = 2_592_000;
@@ -601,86 +551,6 @@ fn map_named_windows(
     windows
 }
 
-fn collect_rpc(
-    identity: &Identity,
-    context: &CollectionContext,
-) -> Result<QuotaSnapshot, ProviderError> {
-    let executable = resolve_executable(context)
-        .ok_or_else(|| ProviderError::new(ErrorCategory::Unavailable, SOURCE_RPC))?;
-    let mut rpc = RpcClient::spawn(&executable, context)?;
-    rpc.request(
-        "initialize",
-        Some(json!({ "clientInfo": {
-            "name": context.client_name,
-            "version": context.client_version
-        } })),
-    )?;
-    rpc.notify("initialized", None)?;
-    let rates = rpc.request("account/rateLimits/read", None)?;
-    let mut account_email = identity.email.clone();
-    let mut account_plan = identity.plan.clone();
-    if let Ok(account) = rpc.request("account/read", None) {
-        let account = account.get("account").unwrap_or(&account);
-        account_email = account_email
-            .or_else(|| obj_get_any(account, &["email"]).and_then(|v| string(Some(v))))
-            .or_else(|| {
-                obj_get(account, "chatgpt")
-                    .and_then(|v| obj_get(v, "email"))
-                    .and_then(|v| string(Some(v)))
-            });
-        account_plan = account_plan
-            .or_else(|| obj_get_any(account, &["plan", "planType"]).and_then(|v| string(Some(v))))
-            .or_else(|| {
-                obj_get(account, "chatgpt")
-                    .and_then(|v| obj_get(v, "plan"))
-                    .and_then(|v| string(Some(v)))
-            });
-    }
-    let mapped = map_rpc(&rates);
-    if mapped.windows.is_empty() {
-        return Err(ProviderError::new(ErrorCategory::Unavailable, SOURCE_RPC));
-    }
-    Ok(snapshot(
-        &mapped.windows,
-        account_plan.as_deref(),
-        account_email.as_deref(),
-        identity.account_id.as_deref(),
-        &context.observed_at(),
-    ))
-}
-
-fn resolve_executable(context: &CollectionContext) -> Option<String> {
-    if let Some(path) = context
-        .env("CODEX_CLI_PATH")
-        .filter(|v| !v.trim().is_empty())
-    {
-        return Some(path.to_owned());
-    }
-    let mut paths = vec![
-        context.home_directory.join(".local/bin/codex"),
-        PathBuf::from("/opt/homebrew/bin/codex"),
-        PathBuf::from("/usr/local/bin/codex"),
-        context
-            .home_directory
-            .join("Applications/ChatGPT.app/Contents/Resources/codex"),
-        context
-            .home_directory
-            .join("Applications/Codex.app/Contents/Resources/codex"),
-        PathBuf::from("/Applications/ChatGPT.app/Contents/Resources/codex"),
-        PathBuf::from("/Applications/Codex.app/Contents/Resources/codex"),
-    ];
-    if let Some(path) = context.env("PATH") {
-        for directory in path.split(':') {
-            paths.push(PathBuf::from(directory).join("codex"));
-        }
-    }
-    paths
-        .into_iter()
-        .find(|path| is_executable_file(path))
-        .map(|path| path.to_string_lossy().into_owned())
-        .or_else(|| Some("codex".to_owned()))
-}
-
 pub(super) fn snapshot(
     windows: &[QuotaWindow],
     plan: Option<&str>,
@@ -700,180 +570,6 @@ pub(super) fn snapshot(
         windows: windows.to_vec(),
         status: "available",
         observed_at: observed_at.to_owned(),
-    }
-}
-
-struct RpcClient {
-    child: Child,
-    stdin: ChildStdin,
-    responses: Receiver<RpcReadEvent>,
-    next_id: u64,
-    cancel: Option<Arc<AtomicBool>>,
-}
-
-enum RpcReadEvent {
-    Line(String),
-    OutputLimit,
-}
-
-impl RpcClient {
-    fn spawn(executable: &str, context: &CollectionContext) -> Result<Self, ProviderError> {
-        let mut command = Command::new(executable);
-        command
-            // `never` is the only approval policy that suits a probe: the alternative,
-            // `on-request`, would wait on a prompt nothing is there to answer. Codex
-            // removed the `untrusted` value it once took here, and rejects the whole
-            // invocation when it sees one it does not know.
-            .args(["-s", "read-only", "-a", "never", "app-server"])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null());
-        command.envs(&context.environment);
-        let mut child = command
-            .spawn()
-            .map_err(|_| ProviderError::new(ErrorCategory::Unavailable, SOURCE_RPC))?;
-        let Some(stdin) = child.stdin.take() else {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(ProviderError::new(ErrorCategory::Unavailable, SOURCE_RPC));
-        };
-        let Some(stdout) = child.stdout.take() else {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(ProviderError::new(ErrorCategory::Unavailable, SOURCE_RPC));
-        };
-        let (sender, receiver) = mpsc::channel();
-        thread::spawn(move || {
-            let mut reader = stdout;
-            let mut pending = Vec::new();
-            let mut chunk = [0_u8; 8192];
-            while let Ok(size) = reader.read(&mut chunk) {
-                if size == 0 {
-                    break;
-                }
-                pending.extend_from_slice(&chunk[..size]);
-                loop {
-                    let Some(newline) = pending.iter().position(|byte| *byte == b'\n') else {
-                        if pending.len() > 1_048_576 {
-                            let _ = sender.send(RpcReadEvent::OutputLimit);
-                            return;
-                        }
-                        break;
-                    };
-                    let line = pending.drain(..=newline).collect::<Vec<_>>();
-                    if line.len() > 1_048_577 {
-                        let _ = sender.send(RpcReadEvent::OutputLimit);
-                        return;
-                    }
-                    if let Ok(line) = String::from_utf8(line) {
-                        let _ = sender.send(RpcReadEvent::Line(line));
-                    }
-                }
-            }
-        });
-        Ok(Self {
-            child,
-            stdin,
-            responses: receiver,
-            next_id: 1,
-            cancel: context.cancel.clone(),
-        })
-    }
-
-    fn notify(&mut self, method: &str, params: Option<Value>) -> Result<(), ProviderError> {
-        let mut request = json!({ "jsonrpc": "2.0", "method": method });
-        if let Some(params) = params {
-            request["params"] = params;
-        }
-        let line = serde_json::to_string(&request)
-            .map_err(|_| ProviderError::new(ErrorCategory::Error, SOURCE_RPC))?;
-        self.stdin
-            .write_all(line.as_bytes())
-            .and_then(|_| self.stdin.write_all(b"\n"))
-            .map_err(|_| ProviderError::new(ErrorCategory::Unavailable, SOURCE_RPC))
-    }
-
-    fn request(&mut self, method: &str, params: Option<Value>) -> Result<Value, ProviderError> {
-        let id = self.next_id;
-        self.next_id += 1;
-        let mut request = json!({ "jsonrpc": "2.0", "id": id, "method": method });
-        if let Some(params) = params {
-            request["params"] = params;
-        }
-        let line = serde_json::to_string(&request)
-            .map_err(|_| ProviderError::new(ErrorCategory::Error, SOURCE_RPC))?;
-        self.stdin
-            .write_all(line.as_bytes())
-            .and_then(|_| self.stdin.write_all(b"\n"))
-            .map_err(|_| ProviderError::new(ErrorCategory::Unavailable, SOURCE_RPC))?;
-        let started = Instant::now();
-        loop {
-            if self
-                .cancel
-                .as_ref()
-                .map(|value| value.load(std::sync::atomic::Ordering::Acquire))
-                .unwrap_or(false)
-            {
-                return Err(ProviderError::new(ErrorCategory::Unavailable, SOURCE_RPC));
-            }
-            let line = match self.responses.recv_timeout(Duration::from_millis(100)) {
-                Ok(RpcReadEvent::Line(line)) => line,
-                Ok(RpcReadEvent::OutputLimit) => {
-                    return Err(ProviderError::new(ErrorCategory::Error, SOURCE_RPC));
-                }
-                Err(RecvTimeoutError::Timeout) if started.elapsed() < Duration::from_secs(20) => {
-                    continue;
-                }
-                Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => {
-                    return Err(ProviderError::new(ErrorCategory::Unavailable, SOURCE_RPC));
-                }
-            };
-            // Provider CLIs may write startup banners or other non-JSON noise to stdout. The
-            // released collector ignored such lines while waiting for the matching response.
-            let Ok(value) = serde_json::from_str::<Value>(&line) else {
-                continue;
-            };
-            if value.get("id").and_then(Value::as_u64) != Some(id) {
-                continue;
-            }
-            if value.get("error").is_some() {
-                return Err(ProviderError::new(rpc_error_category(&value), SOURCE_RPC));
-            }
-            return Ok(value.get("result").cloned().unwrap_or(Value::Null));
-        }
-    }
-}
-
-fn rpc_error_category(value: &Value) -> ErrorCategory {
-    let error = value.get("error").unwrap_or(&Value::Null);
-    let code = obj_get(error, "code").and_then(Value::as_i64);
-    let message = obj_get(error, "message")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_ascii_lowercase();
-    if code == Some(-32601)
-        || message.contains("method not found")
-        || message.contains("not supported")
-        || message.contains("unsupported")
-    {
-        ErrorCategory::Unsupported
-    } else if message.contains("authentication required")
-        || message.contains("not authenticated")
-        || message.contains("login")
-        || message.contains("unauthorized")
-        || message.contains("token_expired")
-        || message.contains("invalid_token")
-    {
-        ErrorCategory::AuthRequired
-    } else {
-        ErrorCategory::Error
-    }
-}
-
-impl Drop for RpcClient {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
     }
 }
 
@@ -965,6 +661,21 @@ mod tests {
             [("weekly", "Weekly", 12.0), ("monthly", "Monthly", 41.0),]
         );
         assert!(!usage.malformed_success);
+        // The same cadences stated in minutes rather than seconds.
+        let minutes = map_usage(&serde_json::json!({
+            "rate_limit": {
+                "primary_window": {"used_percent": 22, "window_minutes": 43200},
+                "secondary_window": {"usedPercent": 8, "windowDurationMins": 10080}
+            }
+        }));
+        assert_eq!(
+            minutes
+                .windows
+                .iter()
+                .map(|window| (window.id.as_str(), window.duration_seconds))
+                .collect::<Vec<_>>(),
+            [("weekly", Some(604_800)), ("monthly", Some(2_592_000))]
+        );
     }
 
     #[test]
@@ -989,32 +700,6 @@ mod tests {
             [("monthly", "Monthly")]
         );
         assert!(!usage.malformed_success);
-    }
-
-    #[test]
-    fn maps_rpc_window_minutes_to_monthly() {
-        let usage = map_rpc(&serde_json::json!({
-            "rate_limits": {
-                "plan_type": "free",
-                "primary": {"used_percent": 22, "window_minutes": 43200, "resets_at": 1787842532},
-                "secondary": {"usedPercent": 8, "windowDurationMins": 10080}
-            }
-        }));
-        assert_eq!(
-            usage
-                .windows
-                .iter()
-                .map(|window| (
-                    window.id.as_str(),
-                    window.title.as_str(),
-                    window.duration_seconds
-                ))
-                .collect::<Vec<_>>(),
-            [
-                ("weekly", "Weekly", Some(604_800)),
-                ("monthly", "Monthly", Some(2_592_000)),
-            ]
-        );
     }
 
     #[test]
@@ -1185,48 +870,5 @@ mod tests {
         let serialized = serde_json::to_string(&snapshot).unwrap();
         assert!(!serialized.contains("acct-owner"));
         assert!(!serialized.contains("ada@example.com"));
-    }
-
-    #[test]
-    fn classifies_rpc_auth_and_unsupported_errors() {
-        assert_eq!(
-            rpc_error_category(&serde_json::json!({
-                "error": {"code": -32601, "message": "method not found"}
-            })),
-            ErrorCategory::Unsupported
-        );
-        assert_eq!(
-            rpc_error_category(&serde_json::json!({
-                "error": {"message": "Authentication required"}
-            })),
-            ErrorCategory::AuthRequired
-        );
-        assert_eq!(
-            rpc_error_category(&serde_json::json!({
-                "error": {"message": "provider failed"}
-            })),
-            ErrorCategory::Error
-        );
-    }
-
-    /// An expired sign-in says so in the words the upstream service uses, not in the words
-    /// this classifier happened to be taught first.  A reader told to retry never retries
-    /// their way back in: only `auth_required` asks them to sign in again.
-    #[test]
-    fn an_expired_sign_in_is_recognised_however_the_upstream_words_it() {
-        for message in [
-            "failed to fetch codex rate limits: GET https://chatgpt.com/backend-api/wham/usage \
-             failed: 401 Unauthorized; body: {\"error\":{\"code\":\"token_expired\"}}",
-            "request failed: 401 Unauthorized",
-            "{\"code\": \"invalid_token\"}",
-        ] {
-            assert_eq!(
-                rpc_error_category(&serde_json::json!({
-                    "error": {"code": -32603, "message": message}
-                })),
-                ErrorCategory::AuthRequired,
-                "{message}"
-            );
-        }
     }
 }
