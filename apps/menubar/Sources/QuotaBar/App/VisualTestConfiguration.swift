@@ -14,10 +14,7 @@
     case cachedRefreshError = "cached-refresh-error"
     case empty
     case unavailable
-    case repairingDurable = "repairing-durable"
-    case repairingDerived = "repairing-derived"
-    case stuck
-    case failed
+    case cacheRebuilding = "cache-rebuilding"
 
     @MainActor
     fileprivate func makeModel(referenceDate: Date) -> MenuBarViewModel {
@@ -50,85 +47,15 @@
           errorMessage: "The bundled local service could not be started.",
           lastCheckedAt: nil
         )
-      case .repairingDurable, .repairingDerived, .stuck, .failed:
+      case .cacheRebuilding:
         MenuBarViewModel(
-          visualTestState: contentVisualState(at: referenceDate).withRepair(repairSession(at: referenceDate)),
+          visualTestState: rebuildingVisualState(at: referenceDate),
           errorMessage: nil,
           lastCheckedAt: referenceDate.addingTimeInterval(-30)
         )
       }
     }
 
-    fileprivate func repairSession(at date: Date) -> LocalServiceRepairSession {
-      switch self {
-      case .repairingDurable:
-        LocalServiceRepairSession(
-          status: .repairing,
-          severity: .durable,
-          phase: .preservingAccount,
-          title: "Repairing local data",
-          guidance: "Keep QuotaBar open. You can close this menu.",
-          activity: "Copying account",
-          startedAt: date.addingTimeInterval(-14),
-          heartbeatAt: date.addingTimeInterval(-2),
-          progressCurrent: 3,
-          progressTotal: 7,
-          stuck: false,
-          blocksQuit: true,
-          recoveryAction: nil
-        )
-      case .repairingDerived:
-        LocalServiceRepairSession(
-          status: .repairing,
-          severity: .derived,
-          phase: .reindexingUsage,
-          title: "Rebuilding Usage history",
-          guidance: "Quota and Account stay available. Usage history is catching up.",
-          activity: "Scanning local logs",
-          startedAt: date.addingTimeInterval(-14),
-          heartbeatAt: date.addingTimeInterval(-2),
-          progressCurrent: 12,
-          progressTotal: 40,
-          stuck: false,
-          blocksQuit: false,
-          recoveryAction: nil
-        )
-      case .stuck:
-        LocalServiceRepairSession(
-          status: .stuck,
-          severity: .durable,
-          phase: .preservingAccount,
-          title: "Repairing local data",
-          guidance: "Repair stopped responding. You can retry.",
-          activity: "Copying account",
-          startedAt: date.addingTimeInterval(-60),
-          heartbeatAt: date.addingTimeInterval(-50),
-          progressCurrent: 3,
-          progressTotal: 7,
-          stuck: true,
-          blocksQuit: false,
-          recoveryAction: .retry
-        )
-      case .failed:
-        LocalServiceRepairSession(
-          status: .failed,
-          severity: .durable,
-          phase: .rebuildingStorage,
-          title: "Repairing local data",
-          guidance: "Reinstall QuotaBar to repair local data.",
-          activity: "Rebuilding storage",
-          startedAt: date.addingTimeInterval(-90),
-          heartbeatAt: date.addingTimeInterval(-80),
-          progressCurrent: nil,
-          progressTotal: nil,
-          stuck: true,
-          blocksQuit: false,
-          recoveryAction: .reinstall
-        )
-      default:
-        .idle
-      }
-    }
   }
 
   enum VisualTestRoute: String {
@@ -142,11 +69,10 @@
     case usage
     case support
     case diagnostics
-    case repair
 
     fileprivate var path: [MenuBarRoute] {
       switch self {
-      case .overview, .repair: []
+      case .overview: []
       case .settings: [.settings]
       case .agents: [.settings, .agents]
       case .providerCodex: [.settings, .agents, .provider(.codex)]
@@ -266,7 +192,7 @@
         return DiagnosticsPageModel(report: signedOutDiagnosticVisualReport(at: referenceDate))
       case .unavailable:
         return DiagnosticsPageModel(errorMessage: "The bundled local service could not be started.")
-      case .repairingDurable, .repairingDerived, .stuck, .failed:
+      case .cacheRebuilding:
         return DiagnosticsPageModel(report: diagnosticVisualReport(at: referenceDate))
       }
     }
@@ -289,6 +215,17 @@
       return Value(rawValue: arguments[valueIndex])
     }
 
+  }
+
+  /// The panel a Mac shows right after its cache was thrown away: quota still reads, and the
+  /// notice says local Usage history is on its way back.
+  private func rebuildingVisualState(at date: Date) -> MenuBarVisualState {
+    var state = contentVisualState(at: date)
+    state.cache = LocalServiceCacheState(
+      rebuilding: true,
+      resetAt: date.addingTimeInterval(-14)
+    )
+    return state
   }
 
   private func contentVisualState(at date: Date) -> MenuBarVisualState {

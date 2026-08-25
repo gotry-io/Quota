@@ -67,7 +67,7 @@ struct LocalServiceClientTests {
                     "providers": [],
                     "provider_browser_sessions": [],
                     "overview": [],
-                    "repair": idle_repair(),
+                    "cache": settled_cache(),
                 }
             elif operation == "refresh":
                 assert request["payload"] == {}
@@ -320,7 +320,7 @@ struct LocalServiceClientTests {
                     "providers": [],
                     "provider_browser_sessions": [],
                     "overview": [],
-                    "repair": idle_repair(),
+                    "cache": settled_cache(),
                 },
             }), flush=True)
             break
@@ -377,22 +377,8 @@ private struct TemporaryService {
               "last_error": None,
               "refreshing": False,
           }
-      def idle_repair():
-          return {
-              "status": "idle",
-              "severity": "none",
-              "phase": None,
-              "title": None,
-              "guidance": None,
-              "activity": None,
-              "started_at": None,
-              "heartbeat_at": None,
-              "progress_current": None,
-              "progress_total": None,
-              "stuck": False,
-              "blocks_quit": False,
-              "recovery_action": None,
-          }
+      def settled_cache():
+          return {"rebuilding": False, "reset_at": None}
       \(body)
       """
     try Data(script.utf8).write(to: executableURL, options: .atomic)

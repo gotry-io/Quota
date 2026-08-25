@@ -223,6 +223,6 @@ private func flowState() -> LocalServiceState {
     providers: [],
     providerBrowserSessions: [],
     overview: [],
-    repair: .idle
+    cache: .settled
   )
 }

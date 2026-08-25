@@ -355,20 +355,9 @@ func rejectsUnknownNestedLocalServiceStateFields() throws {
       "providers": [],
       "provider_browser_sessions": [],
       "overview": [],
-      "repair": {
-        "status": "idle",
-        "severity": "none",
-        "phase": null,
-        "title": null,
-        "guidance": null,
-        "activity": null,
-        "started_at": null,
-        "heartbeat_at": null,
-        "progress_current": null,
-        "progress_total": null,
-        "stuck": false,
-        "blocks_quit": false,
-        "recovery_action": null
+      "cache": {
+        "rebuilding": false,
+        "reset_at": null
       }
     }
     """#.utf8
@@ -377,8 +366,8 @@ func rejectsUnknownNestedLocalServiceStateFields() throws {
   let state = try QuotaWireCodec.makeDecoder().decode(LocalServiceState.self, from: data)
   #expect(state.pricing.value?.revision == "pricing_test")
   #expect(state.usageUploadEnabled)
-  #expect(state.repair.isValid)
-  #expect(state.repair.status == .idle)
+  #expect(!state.cache.rebuilding)
+  #expect(state.cache.resetAt == nil)
 
   let pricingExtra = Data(
     String(decoding: data, as: UTF8.self).replacingOccurrences(
@@ -403,69 +392,32 @@ func rejectsUnknownNestedLocalServiceStateFields() throws {
 }
 
 @Test
-func decodesRepairSessionAndRejectsUnknownKeys() throws {
+func decodesCacheStateAndRejectsUnknownKeys() throws {
   let data = Data(
     #"""
     {
-      "status": "repairing",
-      "severity": "derived",
-      "phase": "reindexing_usage",
-      "title": "Rebuilding Usage history",
-      "guidance": "Quota and Account stay available. Usage history is catching up.",
-      "activity": "Scanning local logs",
-      "started_at": "2026-08-17T01:00:00Z",
-      "heartbeat_at": "2026-08-17T01:00:14Z",
-      "progress_current": 12,
-      "progress_total": 40,
-      "stuck": false,
-      "blocks_quit": false,
-      "recovery_action": null
+      "rebuilding": true,
+      "reset_at": "2026-08-17T01:00:00Z"
     }
     """#.utf8
   )
-  let session = try QuotaWireCodec.makeDecoder().decode(LocalServiceRepairSession.self, from: data)
-  #expect(session.isValid)
-  #expect(session.status == .repairing)
-  #expect(session.severity == .derived)
-  #expect(session.phase == .reindexingUsage)
-  #expect(session.progressCurrent == 12)
-  #expect(!session.blocksQuit)
+  let cache = try QuotaWireCodec.makeDecoder().decode(LocalServiceCacheState.self, from: data)
+  #expect(cache.rebuilding)
+  #expect(cache.resetAt == Date(timeIntervalSince1970: 1_786_928_400))
 
   let extra = Data(
     String(decoding: data, as: UTF8.self).replacingOccurrences(
-      of: "\"recovery_action\": null",
-      with: "\"recovery_action\": null,\n      \"seq\": 4"
+      of: "\"reset_at\": \"2026-08-17T01:00:00Z\"",
+      with: "\"reset_at\": \"2026-08-17T01:00:00Z\",\n      \"seq\": 4"
     ).utf8
   )
   #expect(throws: DecodingError.self) {
-    _ = try QuotaWireCodec.makeDecoder().decode(LocalServiceRepairSession.self, from: extra)
-  }
-
-  let invalidProgress = Data(
-    String(decoding: data, as: UTF8.self).replacingOccurrences(
-      of: "\"progress_current\": 12",
-      with: "\"progress_current\": 80"
-    ).utf8
-  )
-  #expect(throws: DecodingError.self) {
-    _ = try QuotaWireCodec.makeDecoder().decode(
-      LocalServiceRepairSession.self, from: invalidProgress)
-  }
-
-  let stuckWhileRepairing = Data(
-    String(decoding: data, as: UTF8.self).replacingOccurrences(
-      of: "\"stuck\": false",
-      with: "\"stuck\": true"
-    ).utf8
-  )
-  #expect(throws: DecodingError.self) {
-    _ = try QuotaWireCodec.makeDecoder().decode(
-      LocalServiceRepairSession.self, from: stuckWhileRepairing)
+    _ = try QuotaWireCodec.makeDecoder().decode(LocalServiceCacheState.self, from: extra)
   }
 }
 
 @Test
-func decodesFailClosedDiagnosticReport() throws {
+func decodesABlockedDiagnosticReport() throws {
   let data = Data(
     #"""
     {
@@ -496,7 +448,7 @@ func decodesFailClosedDiagnosticReport() throws {
           "data": "unknown",
           "last_attempt_at": "2026-08-17T00:00:00Z",
           "last_success_at": null,
-          "metrics": { "repaired": 0 }
+          "metrics": { "resets": 1 }
         }
       ],
       "findings": [
@@ -504,13 +456,13 @@ func decodesFailClosedDiagnosticReport() throws {
           "component": "local_state",
           "source": "system",
           "subject": null,
-          "code": "invalid_state",
+          "code": "local_identity_reset",
           "severity": "error",
           "impact": "system",
           "recovery": "reinstall",
           "count": 1,
           "observed_at": "2026-08-17T00:00:00Z",
-          "message": "Local state cannot be written and could not be repaired automatically."
+          "message": "Local identity could not be read and was reset. Sign in again."
         }
       ],
       "recent_activity": { "attempts": [], "history_truncated": false }
@@ -528,9 +480,9 @@ func decodesFailClosedDiagnosticReport() throws {
     "quota_overview", "usage_this_device", "usage_account", "account",
   ]))
   #expect(report.findings.count == 1)
-  #expect(report.findings[0].code == "invalid_state")
+  #expect(report.findings[0].code == "local_identity_reset")
   #expect(report.findings[0].recovery == .reinstall)
-  #expect(report.checks[0].metrics["repaired"] == 0)
+  #expect(report.checks[0].metrics["resets"] == 1)
 }
 
 @Test

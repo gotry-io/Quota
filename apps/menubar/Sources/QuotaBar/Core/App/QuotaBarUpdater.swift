@@ -9,7 +9,6 @@ enum QuotaBarUpdater {
   #if VISUAL_TEST
     static func start() {}
     static func checkForUpdates() {}
-    static func setChecksSuppressed(_: Bool) {}
   #else
     @MainActor
     private static let owner = Owner()
@@ -21,15 +20,9 @@ enum QuotaBarUpdater {
 
     @MainActor
     static func checkForUpdates() {
-      guard !owner.checksSuppressed else { return }
       NSApp.activate(ignoringOtherApps: true)
       owner.startIfNeeded()
       owner.controller.checkForUpdates(nil)
-    }
-
-    @MainActor
-    static func setChecksSuppressed(_ suppressed: Bool) {
-      owner.setChecksSuppressed(suppressed)
     }
 
     @MainActor
@@ -37,7 +30,6 @@ enum QuotaBarUpdater {
       let driver = QuotaBarSparkleDriver()
       let controller: SPUStandardUpdaterController
       private var started = false
-      var checksSuppressed = false
 
       init() {
         controller = SPUStandardUpdaterController(
@@ -54,17 +46,9 @@ enum QuotaBarUpdater {
         }
         do {
           try controller.updater.start()
-          controller.updater.automaticallyChecksForUpdates = !checksSuppressed
           started = true
         } catch {
           return
-        }
-      }
-
-      func setChecksSuppressed(_ suppressed: Bool) {
-        checksSuppressed = suppressed
-        if started {
-          controller.updater.automaticallyChecksForUpdates = !suppressed
         }
       }
     }

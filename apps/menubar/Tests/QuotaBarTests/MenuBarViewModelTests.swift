@@ -99,7 +99,7 @@ func consumesServiceMergedOverviewWithoutReprocessingObservations() async throws
         isStale: false
       )
     ],
-    repair: .idle
+    cache: .settled
   )
   let model = MenuBarViewModel(client: StubLocalService(state: state))
 
@@ -153,7 +153,7 @@ func emptyUsageCacheWhileRefreshingIsPreparingNotMissing() async throws {
     providers: [],
     providerBrowserSessions: [],
     overview: [],
-    repair: .idle
+    cache: .settled
   )
   let model = MenuBarViewModel(client: StubLocalService(state: state))
   await model.refreshIfNeeded()
@@ -163,50 +163,33 @@ func emptyUsageCacheWhileRefreshingIsPreparingNotMissing() async throws {
 }
 
 @Test @MainActor
-func idleRepairStaysOnOverviewAndDurableRepairBlocksQuit() async throws {
-  let idle = MenuBarViewModel(client: StubLocalService(state: loggingInState()))
-  await idle.refreshIfNeeded()
-  #expect(idle.repairPresentation == .overview)
-  #expect(!idle.showsFullRepairPage)
-  #expect(!idle.repairBlocksQuit)
+func aRebuildingCacheShowsTheCatchUpNoticeAndASettledOneDoesNot() async throws {
+  let settled = MenuBarViewModel(client: StubLocalService(state: loggingInState()))
+  await settled.refreshIfNeeded()
+  #expect(!settled.showsCacheRebuildNotice)
 
-  var repairing = loggingInState()
-  repairing = LocalServiceState(
-    ipcVersion: repairing.ipcVersion,
-    revision: repairing.revision,
-    usageUploadEnabled: repairing.usageUploadEnabled,
-    usagePeriods: repairing.usagePeriods,
-    quota: repairing.quota,
-    usage: repairing.usage,
-    account: repairing.account,
-    pricing: repairing.pricing,
-    providers: repairing.providers,
-    providerBrowserSessions: repairing.providerBrowserSessions,
-    overview: repairing.overview,
-    repair: LocalServiceRepairSession(
-      status: .repairing,
-      severity: .durable,
-      phase: .preservingAccount,
-      title: "Repairing local data",
-      guidance: "Keep QuotaBar open. You can close this menu.",
-      activity: "Copying account",
-      startedAt: Date(timeIntervalSince1970: 1_786_300_000),
-      heartbeatAt: Date(timeIntervalSince1970: 1_786_300_014),
-      progressCurrent: 1,
-      progressTotal: 7,
-      stuck: false,
-      blocksQuit: true,
-      recoveryAction: nil
+  let base = loggingInState()
+  let rebuilding = LocalServiceState(
+    ipcVersion: base.ipcVersion,
+    revision: base.revision,
+    usageUploadEnabled: base.usageUploadEnabled,
+    usagePeriods: base.usagePeriods,
+    quota: base.quota,
+    usage: base.usage,
+    account: base.account,
+    pricing: base.pricing,
+    providers: base.providers,
+    providerBrowserSessions: base.providerBrowserSessions,
+    overview: base.overview,
+    cache: LocalServiceCacheState(
+      rebuilding: true,
+      resetAt: Date(timeIntervalSince1970: 1_786_300_000)
     )
   )
-  let model = MenuBarViewModel(client: StubLocalService(state: repairing))
+  let model = MenuBarViewModel(client: StubLocalService(state: rebuilding))
   await model.refreshIfNeeded()
-  #expect(model.repairPresentation == .fullPage)
-  #expect(model.showsFullRepairPage)
-  #expect(model.repairBlocksQuit)
-  #expect(model.repairHeaderTitle == "Repairing")
-  model.presentRepairPageFromQuitAttempt()
-  #expect(model.showsFullRepairPage)
+  #expect(model.showsCacheRebuildNotice)
+  #expect(model.cache.resetAt == Date(timeIntervalSince1970: 1_786_300_000))
 }
 
 @Test @MainActor
@@ -312,7 +295,7 @@ func anotherDeviceReadingDoesNotHideThisMacsOwnCollectionFailure() async throws 
           isStale: false
         )
       ],
-      repair: .idle
+      cache: .settled
     )
   }
 
@@ -362,7 +345,7 @@ func overviewTodayLineFollowsTheSourceTheUsagePageWouldActuallyShow() async thro
     providers: [],
     providerBrowserSessions: [],
     overview: [],
-    repair: .idle
+    cache: .settled
   )
   let model = MenuBarViewModel(client: StubLocalService(state: state))
 
@@ -435,7 +418,7 @@ private func loggingInState() -> LocalServiceState {
     providers: [],
     providerBrowserSessions: [],
     overview: [],
-    repair: .idle
+    cache: .settled
   )
 }
 

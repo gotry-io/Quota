@@ -36,24 +36,16 @@ struct MenuBarContentView: View {
     TimelineView(.periodic(from: .now, by: 1)) { context in
       MenuBarShell(
         model: model,
-        title: model.showsFullRepairPage ? model.repairHeaderTitle : navigation.title,
-        canNavigateBack: model.showsFullRepairPage ? false : navigation.canNavigateBack,
+        title: navigation.title,
+        canNavigateBack: navigation.canNavigateBack,
         onNavigateBack: navigateBack,
-        showsLeadingIcon: model.showsFullRepairPage ? false : navigation.currentRoute == nil,
-        trailing: model.showsFullRepairPage ? .none : headerTrailingAction
+        showsLeadingIcon: navigation.currentRoute == nil,
+        trailing: headerTrailingAction
       ) {
-        if model.showsFullRepairPage {
-          RepairPageView(
-            session: model.presentedRepair,
-            now: context.date,
-            onRetry: { Task { await model.refresh() } }
-          )
-        } else {
-          currentPage(now: context.date)
-            .id(navigation.pageIdentity)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .transition(pageTransition)
-        }
+        currentPage(now: context.date)
+          .id(navigation.pageIdentity)
+          .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+          .transition(pageTransition)
       }
     }
     .environment(\.quotaPageTransitionActive, navigationTransitionActive)

@@ -17,174 +17,33 @@ enum LocalServiceComponentName: String, Decodable, Sendable {
   case account
   case pricing
   case providers
-  case repair
 }
 
-enum LocalServiceRepairStatus: String, Decodable, Equatable, Sendable {
-  case idle
-  case checking
-  case repairing
-  case stuck
-  case failed
-  case completed
-}
+/// What the service says about the disposable half of its local state.
+///
+/// `rebuilding` means the cache was thrown away and this Mac has not finished one full Usage
+/// scan since, so local history is still filling in.
+struct LocalServiceCacheState: Decodable, Equatable, Sendable {
+  let rebuilding: Bool
+  let resetAt: Date?
 
-enum LocalServiceRepairSeverity: String, Decodable, Equatable, Sendable {
-  case none
-  case derived
-  case durable
-}
-
-enum LocalServiceRepairPhase: String, Decodable, Equatable, Sendable {
-  case preservingAccount = "preserving_account"
-  case rebuildingStorage = "rebuilding_storage"
-  case reindexingUsage = "reindexing_usage"
-  case verifying
-  case restoringLastGood = "restoring_last_good"
-}
-
-enum LocalServiceRepairRecoveryAction: String, Decodable, Equatable, Sendable {
-  case retry
-  case reinstall
-}
-
-struct LocalServiceRepairSession: Decodable, Equatable, Sendable {
-  let status: LocalServiceRepairStatus
-  let severity: LocalServiceRepairSeverity
-  let phase: LocalServiceRepairPhase?
-  let title: String?
-  let guidance: String?
-  let activity: String?
-  let startedAt: Date?
-  let heartbeatAt: Date?
-  let progressCurrent: Int?
-  let progressTotal: Int?
-  let stuck: Bool
-  let blocksQuit: Bool
-  let recoveryAction: LocalServiceRepairRecoveryAction?
+  static let settled = LocalServiceCacheState(rebuilding: false, resetAt: nil)
 
   private enum CodingKeys: String, CodingKey {
-    case status
-    case severity
-    case phase
-    case title
-    case guidance
-    case activity
-    case startedAt
-    case heartbeatAt
-    case progressCurrent
-    case progressTotal
-    case stuck
-    case blocksQuit
-    case recoveryAction
+    case rebuilding
+    case resetAt
   }
 
-  static var idle: LocalServiceRepairSession {
-    LocalServiceRepairSession(
-      status: .idle,
-      severity: .none,
-      phase: nil,
-      title: nil,
-      guidance: nil,
-      activity: nil,
-      startedAt: nil,
-      heartbeatAt: nil,
-      progressCurrent: nil,
-      progressTotal: nil,
-      stuck: false,
-      blocksQuit: false,
-      recoveryAction: nil
-    )
+  init(rebuilding: Bool, resetAt: Date?) {
+    self.rebuilding = rebuilding
+    self.resetAt = resetAt
   }
 
-  var isValid: Bool {
-    guard controlFree(title, max: 64), controlFree(guidance, max: 160),
-      controlFree(activity, max: 64)
-    else { return false }
-    switch (progressCurrent, progressTotal) {
-    case (nil, nil):
-      break
-    case (let current?, let total?) where (1...1_000_000).contains(total) && current >= 0
-      && current <= total:
-      break
-    default:
-      return false
-    }
-    if blocksQuit && !(severity == .durable && status == .repairing) { return false }
-    if status == .idle {
-      return severity == .none && phase == nil && title == nil && guidance == nil
-        && activity == nil && startedAt == nil && heartbeatAt == nil && progressCurrent == nil
-        && progressTotal == nil && !stuck && !blocksQuit && recoveryAction == nil
-    }
-    if startedAt == nil || heartbeatAt == nil { return false }
-    if recoveryAction != nil && status != .stuck && status != .failed { return false }
-    if stuck && status != .stuck && status != .failed { return false }
-    return true
-  }
-
-  private func controlFree(_ value: String?, max: Int) -> Bool {
-    guard let value else { return true }
-    return value.count <= max && !value.unicodeScalars.contains { $0.value < 0x20 || $0.value == 0x7F }
-  }
-}
-
-extension LocalServiceRepairSession {
   init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys([
-      "status", "severity", "phase", "title", "guidance", "activity", "startedAt", "heartbeatAt",
-      "progressCurrent", "progressTotal", "stuck", "blocksQuit", "recoveryAction",
-    ])
+    try decoder.rejectUnknownWireKeys(["rebuilding", "resetAt"])
     let container = try decoder.container(keyedBy: CodingKeys.self)
-    status = try container.decode(LocalServiceRepairStatus.self, forKey: .status)
-    severity = try container.decode(LocalServiceRepairSeverity.self, forKey: .severity)
-    phase = try container.decodeIfPresent(LocalServiceRepairPhase.self, forKey: .phase)
-    title = try container.decodeIfPresent(String.self, forKey: .title)
-    guidance = try container.decodeIfPresent(String.self, forKey: .guidance)
-    activity = try container.decodeIfPresent(String.self, forKey: .activity)
-    startedAt = try container.decodeIfPresent(Date.self, forKey: .startedAt)
-    heartbeatAt = try container.decodeIfPresent(Date.self, forKey: .heartbeatAt)
-    progressCurrent = try container.decodeIfPresent(Int.self, forKey: .progressCurrent)
-    progressTotal = try container.decodeIfPresent(Int.self, forKey: .progressTotal)
-    stuck = try container.decode(Bool.self, forKey: .stuck)
-    blocksQuit = try container.decode(Bool.self, forKey: .blocksQuit)
-    recoveryAction = try container.decodeIfPresent(
-      LocalServiceRepairRecoveryAction.self, forKey: .recoveryAction)
-    guard isValid else {
-      throw DecodingError.dataCorruptedError(
-        forKey: .status,
-        in: container,
-        debugDescription: "Invalid repair session."
-      )
-    }
-  }
-}
-
-enum RepairPresentationKind: Equatable, Sendable {
-  case overview
-  case derivedNotice
-  case fullPage
-}
-
-enum RepairPresentation {
-  static func kind(for session: LocalServiceRepairSession) -> RepairPresentationKind {
-    switch session.status {
-    case .idle, .checking:
-      return .overview
-    case .repairing, .stuck, .failed, .completed:
-      switch session.severity {
-      case .durable: return .fullPage
-      case .derived: return .derivedNotice
-      case .none: return .overview
-      }
-    }
-  }
-
-  static func headerTitle(for session: LocalServiceRepairSession) -> String {
-    switch session.status {
-    case .stuck: "Repair stopped"
-    case .failed: "Repair failed"
-    default: "Repairing"
-    }
+    rebuilding = try container.decode(Bool.self, forKey: .rebuilding)
+    resetAt = try container.decodeIfPresent(Date.self, forKey: .resetAt)
   }
 }
 
@@ -552,7 +411,7 @@ struct LocalServiceState: Decodable, Sendable {
   let providers: [LocalServiceProviderConfig]
   let providerBrowserSessions: [LocalServiceProviderBrowserSession]
   let overview: [LocalServiceOverviewItem]
-  let repair: LocalServiceRepairSession
+  let cache: LocalServiceCacheState
 
   private enum CodingKeys: String, CodingKey {
     case ipcVersion
@@ -566,7 +425,7 @@ struct LocalServiceState: Decodable, Sendable {
     case providers
     case providerBrowserSessions
     case overview
-    case repair
+    case cache
   }
 
   var isValid: Bool {
@@ -585,8 +444,7 @@ struct LocalServiceState: Decodable, Sendable {
       Set(providerBrowserSessions.map(\.provider)).count == providerBrowserSessions.count,
       providerBrowserSessions.allSatisfy(\.isValid),
       overview.count <= 2_048,
-      Set(overviewIDs).count == overviewIDs.count,
-      repair.isValid
+      Set(overviewIDs).count == overviewIDs.count
     else { return false }
 
     return overview.allSatisfy { item in
@@ -615,7 +473,7 @@ extension LocalServiceState {
   init(from decoder: Decoder) throws {
     try decoder.rejectUnknownWireKeys([
       "ipcVersion", "revision", "usageUploadEnabled", "usagePeriods", "quota", "usage",
-      "account", "pricing", "providers", "providerBrowserSessions", "overview", "repair",
+      "account", "pricing", "providers", "providerBrowserSessions", "overview", "cache",
     ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     ipcVersion = try container.decode(Int.self, forKey: .ipcVersion)
@@ -631,7 +489,7 @@ extension LocalServiceState {
     providerBrowserSessions = try container.decode(
       [LocalServiceProviderBrowserSession].self, forKey: .providerBrowserSessions)
     overview = try container.decode([LocalServiceOverviewItem].self, forKey: .overview)
-    repair = try container.decode(LocalServiceRepairSession.self, forKey: .repair)
+    cache = try container.decode(LocalServiceCacheState.self, forKey: .cache)
   }
 }
 

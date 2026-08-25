@@ -181,30 +181,16 @@
   }
 
   @Test @MainActor
-  func repairVisualRouteAndFixturesCompile() throws {
+  func cacheRebuildingVisualFixtureShowsTheCatchUpNotice() throws {
     let referenceDate = Date(timeIntervalSince1970: 1_785_752_430)
-    let route = try #require(VisualTestConfiguration(arguments: ["QuotaBar", "--route", "repair"]))
-    #expect(route.initialPath.isEmpty)
-
-    let durable = try configuration(fixture: .repairingDurable, referenceDate: referenceDate)
+    let rebuilding = try configuration(fixture: .cacheRebuilding, referenceDate: referenceDate)
       .makeModel()
-    #expect(durable.showsFullRepairPage)
-    #expect(durable.repairBlocksQuit)
-    #expect(durable.presentedRepair.severity == .durable)
+    #expect(rebuilding.showsCacheRebuildNotice)
+    // Quota is read from the providers, not from the cache, so it is still on screen.
+    #expect(rebuilding.report != nil)
 
-    let derived = try configuration(fixture: .repairingDerived, referenceDate: referenceDate)
-      .makeModel()
-    #expect(!derived.showsFullRepairPage)
-    #expect(derived.showsDerivedRepairNotice)
-    #expect(!derived.repairBlocksQuit)
-
-    let stuck = try configuration(fixture: .stuck, referenceDate: referenceDate).makeModel()
-    #expect(stuck.showsFullRepairPage)
-    #expect(stuck.repairHeaderTitle == "Repair stopped")
-
-    let failed = try configuration(fixture: .failed, referenceDate: referenceDate).makeModel()
-    #expect(failed.showsFullRepairPage)
-    #expect(failed.repairHeaderTitle == "Repair failed")
+    let content = try configuration(fixture: .content, referenceDate: referenceDate).makeModel()
+    #expect(!content.showsCacheRebuildNotice)
   }
 
   @Test @MainActor
