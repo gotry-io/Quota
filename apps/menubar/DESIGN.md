@@ -337,18 +337,36 @@ Provider detail contains:
   Session unless that session is catalog `exclusive` (Cursor); or
 - **This Mac Configuration**: native secure API-key entry, optional base URL when catalog-enabled,
   masked saved state, Save, and Remove; and
-- **Browser Session** when catalog-enabled: disconnected **Sign In**, bounded **Waiting / Cancel**,
-  non-cancellable **Connecting** after commit begins, or a connected masked account with only
-  **Disconnect**. Sign In, Cancel, and Disconnect are the same compact secondary control; do not
-  use an accent capsule or explanatory body copy on this surface. Confirmed disconnect is likewise
-  non-cancellable. There is no switch-account action; a different account is disconnect, then sign
-  in.
+- **Browser Session** when catalog-enabled (Cursor only): disconnected **Sign In**, bounded
+  **Waiting / Cancel**, non-cancellable **Connecting** after commit begins, or a connected masked
+  account with only **Disconnect**. Sign In, Cancel, and Disconnect are the same compact secondary
+  control; do not use an accent capsule or explanatory body copy on this surface. Confirmed
+  disconnect is likewise non-cancellable. There is no switch-account action; a different account is
+  disconnect, then sign in. A read macOS refused is its own row, carried by
+  `exclamationmark.triangle` rather than the generic `exclamationmark.circle`, and it replaces the
+  ordinary error line rather than stacking with it.
 
 Browser-session login uses app-owned selection/confirmation popups at the panel root, never system
 alerts or sheets. Login is pinned to one supported browser; an unsupported default HTTPS handler
 requires a browser selection before opening the URL. One unambiguous new account may commit
 automatically; multiple accounts require selection. Lists scroll within the panel; the popup owns
 focus, Escape, keyboard, and VoiceOver while the underlying page is disabled and accessibility-hidden.
+
+**Consent copy.** Reading another program's cookie jar is the one thing this app does that a person
+has to agree to, so a confirmation popup states what is about to happen before it happens, once the
+browser is known and before any store is opened. Cancel and Escape read nothing. The message says,
+in this order and in plain sentences: which browser will be read, by name; which hosts and which
+cookie names, both quoted from the catalog so the sheet cannot promise a narrower read than the one
+that follows; the permission macOS will ask for, naming only the gatekeeper that browser actually
+has (Full Disk Access for Safari, the "Chrome Safe Storage" Keychain item for a Chrome-family
+browser, neither for Firefox); that the accepted session is stored in QuotaBar's local service
+database on this Mac until disconnected; and that nothing about it is uploaded. Confirm reads
+**Read Cookies**, never "OK" or "Allow".
+
+**Refusal copy.** A store macOS would not open is a different state from finding no session, and it
+never reads as one. Each refusal names the browser and the single next action — grant Full Disk
+Access, allow the Keychain item, or quit the browser and retry — and never a store path, a profile
+name, or the underlying error's text. It ends the attempt rather than continuing to poll.
 
 QuotaBar never reads provider credential files. New values travel only over private child stdin and
 Swift clears the field after Save; the service owns validation, owner-only persistence, and masking.

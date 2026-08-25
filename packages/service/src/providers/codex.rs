@@ -5,16 +5,12 @@ use std::path::{Path, PathBuf};
 
 use super::common::{
     CollectionContext, ErrorCategory, HttpClient, LOCAL_FILE_LIMIT, ProviderError, ProviderSession,
-    QuotaAccount, QuotaSnapshot, QuotaWindow, ValidatedBrowserSession, account_identity,
-    clamp_percent, collect_official_or_browser, decode_jwt_payload, discover_official_or_browser,
+    QuotaAccount, QuotaSnapshot, QuotaWindow, account_identity, clamp_percent, decode_jwt_payload,
     mask_email, number, obj_get, obj_get_any, parse_date, read_bounded_file, slug, string,
 };
 
-mod web;
-
 pub const SOURCE_API: &str = "chatgpt_usage_api";
 pub const SOURCE_PAT: &str = "codex_pat_usage_api";
-pub const WEB_SOURCE: &str = web::WEB_SOURCE;
 pub const USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
 pub const WHOAMI_URL: &str = "https://auth.openai.com/api/accounts/v1/user-auth-credential/whoami";
 
@@ -40,35 +36,23 @@ pub(super) struct Identity {
 }
 
 pub fn discover(context: &CollectionContext) -> Vec<ProviderSession> {
-    discover_official_or_browser(
-        ProviderId::Codex,
-        load_auth(context).map(|auth| ProviderSession {
+    load_auth(context)
+        .map(|auth| ProviderSession {
             provider: ProviderId::Codex,
             credential_source: auth.source,
-        }),
-        context,
-    )
-}
-
-pub fn validate_browser_session(
-    cookie_header: &str,
-    context: &CollectionContext,
-) -> Result<ValidatedBrowserSession, ProviderError> {
-    web::validate_browser_session(cookie_header, context)
+        })
+        .into_iter()
+        .collect()
 }
 
 pub fn collect(
-    session: &ProviderSession,
+    _session: &ProviderSession,
     context: &CollectionContext,
 ) -> Result<QuotaSnapshot, ProviderError> {
-    collect_official_or_browser(
-        session,
-        context,
-        ProviderId::Codex,
-        SOURCE_API,
-        || collect_local(context),
-        || web::collect(context),
-    )
+    if context.cancelled() {
+        return Err(ProviderError::new(ErrorCategory::Unavailable, SOURCE_API));
+    }
+    collect_local(context)
 }
 
 fn collect_local(context: &CollectionContext) -> Result<QuotaSnapshot, ProviderError> {
@@ -579,9 +563,11 @@ mod tests {
     use super::*;
     use base64::Engine as _;
 
+    /// Codex owns this grant, so a Mac without one has nothing for this collector to try.
+    /// There is no second rung to fall to.
     #[test]
-    fn discovers_browser_session_when_oauth_is_absent() {
-        let mut context = CollectionContext {
+    fn no_local_grant_discovers_nothing() {
+        let context = CollectionContext {
             home_directory: PathBuf::from("/tmp/quota-codex-missing-home"),
             environment: std::collections::HashMap::new(),
             config_path: None,
@@ -593,13 +579,7 @@ mod tests {
             keychain: Default::default(),
         };
         assert!(discover(&context).is_empty());
-        context.browser_sessions.insert(
-            ProviderId::Codex,
-            "__Secure-next-auth.session-token=abc".to_owned(),
-        );
-        let sessions = discover(&context);
-        assert_eq!(sessions.len(), 1);
-        assert_eq!(sessions[0].credential_source, "browser_session");
+        assert!(ProviderId::Codex.metadata().browser_session.is_none());
     }
 
     #[test]

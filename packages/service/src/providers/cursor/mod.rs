@@ -3,10 +3,10 @@ use serde_json::Value;
 use std::time::Duration;
 
 use super::common::{
-    CollectionContext, ErrorCategory, HttpClient, ProviderError, ProviderSession, QuotaAccount,
-    QuotaSnapshot, QuotaWindow, VALIDATION_TIMEOUT, ValidatedBrowserSession, account_identity,
-    clamp_percent, collect_official_or_browser, discover_official_or_browser, mask_email, number,
-    obj_get, parse_date, unix_seconds_to_iso, url_encode,
+    BROWSER_SESSION_SOURCE, CollectionContext, ErrorCategory, HttpClient, ProviderError,
+    ProviderSession, QuotaAccount, QuotaSnapshot, QuotaWindow, VALIDATION_TIMEOUT,
+    ValidatedBrowserSession, account_identity, clamp_percent, mask_email, number, obj_get,
+    parse_date, unix_seconds_to_iso, url_encode,
 };
 
 mod app;
@@ -26,15 +26,24 @@ struct Identity {
     subject: Option<String>,
 }
 
+/// Cursor has no CLI to sign in with and no API key, so a signed-in Cursor.app is the only
+/// credential this Mac can find on its own. A stored browser session is the fallback, and
+/// the only one in the product.
 pub fn discover(context: &CollectionContext) -> Vec<ProviderSession> {
-    discover_official_or_browser(
-        ProviderId::Cursor,
-        app::usable_session(context).then(|| ProviderSession {
+    if app::usable_session(context) {
+        return vec![ProviderSession {
             provider: ProviderId::Cursor,
             credential_source: app::SOURCE.to_owned(),
-        }),
-        context,
-    )
+        }];
+    }
+    context
+        .browser_session(ProviderId::Cursor)
+        .map(|_| ProviderSession {
+            provider: ProviderId::Cursor,
+            credential_source: BROWSER_SESSION_SOURCE.to_owned(),
+        })
+        .into_iter()
+        .collect()
 }
 
 pub fn validate_browser_session(
@@ -111,27 +120,37 @@ fn valid_email(value: &str) -> bool {
         && !domain.contains('@')
 }
 
+/// Reads the live Cursor.app session, and falls back to the stored browser session only when
+/// the app has no usable sign-in to offer. Any other failure is this refresh's answer: a
+/// rejected reading is not a reason to spend a second request on the same account.
 pub fn collect(
     session: &ProviderSession,
     context: &CollectionContext,
 ) -> Result<QuotaSnapshot, ProviderError> {
-    collect_official_or_browser(
-        session,
-        context,
-        ProviderId::Cursor,
-        SOURCE,
-        || {
-            let cookie_header = app::cookie_header(context)
-                .ok_or_else(|| ProviderError::new(ErrorCategory::AuthRequired, SOURCE))?;
-            collect_with_cookie(&cookie_header, context)
-        },
-        || {
-            let cookie_header = context
-                .browser_session(ProviderId::Cursor)
-                .ok_or_else(|| ProviderError::new(ErrorCategory::AuthRequired, SOURCE))?;
-            collect_with_cookie(cookie_header, context)
-        },
-    )
+    let stored = || {
+        let cookie_header = context
+            .browser_session(ProviderId::Cursor)
+            .ok_or_else(|| ProviderError::new(ErrorCategory::AuthRequired, SOURCE))?;
+        collect_with_cookie(cookie_header, context)
+    };
+    if session.credential_source == BROWSER_SESSION_SOURCE {
+        return stored();
+    }
+    if context.cancelled() {
+        return Err(ProviderError::new(ErrorCategory::Unavailable, SOURCE));
+    }
+    let app_result = app::cookie_header(context)
+        .ok_or_else(|| ProviderError::new(ErrorCategory::AuthRequired, SOURCE))
+        .and_then(|cookie_header| collect_with_cookie(&cookie_header, context));
+    match app_result {
+        Err(error)
+            if error.category == ErrorCategory::AuthRequired
+                && context.browser_session(ProviderId::Cursor).is_some() =>
+        {
+            stored()
+        }
+        result => result,
+    }
 }
 
 fn collect_with_cookie(
@@ -265,12 +284,11 @@ fn quota_windows(
             windows.push(window);
         }
     }
-    if let Some(overall) = individual.and_then(|value| obj_get(value, "overall")) {
-        if windows.is_empty()
-            && let Some(window) = money_window("individual", "Individual", overall, reset.clone())
-        {
-            windows.push(window);
-        }
+    if windows.is_empty()
+        && let Some(overall) = individual.and_then(|value| obj_get(value, "overall"))
+        && let Some(window) = money_window("individual", "Individual", overall, reset.clone())
+    {
+        windows.push(window);
     }
     if let Some(on_demand) = individual.and_then(|value| obj_get(value, "onDemand"))
         && let Some(window) = money_window("on_demand", "On-demand", on_demand, reset.clone())
@@ -426,6 +444,61 @@ mod tests {
                 .map(|session| session.exclusive),
             Some(true)
         );
+    }
+
+    /// Cursor is the only provider that declares a browser session, so it is the only one a
+    /// stored cookie header can be discovered for.
+    #[test]
+    fn cursor_is_the_only_browser_session_provider() {
+        let with_session = ProviderId::ALL
+            .iter()
+            .filter(|provider| provider.metadata().browser_session.is_some())
+            .collect::<Vec<_>>();
+        assert_eq!(with_session, [&ProviderId::Cursor]);
+    }
+
+    #[test]
+    fn a_stored_session_is_discovered_only_without_a_usable_app_session() {
+        let mut context = CollectionContext {
+            home_directory: std::path::PathBuf::from("/tmp/quota-cursor-missing-home"),
+            environment: std::collections::HashMap::new(),
+            config_path: None,
+            browser_sessions: std::collections::HashMap::new(),
+            client_name: "QuotaTest".to_owned(),
+            client_version: "test".to_owned(),
+            now: Some("2026-08-10T00:00:00Z".to_owned()),
+            cancel: None,
+            keychain: Default::default(),
+        };
+        assert!(discover(&context).is_empty());
+        context
+            .browser_sessions
+            .insert(ProviderId::Cursor, "wos-session=stored".to_owned());
+        let sessions = discover(&context);
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].credential_source, BROWSER_SESSION_SOURCE);
+    }
+
+    /// A cancelled refresh must not start a request for either rung.
+    #[test]
+    fn a_cancelled_refresh_reads_neither_rung() {
+        let context = CollectionContext {
+            cancel: Some(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
+                true,
+            ))),
+            ..CollectionContext::default()
+        };
+        for credential_source in [app::SOURCE, BROWSER_SESSION_SOURCE] {
+            let session = ProviderSession {
+                provider: ProviderId::Cursor,
+                credential_source: credential_source.to_owned(),
+            };
+            let error = collect(&session, &context).expect_err("cancelled");
+            assert!(matches!(
+                error.category,
+                ErrorCategory::Unavailable | ErrorCategory::AuthRequired
+            ));
+        }
     }
 
     #[test]

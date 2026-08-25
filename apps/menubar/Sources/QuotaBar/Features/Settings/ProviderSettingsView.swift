@@ -192,7 +192,15 @@ struct ProviderSettingsView: View {
       }
       .frame(minHeight: QuotaDesign.Layout.minimumInteractiveDimension)
 
-      if let message = model.browserSessionErrorMessages[provider] {
+      // A refused read is not a failed one: it names a permission this Mac has to be given,
+      // so it carries a warning rather than the generic error mark.
+      if let denial = model.browserSessionAccessDenials[provider] {
+        Label(denial.message, systemImage: "exclamationmark.triangle")
+          .quotaMetaStyle()
+          .fixedSize(horizontal: false, vertical: true)
+          .accessibilityLabel("\(denial.browserName) cookies could not be read")
+          .accessibilityValue(denial.message)
+      } else if let message = model.browserSessionErrorMessages[provider] {
         Label(message, systemImage: "exclamationmark.circle")
           .quotaMetaStyle()
           .fixedSize(horizontal: false, vertical: true)

@@ -287,6 +287,65 @@ pub struct ProviderBrowserSessionPayload {
     pub cookie_header: String,
 }
 
+/// Why macOS handed the client nothing when it opened a browser's cookie store.
+///
+/// The reason is a closed set, not prose: the store's path and the underlying error's text
+/// stay on the client's side of the boundary, because neither belongs in a report a person
+/// copies out of the app.
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BrowserAccessDenialReason {
+    /// Safari keeps its cookies where only an app with Full Disk Access may look.
+    FullDiskAccess,
+    /// A Chrome-family store is sealed with a Keychain item macOS would not release.
+    KeychainRefused,
+    /// The store is there, and could not be opened or parsed.
+    StoreUnreadable,
+}
+
+impl BrowserAccessDenialReason {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::FullDiskAccess => "full_disk_access",
+            Self::KeychainRefused => "keychain_refused",
+            Self::StoreUnreadable => "store_unreadable",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "full_disk_access" => Some(Self::FullDiskAccess),
+            "keychain_refused" => Some(Self::KeychainRefused),
+            "store_unreadable" => Some(Self::StoreUnreadable),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderBrowserAccessDenial {
+    /// The browser's display name. Never a profile name or a store path.
+    pub browser: String,
+    pub reason: BrowserAccessDenialReason,
+}
+
+/// What one browser sign-in attempt produced.
+///
+/// A commit either stores the session a browser released, or records that the browser released
+/// nothing because macOS refused the store. Both are answers to the same question, and only
+/// the second is one the reader has to act on, so the two must not arrive as the same silence.
+/// Exactly one of the two fields is present.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CommitProviderBrowserSessionPayload {
+    pub provider: String,
+    #[serde(default)]
+    pub cookie_header: Option<String>,
+    #[serde(default)]
+    pub access_denied: Option<ProviderBrowserAccessDenial>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SetUsageUploadPayload {

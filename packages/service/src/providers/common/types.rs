@@ -258,61 +258,6 @@ impl CollectionContext {
     }
 }
 
-pub fn discover_official_or_browser(
-    provider: ProviderId,
-    official: Option<ProviderSession>,
-    context: &CollectionContext,
-) -> Vec<ProviderSession> {
-    if let Some(session) = official {
-        return vec![session];
-    }
-    context
-        .browser_session(provider)
-        .map(|_| ProviderSession {
-            provider,
-            credential_source: BROWSER_SESSION_SOURCE.to_owned(),
-        })
-        .into_iter()
-        .collect()
-}
-
-/// Collects from a provider's local credentials, falling back to a stored
-/// browser session.
-///
-/// **`collect_official` must report [`ErrorCategory::AuthRequired`] when no
-/// usable local credential exists.** That category is the only one that reaches
-/// `collect_web`; any other ends the refresh, so a provider whose official
-/// closure chains several credential sources internally has to surface the
-/// chain's verdict rather than the last step's incidental error.
-pub fn collect_official_or_browser(
-    session: &ProviderSession,
-    context: &CollectionContext,
-    provider: ProviderId,
-    official_source: &'static str,
-    collect_official: impl FnOnce() -> Result<QuotaSnapshot, ProviderError>,
-    collect_web: impl FnOnce() -> Result<QuotaSnapshot, ProviderError>,
-) -> Result<QuotaSnapshot, ProviderError> {
-    if session.credential_source == BROWSER_SESSION_SOURCE {
-        return collect_web();
-    }
-    if context.cancelled() {
-        return Err(ProviderError::new(
-            ErrorCategory::Unavailable,
-            official_source,
-        ));
-    }
-    match collect_official() {
-        Ok(snapshot) => Ok(snapshot),
-        Err(error)
-            if error.category == ErrorCategory::AuthRequired
-                && context.browser_session(provider).is_some() =>
-        {
-            collect_web()
-        }
-        Err(error) => Err(error),
-    }
-}
-
 pub fn normalize_browser_cookie_header(
     provider: ProviderId,
     header: &str,
@@ -352,14 +297,6 @@ pub fn normalize_browser_cookie_header(
         .join("; "))
 }
 
-pub fn cookie_named_value<'a>(header: &'a str, name: &str) -> Option<&'a str> {
-    header.split(';').find_map(|pair| {
-        let pair = pair.trim_matches([' ', '\t']);
-        let (cookie_name, value) = pair.split_once('=')?;
-        (cookie_name == name && !value.is_empty()).then_some(value)
-    })
-}
-
 fn is_cookie_octet(byte: u8) -> bool {
     matches!(byte, 0x21 | 0x23..=0x2B | 0x2D..=0x3A | 0x3C..=0x5B | 0x5D..=0x7E)
 }
@@ -367,54 +304,6 @@ fn is_cookie_octet(byte: u8) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn only_auth_required_reaches_the_browser_session() {
-        let mut context = CollectionContext::default();
-        context
-            .browser_sessions
-            .insert(ProviderId::Claude, "sessionKey=sk-ant-x".to_owned());
-        let session = ProviderSession {
-            provider: ProviderId::Claude,
-            credential_source: "local".to_owned(),
-        };
-        let web = || {
-            Err::<QuotaSnapshot, _>(ProviderError::new(ErrorCategory::Unsupported, "web_source"))
-        };
-        // A missing local credential hands off to the stored session...
-        let handed_off = collect_official_or_browser(
-            &session,
-            &context,
-            ProviderId::Claude,
-            "official_source",
-            || {
-                Err(ProviderError::new(
-                    ErrorCategory::AuthRequired,
-                    "official_source",
-                ))
-            },
-            web,
-        );
-        assert_eq!(handed_off.unwrap_err().source_id, "web_source");
-        // ...while every other failure is the refresh's final answer.
-        for category in [
-            ErrorCategory::Error,
-            ErrorCategory::Unavailable,
-            ErrorCategory::Unsupported,
-        ] {
-            let error = collect_official_or_browser(
-                &session,
-                &context,
-                ProviderId::Claude,
-                "official_source",
-                || Err(ProviderError::new(category, "official_source")),
-                web,
-            )
-            .expect_err("official failure");
-            assert_eq!(error.category, category);
-            assert_eq!(error.source_id, "official_source");
-        }
-    }
 
     /// Discovery and collection both need this device's Claude grant, and asking twice
     /// starts a second `/usr/bin/security` for an answer the first already gave.
@@ -486,34 +375,5 @@ mod tests {
             )
             .is_err()
         );
-    }
-
-    #[test]
-    fn cancelled_browser_session_collect_uses_web_source() {
-        let session = ProviderSession {
-            provider: ProviderId::Claude,
-            credential_source: BROWSER_SESSION_SOURCE.to_owned(),
-        };
-        let context = CollectionContext {
-            cancel: Some(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
-                true,
-            ))),
-            ..CollectionContext::default()
-        };
-        let error = collect_official_or_browser(
-            &session,
-            &context,
-            ProviderId::Claude,
-            "official",
-            || panic!("official collect"),
-            || {
-                Err(ProviderError::new(
-                    ErrorCategory::Unavailable,
-                    "claude_web_usage_api",
-                ))
-            },
-        )
-        .unwrap_err();
-        assert_eq!(error.source_id, "claude_web_usage_api");
     }
 }

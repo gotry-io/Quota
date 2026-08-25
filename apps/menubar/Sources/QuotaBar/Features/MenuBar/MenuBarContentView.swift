@@ -83,13 +83,24 @@ struct MenuBarContentView: View {
     case .browser(let provider, let choices):
       QuotaSelectionPopup(
         title: "Choose Browser",
-        message: "QuotaBar will open \(provider.displayName) and read only that browser's matching session cookies.",
+        message: "Choose the browser you are signed in to \(provider.displayName) with. QuotaBar asks before it reads anything.",
         choices: choices.map {
           QuotaSelectionChoice(id: $0.id, title: $0.title, subtitle: nil)
         },
         onCancel: model.cancelProviderBrowserSessionFlow,
         onSelect: { model.selectBrowserApplication($0, provider: provider) }
       )
+    case .consent(let provider, let choice):
+      if let spec = provider.browserSession {
+        QuotaConfirmationPopup(
+          title: BrowserSessionCopy.consentTitle(provider: provider),
+          message: BrowserSessionCopy.consentMessage(
+            provider: provider, browserName: choice.title, spec: spec),
+          confirmTitle: BrowserSessionCopy.consentConfirmTitle,
+          onCancel: model.cancelProviderBrowserSessionFlow,
+          onConfirm: model.confirmProviderBrowserSessionConsent
+        )
+      }
     case .account(let provider, let choices):
       QuotaSelectionPopup(
         title: "Choose \(provider.displayName) Account",

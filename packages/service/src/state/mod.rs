@@ -29,8 +29,8 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::protocol::{
-    CacheState, ComponentName, ComponentState, ComponentStatus, DiagnosticAttempt,
-    DiagnosticAttemptCode, DiagnosticAttemptKind, DiagnosticAttemptOutcome,
+    BrowserAccessDenialReason, CacheState, ComponentName, ComponentState, ComponentStatus,
+    DiagnosticAttempt, DiagnosticAttemptCode, DiagnosticAttemptKind, DiagnosticAttemptOutcome,
     DiagnosticAttemptTrigger, DiagnosticReport, ErrorCode, IPC_VERSION, IpcError,
     MAXIMUM_DIAGNOSTIC_RECENT, ProviderBrowserSessionView, ProviderConfigView, QuotaOverviewItem,
     RecoveryAction, StateSnapshot, UsagePeriod, UsagePeriodCache, UsageSource,
@@ -49,6 +49,8 @@ const CACHE_NAME: &str = "cache.sqlite";
 const CACHE_RESET_KEY: &str = "cache_reset_at";
 const IDENTITY_RESET_KEY: &str = "identity_reset_at";
 const REBUILDING_KEY: &str = "rebuilding";
+/// The browsers this Mac was refused, by provider.
+const BROWSER_ACCESS_DENIED_KEY: &str = "browser_access_denied";
 /// The monotonic revision each rescanned hour is stamped with.
 const USAGE_SCAN_VERSION_KEY: &str = "usage_scan_version";
 const MAX_DIAGNOSTIC_ATTEMPTS: i64 = 5_000;
@@ -121,6 +123,15 @@ pub struct ProviderBrowserSession {
     pub cookie_header: String,
     pub account_fingerprint: String,
     pub account_label: Option<String>,
+}
+
+/// One browser cookie store this Mac was refused, and when.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserAccessDenial {
+    pub browser: String,
+    pub reason: BrowserAccessDenialReason,
+    pub denied_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1587,6 +1598,56 @@ impl StateStore {
         } else {
             self.current_revision()
         }
+    }
+
+    /// Records that macOS refused this Mac a browser's cookie store.
+    ///
+    /// This lives in the cache, not in identity: it is a fact about the last attempt, and the
+    /// next attempt produces it again. Losing it to a cache rebuild costs nothing.
+    pub fn set_browser_access_denial(
+        &self,
+        provider: &str,
+        denial: &BrowserAccessDenial,
+    ) -> Result<u64, StateError> {
+        let mut denials = self.browser_access_denials()?;
+        denials.insert(provider.to_owned(), denial.clone());
+        self.write_browser_access_denials(&denials)?;
+        self.bump_revision()
+    }
+
+    /// Clears a recorded refusal. A stored session, or a disconnect, both answer it.
+    pub fn clear_browser_access_denial(&self, provider: &str) -> Result<(), StateError> {
+        let mut denials = self.browser_access_denials()?;
+        if denials.remove(provider).is_none() {
+            return Ok(());
+        }
+        self.write_browser_access_denials(&denials)
+    }
+
+    pub fn browser_access_denials(
+        &self,
+    ) -> Result<BTreeMap<String, BrowserAccessDenial>, StateError> {
+        let raw = self.with_cache(|conn| metadata_value(conn, BROWSER_ACCESS_DENIED_KEY))?;
+        let Some(raw) = raw else {
+            return Ok(BTreeMap::new());
+        };
+        // A cache row this process cannot read is a cache row: it is thrown away, not salvaged.
+        Ok(serde_json::from_str(&raw).unwrap_or_default())
+    }
+
+    fn write_browser_access_denials(
+        &self,
+        denials: &BTreeMap<String, BrowserAccessDenial>,
+    ) -> Result<(), StateError> {
+        let encoded = serde_json::to_string(denials)?;
+        self.with_cache_mut(|conn| {
+            conn.execute(
+                "INSERT INTO metadata(key, value) VALUES (?1, ?2)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                params![BROWSER_ACCESS_DENIED_KEY, encoded],
+            )?;
+            Ok(())
+        })
     }
 
     /// Everything this device still owes an Account, oldest hour first.

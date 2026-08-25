@@ -282,12 +282,12 @@ Cost：本机 projects JSONL；Admin 另出 org spend。
 
 | 主题 | CodexBar（源码） | Quota 现状（[`provider-collection.md`](provider-collection.md)） |
 | --- | --- | --- |
-| Cursor 额度 | Probe 内 App→Cookie；`usage-summary` + `get-sand-usage-status`（Grok Bot 周额度）+ `/api/usage?user=`（legacy 按次套餐） | 已对齐：Cursor.app `state.vscdb` → stored browser session；三个端点及 legacy 套餐替换规则一致 |
+| Cursor 额度 | Probe 内 App→Cookie；`usage-summary` + `get-sand-usage-status`（Grok Bot 周额度）+ `/api/usage?user=`（legacy 按次套餐） | 已对齐：Cursor.app `state.vscdb` → stored browser session；三个端点及 legacy 套餐替换规则一致。Cursor 是唯一声明 browser_session 的 provider，首次读 cookie 前有同意弹窗 |
 | Cursor cost | Dashboard events + token-cost | 本机 bubble/JSONL，不等价 |
-| Codex Auto | PAT→OAuth→CLI | PAT→OAuth(WHAM)→browser；窗口按时长分类。**有意差异**：不启动 `codex app-server`——定时刷新不 spawn provider CLI；直连失败即 `auth_required`，由用户打开 Codex 续期 |
-| Claude Auto | Planner oauth→cli→web | OAuth→browser。**有意差异**：不跑 `/status`、`/usage` PTY 探针——同上；过期 grant 直接报 `auth_required`。唯一保留的子进程是读 Keychain 的 `/usr/bin/security`，每次刷新至多一次 |
-| Grok Auto | CLI→OAuth(proxy)→Web→OAuth(grpc)；套餐名来自 `/v1/settings` `subscription_tier_display` | OAuth(proxy)→OAuth(grpc)→browser 与 settings 套餐名一致。**有意差异**：完全不启动 grok CLI——既不取额度（grok 1.0.5 `agent stdio` 对 `x.ai/billing` 返回 `-32601 Method not found`），也不用它刷新 token；OAuth(grpc) 排在 browser 之前，因为它不需要额外凭据 |
-| Kimi | API→CLI cred→Web | 已对齐：API key→`~/.kimi-code` CLI 凭据→browser |
+| Codex Auto | PAT→OAuth→CLI | PAT→OAuth(WHAM)；窗口按时长分类。**有意差异**：不启动 `codex app-server`——定时刷新不 spawn provider CLI；也不读 chatgpt.com cookie——Codex 自己续期 grant，多一条 cookie 阶梯只是多要一份浏览器权限；直连失败即 `auth_required`，由用户打开 Codex 续期 |
+| Claude Auto | Planner oauth→cli→web | 仅 OAuth。**有意差异**：不跑 `/status`、`/usage` PTY 探针——同上；也不读 claude.ai cookie——同 Codex 理由；过期 grant 直接报 `auth_required`。唯一保留的子进程是读 Keychain 的 `/usr/bin/security`，每次刷新至多一次 |
+| Grok Auto | CLI→OAuth(proxy)→Web→OAuth(grpc)；套餐名来自 `/v1/settings` `subscription_tier_display` | OAuth(proxy)→OAuth(grpc)，settings 套餐名一致。**有意差异**：完全不启动 grok CLI——既不取额度（grok 1.0.5 `agent stdio` 对 `x.ai/billing` 返回 `-32601 Method not found`），也不用它刷新 token；也不读 grok.com cookie——OAuth(grpc) 用同一个 token 打同一个 RPC，cookie 阶梯不增加任何能力 |
+| Kimi | API→CLI cred→Web | API key→`~/.kimi-code` CLI 凭据。**有意差异**：不读 kimi.com cookie——同 Codex 理由 |
 | DeepSeek | 有 key→API（可叠加 Chrome localStorage `userToken` 取月度明细）；无 key→Platform Web（同一 token） | **有意差异**：仅 API balance。Platform 路径的 token 来源是浏览器 localStorage（安全基线排除）或 `DEEPSEEK_PLATFORM_TOKEN` 手工粘贴；其增量是月度花费明细（cost，不是 quota），余额与 API key 路径相同 |
 | OpenRouter | `/credits` + `/key` 额度；`/activity` 花费历史 | 额度已对齐；`/activity` 属 cost，不在 quota 范围 |
 | LiteLLM | `key/info` → `user/info` / `team/info`，含 `budget_reset_at` | 已对齐 |

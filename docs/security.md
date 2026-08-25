@@ -29,14 +29,23 @@ data requirements. Architecture and product behavior are defined in
   taking a lock. A helper that leaves two consecutive pings unanswered is terminated, killed if it
   does not exit, and reaped before its pending continuations fail, so a later request starts a fresh
   helper and never a second live one.
-- The deliberate macOS browser-session exception is acquisition only. SweetCookieKit briefly reads
-  catalog-allowlisted Cookie names from catalog-declared exact hosts in the one browser selected for
-  login. Its logger is disabled; profile paths/store IDs and unrelated Cookies never cross private
-  stdin or enter logs, diagnostics, UserDefaults, or Relay. Swift retains candidates only in memory.
-  Rust validates Cookie syntax and the provider account over fixed HTTPS, revalidates on commit,
-  and persists only the accepted header plus an irreversible fingerprint and bounded masked label
-  in owner-only SQLite. Failed validation/commit preserves the old session; disconnect removes it
-  transactionally.
+- The deliberate macOS browser-session exception is acquisition only, it applies to Cursor alone,
+  and it never starts without consent. Cursor is the only provider whose catalog row declares a
+  browser session, because it is the only one with no CLI sign-in and no API key; every other
+  provider's grant is renewed by the program that owns it, so no cookie store is opened for them.
+  Before the first read QuotaBar shows a confirmation popup naming the browser, the permission
+  macOS will ask for — Full Disk Access for Safari, the "Chrome Safe Storage" Keychain item for a
+  Chrome-family browser — the exact hosts and Cookie names, the local database the accepted session
+  is kept in until disconnected, and that none of it is uploaded. Declining opens nothing.
+  SweetCookieKit then briefly reads catalog-allowlisted Cookie names from catalog-declared exact
+  hosts in that one browser. Its logger is disabled; profile paths/store IDs and unrelated Cookies
+  never cross private stdin or enter logs, diagnostics, UserDefaults, or Relay. A store macOS
+  refuses is reported as `access_denied` with the browser name and a closed reason code, not as an
+  absent session, and the underlying error — which names a store path — never leaves Swift. Swift
+  retains candidates only in memory. Rust validates Cookie syntax and the provider account over
+  fixed HTTPS, revalidates on commit, and persists only the accepted header plus an irreversible
+  fingerprint and bounded masked label in owner-only SQLite. Failed validation/commit preserves the
+  old session; disconnect removes it transactionally.
 - Quota Web and the Quota iOS `quota-ios` account client receive normalized account data only. They
   do not discover local credentials or logs. Relay publishes no account projection without an
   authenticated principal.

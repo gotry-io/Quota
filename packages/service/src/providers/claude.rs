@@ -7,16 +7,12 @@ use std::time::Duration;
 
 use super::common::{
     CollectionContext, ErrorCategory, HttpClient, KeychainSecret, LOCAL_FILE_LIMIT, ProviderError,
-    ProviderSession, QuotaAccount, QuotaSnapshot, QuotaWindow, ValidatedBrowserSession,
-    account_identity, clamp_percent, collect_official_or_browser, discover_official_or_browser,
+    ProviderSession, QuotaAccount, QuotaSnapshot, QuotaWindow, account_identity, clamp_percent,
     mask_email, number, obj_get, obj_get_any, parse_date, read_bounded_file, run_bounded_command,
     slug, string,
 };
 
-mod web;
-
 pub const SOURCE: &str = "anthropic_oauth_usage_api";
-pub const WEB_SOURCE: &str = web::WEB_SOURCE;
 pub const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 pub const PROFILE_URL: &str = "https://api.anthropic.com/api/oauth/profile";
 pub const KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
@@ -33,35 +29,23 @@ struct Credentials {
 }
 
 pub fn discover(context: &CollectionContext) -> Vec<ProviderSession> {
-    discover_official_or_browser(
-        ProviderId::Claude,
-        load_credentials(context).map(|credentials| ProviderSession {
+    load_credentials(context)
+        .map(|credentials| ProviderSession {
             provider: ProviderId::Claude,
             credential_source: credentials.source,
-        }),
-        context,
-    )
-}
-
-pub fn validate_browser_session(
-    cookie_header: &str,
-    context: &CollectionContext,
-) -> Result<ValidatedBrowserSession, ProviderError> {
-    web::validate_browser_session(cookie_header, context)
+        })
+        .into_iter()
+        .collect()
 }
 
 pub fn collect(
-    session: &ProviderSession,
+    _session: &ProviderSession,
     context: &CollectionContext,
 ) -> Result<QuotaSnapshot, ProviderError> {
-    collect_official_or_browser(
-        session,
-        context,
-        ProviderId::Claude,
-        SOURCE,
-        || collect_official(context),
-        || web::collect(context),
-    )
+    if context.cancelled() {
+        return Err(ProviderError::new(ErrorCategory::Unavailable, SOURCE));
+    }
+    collect_official(context)
 }
 
 fn collect_official(context: &CollectionContext) -> Result<QuotaSnapshot, ProviderError> {
@@ -628,17 +612,14 @@ mod tests {
         }
     }
 
+    /// Claude Code owns this grant, so a Mac without one has nothing for this collector to
+    /// try. There is no second rung to fall to.
     #[test]
-    fn discovers_browser_session_when_oauth_is_absent() {
-        let mut context = isolated_context();
+    fn no_local_grant_discovers_nothing() {
+        let context = isolated_context();
         assert!(!context.allows_host_keychain());
         assert!(discover(&context).is_empty());
-        context
-            .browser_sessions
-            .insert(ProviderId::Claude, "sessionKey=sk-ant-ok".to_owned());
-        let sessions = discover(&context);
-        assert_eq!(sessions.len(), 1);
-        assert_eq!(sessions[0].credential_source, "browser_session");
+        assert!(ProviderId::Claude.metadata().browser_session.is_none());
     }
 
     #[test]

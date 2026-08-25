@@ -15,8 +15,8 @@ subscription quota and privacy-preserving Usage together across a user's devices
 
 Quota collection supports Codex, Claude Code, Grok, OpenRouter, DeepSeek, Kimi Code, LiteLLM, and
 Cursor. Cursor prefers a signed-in Cursor.app session from local desktop state, then a stored
-browser session. On macOS, QuotaBar can acquire catalog-declared browser sessions for Cursor, Codex,
-Claude, Grok, and Kimi.
+browser session. On macOS, QuotaBar can acquire that browser session for Cursor — the only provider
+that declares one — and asks for consent before it reads a cookie.
 Local Usage analytics supports Codex, Claude Code, Grok, OpenCode, Pi, and Cursor logs. Provider credentials,
 prompts, completions, raw events, local paths, and conversation identifiers never upload.
 

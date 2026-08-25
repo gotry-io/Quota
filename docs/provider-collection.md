@@ -27,7 +27,9 @@ To add a provider:
 
 API-key providers declare credential and base-URL capabilities so QuotaBar Settings can render the
 correct native fields. Browser-session capability separately declares its HTTPS login URL, exact
-Cookie hosts/names, and browser-priority prefix; capabilities may coexist.
+Cookie hosts/names, and browser-priority prefix. Only a provider with no other way to be read
+declares one, and Cursor is the only such provider; a provider whose own program renews its grant
+declares none, so QuotaBar never opens a cookie store for it.
 
 Supported order today: Codex, Claude Code, Grok, OpenRouter, DeepSeek, Kimi Code, LiteLLM, Cursor.
 
@@ -67,11 +69,8 @@ report it, and nothing stamps it onto the upload.
    changing their used/remaining meaning. Classify primary and secondary by reported duration
    (5-hour, weekly, or 30-day monthly) rather than by payload slot, so a Free-tier monthly
    window is not labeled as 5-hour. A null code-review object is absent, not malformed.
-5. If OAuth credentials are missing or WHAM returns 401/403, and a stored ChatGPT browser session
-   exists, read `GET https://chatgpt.com/api/auth/session` (then `/backend-api/me`) with the catalog
-   session cookies. Use a session `accessToken` as Bearer for the same WHAM URL when present;
-   otherwise send the Cookie header. QuotaBar acquires those cookies from `chatgpt.com`.
-6. Do not fall back after a successful but malformed response; report the parser failure instead.
+5. Do not fall back after a successful but malformed response; report the parser failure instead.
+   There is no further rung: absent or rejected credentials are `auth_required`.
 
 The local service never submits the Codex refresh token or writes `auth.json`, and never starts the
 Codex CLI: a grant Codex no longer accepts is reported as `auth_required`, and the reader renews it
@@ -94,18 +93,12 @@ build takes knowingly. Hidden WebView dashboard scraping and reset-credit redemp
    weekly limit meters one seven-day cycle, so a weekly window that reports no reset of its own —
    model-scoped or not — takes the seven-day window's reset.
 5. Enrich identity best-effort through `/api/oauth/profile`; usage remains valid if enrichment fails.
-6. If OAuth usage is unavailable or returns 401/403, and a stored Claude browser session
-   exists, send the stored allowlisted Cookie header (`sessionKey` plus optional `lastActiveOrg`)
-   to `https://claude.ai/api/organizations` then `/organizations/{id}/usage`. Prefer the listed org
-   matching `lastActiveOrg`, then the org on `/api/account`, unless that org is `api_disabled`;
-   otherwise the first chat-capable org. Validate by mapping usage, not by the org list alone. Usage
-   accepts OAuth `utilization` / `resets_at` and the web aliases `utilization_pct` / `reset_at`. The
-   `sessionKey` value must start with `sk-ant-`. QuotaBar acquires `sessionKey` and optional
-   `lastActiveOrg` from `claude.ai` through the same allowlisted browser-session flow as Cursor.
+6. Usage accepts `utilization` / `resets_at` and the aliases `utilization_pct` / `reset_at`.
+   There is no further rung: absent or rejected credentials are `auth_required`.
 
 An absent, stale, or unreadable session is `auth_required`. A Claude Code installation configured
-only for a third-party API gateway does not provide Anthropic subscription OAuth quota unless a
-valid `claude.ai` browser session is stored. Collection never starts the Claude CLI, in any form:
+only for a third-party API gateway does not provide Anthropic subscription OAuth quota.
+Collection never starts the Claude CLI, in any form:
 an expired grant is reported as the sign-in it is, and the reader renews it by opening Claude Code.
 The local service never submits the Claude refresh token or writes its credential file or Keychain
 entry. The Keychain read is the one process a refresh starts, and it is performed once and shared.
@@ -277,13 +270,9 @@ upload partitions are summarized by the unified `quotacli doctor`/QuotaBar diagn
    When that is absent, infer a weak hint from local credentials only: OIDC scopes under
    `https://auth.x.ai::` (and `auth_mode: oidc`) map to `supergrok`; other `auth_mode` values may be
    kept as a plan slug when they look like a plan name. Do not invent a plan when no signal is present.
-8. If OAuth credentials are missing or billing returns 401/403, and a stored Grok browser session
-   exists, call the same gRPC-web billing RPC with the catalog `sso` / `sso-rw` cookies. Map used
-   percent and reset from the protobuf payload. The RPC exposes only the reset instant: 20–45 days
-   out is **Monthly**, anything nearer is the **Weekly** credit pool, and no reset stays
-   **Billing cycle**. QuotaBar acquires those cookies from `grok.com`. grok.com may reject
-   cookie-only requests that lack the browser Web Key Exchange proof; that is `auth_required`, not a
-   parser failure.
+8. Absent or rejected credentials are `auth_required`; there is no further rung. The billing RPC
+   exposes only the reset instant: 20–45 days out is **Monthly**, anything nearer is the **Weekly**
+   credit pool, and no reset stays **Billing cycle**.
 
 The local service never submits the refresh token itself, never starts Grok's interactive browser
 login, and never starts the Grok CLI at all. That CLI is solely responsible for refresh-token
@@ -358,7 +347,8 @@ stays out of scope unless a future allowlisted, user-supplied token channel is a
 
 ## Kimi Code
 
-Aligned with CodexBar's Kimi Code Automatic order: API key → CLI credential → web cookie.
+Aligned with CodexBar's Kimi Code Automatic order, minus its web-cookie rung: API key → CLI
+credential.
 
 1. Resolve the API key in order:
    1. Owner-only config `providers.kimi.api_key`.
@@ -374,11 +364,7 @@ Aligned with CodexBar's Kimi Code Automatic order: API key → CLI credential �
    `$KIMI_CODE_HOME/credentials/kimi-code.json` or `~/.kimi-code/credentials/kimi-code.json`
    read-only. Use a fresh `access_token` (`expires_at` more than 60 seconds away) against the same
    `/coding/v1/usages` URL. Do not redeem `refresh_token` or write `device_id` / credential files.
-5. If API and CLI credentials are unavailable or unauthorized, and a stored Kimi browser session
-   exists, `POST https://www.kimi.com/apiv2/kimi.gateway.billing.v1.BillingService/GetUsages` with
-   `Authorization: Bearer` from the `kimi-auth` cookie. Map the `FEATURE_CODING` usage object with
-   the same weekly / 5-hour rules. QuotaBar acquires `kimi-auth` from `www.kimi.com` / `kimi.com`.
-6. Absent key/CLI credential and no browser session → `auth_required`. HTTP 401/403 →
+5. Absent key and CLI credential → `auth_required`; there is no further rung. HTTP 401/403 →
    `auth_required`.
 
 The CLI-credential request carries `X-Msh-Platform: kimi_code_cli`, because Kimi honors that token
@@ -407,9 +393,10 @@ OpenRouter, DeepSeek, and Kimi always use their fixed official origins; custom b
 
 ## Cursor
 
-Cursor prefers a signed-in Cursor.app session, then a stored browser session. Codex, Claude, Grok,
-and Kimi declare the same catalog browser-session capability alongside their existing OAuth/API-key
-sources. Quota snapshots follow the product default and sync to the managed Account.
+Cursor prefers a signed-in Cursor.app session, then a stored browser session. It is the only
+provider that declares a browser session at all: it has no CLI sign-in command and no API key, so
+without one there is nothing to read. Quota snapshots follow the product default and sync to the
+managed Account.
 
 1. Discover a usable Cursor.app session from the desktop `state.vscdb` `ItemTable` key
    `cursorAuth/accessToken`. On macOS that file is
@@ -421,16 +408,22 @@ sources. Quota snapshots follow the product default and sync to the managed Acco
    away. The local service never refreshes it. Derive
    `WorkosCursorSessionToken={userID}%3A%3A{token}` from the last `|` component of `sub`. Isolated
    or remapped collection homes only read that remapped desktop path.
-2. QuotaBar opens `https://authenticator.cursor.sh/` in one explicit supported browser and polls
-   only that browser's profiles. If the default HTTPS handler is unsupported, the user chooses a
-   supported browser before any URL opens. Linux QuotaCLI does not acquire browser sessions.
+2. QuotaBar resolves one explicit supported browser — the default HTTPS handler, or a choice the
+   user makes when that handler is unsupported — and then asks for consent before opening any
+   cookie store. The popup names that browser, the permission macOS will ask for, the exact hosts
+   and Cookie names, that the accepted session stays in the local service database until
+   disconnected, and that nothing is uploaded. Declining reads nothing. On confirmation QuotaBar
+   opens `https://authenticator.cursor.sh/` in that browser and polls only its profiles. Linux
+   QuotaCLI does not acquire browser sessions.
 3. SweetCookieKit queries the catalog's four exact hosts (`cursor.com`, `www.cursor.com`,
-   `cursor.sh`, `authenticator.cursor.sh`) and seven exact session Cookie names. Expired/unrelated
-   records are discarded and logging is disabled. Complementary same-host cookies share one header
-   (Grok `sso`/`sso-rw`, numbered ChatGPT session-token chunks, plus optional `_account` or
-   `lastActiveOrg`). Unrelated allowlisted names stay one candidate each, so Cursor
-   `wos-session` and `WorkosCursorSessionToken` are never combined. Hosts and browser profiles are
-   never combined.
+   `cursor.sh`, `authenticator.cursor.sh`) and the three exact WorkOS session Cookie names
+   (`WorkosCursorSessionToken`, `wos-session`, `__Secure-wos-session`). Expired/unrelated records
+   are discarded and logging is disabled. Each allowlisted name on each host is one candidate;
+   names, hosts, and browser profiles are never combined.
+   A read macOS refuses is not an absent session: the importer reports `access_denied` with the
+   browser and one of `full_disk_access`, `keychain_refused`, or `store_unreadable`, which ends the
+   attempt and is recorded through the browser-session commit as the `browser_access_denied`
+   diagnostics source. The underlying error names a store path and never leaves Swift.
 4. Rust validates header syntax and the catalog allowlist, then calls fixed
    `GET https://cursor.com/api/auth/me` with no redirects and a ten-second timeout. Stable `sub` is
    the preferred namespaced fingerprint input; normalized email is the fallback. Only the hash and
@@ -469,7 +462,7 @@ sources. Quota snapshots follow the product default and sync to the managed Acco
   `sub`. For every other provider, email is display enrichment only and never a global identity; a
   missing quota-owner identifier uses a stable source-scoped fingerprint. QuotaBar does not treat
   that shared source hash as picker identity: sign-in choices stay distinct by cookie-header
-  fingerprint so two valid Grok, Kimi, or Codex sessions cannot silently overwrite each other.
+  fingerprint so two valid sessions cannot silently overwrite each other.
   Every normalized account declares its fingerprint scope.
 - Account labels use a masked email or a non-sensitive display name.
 - A collection attempt records its stable source identifier and an explicit outcome.
