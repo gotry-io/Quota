@@ -113,37 +113,17 @@ extension ProviderID {
 
   var browserSession: BrowserSessionSpec? {
     switch self {
-    case .`codex`: BrowserSessionSpec(
-      loginURL: "https://chatgpt.com/",
-      cookieHosts: ["chatgpt.com", "www.chatgpt.com"],
-      cookieNames: ["__Secure-next-auth.session-token", "__Secure-next-auth.session-token.0", "__Secure-next-auth.session-token.1", "__Secure-next-auth.session-token.2", "__Host-next-auth.session-token", "__Secure-authjs.session-token", "authjs.session-token", "_account"],
-      browserPriority: ["safari", "chrome", "edge", "brave", "arc", "dia", "chromium", "firefox"],
-      exclusive: false)
-    case .`claude`: BrowserSessionSpec(
-      loginURL: "https://claude.ai/",
-      cookieHosts: ["claude.ai", "www.claude.ai"],
-      cookieNames: ["sessionKey", "lastActiveOrg"],
-      browserPriority: ["safari", "chrome", "edge", "brave", "arc", "dia", "chromium", "firefox"],
-      exclusive: false)
-    case .`grok`: BrowserSessionSpec(
-      loginURL: "https://grok.com/",
-      cookieHosts: ["grok.com", "www.grok.com"],
-      cookieNames: ["sso", "sso-rw"],
-      browserPriority: ["safari", "chrome", "edge", "brave", "arc", "dia", "chromium", "firefox"],
-      exclusive: false)
+    case .`codex`: nil
+    case .`claude`: nil
+    case .`grok`: nil
     case .`openrouter`: nil
     case .`deepseek`: nil
-    case .`kimi`: BrowserSessionSpec(
-      loginURL: "https://www.kimi.com/code/console",
-      cookieHosts: ["www.kimi.com", "kimi.com"],
-      cookieNames: ["kimi-auth"],
-      browserPriority: ["safari", "chrome", "edge", "brave", "arc", "dia", "chromium", "firefox"],
-      exclusive: false)
+    case .`kimi`: nil
     case .`litellm`: nil
     case .`cursor`: BrowserSessionSpec(
       loginURL: "https://authenticator.cursor.sh/",
       cookieHosts: ["cursor.com", "www.cursor.com", "cursor.sh", "authenticator.cursor.sh"],
-      cookieNames: ["WorkosCursorSessionToken", "__Secure-next-auth.session-token", "next-auth.session-token", "wos-session", "__Secure-wos-session", "authjs.session-token", "__Secure-authjs.session-token"],
+      cookieNames: ["WorkosCursorSessionToken", "wos-session", "__Secure-wos-session"],
       browserPriority: ["safari", "chrome", "edge", "brave", "arc", "dia", "chromium", "firefox"],
       exclusive: true)
     case .unknown: nil
