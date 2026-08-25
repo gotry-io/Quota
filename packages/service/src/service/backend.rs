@@ -1203,13 +1203,7 @@ impl NativeBackend {
                 Err(_) => {
                     let _ = self.state.write_usage_scan_diagnostics(
                         agent,
-                        &json!({
-                            "status": "blocked",
-                            "scanned_files": 0,
-                            "skipped_files": 0,
-                            "indexed_records": 0,
-                            "reason_counts": {"scan_failed": 1}
-                        }),
+                        &json!({"status": "blocked", "reason_counts": {"scan_failed": 1}}),
                     );
                     self.finish_attempt(
                         attempt,
@@ -1230,15 +1224,7 @@ impl NativeBackend {
             if self.state.apply_usage_scan(agent, &scan).is_err() {
                 let _ = self.state.write_usage_scan_diagnostics(
                     agent,
-                    &json!({
-                        "status": "blocked",
-                        "scanned_files": scan.scanned_source_count,
-                        "skipped_files": scan.skipped_source_count,
-                        "indexed_records": scan.records.len(),
-                        "valid_records": scan.records.len(),
-                        "ignored_empty_records": scan.ignored_empty_records,
-                        "reason_counts": {"state_apply_failed": 1}
-                    }),
+                    &json!({"status": "blocked", "reason_counts": {"state_apply_failed": 1}}),
                 );
                 self.finish_attempt(
                     attempt,
@@ -2617,6 +2603,8 @@ fn usage_date_range(rows: &[UsageHourlyFact], fallback_date: &str) -> (String, S
     (from, to)
 }
 
+/// What the last scan of one agent left behind, in the two facts the report reads: whether the
+/// scan covered everything it found, and the bounded count per reason it did not.
 fn usage_scan_diagnostic(scan: &usage::UsageScanResult) -> Value {
     let mut reason_counts = BTreeMap::<String, i64>::new();
     for reason in &scan.coverage.reasons {
@@ -2627,24 +2615,11 @@ fn usage_scan_diagnostic(scan: &usage::UsageScanResult) -> Value {
         let entry = reason_counts.entry(key).or_default();
         *entry = entry.saturating_add(reason.count.min(i64::MAX as u64) as i64);
     }
-    let complete_sources = scan
-        .sources
-        .iter()
-        .filter(|source| source.coverage.status == CoverageStatus::Complete)
-        .count();
-    let partial_sources = scan.sources.len().saturating_sub(complete_sources);
     json!({
         "status": match scan.coverage.status {
             CoverageStatus::Complete => "complete",
             CoverageStatus::Partial => "partial",
         },
-        "scanned_files": scan.scanned_source_count,
-        "skipped_files": scan.skipped_source_count,
-        "complete_files": complete_sources,
-        "partial_files": partial_sources,
-        "indexed_records": scan.records.len(),
-        "valid_records": scan.records.len(),
-        "ignored_empty_records": scan.ignored_empty_records,
         "reason_counts": reason_counts,
     })
 }
@@ -4239,8 +4214,8 @@ mod tests {
             .write_usage_scan_diagnostics(
                 UsageAgent::Cursor,
                 &json!({
-                    "status":"partial","scanned_files":2,"partial_files":1,"valid_records":9,
-                    "reason_counts":{"malformed_json":4,"truncated_tail":1}
+                    "status": "partial",
+                    "reason_counts": {"malformed_json": 4, "truncated_tail": 1}
                 }),
             )
             .expect("scan diagnostics");
