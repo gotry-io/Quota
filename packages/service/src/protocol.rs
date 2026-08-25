@@ -39,7 +39,6 @@ pub enum ComponentName {
     Account,
     Pricing,
     Providers,
-    Repair,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -420,197 +419,18 @@ pub struct StateSnapshot {
     pub providers: Vec<ProviderConfigView>,
     pub provider_browser_sessions: Vec<ProviderBrowserSessionView>,
     pub overview: Vec<QuotaOverviewItem>,
-    pub repair: RepairSession,
+    pub cache: CacheState,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RepairStatus {
-    Idle,
-    Checking,
-    Repairing,
-    Stuck,
-    Failed,
-    Completed,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RepairSeverity {
-    None,
-    Derived,
-    Durable,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RepairPhase {
-    PreservingAccount,
-    RebuildingStorage,
-    ReindexingUsage,
-    Verifying,
-    RestoringLastGood,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RepairRecoveryAction {
-    Retry,
-    Reinstall,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// What a reader is told about the disposable half of local state.
+///
+/// `rebuilding` means the cache was thrown away and this device has not yet completed one full
+/// Usage scan, so local history is still filling in. `reset_at` is when that happened.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct RepairSession {
-    pub status: RepairStatus,
-    pub severity: RepairSeverity,
-    pub phase: Option<RepairPhase>,
-    pub title: Option<String>,
-    pub guidance: Option<String>,
-    pub activity: Option<String>,
-    pub started_at: Option<String>,
-    pub heartbeat_at: Option<String>,
-    pub progress_current: Option<i64>,
-    pub progress_total: Option<i64>,
-    pub stuck: bool,
-    pub blocks_quit: bool,
-    pub recovery_action: Option<RepairRecoveryAction>,
-}
-
-impl RepairSession {
-    pub const TITLE_MAX_CHARS: usize = 64;
-    pub const GUIDANCE_MAX_CHARS: usize = 160;
-    pub const ACTIVITY_MAX_CHARS: usize = 64;
-    pub const PROGRESS_TOTAL_MAX: i64 = 1_000_000;
-
-    pub fn idle() -> Self {
-        Self {
-            status: RepairStatus::Idle,
-            severity: RepairSeverity::None,
-            phase: None,
-            title: None,
-            guidance: None,
-            activity: None,
-            started_at: None,
-            heartbeat_at: None,
-            progress_current: None,
-            progress_total: None,
-            stuck: false,
-            blocks_quit: false,
-            recovery_action: None,
-        }
-    }
-
-    pub fn is_valid(&self) -> bool {
-        self.validation_error().is_none()
-    }
-
-    pub fn validation_error(&self) -> Option<&'static str> {
-        if !text_field_ok(self.title.as_deref(), Self::TITLE_MAX_CHARS) {
-            return Some("invalid repair title");
-        }
-        if !text_field_ok(self.guidance.as_deref(), Self::GUIDANCE_MAX_CHARS) {
-            return Some("invalid repair guidance");
-        }
-        if !text_field_ok(self.activity.as_deref(), Self::ACTIVITY_MAX_CHARS) {
-            return Some("invalid repair activity");
-        }
-        match (self.progress_current, self.progress_total) {
-            (None, None) => {}
-            (Some(current), Some(total))
-                if (1..=Self::PROGRESS_TOTAL_MAX).contains(&total)
-                    && current >= 0
-                    && current <= total => {}
-            _ => return Some("invalid repair progress"),
-        }
-        if self.blocks_quit
-            && !(self.severity == RepairSeverity::Durable && self.status == RepairStatus::Repairing)
-        {
-            return Some("blocks_quit is only valid while durable repairing");
-        }
-        if self.status == RepairStatus::Idle {
-            if self.severity != RepairSeverity::None
-                || self.phase.is_some()
-                || self.title.is_some()
-                || self.guidance.is_some()
-                || self.activity.is_some()
-                || self.started_at.is_some()
-                || self.heartbeat_at.is_some()
-                || self.progress_current.is_some()
-                || self.progress_total.is_some()
-                || self.stuck
-                || self.blocks_quit
-                || self.recovery_action.is_some()
-            {
-                return Some("idle repair session must be empty");
-            }
-            return None;
-        }
-        if self.started_at.is_none() || self.heartbeat_at.is_none() {
-            return Some("started_at and heartbeat_at are required while not idle");
-        }
-        if self.recovery_action.is_some()
-            && !matches!(self.status, RepairStatus::Stuck | RepairStatus::Failed)
-        {
-            return Some("recovery_action is only valid when stuck or failed");
-        }
-        if self.stuck && !matches!(self.status, RepairStatus::Stuck | RepairStatus::Failed) {
-            return Some("stuck is only valid when status is stuck or failed");
-        }
-        None
-    }
-}
-
-fn text_field_ok(value: Option<&str>, max_chars: usize) -> bool {
-    value.is_none_or(|text| {
-        text.chars().count() <= max_chars && !text.chars().any(|ch| ch.is_control())
-    })
-}
-
-impl<'de> Deserialize<'de> for RepairSession {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct RawRepairSession {
-            status: RepairStatus,
-            severity: RepairSeverity,
-            phase: Option<RepairPhase>,
-            title: Option<String>,
-            guidance: Option<String>,
-            activity: Option<String>,
-            started_at: Option<String>,
-            heartbeat_at: Option<String>,
-            progress_current: Option<i64>,
-            progress_total: Option<i64>,
-            stuck: bool,
-            blocks_quit: bool,
-            recovery_action: Option<RepairRecoveryAction>,
-        }
-
-        let raw = RawRepairSession::deserialize(deserializer)?;
-        let session = Self {
-            status: raw.status,
-            severity: raw.severity,
-            phase: raw.phase,
-            title: raw.title,
-            guidance: raw.guidance,
-            activity: raw.activity,
-            started_at: raw.started_at,
-            heartbeat_at: raw.heartbeat_at,
-            progress_current: raw.progress_current,
-            progress_total: raw.progress_total,
-            stuck: raw.stuck,
-            blocks_quit: raw.blocks_quit,
-            recovery_action: raw.recovery_action,
-        };
-        if let Some(error) = session.validation_error() {
-            return Err(serde::de::Error::custom(error));
-        }
-        Ok(session)
-    }
+pub struct CacheState {
+    pub rebuilding: bool,
+    pub reset_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -941,101 +761,34 @@ mod tests {
     }
 
     #[test]
-    fn repair_session_idle_and_repairing_round_trip() {
-        let idle = serde_json::from_value::<RepairSession>(serde_json::json!({
-            "status": "idle",
-            "severity": "none",
-            "phase": null,
-            "title": null,
-            "guidance": null,
-            "activity": null,
-            "started_at": null,
-            "heartbeat_at": null,
-            "progress_current": null,
-            "progress_total": null,
-            "stuck": false,
-            "blocks_quit": false,
-            "recovery_action": null
-        }))
-        .expect("idle session");
-        assert_eq!(idle, RepairSession::idle());
-
-        let repairing = serde_json::from_value::<RepairSession>(serde_json::json!({
-            "status": "repairing",
-            "severity": "derived",
-            "phase": "reindexing_usage",
-            "title": "Rebuilding Usage history",
-            "guidance": "Quota and Account stay available. Usage history is catching up.",
-            "activity": "Scanning local logs",
-            "started_at": "2026-08-17T01:00:00Z",
-            "heartbeat_at": "2026-08-17T01:00:14Z",
-            "progress_current": 12,
-            "progress_total": 40,
-            "stuck": false,
-            "blocks_quit": false,
-            "recovery_action": null
-        }))
-        .expect("repairing session");
-        assert_eq!(repairing.status, RepairStatus::Repairing);
-        assert_eq!(repairing.severity, RepairSeverity::Derived);
-        assert_eq!(repairing.progress_current, Some(12));
-        assert_eq!(repairing.progress_total, Some(40));
-        assert!(!repairing.blocks_quit);
-    }
-
-    #[test]
-    fn repair_session_rejects_invalid_progress_and_unknown_fields() {
-        assert!(
-            serde_json::from_value::<RepairSession>(serde_json::json!({
-                "status": "repairing",
-                "severity": "durable",
-                "phase": "preserving_account",
-                "title": "Repairing local data",
-                "guidance": "Keep QuotaBar open. You can close this menu.",
-                "activity": "Copying account",
-                "started_at": "2026-08-17T01:00:00Z",
-                "heartbeat_at": "2026-08-17T01:00:14Z",
-                "progress_current": 8,
-                "progress_total": 4,
-                "stuck": false,
-                "blocks_quit": true,
-                "recovery_action": null
-            }))
-            .is_err()
+    fn the_cache_state_says_whether_local_history_is_still_filling_in() {
+        let value = serde_json::to_value(CacheState {
+            rebuilding: true,
+            reset_at: Some("2026-08-25T01:00:00Z".into()),
+        })
+        .expect("serializes");
+        assert_eq!(value["rebuilding"], true);
+        assert_eq!(value["reset_at"], "2026-08-25T01:00:00Z");
+        assert_eq!(
+            serde_json::from_value::<CacheState>(value).expect("round trip"),
+            CacheState {
+                rebuilding: true,
+                reset_at: Some("2026-08-25T01:00:00Z".into()),
+            }
+        );
+        // A cache this device has never had to throw away says so with an absent instant, not
+        // with a made-up one.
+        assert_eq!(
+            CacheState::default(),
+            CacheState {
+                rebuilding: false,
+                reset_at: None
+            }
         );
         assert!(
-            serde_json::from_value::<RepairSession>(serde_json::json!({
-                "status": "idle",
-                "severity": "none",
-                "phase": null,
-                "title": null,
-                "guidance": null,
-                "activity": null,
-                "started_at": null,
-                "heartbeat_at": null,
-                "progress_current": 0,
-                "progress_total": null,
-                "stuck": false,
-                "blocks_quit": false,
-                "recovery_action": null
-            }))
-            .is_err()
-        );
-        assert!(
-            serde_json::from_value::<RepairSession>(serde_json::json!({
-                "status": "idle",
-                "severity": "none",
-                "phase": null,
-                "title": null,
-                "guidance": null,
-                "activity": null,
-                "started_at": null,
-                "heartbeat_at": null,
-                "progress_current": null,
-                "progress_total": null,
-                "stuck": false,
-                "blocks_quit": false,
-                "recovery_action": null,
+            serde_json::from_value::<CacheState>(serde_json::json!({
+                "rebuilding": false,
+                "reset_at": null,
                 "seq": 1
             }))
             .is_err()
