@@ -301,6 +301,13 @@ generation. Disabling Usage upload is a local Device preference: native Usage pr
 local-only, while already uploaded account history remains subject to the existing Device and Account
 deletion controls.
 
+`GET /api/v5/account/summary` and `GET /api/v5/account/usage/summary` are conditional reads. Each
+carries a strong `ETag` over an account version stamp, the request's full query string, and the
+pricing and model catalog revisions, and is `Cache-Control: private, no-cache` so a caller may hold
+the body as long as it revalidates. The stamp is three aggregates over the devices, quota
+observation, and Device Health rows the response projects; a matching `If-None-Match` returns 304
+before any Usage query runs. Document and `__data.json` responses stay `private, no-store`.
+
 After an authenticated Device completes a refresh, the service uploads a sanitized health snapshot
 on change or a bounded heartbeat. The Device token determines the row; D1 stores only the latest
 monotonic revision and uses server receipt time for freshness. Every Account-summary Device carries `health`,

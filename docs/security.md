@@ -72,6 +72,10 @@ data requirements. Architecture and product behavior are defined in
   `QUOTA_INSTALLATION_KEY`; the raw installation ID must not be logged or used as a global account
   identifier. Switching to a different Account sets a new upload lower bound so earlier local
   history is not copied into that Account.
+- Account reads answer a conditional request from a version stamp over the rows they project, never
+  from a cached body. A 304 asserts only that those rows and the pricing and model catalog revisions
+  are unchanged; it is issued to the authenticated principal that asked, and the responses are
+  `private, no-cache` so no shared cache may hold them.
 - Account and device sessions are separate credential families. Persist each token with its
   audience, authoritative Account/Device IDs, Device generation, and absolute expiry. A response
   whose principal does not match local state fails closed.

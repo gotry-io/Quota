@@ -217,6 +217,32 @@ export interface RateLimitResult {
   retry_after: number;
 }
 
+/**
+ * Everything an Account read depends on, collapsed to numbers a reader can compare.
+ *
+ * Account reads are polled on a timer and are almost always unchanged, so they answer a
+ * conditional request from this stamp instead of aggregating Usage again. Each field either
+ * counts rows or takes the newest instant of a table the response reads, so any write that
+ * could change a byte of the response moves at least one of them. `usage_revision` sums the
+ * per-device counters rather than taking their maximum: each accepted upload increments one
+ * device, and a maximum would not move when the device that uploaded is not the leader.
+ * `active_devices` is here because the device status the response reports is derived from the
+ * read instant, not from a stored column, so it changes with no write at all.
+ */
+export interface AccountVersionStamp {
+  devices: number;
+  active_devices: number;
+  usage_revision: number;
+  device_generation: number;
+  device_last_seen_at: string | null;
+  device_last_login_at: string | null;
+  device_signed_out_at: string | null;
+  snapshots: number;
+  snapshot_updated_at: string | null;
+  device_health: number;
+  device_health_received_at: string | null;
+}
+
 export interface AccountMaintenanceInput {
   grant_expired_before: string;
   session_expired_before: string;
@@ -309,6 +335,7 @@ export interface AccountState {
     freshUntil: string,
   ): Promise<DeviceHealthWriteOutcome>;
   listDeviceHealth(accountId: string): Promise<StoredDeviceHealth[]>;
+  accountVersionStamp(accountId: string, activeSince: string): Promise<AccountVersionStamp>;
   deleteDeviceData(
     accountId: string,
     deviceId: string,

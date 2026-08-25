@@ -10,6 +10,7 @@ import {
   type AccountPrincipal,
   type AccountRecord,
   type AccountState,
+  type AccountVersionStamp,
   type AuthorizeDeviceGrantInput,
   type CompleteIdentityLoginInput,
   type CompleteIdentityLoginResult,
@@ -980,6 +981,68 @@ export class D1AccountState implements AccountState {
       : "unauthorized";
   }
 
+  /**
+   * Three aggregates over the tables an Account read projects. They are the whole basis for the
+   * conditional answer, so each one has to move whenever the response would: counts catch
+   * deletion and retention, the newest instant catches replacement, and the summed per-device
+   * usage revision catches an upload from any device rather than only the leading one.
+   */
+  async accountVersionStamp(accountId: string, activeSince: string): Promise<AccountVersionStamp> {
+    const [devices, snapshots, health] = await this.database.batch<Record<string, unknown>>([
+      this.database
+        .prepare(
+          `SELECT COUNT(*) AS devices,
+                  COALESCE(SUM(usage_sync_revision), 0) AS usage_revision,
+                  COALESCE(MAX(generation), 0) AS device_generation,
+                  MAX(last_seen_at) AS device_last_seen_at,
+                  MAX(last_login_at) AS device_last_login_at,
+                  MAX(signed_out_at) AS device_signed_out_at,
+                  COALESCE(SUM(
+                    CASE WHEN signed_out_at IS NULL AND last_seen_at > ?2 THEN 1 ELSE 0 END
+                  ), 0) AS active_devices
+           FROM devices
+           WHERE account_id = ?1 AND deleted_at IS NULL`,
+        )
+        .bind(accountId, activeSince),
+      this.database
+        .prepare(
+          `SELECT COUNT(*) AS snapshots, MAX(snapshots.updated_at) AS snapshot_updated_at
+           FROM quota_snapshots AS snapshots
+           INNER JOIN devices ON devices.id = snapshots.device_id
+           WHERE devices.account_id = ?1 AND devices.deleted_at IS NULL`,
+        )
+        .bind(accountId),
+      this.database
+        .prepare(
+          `SELECT COUNT(*) AS device_health,
+                  MAX(health.received_at) AS device_health_received_at
+           FROM device_health AS health
+           INNER JOIN devices ON devices.id = health.device_id
+           WHERE devices.account_id = ?1 AND devices.deleted_at IS NULL
+             AND devices.generation = health.device_generation`,
+        )
+        .bind(accountId),
+    ]);
+    const merged = {
+      ...(devices?.results[0] ?? {}),
+      ...(snapshots?.results[0] ?? {}),
+      ...(health?.results[0] ?? {}),
+    };
+    return {
+      devices: stampCount(merged.devices),
+      active_devices: stampCount(merged.active_devices),
+      usage_revision: stampCount(merged.usage_revision),
+      device_generation: stampCount(merged.device_generation),
+      device_last_seen_at: stampInstant(merged.device_last_seen_at),
+      device_last_login_at: stampInstant(merged.device_last_login_at),
+      device_signed_out_at: stampInstant(merged.device_signed_out_at),
+      snapshots: stampCount(merged.snapshots),
+      snapshot_updated_at: stampInstant(merged.snapshot_updated_at),
+      device_health: stampCount(merged.device_health),
+      device_health_received_at: stampInstant(merged.device_health_received_at),
+    };
+  }
+
   async listDeviceHealth(accountId: string): Promise<StoredDeviceHealth[]> {
     const rows = await this.database
       .prepare(
@@ -1307,4 +1370,12 @@ function resultChanged(result: D1Result<unknown> | undefined): boolean {
 
 function resultRow<T>(result: D1Result<unknown> | undefined): T | null {
   return (result?.results[0] as T | undefined) ?? null;
+}
+
+function stampCount(value: unknown): number {
+  return typeof value === "number" && Number.isSafeInteger(value) ? value : 0;
+}
+
+function stampInstant(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
 }

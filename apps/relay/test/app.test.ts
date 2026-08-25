@@ -593,6 +593,77 @@ describe("managed Relay on real Workers and D1", () => {
     expect(await mistyped.json()).toMatchObject({ error: { code: "not_found" } });
   });
 
+  it("answers an unchanged Account read from its validator instead of folding Usage again", async () => {
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_etag', 'subject_etag', ?1, ?1)",
+      ).bind(now.toISOString()),
+      env.DB.prepare(
+        `INSERT INTO devices (
+           id, account_id, installation_id_hash, generation, created_at, last_login_at, last_seen_at
+         ) VALUES ('device_etag', 'account_etag', 'installation_etag', 1, ?1, ?1, ?1)`,
+      ).bind(now.toISOString()),
+      usageFactInsertAt("device_etag", "2026-08-10T00:00:00Z", "2026-08-10"),
+    ]);
+    const usageState = new D1UsageState(env.DB);
+    const state = new D1AccountState(env.DB);
+    const hasher = new SecretHasher(secret);
+    const app = createRelayApp({
+      state,
+      usageState,
+      accountService: new AccountService(state, hasher, secret),
+      webAuth: webSessionFor("account_etag"),
+      hasher,
+      now: () => now,
+    });
+
+    const summaryPath = "https://quota.gotry.io/api/v5/account/summary?usage_agents=all";
+    const first = await app.request(summaryPath);
+    expect(first.status).toBe(200);
+    // `no-cache` is what makes the second request conditional at all: the browser may keep the
+    // body as long as it revalidates before showing it.
+    expect(first.headers.get("Cache-Control")).toBe("private, no-cache");
+    const etag = first.headers.get("ETag");
+    expect(etag).toMatch(/^"[0-9a-f]{64}"$/);
+
+    const unchanged = await app.request(summaryPath, { headers: { "If-None-Match": etag ?? "" } });
+    expect(unchanged.status).toBe(304);
+    expect(unchanged.headers.get("ETag")).toBe(etag);
+    expect(await unchanged.text()).toBe("");
+
+    // Two routes answer the same query string with different bodies, and a different range is a
+    // different answer, so neither may reuse the other's validator.
+    const usage = await app.request(
+      "https://quota.gotry.io/api/v5/account/usage/summary?usage_agents=all",
+    );
+    expect(usage.status).toBe(200);
+    expect(usage.headers.get("ETag")).not.toBe(etag);
+    const narrowed = await app.request(`${summaryPath}&from=2026-08-10&to=2026-08-10`);
+    expect(narrowed.headers.get("ETag")).not.toBe(etag);
+
+    // A new observation is a new answer even though no Usage fact moved.
+    await env.DB.prepare(
+      `INSERT INTO quota_snapshots (
+         device_id, provider, account_fingerprint, sequence, captured_at, observed_at,
+         snapshot_json, updated_at
+       ) VALUES ('device_etag', 'codex', 'fingerprint_etag', 0, ?1, ?1, ?2, ?1)`,
+    )
+      .bind(now.toISOString(), JSON.stringify(quotaSnapshotJson()))
+      .run();
+    const afterUpload = await app.request(summaryPath, {
+      headers: { "If-None-Match": etag ?? "" },
+    });
+    expect(afterUpload.status).toBe(200);
+    expect(afterUpload.headers.get("ETag")).not.toBe(etag);
+
+    // A query key this route does not serve is still refused rather than validated.
+    const bogus = await app.request(`${summaryPath}&nonsense=1`, {
+      headers: { "If-None-Match": etag ?? "" },
+    });
+    expect(bogus.status).toBe(400);
+    expect(bogus.headers.get("ETag")).toBeNull();
+  });
+
   it("reports every billing channel it stores without an opt-in", async () => {
     const channelFact = (channel: string, channelSource: string, model: string) =>
       usageFactInsert("opencode", channel, model, {
@@ -1480,6 +1551,40 @@ function unknownModelSubmission(): UsageSubmission {
         web_search_requests: 0,
         web_fetch_requests: 0,
         source_cost_covered_requests: 0,
+      },
+    ],
+  };
+}
+
+function webSessionFor(accountId: string): WebAccountAuth {
+  return {
+    handler: async () => new Response(null, { status: 404 }),
+    beginGitHubSignIn: async () => new Response(null, { status: 302 }),
+    getSession: async () => ({
+      user: { id: accountId, name: "Quota Tester" },
+      session: {
+        id: `web_${accountId}`,
+        createdAt: now,
+        expiresAt: new Date(now.getTime() + 60_000),
+      },
+    }),
+  };
+}
+
+function quotaSnapshotJson() {
+  return {
+    protocol_version: 5,
+    provider: "codex",
+    captured_at: now.toISOString(),
+    observed_at: now.toISOString(),
+    valid_for_seconds: 3_600,
+    account: { fingerprint: "fingerprint_etag", label: "tester", plan: "Plus" },
+    windows: [
+      {
+        id: "weekly",
+        title: "Weekly",
+        used_percent: 25,
+        resets_at: new Date(now.getTime() + 86_400_000).toISOString(),
       },
     ],
   };
