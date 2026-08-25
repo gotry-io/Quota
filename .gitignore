@@ -36,3 +36,6 @@ tmp/
 
 # pnpm content-addressable store (cloud agent sandboxes drop it in the repo root)
 .pnpm-store/
+
+# Agent worktrees (nested checkouts confuse Biome and must never be committed)
+.claude/worktrees/
