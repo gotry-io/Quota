@@ -13,19 +13,28 @@ private enum AccountDevicesPageState: Equatable {
 /// How recently a device spoke, from the two things Relay actually witnessed: when the device
 /// last called, and when the newest reading it sent was taken. A device that is asleep or closed
 /// is quiet, not broken, so nothing here claims a device is unhealthy.
-enum AccountDeviceActivity: String, Equatable, Sendable {
-  case active = "Active"
-  case idle = "Idle"
-  case notReporting = "Not reporting"
+///
+/// The row states one age, not a list of instants, and it is the instant this verdict came from.
+struct AccountDeviceActivity: Equatable, Sendable {
+  enum Status: String, Equatable, Sendable {
+    case active = "Active"
+    case idle = "Idle"
+    case notReporting = "Not reporting"
+  }
 
-  static func status(for device: AccountDevice, now: Date) -> Self {
+  let status: Status
+  let since: Date?
+
+  var label: String { status.rawValue }
+
+  static func make(for device: AccountDevice, now: Date) -> Self {
     guard let newest = [device.lastSeenAt, device.lastObservedAt].compactMap({ $0 }).max() else {
-      return .notReporting
+      return Self(status: .notReporting, since: nil)
     }
     let age = now.timeIntervalSince(newest)
-    if age < 30 * 60 { return .active }
-    if age < 24 * 60 * 60 { return .idle }
-    return .notReporting
+    if age < 30 * 60 { return Self(status: .active, since: newest) }
+    if age < 24 * 60 * 60 { return Self(status: .idle, since: newest) }
+    return Self(status: .notReporting, since: newest)
   }
 }
 
@@ -93,20 +102,20 @@ struct AccountDevicesView: View {
           } else {
             VStack(alignment: .leading, spacing: 0) {
               ForEach(summary.devices) { device in
+                let activity = AccountDeviceActivity.make(for: device, now: now)
                 SettingsListRow(
                   title: device.displayName,
-                  subtitle: deviceSubtitle(device, now: now),
+                  subtitle: deviceSubtitle(device, activity: activity, now: now),
                   systemImage: device.platform == .macos ? "desktopcomputer" : "terminal",
                   height: QuotaDesign.Layout.settingsListRowHeight
                 ) {
-                  Text(AccountDeviceActivity.status(for: device, now: now).rawValue)
+                  Text(activity.label)
                     .quotaListSecondaryStyle()
                 }
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(device.displayName)
                 .accessibilityValue(
-                  AccountDeviceActivity.status(for: device, now: now).rawValue
-                    + ". " + deviceSubtitle(device, now: now)
+                  activity.label + ". " + deviceSubtitle(device, activity: activity, now: now)
                 )
               }
             }
@@ -125,7 +134,11 @@ struct AccountDevicesView: View {
       : "Sign in from Settings to view account devices."
   }
 
-  private func deviceSubtitle(_ device: AccountDevice, now: Date) -> String {
+  private func deviceSubtitle(
+    _ device: AccountDevice,
+    activity: AccountDeviceActivity,
+    now: Date
+  ) -> String {
     let platform =
       switch device.platform {
       case .macos: "macOS"
@@ -133,16 +146,7 @@ struct AccountDevicesView: View {
       case .windows: "Windows"
       case .unknown: "Unknown"
       }
-    var parts = [platform]
-    if let lastSeenAt = device.lastSeenAt {
-      parts.append("Last seen \(CompactAgeFormat.string(since: lastSeenAt, now: now)) ago")
-    } else {
-      parts.append("Never reported")
-    }
-    if let lastObservedAt = device.lastObservedAt {
-      parts.append("Last reading \(CompactAgeFormat.string(since: lastObservedAt, now: now)) ago")
-    }
-    return parts.joined(separator: " · ")
+    return "\(platform) · \(FreshnessCopy.lastReading(since: activity.since, now: now))"
   }
 
 }

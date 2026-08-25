@@ -203,7 +203,7 @@ struct WidgetSnapshotProjectionTests {
     #expect(item.state == .available)
     #expect(item.validUntil == date("2026-08-14T16:00:00Z"))
     // The widget re-renders long after the app published this.
-    #expect(item.stateLabel(now: date("2026-08-14T16:00:01Z")) == "Stale")
+    #expect(item.stateLabel(now: date("2026-08-14T16:00:01Z")) == "Not current")
     #expect(item.stateLabel(now: date("2026-08-14T15:59:59Z")) == nil)
   }
 

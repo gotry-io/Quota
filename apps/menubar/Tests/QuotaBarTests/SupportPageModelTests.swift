@@ -85,7 +85,7 @@ private func sampleReport() -> LocalServiceDiagnosticReport {
     surfaces: [
       LocalServiceDiagnosticSurface(
         id: "quota_overview", status: .ok, data: .current, lastSuccessAt: date,
-        message: "1 subscription shown · 0 read on this Mac · 1 from the account.",
+        message: "1 subscription shown, all current.",
         recovery: .none),
       LocalServiceDiagnosticSurface(
         id: "usage_this_device", status: .ok, data: .empty, lastSuccessAt: nil,

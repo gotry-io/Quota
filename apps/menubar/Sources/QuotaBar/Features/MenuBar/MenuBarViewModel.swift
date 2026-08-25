@@ -60,10 +60,12 @@ struct ProviderReportingSourcePresentation: Equatable, Identifiable {
   var symbolName: String { kind == .local ? "laptopcomputer" : "desktopcomputer" }
 
   func detailLabel(now: Date) -> String {
-    var parts = [kind.rawValue]
-    if isStale { parts.append(QuotaObservationState.stale.label) }
-    parts.append("\(CompactAgeFormat.string(since: observedAt, now: now)) ago")
-    return parts.joined(separator: " · ")
+    let freshness = FreshnessCopy.observation(
+      state: isStale ? .stale : .available,
+      observedAt: observedAt,
+      now: now
+    )
+    return "\(kind.rawValue) · \(freshness)"
   }
 }
 
@@ -164,7 +166,7 @@ final class MenuBarViewModel {
       return accountState == .signedIn ? "Unavailable" : "Sign in"
     }
     let now = Date()
-    let active = devices.filter { AccountDeviceActivity.status(for: $0, now: now) == .active }
+    let active = devices.filter { AccountDeviceActivity.make(for: $0, now: now).status == .active }
       .count
     return active == devices.count ? "\(devices.count)" : "\(active)/\(devices.count) active"
   }

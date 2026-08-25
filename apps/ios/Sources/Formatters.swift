@@ -46,12 +46,9 @@ enum QuotaFormat {
     )
   }
 
-  static func fetchedTime(_ date: Date) -> String {
-    date.formatted(date: .omitted, time: .shortened)
-  }
-
-  static func refreshedAge(_ date: Date, now: Date = Date()) -> String {
-    CompactAgeFormat.string(since: date, now: now)
+  /// How old the account summary on screen is, in the words every Quota client uses.
+  static func updated(_ date: Date, now: Date = Date()) -> String {
+    FreshnessCopy.updated(since: date, now: now)
   }
 
   static func resetTime(_ date: Date) -> String {

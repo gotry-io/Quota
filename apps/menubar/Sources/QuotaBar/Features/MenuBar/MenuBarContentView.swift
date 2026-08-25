@@ -37,6 +37,7 @@ struct MenuBarContentView: View {
       MenuBarShell(
         model: model,
         title: navigation.title,
+        now: context.date,
         canNavigateBack: navigation.canNavigateBack,
         onNavigateBack: navigateBack,
         showsLeadingIcon: navigation.currentRoute == nil,

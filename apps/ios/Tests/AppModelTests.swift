@@ -22,24 +22,25 @@ struct AppModelTests {
     }
 
     #expect(
-      RemoteDeviceActivity.status(
-        for: device(lastSeenAt: now.addingTimeInterval(-300)), now: now) == .active)
+      RemoteDeviceActivity.make(
+        for: device(lastSeenAt: now.addingTimeInterval(-300)), now: now).status == .active)
     // A device that has not called in a day can still have sent a reading minutes ago.
     #expect(
-      RemoteDeviceActivity.status(
+      RemoteDeviceActivity.make(
         for: device(
           lastSeenAt: now.addingTimeInterval(-86_400),
           lastObservedAt: now.addingTimeInterval(-120)
         ),
-        now: now) == .active)
+        now: now).status == .active)
     #expect(
-      RemoteDeviceActivity.status(
-        for: device(lastSeenAt: now.addingTimeInterval(-3 * 3_600)), now: now) == .idle)
+      RemoteDeviceActivity.make(
+        for: device(lastSeenAt: now.addingTimeInterval(-3 * 3_600)), now: now).status == .idle)
     #expect(
-      RemoteDeviceActivity.status(
-        for: device(lastSeenAt: now.addingTimeInterval(-3 * 86_400)), now: now) == .notReporting)
+      RemoteDeviceActivity.make(
+        for: device(lastSeenAt: now.addingTimeInterval(-3 * 86_400)), now: now).status
+        == .notReporting)
     #expect(
-      RemoteDeviceActivity.status(for: device(lastSeenAt: nil), now: now) == .notReporting)
+      RemoteDeviceActivity.make(for: device(lastSeenAt: nil), now: now).status == .notReporting)
   }
 
   @Test

@@ -1,3 +1,4 @@
+import QuotaPresentation
 import QuotaWire
 import SwiftUI
 
@@ -77,7 +78,7 @@ struct OverviewView: View {
               .font(.subheadline.weight(.medium))
               .foregroundStyle(.secondary)
               .fixedSize(horizontal: false, vertical: true)
-            Text("Updated \(QuotaFormat.refreshedAge(fetchedAt))")
+            Text(QuotaFormat.updated(fetchedAt))
               .font(.footnote.monospacedDigit())
               .foregroundStyle(.tertiary)
               .fixedSize(horizontal: false, vertical: true)
@@ -90,7 +91,7 @@ struct OverviewView: View {
               .foregroundStyle(.secondary)
               .lineLimit(1)
             Spacer(minLength: 8)
-            Text("Updated \(QuotaFormat.refreshedAge(fetchedAt))")
+            Text(QuotaFormat.updated(fetchedAt))
               .font(.footnote.monospacedDigit())
               .foregroundStyle(.tertiary)
               .lineLimit(1)
@@ -99,9 +100,7 @@ struct OverviewView: View {
         }
       }
       .accessibilityElement(children: .ignore)
-      .accessibilityLabel(
-        "\(model.accountLabel), Last updated \(QuotaFormat.fetchedTime(fetchedAt))"
-      )
+      .accessibilityLabel("\(model.accountLabel), \(QuotaFormat.updated(fetchedAt))")
     }
   }
 
@@ -123,18 +122,27 @@ struct OverviewView: View {
 /// How recently a device spoke, from the two things Relay actually witnessed: when the device
 /// last called, and when the newest reading it sent was taken. A device that is asleep or closed
 /// is quiet, not broken, so nothing here claims a device is unhealthy.
-enum RemoteDeviceActivity: String, Equatable, Sendable {
-  case active = "Active"
-  case idle = "Idle"
-  case notReporting = "Not reporting"
+///
+/// The row states one age, not a list of instants, and it is the instant this verdict came from.
+struct RemoteDeviceActivity: Equatable, Sendable {
+  enum Status: String, Equatable, Sendable {
+    case active = "Active"
+    case idle = "Idle"
+    case notReporting = "Not reporting"
+  }
 
-  static func status(for device: AccountDevice, now: Date) -> Self {
+  let status: Status
+  let since: Date?
+
+  var label: String { status.rawValue }
+
+  static func make(for device: AccountDevice, now: Date) -> Self {
     let instants = [device.lastSeenAt, device.lastObservedAt].compactMap { $0 }
-    guard let newest = instants.max() else { return .notReporting }
+    guard let newest = instants.max() else { return Self(status: .notReporting, since: nil) }
     let age = now.timeIntervalSince(newest)
-    if age < 30 * 60 { return .active }
-    if age < 24 * 60 * 60 { return .idle }
-    return .notReporting
+    if age < 30 * 60 { return Self(status: .active, since: newest) }
+    if age < 24 * 60 * 60 { return Self(status: .idle, since: newest) }
+    return Self(status: .notReporting, since: newest)
   }
 }
 
@@ -158,45 +166,39 @@ struct AccountDevicesCard: View {
   }
 
   private func deviceRow(_ device: AccountDevice, now: Date) -> some View {
-    let status = RemoteDeviceActivity.status(for: device, now: now)
+    let activity = RemoteDeviceActivity.make(for: device, now: now)
+    let details = deviceDetails(device, activity: activity, now: now)
     return VStack(alignment: .leading, spacing: 5) {
       HStack(alignment: .firstTextBaseline, spacing: 8) {
         Text(device.displayName)
           .font(.subheadline.weight(.medium))
         Spacer(minLength: 8)
-        Text(status.rawValue)
+        Text(activity.label)
           .font(.footnote.weight(.medium))
           .foregroundStyle(.secondary)
           .multilineTextAlignment(.trailing)
       }
-      Text(deviceDetails(device, now: now))
+      Text(details)
         .font(.footnote.monospacedDigit())
         .foregroundStyle(.secondary)
         .fixedSize(horizontal: false, vertical: true)
     }
     .accessibilityElement(children: .ignore)
-    .accessibilityLabel(
-      "\(device.displayName), \(status.rawValue), \(deviceDetails(device, now: now))"
-    )
+    .accessibilityLabel("\(device.displayName), \(activity.label), \(details)")
   }
 
-  private func deviceDetails(_ device: AccountDevice, now: Date) -> String {
+  private func deviceDetails(
+    _ device: AccountDevice,
+    activity: RemoteDeviceActivity,
+    now: Date
+  ) -> String {
     let platform = switch device.platform {
     case .macos: "macOS"
     case .linux: "Linux"
     case .windows: "Windows"
     case .unknown: "Unknown"
     }
-    var parts = [platform]
-    if let seenAt = device.lastSeenAt {
-      parts.append("Last seen \(QuotaFormat.refreshedAge(seenAt, now: now)) ago")
-    } else {
-      parts.append("Never reported")
-    }
-    if let reading = device.lastObservedAt {
-      parts.append("Last reading \(QuotaFormat.refreshedAge(reading, now: now)) ago")
-    }
-    return parts.joined(separator: " · ")
+    return "\(platform) · \(FreshnessCopy.lastReading(since: activity.since, now: now))"
   }
 }
 
@@ -212,17 +214,23 @@ struct TodayUsageCard: View {
         usage.totals.messages > 0 || usage.totals.inputTokens > 0
           || usage.totals.outputTokens > 0
       {
+        // Tokens and cost are the headline on every Quota surface; the input/output split is
+        // detail that supports them.
         metric(
-          label: "Input tokens", value: QuotaFormat.compactCount(usage.totals.inputTokens),
-          accessibility: "\(QuotaFormat.accessibleCount(usage.totals.inputTokens)) input tokens")
-        metric(
-          label: "Output tokens", value: QuotaFormat.compactCount(usage.totals.outputTokens),
-          accessibility: "\(QuotaFormat.accessibleCount(usage.totals.outputTokens)) output tokens")
+          label: "Tokens", value: QuotaFormat.compactCount(usage.totals.totalTokens),
+          accessibility: "\(QuotaFormat.accessibleCount(usage.totals.totalTokens)) tokens")
         metric(
           label: "API-equivalent cost",
           value: QuotaFormat.cost(usage.cost),
           accessibility: "API-equivalent cost, \(QuotaFormat.costAccessibility(usage.cost))"
         )
+        Divider()
+        detail(
+          label: "Input", value: QuotaFormat.compactCount(usage.totals.inputTokens),
+          accessibility: "\(QuotaFormat.accessibleCount(usage.totals.inputTokens)) input tokens")
+        detail(
+          label: "Output", value: QuotaFormat.compactCount(usage.totals.outputTokens),
+          accessibility: "\(QuotaFormat.accessibleCount(usage.totals.outputTokens)) output tokens")
       } else {
         Text("No Usage for Today.")
           .font(.subheadline)
@@ -243,6 +251,24 @@ struct TodayUsageCard: View {
       Spacer(minLength: 12)
       Text(value)
         .font(.body.monospacedDigit().weight(.medium))
+        .lineLimit(1)
+        .minimumScaleFactor(0.75)
+        .layoutPriority(1)
+    }
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel(accessibility)
+  }
+
+  private func detail(label: String, value: String, accessibility: String) -> some View {
+    HStack(alignment: .firstTextBaseline) {
+      Text(label)
+        .font(.footnote)
+        .foregroundStyle(.secondary)
+        .layoutPriority(0)
+      Spacer(minLength: 12)
+      Text(value)
+        .font(.footnote.monospacedDigit())
+        .foregroundStyle(.secondary)
         .lineLimit(1)
         .minimumScaleFactor(0.75)
         .layoutPriority(1)

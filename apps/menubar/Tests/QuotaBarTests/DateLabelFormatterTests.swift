@@ -1,33 +1,25 @@
 import Foundation
+import QuotaPresentation
 import Testing
 
 @testable import QuotaBar
 
-struct LastCheckedLabelTests {
+/// The footer and the Support status line say the same thing the same way, and neither makes
+/// the reader subtract a clock time from now.
+struct FooterFreshnessTests {
+  private let now = Date(timeIntervalSince1970: 1_786_617_600)
+
   @Test
-  func neverCheckedIsAnEmDash() {
-    #expect(LastCheckedLabel.string(from: nil) == "—")
-    #expect(LastCheckedLabel.accessibleString(from: nil) == "Not checked")
+  func nothingCheckedYetSaysSoInWords() {
+    #expect(FreshnessCopy.updated(since: nil, now: now) == "Not checked")
   }
 
   @Test
-  func checkedLabelIsTimeOnly() {
-    let date = Date(timeIntervalSince1970: 1_786_617_600)
-    let label = LastCheckedLabel.string(from: date)
-    #expect(!label.isEmpty)
-    #expect(!label.localizedCaseInsensitiveContains("last checked"))
-    #expect(LastCheckedLabel.accessibleString(from: date).localizedStandardContains("Last checked"))
-  }
-
-  @Test
-  func diagnosticsCheckedStatusUsesFixedTimeNotRelativeAge() {
-    let date = Date(timeIntervalSince1970: 1_786_617_600)
-    let time = LastCheckedLabel.string(from: date)
-    let status = LastCheckedLabel.checkedStatusString(from: date)
-    #expect(status == "Checked \(time)")
-    #expect(!status.localizedCaseInsensitiveContains("ago"))
-    #expect(!status.localizedCaseInsensitiveContains("generated"))
-    #expect(LastCheckedLabel.accessibleString(from: date) == "Last checked \(time)")
+  func aCompletedSyncStatesItsAgeRelativeToNow() {
+    #expect(
+      FreshnessCopy.updated(since: now.addingTimeInterval(-180), now: now) == "Updated 3m ago"
+    )
+    #expect(FreshnessCopy.updated(since: now, now: now) == "Updated just now")
   }
 }
 

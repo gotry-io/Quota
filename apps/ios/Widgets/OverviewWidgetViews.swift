@@ -87,7 +87,7 @@ struct OverviewSmallView: View {
       parts.append("Resets \(OverviewWidgetContent.resetAge(resetsAt: resetsAt, now: entry.date))")
     }
     if let fetchedAt {
-      parts.append("Updated \(OverviewWidgetContent.updatedAge(fetchedAt: fetchedAt, now: entry.date))")
+      parts.append(OverviewWidgetContent.updated(fetchedAt: fetchedAt, now: entry.date))
     }
     return Text(parts.isEmpty ? " " : parts.joined(separator: " · "))
   }
@@ -173,16 +173,14 @@ struct OverviewMediumView: View {
           .lineLimit(1)
           .minimumScaleFactor(0.8)
       }
-      Text(
-        "Updated \(OverviewWidgetContent.updatedAge(fetchedAt: snapshot.fetchedAt, now: entry.date))"
-      )
+      Text(OverviewWidgetContent.updated(fetchedAt: snapshot.fetchedAt, now: entry.date))
       .font(.caption2.monospacedDigit())
       .foregroundStyle(.tertiary)
       .lineLimit(1)
     }
     .accessibilityElement(children: .ignore)
     .accessibilityLabel(
-      "Today, \(OverviewWidgetContent.todayTokensAccessibility(input: snapshot.today.inputTokens, output: snapshot.today.outputTokens)), \(OverviewWidgetContent.costAccessibility(for: snapshot.today.cost)), Updated \(OverviewWidgetContent.updatedAge(fetchedAt: snapshot.fetchedAt, now: entry.date))"
+      "Today, \(OverviewWidgetContent.todayTokensAccessibility(input: snapshot.today.inputTokens, output: snapshot.today.outputTokens)), \(OverviewWidgetContent.costAccessibility(for: snapshot.today.cost)), \(OverviewWidgetContent.updated(fetchedAt: snapshot.fetchedAt, now: entry.date))"
     )
   }
 }

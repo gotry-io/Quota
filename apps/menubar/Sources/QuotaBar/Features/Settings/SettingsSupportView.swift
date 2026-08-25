@@ -228,7 +228,7 @@ struct SettingsSupportView: View {
   }
 
   private func statusView(_ report: LocalServiceDiagnosticReport) -> some View {
-    let checked = LastCheckedLabel.checkedStatusString(from: report.generatedAt)
+    let checked = FreshnessCopy.updated(since: report.generatedAt)
     let label = SupportPresentation.summaryLabel(report.summary)
     return HStack(spacing: QuotaDesign.Spacing.sm) {
       Image(systemName: summarySymbol(report.summary))

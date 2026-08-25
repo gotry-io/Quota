@@ -246,7 +246,7 @@
       surfaces: [
         LocalServiceDiagnosticSurface(
           id: "quota_overview", status: .ok, data: .current, lastSuccessAt: date,
-          message: "5 subscriptions shown · 3 read on this Mac · 2 from the account.",
+          message: "5 subscriptions shown, all current.",
           recovery: .none),
         LocalServiceDiagnosticSurface(
           id: "usage_this_device", status: .ok, data: .current, lastSuccessAt: date,

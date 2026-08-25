@@ -146,28 +146,17 @@ private struct AccountQuotaView: View {
       Text(observationLabel)
         .lineLimit(1)
         .fixedSize()
-        .accessibilityLabel(observationAccessibilityLabel)
     }
     .quotaFont(.meta)
     .foregroundStyle(emphasizesMetadata ? QuotaPalette.body : QuotaPalette.mute)
   }
 
-  private var stateLabel: String? {
-    presentation.state == .available ? nil : presentation.state.label
-  }
-
   private var observationLabel: String {
-    [stateLabel, "\(observedAge) ago"].compactMap { $0 }.joined(separator: " · ")
-  }
-
-  private var observationAccessibilityLabel: String {
-    let observed = presentation.snapshot.observedAt.formatted(.relative(presentation: .named))
-    guard let stateLabel else { return "Observed \(observed)" }
-    return "\(stateLabel). Observed \(observed)"
-  }
-
-  private var observedAge: String {
-    CompactAgeFormat.string(since: presentation.snapshot.observedAt, now: now)
+    FreshnessCopy.observation(
+      state: presentation.state,
+      observedAt: presentation.snapshot.observedAt,
+      now: now
+    )
   }
 }
 
@@ -211,7 +200,7 @@ private struct QuotaWindowRow: View {
         Text("Resets \(ResetDateFormatter.string(from: resetsAt))")
           .quotaMetaStyle()
       } else if window.showsPercentMeter {
-        Text("Reset time unavailable")
+        Text(FreshnessCopy.noResetTime)
           .quotaMetaStyle()
       }
     }

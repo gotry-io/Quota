@@ -375,19 +375,10 @@ impl NativeBackend {
         let mut sources = Vec::new();
 
         // Quota Overview.
-        let mut local_quota_sources = 0i64;
-        let mut account_quota_sources = 0i64;
         let mut current_quota = 0i64;
         for item in &snapshot.overview {
             if !item.is_stale {
                 current_quota = current_quota.saturating_add(1);
-            }
-            for source in &item.sources {
-                if source.kind == "local" {
-                    local_quota_sources = local_quota_sources.saturating_add(1);
-                } else if source.kind == "device" {
-                    account_quota_sources = account_quota_sources.saturating_add(1);
-                }
             }
         }
         let quota_data = if snapshot.overview.is_empty() {
@@ -860,17 +851,24 @@ impl NativeBackend {
                 status: quota_status,
                 data: quota_data,
                 last_success_at: quota.as_ref().and_then(|value| value.updated_at.clone()),
+                // What a person needs here is whether the numbers on Overview still describe
+                // their account, not how many machines each one came from.
                 message: match (snapshot.overview.len(), quota_data) {
                     (0, _) => "No quota has been read yet.".to_owned(),
-                    (_, DiagnosticDataState::Stale) => format!(
-                        "{} shown, all older than the provider's own freshness window.",
-                        plural(snapshot.overview.len() as i64, "subscription")
+                    (total, DiagnosticDataState::Stale) => format!(
+                        "{} shown, none of them current.",
+                        plural(total as i64, "subscription")
                     ),
-                    _ => format!(
-                        "{} shown · {} read on this Mac · {} from the account.",
-                        plural(snapshot.overview.len() as i64, "subscription"),
-                        local_quota_sources,
-                        account_quota_sources
+                    (total, _) if current_quota == total as i64 => {
+                        format!(
+                            "{} shown, all current.",
+                            plural(total as i64, "subscription")
+                        )
+                    }
+                    (total, _) => format!(
+                        "{} shown, {} not current.",
+                        plural(total as i64, "subscription"),
+                        total as i64 - current_quota
                     ),
                 },
                 recovery: if configured_quota_source_failed {
