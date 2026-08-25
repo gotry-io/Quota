@@ -12,6 +12,7 @@ use super::common::{
 mod app;
 
 pub const SOURCE: &str = "cursor_dashboard_api";
+pub const APP_SOURCE: &str = app::SOURCE;
 const ORIGIN: &str = "https://cursor.com";
 /// Optional dashboard calls must not stretch a refresh that already has its
 /// required usage summary.

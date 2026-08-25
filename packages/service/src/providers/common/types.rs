@@ -31,6 +31,19 @@ impl ErrorCategory {
             Self::Error => "error",
         }
     }
+
+    /// The category as itself, including the refusal [`Self::as_str`] folds away.  Only a
+    /// reader on this device can act on that difference, and only the local collection
+    /// report carries it.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::AuthRequired => "auth_required",
+            Self::AccessDenied => "access_denied",
+            Self::Unavailable => "unavailable",
+            Self::Unsupported => "unsupported",
+            Self::Error => "error",
+        }
+    }
 }
 
 /// A failed provider read. The category is the whole answer: it is what the collection
@@ -401,6 +414,33 @@ mod tests {
             assert_eq!(error.category, category);
             assert_eq!(error.source_id, "official_source");
         }
+    }
+
+    /// Discovery and collection both need this device's Claude grant, and asking twice
+    /// starts a second `/usr/bin/security` for an answer the first already gave.
+    #[test]
+    fn the_keychain_is_read_once_per_context() {
+        let context = CollectionContext::default();
+        let mut reads = 0;
+        for _ in 0..3 {
+            let secret = context.keychain_secret(|| {
+                reads += 1;
+                KeychainSecret::Found(b"{}".to_vec())
+            });
+            assert_eq!(*secret, KeychainSecret::Found(b"{}".to_vec()));
+        }
+        assert_eq!(reads, 1);
+        // A clone of the context is the same refresh, and shares the same answer.
+        let cloned = context.clone();
+        assert_eq!(
+            *cloned.keychain_secret(|| panic!("second read")),
+            KeychainSecret::Found(b"{}".to_vec())
+        );
+        // A secret must not be printable through the context that carries it.
+        assert_eq!(
+            format!("{:?}", KeychainSecret::Found(b"sk-ant-secret".to_vec())),
+            "KeychainSecret::Found(<redacted>)"
+        );
     }
 
     #[test]

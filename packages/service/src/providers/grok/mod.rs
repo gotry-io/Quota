@@ -15,6 +15,7 @@ use super::common::{
 mod web;
 
 pub const SOURCE: &str = "grok_billing_api";
+pub const WEB_SOURCE: &str = web::WEB_SOURCE;
 pub const BILLING_URL: &str = "https://cli-chat-proxy.grok.com/v1/billing?format=credits";
 pub const SETTINGS_URL: &str = "https://cli-chat-proxy.grok.com/v1/settings";
 const SETTINGS_TIMEOUT: Duration = Duration::from_secs(2);

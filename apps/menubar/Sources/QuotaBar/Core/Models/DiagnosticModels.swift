@@ -376,13 +376,18 @@ struct LocalServiceDiagnosticFinding: Decodable, Equatable, Sendable {
   }
 }
 
+/// `provider:<id>`, `agent:<id>`, or a provider narrowed to the source that answered for
+/// it: `provider:<id>/<source_id>`. A finding that names only the provider cannot say which
+/// of its readings to go fix.
 private func isSafeSubject(_ value: String) -> Bool {
   let identity = value.drop(while: { $0 != ":" }).dropFirst()
+  let parts = identity.split(separator: "/", omittingEmptySubsequences: false)
   return isSafeDiagnosticText(value, maximum: 80)
     && (value.hasPrefix("provider:") || value.hasPrefix("agent:"))
-    && !identity.isEmpty
-    && identity.allSatisfy {
-      $0.isASCII && ($0.isLowercase || $0.isNumber || $0 == "_")
+    && (1 ... 2).contains(parts.count)
+    && parts.allSatisfy { part in
+      !part.isEmpty
+        && part.allSatisfy { $0.isASCII && ($0.isLowercase || $0.isNumber || $0 == "_") }
     }
 }
 

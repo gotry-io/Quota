@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use crate::state::StateError;
 
-const CURRENT_SCHEMA: i64 = 11;
+const CURRENT_SCHEMA: i64 = 12;
 
 pub fn apply(conn: &mut Connection) -> Result<(), StateError> {
     conn.execute_batch(
@@ -37,6 +37,7 @@ pub fn apply(conn: &mut Connection) -> Result<(), StateError> {
             9 => migration_v9(&tx)?,
             10 => migration_v10(&tx)?,
             11 => migration_v11(&tx)?,
+            12 => migration_v12(&tx)?,
             _ => return Err(StateError::InvalidState),
         }
         tx.execute(
@@ -649,11 +650,18 @@ fn migration_v11(tx: &Transaction<'_>) -> Result<(), StateError> {
             ON diagnostic_attempts(parent_refresh_id, id);",
     )?;
 
-    // The persisted collection report is stamped with the contract it was written under, and
-    // the app decodes the whole IPC state or none of it.  It is this device's own reading of
-    // its own sources, so it is promoted rather than discarded: v3 only added a marker a v2
-    // report could not have set.
-    if let Some(raw) = tx
+    Ok(())
+}
+
+/// Discards a persisted collection report written under an older contract.
+///
+/// v4 replaced the discovered-source count with the sources themselves, so a v3 report is
+/// not a v4 report with a field missing and cannot be promoted into one.  The report is
+/// this device's own cache of its own sources, and the next collection rebuilds it; the app
+/// decodes the whole IPC state or none of it, so carrying a shape it cannot read forward
+/// would cost more than the few minutes of staleness dropping it costs.
+fn migration_v12(tx: &Transaction<'_>) -> Result<(), StateError> {
+    let current = tx
         .query_row(
             "SELECT value_json FROM components WHERE name = 'quota'",
             [],
@@ -661,27 +669,21 @@ fn migration_v11(tx: &Transaction<'_>) -> Result<(), StateError> {
         )
         .optional()?
         .flatten()
-    {
-        let mut value: Value = serde_json::from_str(&raw)?;
-        if value.get("protocol_version").and_then(Value::as_i64) == Some(2) {
-            // Stamping a newer version onto a report that is not one hands the app something it
-            // decodes the whole state by and cannot read.  A report is this device's own cache
-            // of its own sources, so one that is not the shape being promoted is dropped and
-            // rebuilt by the next collection rather than carried forward as a version it is not.
-            let promotable = value.get("captured_at").and_then(Value::as_str).is_some()
-                && value.get("results").and_then(Value::as_array).is_some();
-            value = if promotable {
-                value["protocol_version"] = Value::from(crate::protocol::LOCAL_COLLECTION_PROTOCOL);
-                value
-            } else {
-                Value::Null
-            };
-            tx.execute(
-                "UPDATE components SET value_json = ?1 WHERE name = 'quota'",
-                [serde_json::to_string(&value)?],
-            )?;
-        }
+        .map(|raw| serde_json::from_str::<Value>(&raw))
+        .transpose()?
+        .and_then(|value| {
+            value
+                .get("protocol_version")
+                .and_then(Value::as_i64)
+                .map(|version| version == crate::protocol::LOCAL_COLLECTION_PROTOCOL)
+        });
+    if current == Some(true) {
+        return Ok(());
     }
+    tx.execute(
+        "UPDATE components SET value_json = NULL WHERE name = 'quota'",
+        [],
+    )?;
     Ok(())
 }
 
@@ -776,7 +778,7 @@ mod tests {
             .expect("v1 rows")
             .collect::<Result<Vec<_>, _>>()
             .expect("v1 values");
-        assert_eq!(fresh_versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+        assert_eq!(fresh_versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
         assert_eq!(fresh_versions, v1_versions);
         assert_eq!(
             columns(&fresh, "usage_period_cache"),
@@ -1001,13 +1003,20 @@ mod tests {
         conn.execute(
             "INSERT INTO components(name, status, value_json) VALUES ('quota', 'ready', ?1)",
             [serde_json::json!({
-                "protocol_version": 2,
+                // Stamped current, so the later step that drops superseded reports keeps it
+                // and this test stays about the fields v9 strips.
+                "protocol_version": crate::protocol::LOCAL_COLLECTION_PROTOCOL,
                 "captured_at": "2026-08-22T14:51:36Z",
                 // A collection result names its own source, which is still a field.
                 "results": [{
                     "provider": "codex",
                     "outcome": "success",
                     "source": "chatgpt_usage_api",
+                    "sources": [{
+                        "source_id": "chatgpt_usage_api",
+                        "outcome": "success",
+                        "category": "success"
+                    }],
                     "snapshots": [reading.clone()]
                 }]
             })
@@ -1261,7 +1270,7 @@ mod tests {
             .expect("rows")
             .collect::<Result<Vec<_>, _>>()
             .expect("values");
-        assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+        assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
     }
 
     fn columns_after_fresh_apply(table: &str) -> Vec<String> {
@@ -1370,7 +1379,7 @@ mod tests {
             .expect("history kept");
         assert_eq!(kept, 1);
         // Rewinding and re-running the rebuild keeps every row it found.
-        conn.execute("DELETE FROM schema_migrations WHERE version = 11", [])
+        conn.execute("DELETE FROM schema_migrations WHERE version >= 11", [])
             .expect("rewind");
         apply(&mut conn).expect("v11");
         let total: i64 = conn
@@ -1388,7 +1397,7 @@ mod tests {
     fn a_row_the_table_should_never_have_held_does_not_strand_the_ladder() {
         let mut conn = Connection::open_in_memory().expect("memory");
         apply(&mut conn).expect("fresh");
-        conn.execute("DELETE FROM schema_migrations WHERE version = 11", [])
+        conn.execute("DELETE FROM schema_migrations WHERE version >= 11", [])
             .expect("rewind");
         conn.execute_batch("PRAGMA ignore_check_constraints = ON")
             .expect("simulate an image that already holds one");
@@ -1432,30 +1441,46 @@ mod tests {
         assert_eq!(truncated, "1");
     }
 
-    /// A report that is not the shape being promoted is not given a version it does not have:
-    /// the app decodes the whole state by that version, so carrying one forward would cost the
-    /// reader every surface at once instead of one cache the next collection rebuilds.
+    /// A report written under an older contract is dropped, not carried forward.
+    ///
+    /// The app decodes the whole IPC state by one version, so a report stamped with a
+    /// version it is not costs the reader every surface at once — instead of one cache the
+    /// next collection rebuilds in minutes.
     #[test]
-    fn a_report_that_is_not_the_shape_being_promoted_is_dropped() {
-        for (name, value, promoted) in [
+    fn a_report_from_an_older_contract_is_dropped() {
+        for (name, value, kept) in [
             (
-                "a report",
+                "the current contract",
                 serde_json::json!({
-                    "protocol_version": 2,
+                    "protocol_version": crate::protocol::LOCAL_COLLECTION_PROTOCOL,
                     "captured_at": "2026-08-25T00:00:00Z",
                     "results": []
                 }),
                 true,
             ),
             (
+                "a report that counted its sources instead of naming them",
+                serde_json::json!({
+                    "protocol_version": 3,
+                    "captured_at": "2026-08-25T00:00:00Z",
+                    "results": [{
+                        "provider": "claude",
+                        "outcome": "auth_required",
+                        "snapshots": [],
+                        "sources": 1
+                    }]
+                }),
+                false,
+            ),
+            (
                 "something else entirely",
-                serde_json::json!({"protocol_version": 2, "unexpected": true}),
+                serde_json::json!({"unexpected": true}),
                 false,
             ),
         ] {
             let mut conn = Connection::open_in_memory().expect("memory");
             apply(&mut conn).expect("fresh");
-            conn.execute("DELETE FROM schema_migrations WHERE version = 11", [])
+            conn.execute("DELETE FROM schema_migrations WHERE version >= 12", [])
                 .expect("rewind");
             conn.execute(
                 "INSERT INTO components(name, status, value_json) VALUES ('quota', 'ready', ?1)
@@ -1464,24 +1489,25 @@ mod tests {
             )
             .expect("persisted report");
 
-            apply(&mut conn).expect("v11");
+            apply(&mut conn).expect("v12");
 
-            let stored: String = conn
+            let stored: Option<String> = conn
                 .query_row(
                     "SELECT value_json FROM components WHERE name = 'quota'",
                     [],
                     |row| row.get(0),
                 )
                 .expect("component");
-            let stored: Value = serde_json::from_str(&stored).expect("json");
-            if promoted {
-                assert_eq!(
-                    stored.get("protocol_version").and_then(Value::as_i64),
-                    Some(crate::protocol::LOCAL_COLLECTION_PROTOCOL),
-                    "{name}"
-                );
-            } else {
-                assert!(stored.is_null(), "{name}: {stored}");
+            match stored {
+                Some(stored) => {
+                    assert!(kept, "{name}: {stored}");
+                    assert_eq!(
+                        serde_json::from_str::<Value>(&stored).expect("json"),
+                        value,
+                        "{name}"
+                    );
+                }
+                None => assert!(!kept, "{name}"),
             }
         }
     }
@@ -1494,7 +1520,7 @@ mod tests {
     fn the_ladder_stays_inside_a_launch() {
         let mut conn = Connection::open_in_memory().expect("memory");
         apply(&mut conn).expect("fresh");
-        conn.execute("DELETE FROM schema_migrations WHERE version = 11", [])
+        conn.execute("DELETE FROM schema_migrations WHERE version >= 11", [])
             .expect("rewind");
         {
             let tx = conn.transaction().expect("transaction");

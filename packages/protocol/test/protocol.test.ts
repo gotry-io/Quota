@@ -233,12 +233,22 @@ describe("quota protocol", () => {
           provider: "codex",
           outcome: "success",
           snapshots: [snapshot("codex")],
+          sources: [{ source_id: "chatgpt_usage_api", outcome: "success", category: "success" }],
         },
         {
+          // Each rung names itself, so an expired OAuth grant and a browser session that
+          // went stale are two findings rather than one shrug.
           provider: "claude",
           outcome: "auth_required",
           snapshots: [],
-          message: "Sign in again",
+          message: "Open Claude Code to refresh the sign-in",
+          sources: [
+            {
+              source_id: "anthropic_oauth_usage_api",
+              outcome: "auth_required",
+              category: "auth_required",
+            },
+          ],
         },
         {
           // A refusal reads as unavailable to every other device and names itself here,
@@ -248,11 +258,19 @@ describe("quota protocol", () => {
           snapshots: [],
           access_denied: true as const,
           message: "Check access",
+          sources: [
+            {
+              source_id: "grok_billing_api",
+              outcome: "unavailable",
+              category: "access_denied",
+            },
+          ],
         },
         {
           provider: "cursor",
           outcome: "success",
           snapshots: [snapshot("cursor")],
+          sources: [{ source_id: "cursor_app_auth", outcome: "success", category: "success" }],
         },
       ],
     };
@@ -260,7 +278,16 @@ describe("quota protocol", () => {
     expect(
       QuotaCollectionReportSchema.safeParse({
         ...report,
-        results: [{ provider: "codex", outcome: "success", snapshots: [snapshot("claude")] }],
+        results: [
+          { provider: "codex", outcome: "success", snapshots: [snapshot("claude")], sources: [] },
+        ],
+      }).success,
+    ).toBe(false);
+    // A provider that was never set up here reports no sources, not a missing field.
+    expect(
+      QuotaCollectionReportSchema.safeParse({
+        ...report,
+        results: [{ provider: "codex", outcome: "auth_required", snapshots: [] }],
       }).success,
     ).toBe(false);
     expect(QuotaCollectionReportSchema.safeParse({ ...report, extra: true }).success).toBe(false);

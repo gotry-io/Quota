@@ -14,6 +14,7 @@ mod web;
 
 pub const SOURCE_API: &str = "chatgpt_usage_api";
 pub const SOURCE_PAT: &str = "codex_pat_usage_api";
+pub const WEB_SOURCE: &str = web::WEB_SOURCE;
 pub const USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
 pub const WHOAMI_URL: &str = "https://auth.openai.com/api/accounts/v1/user-auth-credential/whoami";
 

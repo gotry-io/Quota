@@ -16,6 +16,7 @@ use super::common::{
 mod web;
 
 pub const SOURCE: &str = "anthropic_oauth_usage_api";
+pub const WEB_SOURCE: &str = web::WEB_SOURCE;
 pub const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 pub const PROFILE_URL: &str = "https://api.anthropic.com/api/oauth/profile";
 pub const KEYCHAIN_SERVICE: &str = "Claude Code-credentials";

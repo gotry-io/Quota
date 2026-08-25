@@ -739,7 +739,9 @@
       snapshots: snapshots,
       source: nil,
       message: nil,
-      sources: 1,
+      sources: [
+        QuotaCollectionSource(sourceID: "browser_session", outcome: .success, category: .success)
+      ],
       accessDenied: nil
     )
   }
@@ -756,7 +758,13 @@
       source: nil,
       message: message,
       // A Mac whose stored sign-ins were rejected, not one that never had them.
-      sources: 1,
+      sources: [
+        QuotaCollectionSource(
+          sourceID: "browser_session",
+          outcome: outcome,
+          category: CollectionSourceCategory(rawValue: outcome.rawValue) ?? .error
+        )
+      ],
       accessDenied: nil
     )
   }

@@ -31,7 +31,7 @@ export const MANAGED_DATA_PROTOCOL_VERSION = 5 as const;
 /** The private local Usage report the service hands its own app. */
 export const LOCAL_USAGE_PROTOCOL_VERSION = 3 as const;
 /** The private local quota collection report the service hands its own app. */
-export const LOCAL_COLLECTION_PROTOCOL_VERSION = 3 as const;
+export const LOCAL_COLLECTION_PROTOCOL_VERSION = 4 as const;
 /** The unauthenticated public profile projection. */
 export const PUBLIC_PROFILE_PROTOCOL_VERSION = 2 as const;
 export const MAXIMUM_SNAPSHOTS_PER_ENVELOPE = 32;
@@ -181,13 +181,40 @@ export const CollectionOutcomeSchema = z.enum([
 ]);
 export type CollectionOutcome = z.infer<typeof CollectionOutcomeSchema>;
 
+/**
+ * One discovered credential source and what reading it produced.
+ *
+ * `outcome` is the wire spelling, which folds a refusal into `unavailable` because no other
+ * device can see or change this one's access. `category` keeps them apart for the reader who
+ * can act on the difference.
+ */
+export const QuotaCollectionSourceSchema = z
+  .object({
+    source_id: BillingDimensionSchema,
+    outcome: CollectionOutcomeSchema,
+    category: z.enum([
+      "success",
+      "auth_required",
+      "access_denied",
+      "unavailable",
+      "unsupported",
+      "error",
+    ]),
+  })
+  .strict();
+export type QuotaCollectionSource = z.infer<typeof QuotaCollectionSourceSchema>;
+
 /** What every collection result carries; the outcome decides what `snapshots` may hold. */
 const QuotaCollectionResultFieldsSchema = z.object({
   provider: LocalProviderIdSchema,
   source: BillingDimensionSchema.optional(),
   message: z.string().trim().min(1).max(512).optional(),
-  /** Local credential sources discovered for this provider; 0 means it is not set up here. */
-  sources: SafeNonnegativeIntegerSchema.optional(),
+  /**
+   * The credential sources discovered for this provider, each named by the rung that
+   * answered for it. Empty means the provider was never set up on this device, which is a
+   * different thing from collection failing here.
+   */
+  sources: z.array(QuotaCollectionSourceSchema).max(MAXIMUM_SNAPSHOTS_PER_ENVELOPE),
   /**
    * Set when the failure was this device being refused what it holds — a Keychain entry whose
    * secret is withheld, say.  Signing in again rewrites a secret this device still cannot
