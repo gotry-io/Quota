@@ -117,13 +117,19 @@ data requirements. Architecture and product behavior are defined in
 
 - GitHub is the only external identity provider. QuotaRelay is the confidential OAuth client; Rust
   local clients never embed the GitHub client secret and never receive a GitHub access token.
-- Better Auth owns GitHub OAuth state, PKCE, callback validation, secure browser cookies, session
-  expiry, and standard auth-route origin checks. The registered callback is
-  `https://quota.gotry.io/api/auth/v2/callback/github`.
-- GitHub login requests no email or repository scopes. Relay fetches only the bounded public profile
-  from GitHub's fixed HTTPS API with a 20-second timeout. The numeric provider subject is HMACed
-  before Better Auth stores it; provider access, refresh, and ID tokens are removed by database hooks
-  and are never retained.
+- Relay owns the browser sign-in end to end. `GET /api/auth/github/start` mints a 256-bit `state`
+  and a PKCE verifier and puts both, with the same-origin path to return to, in one HMAC-signed
+  `__Host-quota_oauth` cookie that expires in ten minutes. Both browser cookies carry the `__Host-`
+  prefix, which a browser accepts only when the cookie is `Secure`, `Path=/`, and carries no
+  `Domain`, so nothing able to write a cookie for a sibling `gotry.io` host can plant one on this
+  origin. The registered callback is
+  `https://quota.gotry.io/api/auth/github/callback`; it checks `state` against that cookie before
+  spending the code, clears the cookie, and answers a callback with a missing, altered, expired, or
+  mismatched cookie with 400 and no session. A code GitHub refuses to spend twice is the same 400.
+- GitHub login requests no scope at all. Relay fetches only the bounded public profile from GitHub's
+  fixed HTTPS API with a 20-second timeout and reads a numeric id and login name from it. The
+  numeric subject is HMACed with `GITHUB_SUBJECT_KEY` and becomes the Account id; the GitHub access
+  token is used for that one request and is never written anywhere.
 - Native browser login uses Authorization Code with PKCE S256, a random state, and a temporary
   `127.0.0.1` callback on a random port. The callback accepts the exact path/state and an
   authorization code only; it rejects tokens in query data and stops after success, cancellation, or
@@ -170,19 +176,21 @@ data requirements. Architecture and product behavior are defined in
 - Successful collection-client login issues an account-read token family and a current-device-write
   token family. Access tokens are short-lived; refresh tokens rotate with compare-and-swap so replay
   revokes or rejects the token family. Store only HMACs of server session and grant secrets.
-- Better Auth browser sessions use secure, HttpOnly cookies. JavaScript cannot read them. On
-  document navigations the Worker reads the session cookie through `WebDocumentPort` so SvelteKit
-  can paint the header username in the first HTML byte. The session token is not exposed to the
-  page, and SvelteKit never receives `env.DB` or Relay secrets. Every document and SvelteKit load
-  response is `Cache-Control: private, no-store`. Raw secondary-storage keys are HMACed; values are
-  AES-GCM encrypted with the key hash as associated data. Its database session table remains empty
-  because Web session material uses that encrypted store.
-- Better Auth validates trusted origins and session freshness for standard sign-in, sign-out, and
-  Account deletion routes. Its user-deletion hook removes the Quota domain Account and cascading
-  business data. Device authorization decisions and Delete Device additionally require a session
-  created within ten minutes and an exact same-origin `Origin` (with same-origin Fetch Metadata when
-  present); session refresh does not advance this authentication timestamp. Cross-account or unknown
-  user codes return a generic not-found response.
+- A browser session is one `account_sessions` row with `client_kind = 'web'` — the same table the
+  native clients use, so there is one place a session expires, is revoked, or is swept. It has no
+  refresh token: `__Host-quota_session` is the whole credential, is `HttpOnly; Secure; SameSite=Lax;
+  Path=/`, and is stored only as an HMAC under its own label, so it cannot be presented as a Bearer
+  token and a native token cannot be presented as a cookie. JavaScript never reads it, and it
+  appears in no log or response body other than its own `Set-Cookie`.
+- On document navigations the Worker reads that cookie through `WebDocumentPort` so SvelteKit can
+  paint the header username in the first HTML byte. A request carrying no cookie of that shape is
+  answered without reaching D1. SvelteKit never receives `env.DB` or Relay secrets, and every
+  document and SvelteKit load response is `Cache-Control: private, no-store`.
+- `POST /api/auth/logout` revokes that row and clears the cookie, and requires an exact same-origin
+  `Origin` (with same-origin Fetch Metadata when present). Delete Account, Delete Device, and device
+  authorization decisions require the same origin check and a session authenticated within ten
+  minutes; nothing advances that timestamp except signing in again. Cross-account or unknown user
+  codes return a generic not-found response.
 
 ## Upload, Usage, and deletion safety
 
@@ -236,10 +244,10 @@ data requirements. Architecture and product behavior are defined in
   terminally rejected.
   The new generation may rebuild the watermark's UTC hour only after the local service filters raw event
   instants before the precise watermark. The account-scoped browser session remains signed in.
-- Delete Account deletes its Devices and business data transactionally. Better Auth removes every
-  indexed browser session for the deleted user, and Relay additionally rejects any cached Web
-  principal whose business Account no longer exists. Local provider data remains owned by provider
-  tools.
+- Delete Account is one Relay D1 batch: sessions, Devices, Device sessions, quota observations,
+  hourly Usage, the daily rollup, login grants, and the Account row. Nothing survives as a
+  tombstone, and the cookie is cleared in the same response. Local provider data remains owned by
+  provider tools.
 - Logout disables upload and revokes account/device sessions but intentionally retains the Device and
   remote facts. Re-login to the same Account may backfill locally readable history, including history
   created while signed out. Re-login revokes every prior session family for that installation before
@@ -296,9 +304,9 @@ data requirements. Architecture and product behavior are defined in
   schemas. Relay serves one managed data contract, so a read never has to exclude what a retired
   contract could not carry.
 - Persist GitHub subjects, installation identities, token/grant secrets, session-store keys, and
-  rate-limit subjects only as keyed hashes where equality is required. Better Auth session values
-  are encrypted at rest. Persist plaintext native tokens only in the one successful issuance
-  response, never in D1.
+  rate-limit subjects only as keyed hashes where equality is required. Persist plaintext native
+  tokens only in the one successful issuance response, never in D1, and browser session tokens only
+  in their `Set-Cookie`.
 - Retained business data is limited to Account/Device lifecycle metadata, normalized quota
   observations, sparse hourly Usage rows, the daily rollup derived from them, and bounded rate
   limits. Nothing is kept to recognize a retry: an hour's `scan_version` is the check, and a
@@ -309,12 +317,14 @@ data requirements. Architecture and product behavior are defined in
   the hourly Worker schedule delete at most 100 expired rows from each credential and observation
   table per run; consuming a limit collects at most 100 expired counters inline. Every
   such delete addresses whole rows, so expiring one fixed window never resets a subject's live one.
-  Expired login grants, Better Auth encrypted sessions, and rate-limit counters are eligible
-  immediately. Expired or revoked native account/device sessions remain for seven days so logout
-  retries stay diagnosable without allowing those credentials to authenticate.
-- Production keys (`GITHUB_CLIENT_SECRET`, `BETTER_AUTH_SECRET`, and
-  subject/installation/session HMAC keys) are Cloudflare secrets and must not be tracked. Each key has
-  a distinct purpose and must contain sufficient entropy; do not reuse one secret across purposes.
+  Expired login grants and rate-limit counters are eligible immediately. Expired or revoked account
+  and device sessions remain for seven days so logout retries stay diagnosable without allowing
+  those credentials to authenticate.
+- Production keys (`GITHUB_CLIENT_SECRET` and the subject/installation/session HMAC keys) are
+  Cloudflare secrets and must not be tracked. Each key has a distinct purpose and must contain
+  sufficient entropy; do not reuse one secret across purposes. `QUOTA_SESSION_HASH_KEY` covers every
+  credential Relay stores by equality, including the browser session token and the signature on the
+  `__Host-quota_oauth` handoff cookie, each under its own domain label.
 - Local builds, Linux `quotacli` build/tests, local D1 migrations, and Wrangler dry runs are
   verification. Do not deploy, apply remote migrations, publish packages, or change production
   secrets without explicit authorization.

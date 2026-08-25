@@ -53,7 +53,6 @@ import type {
 } from "@gotry-io/relay-core";
 import { type Context, Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
-import type { WebAccountAuth } from "./account/better-auth.ts";
 import { consumeNamedRateLimit } from "./account/rate-limit.ts";
 import {
   AccountFlowError,
@@ -61,6 +60,13 @@ import {
   isIosRedirect,
   isLoopbackRedirect,
 } from "./account/service.ts";
+import {
+  clearedHandoffCookie,
+  clearedSessionCookie,
+  DEFAULT_RETURN_PATH,
+  safeReturnPath,
+  type WebSessionPort,
+} from "./account/web-session.ts";
 import { managedServiceInfo } from "./config.ts";
 import { PRICING_CATALOG, PRICING_CATALOG_ETAG } from "./pricing-catalog.ts";
 import { bearerToken, canonicalRequestDigest, type SecretHasher } from "./security.ts";
@@ -109,6 +115,7 @@ const rateLimits = {
   nativeAuthorize: { limit: 60, windowSeconds: 10 * 60 },
   deviceCode: { limit: 30, windowSeconds: 10 * 60 },
   token: { limit: 180, windowSeconds: 10 * 60 },
+  webSignIn: { limit: 30, windowSeconds: 10 * 60 },
   sessionMutation: { limit: 60, windowSeconds: 10 * 60 },
   destructiveMutation: { limit: 10, windowSeconds: 60 * 60 },
 } as const;
@@ -121,7 +128,7 @@ export interface RelayAppOptions {
   state: AccountState;
   usageState: UsageState;
   accountService: AccountService;
-  webAuth: WebAccountAuth;
+  webSessions: WebSessionPort;
   hasher: SecretHasher;
   now?: () => Date;
   pricingCatalog?: PricingCatalog;
@@ -165,7 +172,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
 
   app.get("/healthz", (context) => context.json({ status: "ok", ...managedServiceInfo() }));
   for (const path of [
-    "/api/auth/v2/*",
+    "/api/auth/*",
     "/oauth/v2/*",
     "/api/v2/account",
     "/api/v2/account/*",
@@ -178,7 +185,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
       await next();
     });
   }
-  for (const path of ["/api/auth/v2/*", "/oauth/v2/*"]) {
+  for (const path of ["/api/auth/*", "/oauth/v2/*"]) {
     app.use(path, bodyLimit({ maxSize: maximumCredentialBodyBytes, onError: requestBodyTooLarge }));
   }
   app.use(
@@ -205,10 +212,85 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     }
   });
   app.get("/api/v2/info", (context) => context.json(managedServiceInfo()));
-  app.on(["GET", "POST"], "/api/auth/v2/*", async (context) => {
-    const response = await options.webAuth.handler(context.req.raw);
-    response.headers.set("Cache-Control", "no-store");
-    return response;
+  // Sign-in is a plain navigation: the browser leaves for GitHub carrying a signed cookie that
+  // states which sign-in this is, and comes back to the callback below with nothing else.
+  app.get("/api/auth/github/start", async (context) => {
+    if (!hasOnlyQueryKeys(context, ["return_to"])) return invalidRequest(context);
+    const requested = context.req.query("return_to");
+    const returnTo = requested === undefined ? DEFAULT_RETURN_PATH : safeReturnPath(requested);
+    if (returnTo === null) return invalidRequest(context);
+    const limited = await enforceRateLimit(
+      context,
+      options.state,
+      options.hasher,
+      "web-signin",
+      anonymousClientSubject(context),
+      rateLimits.webSignIn,
+      now(),
+    );
+    if (limited) return limited;
+    return beginGitHubSignIn(context, options, returnTo, now());
+  });
+
+  app.get("/api/auth/github/callback", async (context) => {
+    if (!hasOnlyQueryKeys(context, ["code", "state"])) return invalidRequest(context);
+    const limited = await enforceRateLimit(
+      context,
+      options.state,
+      options.hasher,
+      "web-signin",
+      anonymousClientSubject(context),
+      rateLimits.webSignIn,
+      now(),
+    );
+    if (limited) return limited;
+    let completed: Awaited<ReturnType<WebSessionPort["completeSignIn"]>>;
+    try {
+      completed = await options.webSessions.completeSignIn(
+        {
+          cookie: context.req.header("Cookie") ?? null,
+          state: context.req.query("state") ?? null,
+          code: context.req.query("code") ?? null,
+        },
+        now(),
+      );
+    } catch {
+      return relayError(context, 502, "internal_error", "Identity verification is unavailable.");
+    }
+    if (completed.outcome !== "signed_in") {
+      context.header("Set-Cookie", clearedHandoffCookie(), { append: true });
+      return relayError(
+        context,
+        400,
+        "invalid_request",
+        "The sign-in request could not be completed.",
+      );
+    }
+    context.header("Set-Cookie", completed.session, { append: true });
+    context.header("Set-Cookie", completed.handoff, { append: true });
+    return context.redirect(completed.return_to, 302);
+  });
+
+  app.post("/api/auth/logout", async (context) => {
+    const principal = await options.webSessions.authorize(context.req.raw.headers, now());
+    if (!principal) return unauthorized(context);
+    const unsafe = requireWebOrigin(context, principal);
+    if (unsafe) return unsafe;
+    const limited = await enforceRateLimit(
+      context,
+      options.state,
+      options.hasher,
+      "web-logout",
+      principal.account_id,
+      rateLimits.sessionMutation,
+      now(),
+    );
+    if (limited) return limited;
+    await options.state.revokePrincipalFamily(principal, now().toISOString(), false);
+    context.header("Set-Cookie", clearedSessionCookie(), { append: true });
+    return context.json(
+      LogoutResponseSchema.parse({ protocol_version: PROTOCOL_VERSION, status: "signed_out" }),
+    );
   });
 
   app.get("/oauth/v2/authorize", async (context) => {
@@ -246,9 +328,8 @@ export function createRelayApp(options: RelayAppOptions): Hono {
         },
         now(),
       );
-      const callback = new URL("/oauth/v2/complete", context.req.url);
-      callback.searchParams.set("login_token", login.login_token);
-      return await options.webAuth.beginGitHubSignIn(context.req.raw.headers, callback.toString());
+      const callback = `/oauth/v2/complete?login_token=${encodeURIComponent(login.login_token)}`;
+      return await beginGitHubSignIn(context, options, callback, now());
     } catch (error) {
       return accountFlowError(context, error);
     }
@@ -257,14 +338,15 @@ export function createRelayApp(options: RelayAppOptions): Hono {
   app.get("/oauth/v2/complete", async (context) => {
     if (!hasOnlyQueryKeys(context, ["login_token"])) return invalidRequest(context);
     const loginToken = context.req.query("login_token");
-    const webSession = await options.webAuth.getSession(context.req.raw.headers);
-    if (!loginToken || loginToken.length > 4_096 || !webSession) return unauthorized(context);
-    if (!(await options.state.getAccount(webSession.user.id))) return unauthorized(context);
+    const principal = await options.webSessions.authorize(context.req.raw.headers, now());
+    if (!loginToken || loginToken.length > 4_096 || !principal) return unauthorized(context);
+    const account = await options.state.getAccount(principal.account_id);
+    if (!account) return unauthorized(context);
     try {
       const completion = await options.accountService.completeBrowserLogin(
         loginToken,
-        webSession.user.id,
-        webSession.user.name,
+        principal.account_id,
+        account.display_label ?? "GitHub account",
         now(),
       );
       if (!isLoopbackRedirect(completion.redirect_uri) && !isIosRedirect(completion.redirect_uri)) {
@@ -614,6 +696,34 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     }
   });
 
+  app.delete("/api/v2/account", async (context) => {
+    const principal = await authorizeAccount(context, options, "account:manage", now());
+    if (principal instanceof Response) {
+      return principal;
+    }
+    const limited = await enforceRateLimit(
+      context,
+      options.state,
+      options.hasher,
+      "account-delete",
+      principal.account_id,
+      rateLimits.destructiveMutation,
+      now(),
+    );
+    if (limited) {
+      return limited;
+    }
+    const unsafe = requireRecentWebMutation(context, principal, now());
+    if (unsafe) {
+      return unsafe;
+    }
+    if (!(await options.state.deleteAccountData(principal.account_id))) {
+      return notFound(context);
+    }
+    context.header("Set-Cookie", clearedSessionCookie(), { append: true });
+    return context.body(null, 204);
+  });
+
   app.delete("/api/v2/account/devices/:device_id", async (context) => {
     const principal = await authorizeAccount(context, options, "account:manage", now());
     if (principal instanceof Response) {
@@ -882,6 +992,17 @@ async function answerConditionally(
   return context.req.header("If-None-Match") === etag ? context.body(null, 304) : null;
 }
 
+async function beginGitHubSignIn(
+  context: Context,
+  options: RelayAppOptions,
+  returnTo: string,
+  now: Date,
+): Promise<Response> {
+  const started = await options.webSessions.beginSignIn(returnTo, now);
+  context.header("Set-Cookie", started.handoff, { append: true });
+  return context.redirect(started.location, 302);
+}
+
 /** The `tz` a read was asked for, `UTC` when it named none, or null when it named nonsense. */
 function requestedTimezone(context: Context): string | null {
   const requested = context.req.query("tz");
@@ -979,19 +1100,10 @@ async function authorizeAccount(
     if (!principal) return unauthorized(context);
     return principal.scopes.includes(scope) ? principal : forbidden(context);
   }
-  const webSession = await options.webAuth.getSession(context.req.raw.headers);
-  if (!webSession) return unauthorized(context);
-  if (!(await options.state.getAccount(webSession.user.id))) return unauthorized(context);
-  const principal: AccountPrincipal = {
-    kind: "account",
-    session_id: webSession.session.id,
-    family_id: webSession.session.id,
-    account_id: webSession.user.id,
-    device_id: null,
-    client_kind: "web",
-    scopes: ["account:read", "account:manage", "session:revoke:self"],
-    authenticated_at: webSession.session.createdAt.toISOString(),
-  };
+  // A browser session is a row in the same table, so nothing has to be synthesized here and a
+  // revoked or expired cookie stops working the moment that row says so.
+  const principal = await options.webSessions.authorize(context.req.raw.headers, checkedAt);
+  if (!principal) return unauthorized(context);
   return principal.scopes.includes(scope) ? principal : forbidden(context);
 }
 

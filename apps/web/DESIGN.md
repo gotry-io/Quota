@@ -39,7 +39,7 @@ The site has four surfaces:
    the name opens `/my`, and its menu
    contains only **Sign out**. Session cookies stay HttpOnly. SvelteKit renders the header from
    `WebDocumentPort.getViewer` on the first HTML byte. While rendering the signed-in document, the
-   Worker starts `GET /api/v5/account/summary` internally, reuses the resolved Better Auth session,
+   Worker starts `GET /api/v6/account/summary` internally, reuses the resolved session,
    and streams the typed result into the page. The browser fetch is only a development or retry
    path; it is not the production first-load path. Unsigned visits to `/my` are a server redirect to
    `/`. The shipped `/app` bookmark is a single redirect to `/my`. Account data is never published

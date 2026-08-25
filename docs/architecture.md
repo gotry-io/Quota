@@ -17,9 +17,9 @@ Quota has five application products and three shared native library boundaries:
   Rust service owns the durable Usage upload setting so it applies before background work begins.
 - QuotaCLI is a Linux-only native Rust command that uses the shared local service library. It is
   released as a static x86_64 binary; Windows is not supported.
-- QuotaRelay owns GitHub-backed Accounts, Devices, scoped native sessions, normalized quota/Usage
-  storage, deletion controls, pricing distribution, and account queries. Better Auth owns its Web
-  identity/session boundary. Relay runs only as a Cloudflare Worker backed by D1.
+- QuotaRelay owns GitHub-backed Accounts, Devices, scoped native and browser sessions, normalized
+  quota/Usage storage, deletion controls, pricing distribution, and account queries. Relay runs only
+  as a Cloudflare Worker backed by D1.
 - Quota Web owns the public site and browser account UI. It shares `quota.gotry.io` with the Worker
   but remains a separate SvelteKit application and source boundary.
 
@@ -263,7 +263,7 @@ path or fallback.
 ## Managed account and sync
 
 ```text
-GitHub ── Better Auth web OAuth ──► QuotaRelay ──► browser account session
+GitHub ── /api/auth/github/* ──────► QuotaRelay ──► browser account session
                                           │
 browser PKCE authorization                │ account + device token families
 quota-ios PKCE (account session only)     │
@@ -412,13 +412,14 @@ protocol + quota-model + relay-core
   native-addon APIs.
 - `apps/web` remains a separate SvelteKit source boundary even though production serves it and Relay
   from one hostname. SvelteKit owns documents, routes, and document-scoped viewer presentation.
-  Relay owns Better Auth, OAuth, APIs, D1, Usage aggregation, and domain policy. The two meet only
+  Relay owns sessions, OAuth, APIs, D1, Usage aggregation, and domain policy. The two meet only
   through `WebDocumentPort`.
 
 ## Relay, Web, and deployment
 
 QuotaRelay mounts OAuth and Device control at `/oauth/v2` and `/api/v2`, the managed quota and
-Usage data contract at `/api/v6`, Better Auth at `/api/auth/v2`, and the health routes. It
+Usage data contract at `/api/v6`, browser sign-in and sign-out at `/api/auth`, and the health
+routes. It
 authenticates each route with the minimum account, device, or browser scope and performs
 Device/Account deletion, rotation/revocation, and hour replacement with its daily rollup in storage
 transactions. An Account read carries every stored agent and channel with no opt-in query: the only thing it asks
@@ -429,17 +430,18 @@ client sends any more.
 Quota Web is a SvelteKit app. Hashed `/_app/immutable/*` CSS and JS stay asset-first. Document
 navigations run the existing Relay Worker first: `apps/relay/src/cloudflare.ts` stays Wrangler
 `main`, Hono keeps `/api`, `/oauth`, `/healthz`, and `/readyz`, and every other Worker-first
-request is rendered by SvelteKit `Server.respond`. The Worker reads the Better Auth session
-cookie through `WebDocumentPort` and writes the signed-in header into the first HTML byte.
+request is rendered by SvelteKit `Server.respond`. The Worker reads the `__Host-quota_session` cookie
+through `WebDocumentPort` and writes the signed-in header into the first HTML byte.
 Session cookies remain HttpOnly. `/` offers the QuotaBar `.dmg` and Homebrew install command.
 GitHub sign-in is in the header; `/my` is a server redirect when unsigned and otherwise a
 streaming dashboard. Its document load starts the existing
 `GET /api/v6/account/summary` handler inside the composed Worker and reuses the
-request's memoized Better Auth session, so Account data can resolve in parallel with hydration
+request's memoized session read, so Account data can resolve in parallel with hydration
 without a second browser round trip. The API schema and Relay/Web source boundary remain unchanged.
 Every page requires a session; Quota Web publishes no account data anonymously. `/activate` approves
-or denies native authorization. `/app` is a server redirect to `/my`. Better Auth owns GitHub
-login and browser sessions. Production Web and Worker deploy together only through
+or denies native authorization. `/app` is a server redirect to `/my`. Relay owns GitHub login and
+browser sessions, as
+[ADR 0025](decisions/0025-one-session-system.md) defines. Production Web and Worker deploy together only through
 `.github/workflows/deploy-cloudflare.yml`. The composition decision is
 [ADR 0011](decisions/0011-sveltekit-document-worker.md).
 

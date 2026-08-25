@@ -160,6 +160,21 @@ export type LoginGrantConsumeResult =
     }
   | { outcome: "not_found" | "expired" | "consumed" | "not_approved" };
 
+/**
+ * One browser sign-in, as Relay stores it.
+ *
+ * The Account is found or created in the same batch: a first GitHub sign-in and a return visit
+ * differ only in whether the row was already there.
+ */
+export interface CreateWebSessionInput {
+  session_id: string;
+  account_id: string;
+  display_label: string;
+  access_token_hash: string;
+  authenticated_at: string;
+  expires_at: string;
+}
+
 export interface ConsumeAccountLoginGrantInput {
   grant_id: string;
   credential_hash: string;
@@ -288,6 +303,7 @@ export interface AccountState {
   consumeAccountLoginGrant(
     input: ConsumeAccountLoginGrantInput,
   ): Promise<AccountLoginGrantConsumeResult>;
+  createWebSession(input: CreateWebSessionInput): Promise<AccountRecord>;
   authorizeAccountSession(
     accessTokenHash: string,
     checkedAt: string,
@@ -322,6 +338,7 @@ export interface AccountState {
     deviceId: string,
     deletedAt: string,
   ): Promise<DeleteDeviceResult | null>;
+  deleteAccountData(accountId: string): Promise<boolean>;
   recordSnapshot(
     principal: DevicePrincipal,
     envelope: QuotaSnapshotSubmission,

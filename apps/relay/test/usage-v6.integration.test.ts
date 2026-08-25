@@ -8,6 +8,7 @@ import { createRelayApp } from "../src/app.ts";
 import { SecretHasher } from "../src/security.ts";
 import { D1AccountState } from "../src/state/d1-account-state.ts";
 import { D1UsageState } from "../src/state/d1-usage-state.ts";
+import { SignedInWebSessionStub } from "./web-session-stub.ts";
 
 declare global {
   namespace Cloudflare {
@@ -332,18 +333,7 @@ function signedInApp() {
     state,
     usageState: new D1UsageState(env.DB),
     accountService: new AccountService(state, hasher, secret),
-    webAuth: {
-      handler: async () => new Response(null, { status: 404 }),
-      beginGitHubSignIn: async () => new Response(null, { status: 302 }),
-      getSession: async () => ({
-        user: { id: accountId, name: "Quota Tester" },
-        session: {
-          id: "web_v6",
-          createdAt: now,
-          expiresAt: new Date(now.getTime() + 60_000),
-        },
-      }),
-    },
+    webSessions: new SignedInWebSessionStub(accountId, now),
     hasher,
     now: () => now,
   });

@@ -7,13 +7,12 @@ import {
 } from "@gotry-io/quota-protocol";
 import type { DevicePrincipal, UsageUpload } from "@gotry-io/relay-core";
 import { beforeEach, describe, expect, inject, it } from "vitest";
-import { createWebAccountAuth, type WebAccountAuth } from "../src/account/better-auth.ts";
-import { D1EncryptedAuthStorage } from "../src/account/better-auth-storage.ts";
 import { AccountService } from "../src/account/service.ts";
 import { accountMaintenanceInput, createRelayApp } from "../src/app.ts";
 import { SecretHasher } from "../src/security.ts";
 import { D1AccountState } from "../src/state/d1-account-state.ts";
 import { D1UsageState } from "../src/state/d1-usage-state.ts";
+import { SignedInWebSessionStub } from "./web-session-stub.ts";
 
 declare global {
   namespace Cloudflare {
@@ -369,14 +368,7 @@ describe("managed Relay on real Workers and D1", () => {
       state,
       usageState: new D1UsageState(env.DB),
       accountService: new AccountService(state, hasher, secret),
-      webAuth: createWebAccountAuth({
-        database: env.DB,
-        githubClientId: "github-client",
-        githubClientSecret: "github-secret",
-        githubSubjectKey: secret,
-        authSecret: secret,
-        origin: "https://quota.gotry.io",
-      }),
+      webSessions: new SignedInWebSessionStub("account_catalogs", now),
       hasher,
       now: () => now,
     });
@@ -550,40 +542,6 @@ describe("managed Relay on real Workers and D1", () => {
     expect(body.usage.all.cost.unpriced_truncated).toBe(true);
   });
 
-  it("stores Better Auth sessions encrypted behind hashed keys", async () => {
-    const storage = new D1EncryptedAuthStorage(env.DB, secret);
-    await storage.set("raw-session-token", JSON.stringify({ token: "raw-session-token" }), 60);
-
-    const row = await env.DB.prepare(
-      "SELECT key_hash, value_ciphertext FROM auth_session_store",
-    ).first<{ key_hash: string; value_ciphertext: string }>();
-    expect(row?.key_hash).not.toContain("raw-session-token");
-    expect(row?.value_ciphertext).not.toContain("raw-session-token");
-    expect(await storage.get("raw-session-token")).toContain("raw-session-token");
-
-    const expiredKeyHash = await new SecretHasher(secret).hash(
-      "better-auth-storage",
-      "expired-session-token",
-    );
-    await env.DB.prepare(
-      "INSERT INTO auth_session_store (key_hash, value_ciphertext, expires_at) VALUES (?1, 'expired', ?2)",
-    )
-      .bind(expiredKeyHash, "2026-08-09T00:00:00.000Z")
-      .run();
-    expect(await storage.getAndDelete("expired-session-token")).toBeNull();
-    await env.DB.prepare(
-      "INSERT INTO auth_session_store (key_hash, value_ciphertext, expires_at) VALUES ('expired', 'expired', ?1)",
-    )
-      .bind("2026-08-09T00:00:00.000Z")
-      .run();
-    await new D1AccountState(env.DB).performMaintenance(accountMaintenanceInput(now));
-    expect(
-      await env.DB.prepare(
-        "SELECT COUNT(*) AS count FROM auth_session_store WHERE key_hash = 'expired'",
-      ).first("count"),
-    ).toBe(0);
-  });
-
   it("answers an account whose stored reading this build cannot read", async () => {
     await env.DB.batch([
       env.DB.prepare(
@@ -712,53 +670,7 @@ describe("managed Relay on real Workers and D1", () => {
     expect(rows.results.map((row) => row.window_started_at)).toEqual(["2026-08-10T00:00:00.000Z"]);
   });
 
-  it("uses Better Auth's standard GitHub redirect and stores no provider token", async () => {
-    const auth = createWebAccountAuth({
-      database: env.DB,
-      githubClientId: "github-client",
-      githubClientSecret: "github-secret",
-      githubSubjectKey: secret,
-      authSecret: secret,
-      origin: "https://quota.gotry.io",
-    });
-    const state = new D1AccountState(env.DB);
-    const hasher = new SecretHasher(secret);
-    const app = createRelayApp({
-      state,
-      usageState: new D1UsageState(env.DB),
-      accountService: new AccountService(state, hasher, secret),
-      webAuth: auth,
-      hasher,
-      now: () => now,
-    });
-    const response = await app.request("https://quota.gotry.io/api/auth/v2/sign-in/social", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Origin: "https://quota.gotry.io",
-        "cf-connecting-ip": "203.0.113.10",
-      },
-      body: JSON.stringify({ provider: "github", callbackURL: "/app" }),
-    });
-    const body = (await response.json()) as { url?: string };
-    expect(body.url).toContain("github.com/login/oauth/authorize");
-    expect(body.url).toContain("scope=");
-    expect(response.headers.get("set-cookie")).toContain("quota");
-    expect(response.headers.get("cache-control")).toBe("no-store");
-    const nativeResponse = await auth.beginGitHubSignIn(
-      new Headers({ Origin: "https://quota.gotry.io" }),
-      "https://quota.gotry.io/oauth/v2/complete?login_token=synthetic",
-    );
-    expect(nativeResponse.status).toBe(302);
-    expect(nativeResponse.headers.get("location")).toContain("github.com/login/oauth/authorize");
-    expect(nativeResponse.headers.get("set-cookie")).toContain("quota");
-    expect(nativeResponse.headers.get("cache-control")).toBe("no-store");
-    expect(
-      await env.DB.prepare("SELECT COUNT(*) AS count FROM auth_identities").first("count"),
-    ).toBe(0);
-  });
-
-  it("completes browser PKCE through a Better Auth Web principal and issues device tokens", async () => {
+  it("completes browser PKCE through a Web principal and issues device tokens", async () => {
     const state = new D1AccountState(env.DB);
     const hasher = new SecretHasher(secret);
     const service = new AccountService(state, hasher, secret);
@@ -768,31 +680,16 @@ describe("managed Relay on real Workers and D1", () => {
     )
       .bind(now.toISOString())
       .run();
-    let callbackURL = "";
-    let sessionCreatedAt = now;
-    const webAuth: WebAccountAuth = {
-      handler: async () => new Response(null, { status: 404 }),
-      beginGitHubSignIn: async (_headers, callback) => {
-        callbackURL = callback;
-        return Response.redirect("https://github.com/login/oauth/authorize", 302);
-      },
-      getSession: async () => ({
-        user: { id: "identity_subject", name: "Quota Tester" },
-        session: {
-          id: "web_session",
-          createdAt: sessionCreatedAt,
-          expiresAt: new Date(now.getTime() + 60_000),
-        },
-      }),
-    };
+    const webSessions = new SignedInWebSessionStub("identity_subject", now);
     const app = createRelayApp({
       state,
       usageState: new D1UsageState(env.DB),
       accountService: service,
-      webAuth,
+      webSessions,
       hasher,
       now: () => now,
     });
+    const callbackURL = (): string => `https://quota.gotry.io${webSessions.returnTo}`;
     const decisionBody = JSON.stringify({
       protocol_version: 2,
       user_code: "ABCD-EFGH",
@@ -820,7 +717,7 @@ describe("managed Relay on real Workers and D1", () => {
         })
       ).status,
     ).toBe(404);
-    sessionCreatedAt = new Date(now.getTime() - 10 * 60_000 - 1);
+    webSessions.authenticatedAt = new Date(now.getTime() - 10 * 60_000 - 1);
     expect(
       (
         await app.request("https://quota.gotry.io/oauth/v2/device/authorize", {
@@ -834,7 +731,7 @@ describe("managed Relay on real Workers and D1", () => {
         })
       ).status,
     ).toBe(403);
-    sessionCreatedAt = now;
+    webSessions.authenticatedAt = now;
 
     const verifier = "a".repeat(43);
     const challengeBuffer = await crypto.subtle.digest(
@@ -856,7 +753,7 @@ describe("managed Relay on real Workers and D1", () => {
     }).toString();
     expect((await app.request(authorize)).status).toBe(302);
 
-    const complete = await app.request(callbackURL);
+    const complete = await app.request(callbackURL());
     expect(complete.status).toBe(302);
     const code = new URL(complete.headers.get("location") ?? "invalid:").searchParams.get("code");
     expect(code).toBeTruthy();
@@ -995,7 +892,7 @@ describe("managed Relay on real Workers and D1", () => {
     await env.DB.prepare(
       "UPDATE login_grants SET redirect_uri = 'https://attacker.invalid/callback' WHERE completed_at IS NULL",
     ).run();
-    const unsafeRedirect = await app.request(callbackURL);
+    const unsafeRedirect = await app.request(callbackURL());
     expect(unsafeRedirect.status).toBe(400);
     expect(unsafeRedirect.headers.get("location")).toBeNull();
     expect(
@@ -1006,7 +903,7 @@ describe("managed Relay on real Workers and D1", () => {
 
     expect((await app.request(authorize)).status).toBe(302);
     await env.DB.prepare("DELETE FROM accounts WHERE id = ?1").bind(tokens.account_id).run();
-    expect((await app.request(callbackURL)).status).toBe(401);
+    expect((await app.request(callbackURL())).status).toBe(401);
     expect(
       (
         await app.request("https://quota.gotry.io/api/v6/account/summary", {
@@ -1031,23 +928,11 @@ describe("managed Relay on real Workers and D1", () => {
     )
       .bind(now.toISOString())
       .run();
-    const webAuth: WebAccountAuth = {
-      handler: async () => new Response(null, { status: 404 }),
-      beginGitHubSignIn: async () => new Response(null, { status: 302 }),
-      getSession: async () => ({
-        user: { id: "device_account", name: "Device Tester" },
-        session: {
-          id: "device_web_session",
-          createdAt: now,
-          expiresAt: new Date(now.getTime() + 60_000),
-        },
-      }),
-    };
     const app = createRelayApp({
       state,
       usageState: new D1UsageState(env.DB),
       accountService: new AccountService(state, hasher, secret),
-      webAuth,
+      webSessions: new SignedInWebSessionStub("device_account", now),
       hasher,
       now: () => checkedAt,
     });
@@ -1253,25 +1138,10 @@ function appFor(accountId: string) {
     state,
     usageState: new D1UsageState(env.DB),
     accountService: new AccountService(state, hasher, secret),
-    webAuth: webSessionFor(accountId),
+    webSessions: new SignedInWebSessionStub(accountId, now),
     hasher,
     now: () => now,
   });
-}
-
-function webSessionFor(accountId: string): WebAccountAuth {
-  return {
-    handler: async () => new Response(null, { status: 404 }),
-    beginGitHubSignIn: async () => new Response(null, { status: 302 }),
-    getSession: async () => ({
-      user: { id: accountId, name: "Quota Tester" },
-      session: {
-        id: `web_${accountId}`,
-        createdAt: now,
-        expiresAt: new Date(now.getTime() + 60_000),
-      },
-    }),
-  };
 }
 
 function quotaSnapshotJson() {

@@ -6,8 +6,8 @@
 
 ## Context
 
-Quota Web shares `https://quota.gotry.io` with QuotaRelay. Better Auth browser sessions use
-HttpOnly, Secure cookies (`cookiePrefix: "quota"`). A static HTML document cannot read that cookie,
+Quota Web shares `https://quota.gotry.io` with QuotaRelay. Browser sessions use HttpOnly, Secure
+cookies. A static HTML document cannot read that cookie,
 so a signed-out first paint is inevitable if HTML is a build artifact. The rejected alternatives
 were a JS-readable session cookie, a second client session store, and HTMLRewriter on Static Assets.
 
@@ -17,8 +17,12 @@ must be the process that can already read the session cookie: the existing Relay
 
 ## Decision
 
-Render Quota Web documents with SvelteKit on the existing `quota` Worker. Keep Hono, Better Auth,
-D1, OAuth, Usage aggregation, and domain policy in Relay.
+Render Quota Web documents with SvelteKit on the existing `quota` Worker. Keep Hono, browser
+sessions, D1, OAuth, Usage aggregation, and domain policy in Relay.
+
+> Updated 2026-08-26: Better Auth is gone. `getViewer` reads the `__Host-quota_session` cookie against
+> `account_sessions` directly; the pairing below is unchanged in shape. See
+> [ADR 0025](0025-one-session-system.md).
 
 - `apps/relay/wrangler.jsonc` `main` remains `src/cloudflare.ts`. Cron stays on that export.
   Official `@sveltejs/adapter-cloudflare` `main` is generated `_worker.js`, which does not support
@@ -28,8 +32,8 @@ D1, OAuth, Usage aggregation, and domain policy in Relay.
   listed static images stay asset-first.
 - `apps/web` owns the `WebDocumentPort` type. Relay implements it. SvelteKit `Platform` has no
   `env`, `DB`, or secrets. Document loads may call `getViewer` only.
-- `getViewer` is the same pairing as `authorizeAccount`: session cookie present, then
-  `getSession`, then `getAccount`. It returns `{ displayLabel }` only.
+- `getViewer` is the same pairing as `authorizeAccount`: a cookie of the right shape, then the
+  session row, then `getAccount`. It returns `{ displayLabel }` only.
 - `/my` Usage, login, logout, and mutations stay on existing HTTP APIs. Document SSR must not run
   Usage aggregation.
 - There is no dual SPA + SvelteKit runtime. Rollback is revert on `main` and let

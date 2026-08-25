@@ -31,7 +31,7 @@ describe("composed Worker documents", () => {
   it("supplies Worker secrets without a local .env file", () => {
     const bindings = env as CloudflareBindings;
     expect(bindings.QUOTA_SESSION_HASH_KEY.length).toBeGreaterThanOrEqual(32);
-    expect(bindings.BETTER_AUTH_SECRET.length).toBeGreaterThanOrEqual(32);
+    expect(bindings.GITHUB_SUBJECT_KEY.length).toBeGreaterThanOrEqual(32);
   });
 
   it("renders the signed-out landing header and keeps the response uncacheable", async () => {

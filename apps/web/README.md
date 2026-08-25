@@ -8,8 +8,8 @@ from `dist/` through Cloudflare Workers Static Assets. Production builds also pu
 protocol files from `packages/protocol/schema` under `/schema/`; the website does not keep a
 duplicate source copy.
 
-SvelteKit owns documents, routes, components, and the document-scoped viewer. Relay owns Better
-Auth, OAuth, APIs, D1, Usage aggregation, and domain policy. The only join is `WebDocumentPort`.
+SvelteKit owns documents, routes, components, and the document-scoped viewer. Relay owns sessions,
+OAuth, APIs, D1, Usage aggregation, and domain policy. The only join is `WebDocumentPort`.
 See [ADR 0011](../../docs/decisions/0011-sveltekit-document-worker.md).
 
 Managed production publishes through the Relay deploy path (`pnpm deploy:cloudflare` / CI workflow
@@ -29,10 +29,12 @@ Worker. Browser GitHub login on localhost is not available.
 `/my` is the GitHub-backed account dashboard and `/activate` approves or denies a native-client
 device authorization grant. Unsigned `/my` visits are a server redirect home. Every page requires a
 session; Quota Web publishes no account data anonymously. `/app` shipped in 0.0.4, so it remains a
-single bookmark redirect to `/my`; new links and OAuth callbacks use `/my`. Better Auth owns GitHub sign-in, browser sessions,
-sign-out, OAuth state/PKCE, account deletion, and standard auth-route origin validation. Quota's
-authorization decision and Device deletion routes additionally require a recent session and an
-exact same-origin request.
+single bookmark redirect to `/my`; new links and OAuth callbacks use `/my`. Sign-in is a plain
+navigation to Relay's `/api/auth/github/start`, not a fetch: the header button is a link, and a
+signed-out visitor to `/activate` returns to the code they were shown. Sign-out posts to
+`/api/auth/logout` and Delete Account is `DELETE /api/v2/account`. Those routes and Quota's
+authorization decision and Device deletion routes all require an exact same-origin request, and the
+destructive ones a session authenticated within ten minutes.
 
 The signed-in dashboard renders what Relay resolved: `subscriptions[]` as one card per
 subscription, whichever of Today, the last 7 days, the last 30 days, or all time is selected, and a
