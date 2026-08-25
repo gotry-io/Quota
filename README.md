@@ -170,8 +170,7 @@ quota and Usage upload sequencing, D1 persistence and deletion watermarks, eight
 Usage parsers with file-level incremental indexing, effective-dated cost calculation, owner-only
 local SQLite state and provider configuration, persistent private IPC, QuotaBar account/provider
 configuration UI, Sparkle in-app updates, fixed-window client-scoped account-or-local Usage
-detail, shareable remaining-quota/usage exports, opt-in public `/u/{username}` pages, and the Web
-account dashboard. Raw model
+detail, shareable remaining-quota/usage exports, and the Web account dashboard. Raw model
 identifiers remain opaque bounded provider text; a separately versioned catalog derives stable
 report keys without rewriting facts or changing pricing. Valid facts remain usable when pricing or
 model aliases are unknown. Record/file failures are isolated and complete uploads are partitioned

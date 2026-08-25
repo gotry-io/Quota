@@ -4,7 +4,6 @@ declare global {
   namespace App {
     interface Locals {
       viewer: WebDocumentViewer | null;
-      retryAfterSeconds?: number;
     }
     interface Platform {
       document: WebDocumentPort;

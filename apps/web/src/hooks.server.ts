@@ -6,9 +6,6 @@ export const handle: Handle = async ({ event, resolve }) => {
   event.locals.viewer = await resolveViewer(event);
 
   const response = await resolve(event);
-  if (event.locals.retryAfterSeconds !== undefined) {
-    response.headers.set("Retry-After", String(event.locals.retryAfterSeconds));
-  }
   response.headers.set("Cache-Control", "private, no-store");
   response.headers.delete("ETag");
   return response;

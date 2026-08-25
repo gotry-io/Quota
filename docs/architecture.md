@@ -409,10 +409,8 @@ streaming dashboard. Its document load starts the existing
 `GET /api/v5/account/summary` handler inside the composed Worker and reuses the
 request's memoized Better Auth session, so Account data can resolve in parallel with hydration
 without a second browser round trip. The API schema and Relay/Web source boundary remain unchanged.
-`/u/{username}` is the public projection for that GitHub username: one row per subscription,
-resolved by the same rule every reader applies and filtered to readings that still describe current
-quota, because the public shape carries no freshness of its own. `/activate` approves or
-denies native authorization. `/app` is a server redirect to `/my`. Better Auth owns GitHub
+Every page requires a session; Quota Web publishes no account data anonymously. `/activate` approves
+or denies native authorization. `/app` is a server redirect to `/my`. Better Auth owns GitHub
 login and browser sessions. Production Web and Worker deploy together only through
 `.github/workflows/deploy-cloudflare.yml`. The composition decision is
 [ADR 0011](decisions/0011-sveltekit-document-worker.md).

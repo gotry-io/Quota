@@ -824,50 +824,11 @@ export class D1AccountState implements AccountState {
   async getAccount(accountId: string): Promise<AccountRecord | null> {
     return this.database
       .prepare(
-        `SELECT id, identity_subject, display_label, created_at, updated_at,
-                public_profile_enabled, public_profile_slug
+        `SELECT id, identity_subject, display_label, created_at, updated_at
          FROM accounts WHERE id = ?1`,
       )
       .bind(accountId)
       .first<AccountRecord>();
-  }
-
-  async getAccountByPublicSlug(slug: string): Promise<AccountRecord | null> {
-    return this.database
-      .prepare(
-        `SELECT id, identity_subject, display_label, created_at, updated_at,
-                public_profile_enabled, public_profile_slug
-         FROM accounts
-         WHERE public_profile_slug = ?1 OR LOWER(display_label) = ?1
-         ORDER BY CASE WHEN LOWER(display_label) = ?1 THEN 0 ELSE 1 END, created_at ASC
-         LIMIT 1`,
-      )
-      .bind(slug)
-      .first<AccountRecord>();
-  }
-
-  async setPublicProfile(
-    accountId: string,
-    enabled: boolean,
-    slug: string | null,
-    updatedAt: string,
-  ): Promise<"ok" | "conflict"> {
-    if (slug) {
-      const taken = await this.database
-        .prepare("SELECT id FROM accounts WHERE public_profile_slug = ?1 AND id != ?2 LIMIT 1")
-        .bind(slug, accountId)
-        .first<{ id: string }>();
-      if (taken) return "conflict";
-    }
-    await this.database
-      .prepare(
-        `UPDATE accounts
-         SET public_profile_enabled = ?2, public_profile_slug = ?3, updated_at = ?4
-         WHERE id = ?1`,
-      )
-      .bind(accountId, enabled ? 1 : 0, slug, updatedAt)
-      .run();
-    return "ok";
   }
 
   async listAccountDevices(accountId: string): Promise<DeviceRecord[]> {

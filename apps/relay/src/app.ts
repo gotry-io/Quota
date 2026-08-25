@@ -29,9 +29,6 @@ import {
   PROTOCOL_VERSION,
   type PricingCatalog,
   PricingCatalogSchema,
-  PublicProfileSchema,
-  PublicProfileSettingsSchema,
-  PublicProfileUpdateRequestSchema,
   QuotaSnapshotEnvelopeSchema,
   QuotaSnapshotUploadResponseSchema,
   type RelayErrorCode,
@@ -55,7 +52,7 @@ import type {
 import { type Context, Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import type { WebAccountAuth } from "./account/better-auth.ts";
-import { consumeNamedRateLimit, publicProfileRateLimit } from "./account/rate-limit.ts";
+import { consumeNamedRateLimit } from "./account/rate-limit.ts";
 import {
   AccountFlowError,
   type AccountService,
@@ -64,7 +61,6 @@ import {
 } from "./account/service.ts";
 import { managedServiceInfo } from "./config.ts";
 import { PRICING_CATALOG, PRICING_CATALOG_ETAG } from "./pricing-catalog.ts";
-import { normalizePublicSlug, publicProfileFromAccount } from "./public-profile.ts";
 import { bearerToken, type SecretHasher } from "./security.ts";
 import { buildUsageSummary, UsageSummaryLimitError } from "./usage-summary.ts";
 
@@ -109,7 +105,6 @@ const rateLimits = {
   token: { limit: 180, windowSeconds: 10 * 60 },
   sessionMutation: { limit: 60, windowSeconds: 10 * 60 },
   destructiveMutation: { limit: 10, windowSeconds: 60 * 60 },
-  publicProfile: publicProfileRateLimit,
 } as const;
 
 interface StrictSchema<Output> {
@@ -591,115 +586,6 @@ export function createRelayApp(options: RelayAppOptions): Hono {
       usage: selected.summary,
     };
     return context.json(AccountSummarySchema.parse(response));
-  });
-
-  app.get("/api/v2/account/public-profile", async (context) => {
-    const principal = await accountReader(context, options, now());
-    if (principal instanceof Response) {
-      return principal;
-    }
-    const account = await options.state.getAccount(principal.account_id);
-    if (!account) {
-      return unauthorized(context);
-    }
-    const slug = normalizePublicSlug(account.display_label ?? "");
-    return context.json(
-      PublicProfileSettingsSchema.parse({
-        protocol_version: PROTOCOL_VERSION,
-        enabled: true,
-        slug,
-      }),
-    );
-  });
-
-  app.put("/api/v2/account/public-profile", async (context) => {
-    const principal = await authorizeAccount(context, options, "account:manage", now());
-    if (principal instanceof Response) {
-      return principal;
-    }
-    const originError = requireWebOrigin(context, principal);
-    if (originError) {
-      return originError;
-    }
-    const body = await parseJSON(context, PublicProfileUpdateRequestSchema);
-    if (body instanceof Response) {
-      return body;
-    }
-    const account = await options.state.getAccount(principal.account_id);
-    if (!account) {
-      return unauthorized(context);
-    }
-    const slug = normalizePublicSlug(account.display_label ?? "");
-    if (!slug) {
-      return invalidRequest(context);
-    }
-    const outcome = await options.state.setPublicProfile(
-      principal.account_id,
-      true,
-      slug,
-      now().toISOString(),
-    );
-    if (outcome === "conflict") {
-      return relayError(context, 409, "conflict", "That public username is already in use.");
-    }
-    return context.json(
-      PublicProfileSettingsSchema.parse({
-        protocol_version: PROTOCOL_VERSION,
-        enabled: true,
-        slug,
-      }),
-    );
-  });
-
-  app.get("/api/v2/public/profiles/:username", async (context) => {
-    const username = context.req.param("username");
-    const slug = normalizePublicSlug(username ?? "");
-    if (!slug) {
-      return notFound(context);
-    }
-    const limited = await enforceRateLimit(
-      context,
-      options.state,
-      options.hasher,
-      "public-profile",
-      slug,
-      rateLimits.publicProfile,
-      now(),
-    );
-    if (limited) {
-      return limited;
-    }
-    const account = await options.state.getAccountByPublicSlug(slug);
-    if (!account) {
-      return notFound(context);
-    }
-    const snapshots = await options.state.listLatestSnapshots(account.id);
-    const usageRows = await options.usageState.queryAccountUsage(account.id, {
-      agents: BILLING_AGENTS,
-      limit: maximumAccountUsageSummaryRows,
-    });
-    if (usageRows.truncated) {
-      return resultLimit(context);
-    }
-    const today = now().toISOString().slice(0, 10);
-    const usage = buildUsageSummary(
-      usageRows,
-      retainedUsageRange(usageRows.rows, today),
-      "calculate",
-      catalog,
-      false,
-    );
-    return context.json(
-      PublicProfileSchema.parse(
-        publicProfileFromAccount({
-          slug,
-          displayLabel: account.display_label,
-          snapshots,
-          usage,
-          now: now(),
-        }),
-      ),
-    );
   });
 
   for (const path of ["/api/v5/account/usage", "/api/v5/account/usage/summary"]) {

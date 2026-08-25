@@ -53,7 +53,6 @@ export default {
       document: createWebDocumentPort({
         webAuth,
         state,
-        hasher,
         async getAccountSummary(headers) {
           try {
             const url = new URL(

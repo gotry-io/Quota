@@ -5,7 +5,6 @@ import {
   DASHBOARD_PATH,
   legacyDashboardRedirect,
   planDisplayName,
-  publicProfileUsername,
 } from "../src/lib/routes.ts";
 import { formatQuotaRemaining } from "../src/lib/format.ts";
 
@@ -21,13 +20,6 @@ test("opens an existing account instead of starting GitHub sign-in again", () =>
   assert.equal(accountEntryAction(204), "dashboard");
   assert.equal(accountEntryAction(401), "login");
   assert.equal(accountEntryAction(500), "error");
-});
-
-test("parses public profile usernames and rejects invalid slugs", () => {
-  assert.equal(publicProfileUsername("/u/octocat"), "octocat");
-  assert.equal(publicProfileUsername("/u/ada-lovelace"), "ada-lovelace");
-  assert.equal(publicProfileUsername("/u/Octocat"), "octocat");
-  assert.equal(publicProfileUsername("/my"), null);
 });
 
 test("matches QuotaBar plan capitalization", () => {

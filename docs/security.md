@@ -35,10 +35,8 @@ data requirements. Architecture and product behavior are defined in
   in owner-only SQLite. Failed validation/commit preserves the old session; disconnect removes it
   transactionally.
 - Quota Web and the Quota iOS `quota-ios` account client receive normalized account data only. They
-  do not discover local credentials or logs.
-  Public `/u/{username}` pages use the GitHub username as the public id and expose remaining quota
-  windows plus aggregated usage totals. They never include device ids, fingerprints, credentials,
-  cookies, raw logs, prompts, or paths. Unknown usernames return not found.
+  do not discover local credentials or logs. Relay publishes no account projection without an
+  authenticated principal.
 
 ## Local credentials and identity
 

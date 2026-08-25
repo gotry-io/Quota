@@ -30,9 +30,6 @@ export function memoizeWebDocumentPort(inner: WebDocumentPort): {
             },
           }
         : {}),
-      lookupPublicProfile(username) {
-        return inner.lookupPublicProfile(username);
-      },
     },
     async hasViewer() {
       if (!viewer) return false;
