@@ -28,7 +28,7 @@ pub use json::{
 };
 pub use types::{
     BROWSER_COOKIE_HEADER_LIMIT, BROWSER_SESSION_SOURCE, CollectionContext, ErrorCategory,
-    ProviderError, ProviderSession, QuotaAccount, QuotaSnapshot, QuotaWindow,
+    KeychainSecret, ProviderError, ProviderSession, QuotaAccount, QuotaSnapshot, QuotaWindow,
     ValidatedBrowserSession, collect_official_or_browser, cookie_named_value,
     discover_official_or_browser, normalize_browser_cookie_header, resolve_timezone,
 };

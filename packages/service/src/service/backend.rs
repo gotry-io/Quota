@@ -1534,6 +1534,7 @@ impl NativeBackend {
             client_version: self.client_version.clone(),
             now: Some(now_rfc3339()),
             cancel: Some(cancel),
+            keychain: Default::default(),
         })
     }
 
@@ -4345,6 +4346,7 @@ mod tests {
             client_version: "test".to_owned(),
             now: Some("2026-08-15T08:00:00Z".to_owned()),
             cancel: None,
+            keychain: Default::default(),
         };
         let rejected = collect_discovered_provider(
             ProviderId::Claude,

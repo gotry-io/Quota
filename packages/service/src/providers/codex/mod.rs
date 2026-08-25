@@ -893,6 +893,7 @@ mod tests {
             client_version: "test".to_owned(),
             now: Some("2026-08-10T00:00:00Z".to_owned()),
             cancel: None,
+            keychain: Default::default(),
         };
         assert!(discover(&context).is_empty());
         context.browser_sessions.insert(
