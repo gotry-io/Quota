@@ -36,11 +36,12 @@
   @Test
   func detailVisualRoutesUseOneTypedNavigationStack() throws {
     let routeExpectations: [(rawValue: String, title: String, depth: Int)] = [
+      ("account", "Account", 2),
       ("agents", "Agents", 2),
       ("provider-codex", "Codex", 3),
       ("provider-openrouter", "OpenRouter", 3),
       ("provider-cursor", "Cursor", 3),
-      ("devices", "Devices", 2),
+      ("devices", "Devices", 3),
       ("usage", "Usage", 2),
       ("support", "Support", 2),
     ]

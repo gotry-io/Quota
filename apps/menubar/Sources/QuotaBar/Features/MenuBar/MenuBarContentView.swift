@@ -51,6 +51,13 @@ struct MenuBarContentView: View {
       }
     }
     .environment(\.quotaPageTransitionActive, navigationTransitionActive)
+    // The Account page belongs to a signed-in account. Signing out closes it rather than
+    // leaving a page with nothing left to manage on screen.
+    .onChange(of: model.accountState) { _, state in
+      guard state != .signedIn, let next = navigation.closing(.account) else { return }
+      navigationDirection = .back
+      applyNavigation(next)
+    }
     .task {
       if seedsLaunchAtLogin {
         LaunchAtLoginController.seedDefaultOnIfNeeded()
@@ -64,10 +71,10 @@ struct MenuBarContentView: View {
     .overlay {
       if isLogoutConfirmationPresented {
         QuotaConfirmationPopup(
-          title: "Log Out?",
+          title: "Sign Out?",
           message:
             "This signs QuotaBar out on this Mac. Your device and synced data stay in your Quota account.",
-          confirmTitle: "Log Out",
+          confirmTitle: "Sign Out",
           onCancel: { isLogoutConfirmationPresented = false }
         ) {
           isLogoutConfirmationPresented = false
@@ -177,11 +184,16 @@ struct MenuBarContentView: View {
     case .settings:
       SettingsHomeView(
         model: model,
+        onOpenAccount: { navigate(to: .account) },
         onOpenAgents: { navigate(to: .agents) },
-        onOpenDevices: { navigate(to: .devices) },
         onOpenUsage: { navigate(to: .usage) },
-        onOpenSupport: { navigate(to: .support) },
-        onRequestLogout: { isLogoutConfirmationPresented = true }
+        onOpenSupport: { navigate(to: .support) }
+      )
+    case .account:
+      AccountSettingsView(
+        model: model,
+        onOpenDevices: { navigate(to: .devices) },
+        onRequestSignOut: { isLogoutConfirmationPresented = true }
       )
     case .agents:
       AgentsSettingsView(
@@ -282,6 +294,7 @@ private enum NavigationDirection {
 
 enum MenuBarRoute: Hashable {
   case settings
+  case account
   case agents
   case provider(ProviderID)
   case devices
@@ -291,6 +304,7 @@ enum MenuBarRoute: Hashable {
   var title: String {
     switch self {
     case .settings: "Settings"
+    case .account: "Account"
     case .agents: "Agents"
     case .provider(let provider): provider.displayName
     case .devices: "Devices"
@@ -320,5 +334,14 @@ struct MenuBarNavigationState: Equatable {
   mutating func navigateBack() {
     guard !path.isEmpty else { return }
     path.removeLast()
+  }
+
+  /// Leaves a page that stopped existing — signing out closes Account — along with whatever was
+  /// opened from it, rather than guessing how deep the person had gone.
+  func closing(_ route: MenuBarRoute) -> MenuBarNavigationState? {
+    guard let index = path.firstIndex(of: route) else { return nil }
+    var next = self
+    next.path.removeSubrange(index...)
+    return next
   }
 }

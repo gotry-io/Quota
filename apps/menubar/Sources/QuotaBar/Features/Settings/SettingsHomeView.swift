@@ -3,11 +3,10 @@ import SwiftUI
 
 struct SettingsHomeView: View {
   @Bindable var model: MenuBarViewModel
+  let onOpenAccount: () -> Void
   let onOpenAgents: () -> Void
-  let onOpenDevices: () -> Void
   let onOpenUsage: () -> Void
   let onOpenSupport: () -> Void
-  let onRequestLogout: () -> Void
 
   @State private var launchAtLoginEnabled = LaunchAtLoginController.isEnabled
   @AppStorage(MenuBarDisplayPreference.storageKey) private var menuBarDisplay =
@@ -61,19 +60,6 @@ struct SettingsHomeView: View {
               accessibilityLabel: "Launch at Login",
               accessibilityHint: "Start QuotaBar when you log in"
             )
-            settingsToggleRow(
-              title: "Sync Usage",
-              systemImage: "arrow.triangle.2.circlepath",
-              isOn: Binding(
-                get: { model.usageUploadEnabled },
-                set: { desired in
-                  Task { await model.setUsageUploadEnabled(desired) }
-                }
-              ),
-              isEnabled: !model.isUpdatingUsageUpload,
-              accessibilityLabel: "Sync Usage",
-              accessibilityHint: "Upload this Mac's Usage to your Quota account"
-            )
             settingsDestinationRow(
               title: "Support",
               systemImage: "questionmark.circle",
@@ -82,10 +68,6 @@ struct SettingsHomeView: View {
               action: onOpenSupport
             )
           }
-        }
-
-        if model.accountState == .signedIn {
-          logoutRow
         }
       }
       .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -101,20 +83,12 @@ struct SettingsHomeView: View {
       VStack(alignment: .leading, spacing: 0) {
         switch model.accountState {
         case .signedIn:
-          VStack(spacing: 0) {
-            settingsExternalLinkRow(
-              title: model.accountDisplayLabel,
-              systemImage: "person.crop.circle.fill",
-              url: AppMetadata.accountURL
-            )
-            settingsDestinationRow(
-              title: "Devices",
-              systemImage: "laptopcomputer.and.iphone",
-              trailing: model.accountDeviceSummary,
-              accessibilityLabel: "Devices",
-              action: onOpenDevices
-            )
-          }
+          settingsDestinationRow(
+            title: model.accountDisplayLabel,
+            systemImage: "person.crop.circle.fill",
+            accessibilityLabel: "Account, \(model.accountDisplayLabel)",
+            action: onOpenAccount
+          )
 
         case .logoutPending:
           SettingsListRow(title: "Logout Pending", systemImage: "wifi.slash") {
@@ -196,31 +170,6 @@ struct SettingsHomeView: View {
     .accessibilityHint("What the QuotaBar menu-bar item shows")
   }
 
-  private var logoutRow: some View {
-    Button {
-      onRequestLogout()
-    } label: {
-      HStack(spacing: QuotaDesign.Spacing.sm) {
-        Image(systemName: "rectangle.portrait.and.arrow.right")
-          .quotaFont(.secondary)
-          .foregroundStyle(QuotaPalette.critical)
-          .frame(width: QuotaDesign.Layout.settingsIconColumnWidth)
-        Text(model.isLoggingOut ? "Logging Out…" : "Log Out")
-          .quotaFont(.settingsLabel)
-          .foregroundStyle(QuotaPalette.critical)
-        Spacer(minLength: 0)
-      }
-      .padding(.horizontal, QuotaDesign.Layout.groupContentInset)
-      .frame(maxWidth: .infinity, minHeight: QuotaDesign.Layout.settingsRowHeight)
-      .contentShape(Rectangle())
-    }
-    .buttonStyle(QuotaListRowButtonStyle())
-    .quotaGroupSurface()
-    .disabled(model.isLoggingOut)
-    .accessibilityLabel(model.isLoggingOut ? "Logging out" : "Log Out")
-    .accessibilityHint("Shows a confirmation")
-  }
-
   private var signedOutMessage: String {
     switch model.accountDisconnectReason {
     case .deviceDeleted:
@@ -255,7 +204,6 @@ struct SettingsHomeView: View {
     title: String,
     systemImage: String,
     isOn: Binding<Bool>,
-    isEnabled: Bool = true,
     accessibilityLabel: String,
     accessibilityHint: String
   ) -> some View {
@@ -269,22 +217,23 @@ struct SettingsHomeView: View {
     .accessibilityElement(children: .combine)
     .accessibilityLabel(accessibilityLabel)
     .accessibilityHint(accessibilityHint)
-    .disabled(!isEnabled)
   }
 
   private func settingsDestinationRow(
     title: String,
     systemImage: String,
-    trailing: String,
+    trailing: String = "",
     accessibilityLabel: String,
     action: @escaping () -> Void
   ) -> some View {
     Button(action: action) {
       SettingsListRow(title: title, systemImage: systemImage) {
         HStack(spacing: QuotaDesign.Spacing.xxs) {
-          Text(trailing)
-            .quotaListSecondaryStyle()
-            .lineLimit(1)
+          if !trailing.isEmpty {
+            Text(trailing)
+              .quotaListSecondaryStyle()
+              .lineLimit(1)
+          }
           Image(systemName: "chevron.right")
             .quotaChevronStyle()
         }

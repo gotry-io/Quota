@@ -162,7 +162,8 @@ Back returns one level.
 ```text
 Overview
 └── Settings
-    ├── Devices
+    ├── Account
+    │   └── Devices
     ├── Usage
     ├── Support
     └── Agents
@@ -237,29 +238,22 @@ Settings section order is fixed:
 2. **Quota**
 3. **General**
 
-Account states:
+The Account group on Settings is one row deep in every state:
 
-- Signed out or not checked: the Account group contains only one standard-height **Sign In** row.
+- Signed out or not checked: one standard-height **Sign In** row.
 - Login running: one standard-height browser completion row with **Cancel**. Cancellation sends the
   typed service operation and closes the browser flow.
-- Signed in: the Account group contains the account row followed by **Devices**. Clicking the account
-  row opens the web account surface. A separate **Log Out** row sits at the bottom of the Settings
-  page, after every group. It opens an app-owned confirmation popup with **Cancel** and destructive
-  **Log Out** actions; it states that the remote Device and synced data remain. Do not use a system
-  alert for this flow.
+- Signed in: one row titled with the account label, which opens the **Account** page.
 - Logout pending: one standard-height status row with **Retry Logout**.
 - Removed or expired device session: use the same **Sign In** action and never show raw reason codes
   or ids. Authentication-provider choice belongs to the login flow, not this row's label.
 
 The Account group is the only place for account authentication actions. Buttons invoke typed private
 service operations; there are no embedded web views.
-Do not add a separate account-management row; the signed-in account label is that destination.
 
 Quota contains the **Usage** and **Agents** destinations. The Usage root summary uses account-wide
 totals while signed in with Usage sync enabled, and local totals otherwise. General contains the
-**Menu Bar Display** choice, the native mini **Launch at Login** and **Sync Usage** switches, then
-the **Support** destination. Menu Bar Display uses the same compact trailing menu as the Usage
-source control.
+native mini **Launch at Login** switch, then the **Support** destination.
 Support is the diagnostic page. It is backed by the private `diagnose` operation and opens with the
 report's status line: a semantic icon, **All systems working** / **Some checks need attention** /
 **Action needed**, and a fixed locale-shortened evaluation time (`Checked 3:40 PM`), not relative
@@ -293,6 +287,18 @@ the latest state after the navigation animation is removed. Any page that can re
 empty, error, or content at its root uses this host; individual pages must not delay requests or
 guess the navigation duration. Header actions stay hidden during the transition and then reflect the
 published page state. Reduce Motion skips the transition and publishes updates immediately.
+
+### Account
+
+The Account page is reachable only while signed in, and it holds everything that belongs to the
+account, top to bottom: the account label, the native mini **Sync Usage** switch, **Devices**,
+**Open quota.gotry.io**, and **Sign Out**. Sync Usage keeps its behaviour and its copy — it is on
+this page because what it uploads is account data, not a general preference.
+
+**Sign Out** is the one destructive row, below the group, and it opens an app-owned confirmation
+popup with **Cancel** and destructive **Sign Out** actions stating that the remote Device and synced
+data remain. Do not use a system alert for this flow. Signing out closes this page, along with
+anything opened from it, because there is no longer an account to manage.
 
 ### Devices
 
@@ -433,7 +439,7 @@ Prefer these components over page-local replicas. In-section actions never mix a
 with a system or bordered control. **Save** and empty-state **Retry** use compact primary. Browser
 Session **Sign In**, **Cancel**, **Remove**, and **Disconnect** use secondary; destructive labels
 use the destructive variant. Support's Recheck is a header icon action only; Copy Report and Reset
-Local Data are Settings list rows. Full-width Settings rows such as **Log Out** stay list rows. Do not use
+Local Data are Settings list rows. Full-width Settings rows such as **Sign Out** stay list rows. Do not use
 `ButtonStyle.bordered` or an unstyled system button inside the panel. Provider assets remain in
 `Resources/BrandIcons`; do not copy their geometry into SwiftUI paths.
 
@@ -465,7 +471,7 @@ share tokens and accessibility semantics but do not own tasks or form a generic 
 
 Required fixture states are loading, signed-in content, cached content with a sync warning,
 signed-out provider issues, service unavailable, and a rebuilding cache (`cache-rebuilding`).
-Required routes are Overview, Settings, Agents, provider
+Required routes are Overview, Settings, Account, Agents, provider
 setup variants (CLI, API key, and browser session), Devices, Usage, and Support. Inspect
 light and dark appearances, standard and accessibility text sizes, keyboard traversal, VoiceOver
 labels, and Reduce Motion transitions.

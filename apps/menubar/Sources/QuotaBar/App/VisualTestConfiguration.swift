@@ -61,6 +61,7 @@
   enum VisualTestRoute: String {
     case overview
     case settings
+    case account
     case agents
     case providerCodex = "provider-codex"
     case providerOpenRouter = "provider-openrouter"
@@ -73,11 +74,12 @@
       switch self {
       case .overview: []
       case .settings: [.settings]
+      case .account: [.settings, .account]
       case .agents: [.settings, .agents]
       case .providerCodex: [.settings, .agents, .provider(.codex)]
       case .providerOpenRouter: [.settings, .agents, .provider(.openrouter)]
       case .providerCursor: [.settings, .agents, .provider(.cursor)]
-      case .devices: [.settings, .devices]
+      case .devices: [.settings, .account, .devices]
       case .usage: [.settings, .usage]
       case .support: [.settings, .support]
       }
