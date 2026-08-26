@@ -87,6 +87,29 @@ func consentCopyNamesTheBrowserThePermissionAndTheCookies() throws {
   #expect(BrowserSessionCopy.consentTitle(provider: .cursor) == "Read Cursor Cookies?")
 }
 
+/// The sheet cannot promise a narrower read than the one that happens, so for every provider
+/// that declares a session it names that provider, every host it will open, and every cookie
+/// name it will take.
+@Test
+func consentCopyNamesEveryHostAndCookieTheCatalogDeclares() throws {
+  for provider in ProviderID.allCases {
+    guard let spec = provider.browserSession else { continue }
+    let message = BrowserSessionCopy.consentMessage(
+      provider: provider, browserName: "Chrome", spec: spec)
+    for host in spec.cookieHosts {
+      #expect(message.contains(host), "\(provider.rawValue) consent omits \(host)")
+    }
+    for name in spec.cookieNames {
+      #expect(message.contains(name), "\(provider.rawValue) consent omits \(name)")
+    }
+    #expect(message.contains("stored in QuotaBar's local service database"))
+    #expect(message.contains("Nothing about it is uploaded"))
+    #expect(
+      BrowserSessionCopy.consentTitle(provider: provider)
+        == "Read \(provider.displayName) Cookies?")
+  }
+}
+
 @Test @MainActor
 func multipleCookieHeadersRequireAccountSelection() async throws {
   let first = BrowserSessionCookieCandidate(
