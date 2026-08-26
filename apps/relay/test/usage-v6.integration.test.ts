@@ -1,7 +1,7 @@
 import { applyD1Migrations, env } from "cloudflare:test";
 import type { D1Migration } from "@cloudflare/vitest-pool-workers";
 import { MAXIMUM_USAGE_ROWS_PER_HOUR } from "@gotry-io/quota-protocol";
-import type { DevicePrincipal, UsageUpload } from "@gotry-io/relay-core";
+import type { DeviceWriterPrincipal, UsageUpload } from "@gotry-io/relay-core";
 import { beforeEach, describe, expect, inject, it } from "vitest";
 import { AccountService } from "../src/account/service.ts";
 import { createRelayApp } from "../src/app.ts";
@@ -217,7 +217,7 @@ describe("managed data v6 end to end", () => {
 
     const app = signedInApp();
     const headers = {
-      Authorization: `Bearer ${await deviceToken("alpha")}`,
+      Authorization: `Bearer ${await bearerFor("alpha")}`,
       "Content-Type": "application/json",
     };
     const oversizedHour = (count: number) =>
@@ -272,15 +272,16 @@ async function addDevice(name: string): Promise<void> {
     .run();
 }
 
-function principal(name: string): DevicePrincipal {
+function principal(name: string): DeviceWriterPrincipal {
   return {
-    kind: "device",
     session_id: `session_${name}`,
     family_id: `family_${name}`,
     account_id: accountId,
     device_id: `device_${name}`,
-    generation: 1,
-    scopes: ["quota:write:self", "usage:write:self"],
+    device_generation: 1,
+    client_kind: "quotabar",
+    scopes: ["account:read", "device:write"],
+    authenticated_at: now.toISOString(),
   };
 }
 
@@ -339,21 +340,23 @@ function signedInApp() {
   });
 }
 
-/** A live device session for one seeded device, and the bearer token that reaches it. */
-async function deviceToken(name: string): Promise<string> {
-  const token = `qda_${name}_${"x".repeat(32)}`;
+/** A live session for one seeded device, and the bearer token that reaches it. */
+async function bearerFor(name: string): Promise<string> {
+  const token = `qb_${name.padEnd(43, "x").slice(0, 43)}`;
   await env.DB.prepare(
-    `INSERT INTO device_sessions (
-       id, family_id, device_id, device_generation, access_token_hash, refresh_token_hash,
-       scopes_json, expires_at, refresh_expires_at, last_used_at, created_at
-     ) VALUES (?1, ?1, ?2, 1, ?3, ?4, ?5, ?6, ?6, ?7, ?7)`,
+    `INSERT INTO sessions (
+       id, family_id, account_id, device_id, device_generation, client_kind,
+       access_token_hash, refresh_token_hash, scopes_json,
+       authenticated_at, expires_at, refresh_expires_at, last_used_at, created_at
+     ) VALUES (?1, ?1, ?2, ?3, 1, 'quotabar', ?4, ?5, ?6, ?8, ?7, ?7, ?8, ?8)`,
   )
     .bind(
       `session_${name}`,
+      accountId,
       `device_${name}`,
-      await new SecretHasher(secret).hash("device-access", token),
+      await new SecretHasher(secret).hash("quotabar-access", token),
       `refresh_${name}`,
-      JSON.stringify(["quota:write:self", "usage:write:self", "sync:read:self"]),
+      JSON.stringify(["account:read", "device:write"]),
       new Date(now.getTime() + 3_600_000).toISOString(),
       now.toISOString(),
     )

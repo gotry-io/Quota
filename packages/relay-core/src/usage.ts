@@ -4,7 +4,7 @@ import type {
   UsageRow as ProtocolUsageRow,
   UsageUpload as ProtocolUsageUpload,
 } from "@gotry-io/quota-protocol";
-import type { DevicePrincipal } from "./account.ts";
+import type { DeviceWriterPrincipal } from "./account.ts";
 
 export type UsageAgent = BillingAgent;
 export type UsageRow = ProtocolUsageRow;
@@ -48,7 +48,7 @@ export interface UsageDailyResult {
 
 export interface UsageState {
   recordUsage(
-    principal: DevicePrincipal,
+    principal: DeviceWriterPrincipal,
     upload: UsageUpload,
     receivedAt: string,
   ): Promise<UsageWriteResult>;

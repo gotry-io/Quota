@@ -35,8 +35,7 @@ beforeEach(async () => {
     env.DB.prepare("DELETE FROM usage_daily"),
     env.DB.prepare("DELETE FROM usage_hourly"),
     env.DB.prepare("DELETE FROM quota_snapshots"),
-    env.DB.prepare("DELETE FROM device_sessions"),
-    env.DB.prepare("DELETE FROM account_sessions"),
+    env.DB.prepare("DELETE FROM sessions"),
     env.DB.prepare("DELETE FROM login_grants"),
     env.DB.prepare("DELETE FROM devices"),
     env.DB.prepare("DELETE FROM accounts"),
@@ -98,7 +97,7 @@ describe("browser sign-in through GitHub", () => {
 
     const sessionCookie = `__Host-quota_session=${session?.value}`;
     const stored = await env.DB.prepare(
-      "SELECT client_kind, device_id, refresh_token_hash, access_token_hash, authenticated_at FROM account_sessions",
+      "SELECT client_kind, device_id, refresh_token_hash, access_token_hash, authenticated_at FROM sessions",
     ).all<Record<string, unknown>>();
     expect(stored.results).toHaveLength(1);
     expect(stored.results[0]).toMatchObject({
@@ -173,9 +172,7 @@ describe("browser sign-in through GitHub", () => {
 
     // Nothing reached GitHub, and no session exists to have been opened.
     expect(github.exchanges).toBe(0);
-    expect(
-      await env.DB.prepare("SELECT COUNT(*) AS count FROM account_sessions").first("count"),
-    ).toBe(0);
+    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM sessions").first("count")).toBe(0);
     expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM accounts").first("count")).toBe(0);
   });
 
@@ -194,9 +191,7 @@ describe("browser sign-in through GitHub", () => {
     );
     expect(expired.status).toBe(400);
     expect(github.exchanges).toBe(0);
-    expect(
-      await env.DB.prepare("SELECT COUNT(*) AS count FROM account_sessions").first("count"),
-    ).toBe(0);
+    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM sessions").first("count")).toBe(0);
 
     // A deadline nothing can read is not an absent deadline: it must fail closed. This payload is
     // signed the same way Relay signs its own, so only the deadline itself is under test.
@@ -214,9 +209,7 @@ describe("browser sign-in through GitHub", () => {
     );
     expect(unreadable.status).toBe(400);
     expect(github.exchanges).toBe(0);
-    expect(
-      await env.DB.prepare("SELECT COUNT(*) AS count FROM account_sessions").first("count"),
-    ).toBe(0);
+    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM sessions").first("count")).toBe(0);
   });
 
   it("maps a code GitHub will not spend twice to a rejected sign-in", async () => {
@@ -229,9 +222,7 @@ describe("browser sign-in through GitHub", () => {
     expect(replayed.status).toBe(400);
     expect(await replayed.json()).toMatchObject({ error: { code: "invalid_request" } });
     expect(github.exchanges).toBe(2);
-    expect(
-      await env.DB.prepare("SELECT COUNT(*) AS count FROM account_sessions").first("count"),
-    ).toBe(1);
+    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM sessions").first("count")).toBe(1);
   });
 
   it("keeps the GitHub access token and the session token out of storage and answers", async () => {
@@ -291,10 +282,10 @@ describe("browser sign-in through GitHub", () => {
       400,
     );
 
-    const activate = await relay.app.request(
-      `${origin}/api/auth/github/start?return_to=${encodeURIComponent("/activate?user_code=ABCD-EFGH")}`,
+    const deepLink = await relay.app.request(
+      `${origin}/api/auth/github/start?return_to=${encodeURIComponent("/my?device=device_1")}`,
     );
-    expect(activate.status).toBe(302);
+    expect(deepLink.status).toBe(302);
   });
 
   it("requires a same-origin request to sign out or delete the Account", async () => {
@@ -385,9 +376,8 @@ describe("browser sign-in through GitHub", () => {
 
     for (const table of [
       "accounts",
-      "account_sessions",
+      "sessions",
       "devices",
-      "device_sessions",
       "quota_snapshots",
       "usage_hourly",
       "usage_daily",
@@ -493,19 +483,14 @@ async function seedDeviceData(accountId: string): Promise<void> {
        VALUES ('device_delete', ?1, 'installation_delete', 1, ?2, ?2)`,
     ).bind(accountId, stamp),
     env.DB.prepare(
-      `INSERT INTO account_sessions (
-         id, family_id, account_id, device_id, client_kind, access_token_hash, refresh_token_hash,
-         scopes_json, authenticated_at, expires_at, refresh_expires_at, last_used_at, created_at
-       ) VALUES ('session_cli', 'family_cli', ?1, 'device_delete', 'cli', 'access_cli',
-         'refresh_cli', '["account:read"]', ?2, ?2, ?2, ?2, ?2)`,
+      `INSERT INTO sessions (
+         id, family_id, account_id, device_id, device_generation, client_kind,
+         access_token_hash, refresh_token_hash, scopes_json,
+         authenticated_at, expires_at, refresh_expires_at, last_used_at, created_at
+       ) VALUES ('session_quotabar', 'family_quotabar', ?1, 'device_delete', 1, 'quotabar',
+         'access_quotabar', 'refresh_quotabar', '["account:read","device:write"]',
+         ?2, ?2, ?2, ?2, ?2)`,
     ).bind(accountId, stamp),
-    env.DB.prepare(
-      `INSERT INTO device_sessions (
-         id, family_id, device_id, device_generation, access_token_hash, refresh_token_hash,
-         scopes_json, expires_at, refresh_expires_at, last_used_at, created_at
-       ) VALUES ('session_device', 'family_cli', 'device_delete', 1, 'access_device',
-         'refresh_device', '["sync:read:self"]', ?1, ?1, ?1, ?1)`,
-    ).bind(stamp),
     env.DB.prepare(
       `INSERT INTO quota_snapshots (device_id, provider, account_fingerprint, observed_at, snapshot_json, updated_at)
        VALUES ('device_delete', 'codex', 'fingerprint', ?1, '{}', ?1)`,
@@ -531,8 +516,8 @@ async function seedDeviceData(accountId: string): Promise<void> {
          'standard', 'default', 'default', 'global', 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, NULL, 0, 0)`,
     ),
     env.DB.prepare(
-      `INSERT INTO login_grants (id, grant_kind, client_id, account_id, expires_at, created_at)
-       VALUES ('grant_delete', 'device_code', 'quotacli', ?1, ?2, ?2)`,
+      `INSERT INTO login_grants (id, client_id, account_id, expires_at, created_at)
+       VALUES ('grant_delete', 'quotabar', ?1, ?2, ?2)`,
     ).bind(accountId, stamp),
   ]);
 }

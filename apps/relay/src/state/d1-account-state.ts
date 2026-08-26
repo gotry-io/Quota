@@ -3,65 +3,54 @@ import {
   type ProviderId,
   QuotaSnapshotSchema,
 } from "@gotry-io/quota-protocol";
-import {
-  ACCOUNT_SCOPES,
-  type AccountClientKind,
-  type AccountLoginGrantConsumeResult,
-  type AccountMaintenanceInput,
-  type AccountPrincipal,
-  type AccountRecord,
-  type AccountState,
-  type AccountVersionStamp,
-  type AuthorizeDeviceGrantInput,
-  type CompleteIdentityLoginInput,
-  type CompleteIdentityLoginResult,
-  type ConsumeAccountLoginGrantInput,
-  type ConsumeLoginGrantInput,
-  type CreateLoginGrantInput,
-  type CreateWebSessionInput,
-  DEVICE_SCOPES,
-  type DeleteDeviceResult,
-  type DeviceGrantDecisionOutcome,
-  type DeviceGrantPollResult,
-  type DevicePrincipal,
-  type DeviceRecord,
-  type DeviceSyncControl,
-  type LoginGrantConsumeResult,
-  type LoginGrantRecord,
-  type QuotaSnapshotSubmission,
-  type RateLimitInput,
-  type RateLimitResult,
-  type RefreshSessionInput,
-  type RevokeRefreshSessionInput,
-  type SnapshotWriteResult,
-  type StoredQuotaSnapshot,
+import type {
+  AccountLoginGrantConsumeResult,
+  AccountMaintenanceInput,
+  AccountRecord,
+  AccountState,
+  AccountVersionStamp,
+  CompleteIdentityLoginInput,
+  CompleteIdentityLoginResult,
+  ConsumeAccountLoginGrantInput,
+  ConsumeLoginGrantInput,
+  CreateLoginGrantInput,
+  CreateWebSessionInput,
+  DeleteDeviceResult,
+  DeviceRecord,
+  DeviceSyncControl,
+  DeviceWriterPrincipal,
+  LoginGrantConsumeResult,
+  LoginGrantRecord,
+  QuotaSnapshotSubmission,
+  RateLimitInput,
+  RateLimitResult,
+  RefreshSessionInput,
+  RevokeRefreshSessionInput,
+  SessionClientKind,
+  SessionPrincipal,
+  SnapshotWriteResult,
+  StoredQuotaSnapshot,
 } from "@gotry-io/relay-core";
 import {
-  decodeAccountScopes,
-  decodeDeviceScopes,
+  decodeSessionScopes,
   encodeScopes,
+  IOS_SESSION_SCOPES,
+  QUOTABAR_SESSION_SCOPES,
   type RateLimitRow,
   rateLimitResult,
   validateRateLimitInput,
+  WEB_SESSION_SCOPES,
 } from "./records.ts";
 
-interface AccountPrincipalRow {
+interface SessionPrincipalRow {
   id: string;
   family_id: string;
   account_id: string;
   device_id: string | null;
+  device_generation: number | null;
   client_kind: string;
   scopes_json: string;
   authenticated_at: string;
-}
-
-interface DevicePrincipalRow {
-  id: string;
-  family_id: string;
-  account_id: string;
-  device_id: string;
-  device_generation: number;
-  scopes_json: string;
 }
 
 interface SnapshotRow {
@@ -91,17 +80,8 @@ export class D1AccountState implements AccountState {
         .bind(input.grant_expired_before, input.limit),
       this.database
         .prepare(
-          `DELETE FROM account_sessions WHERE id IN (
-             SELECT id FROM account_sessions
-             WHERE refresh_expires_at <= ?1 OR (revoked_at IS NOT NULL AND revoked_at <= ?2)
-             ORDER BY COALESCE(revoked_at, refresh_expires_at) ASC, id ASC LIMIT ?3
-           )`,
-        )
-        .bind(input.session_expired_before, input.session_revoked_before, input.limit),
-      this.database
-        .prepare(
-          `DELETE FROM device_sessions WHERE id IN (
-             SELECT id FROM device_sessions
+          `DELETE FROM sessions WHERE id IN (
+             SELECT id FROM sessions
              WHERE refresh_expires_at <= ?1 OR (revoked_at IS NOT NULL AND revoked_at <= ?2)
              ORDER BY COALESCE(revoked_at, refresh_expires_at) ASC, id ASC LIMIT ?3
            )`,
@@ -132,27 +112,17 @@ export class D1AccountState implements AccountState {
     await this.database
       .prepare(
         `INSERT INTO login_grants (
-           id, grant_kind, client_id, login_token_hash,
-           device_code_hash, user_code_hash, installation_id_hash, device_display_name, platform,
-           pkce_challenge, redirect_uri, client_state, poll_interval_seconds, expires_at, created_at
-         ) VALUES (
-           ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15
-         )`,
+           id, client_id, login_token_hash, pkce_challenge, redirect_uri, client_state,
+           expires_at, created_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)`,
       )
       .bind(
         input.id,
-        input.grant_kind,
         input.client_id,
         input.login_token_hash,
-        input.device_code_hash,
-        input.user_code_hash,
-        input.installation_id_hash,
-        input.device_display_name,
-        input.platform,
         input.pkce_challenge,
         input.redirect_uri,
         input.client_state,
-        input.poll_interval_seconds,
         input.expires_at,
         input.created_at,
       )
@@ -167,7 +137,7 @@ export class D1AccountState implements AccountState {
       .prepare(
         `${loginGrantSelect}
          WHERE login_token_hash = ?1 AND expires_at > ?2
-           AND completed_at IS NULL AND consumed_at IS NULL AND denied_at IS NULL`,
+           AND completed_at IS NULL AND consumed_at IS NULL`,
       )
       .bind(hash, checkedAt)
       .first<LoginGrantRecord>();
@@ -184,7 +154,7 @@ export class D1AccountState implements AccountState {
            WHERE EXISTS (
              SELECT 1 FROM login_grants
              WHERE id = ?1 AND login_token_hash = ?2 AND expires_at > ?6
-               AND completed_at IS NULL AND consumed_at IS NULL AND denied_at IS NULL
+               AND completed_at IS NULL AND consumed_at IS NULL
            )
            ON CONFLICT(id) DO UPDATE SET
              display_label = excluded.display_label,
@@ -205,13 +175,11 @@ export class D1AccountState implements AccountState {
            SET account_id = ?4,
                code_hash = ?5,
                completion_nonce_hash = ?3,
-               approved_at = ?6,
                completed_at = ?6
            WHERE id = ?1 AND login_token_hash = ?2 AND expires_at > ?6
-             AND completed_at IS NULL AND consumed_at IS NULL AND denied_at IS NULL
-           RETURNING id, grant_kind, client_id, account_id, installation_id_hash,
-                     device_display_name, platform, pkce_challenge, redirect_uri, client_state, expires_at,
-                     approved_at, denied_at, consumed_at`,
+             AND completed_at IS NULL AND consumed_at IS NULL
+           RETURNING id, client_id, account_id, pkce_challenge, redirect_uri, client_state,
+                     expires_at, completed_at, consumed_at`,
         )
         .bind(
           input.grant_id,
@@ -245,96 +213,23 @@ export class D1AccountState implements AccountState {
     return this.database
       .prepare(
         `${loginGrantSelect}
-         WHERE code_hash = ?1 AND expires_at > ?2 AND approved_at IS NOT NULL
-           AND denied_at IS NULL AND consumed_at IS NULL`,
+         WHERE code_hash = ?1 AND expires_at > ?2
+           AND completed_at IS NOT NULL AND consumed_at IS NULL`,
       )
       .bind(hash, checkedAt)
       .first<LoginGrantRecord>();
   }
 
-  async authorizeDeviceGrant(
-    input: AuthorizeDeviceGrantInput,
-  ): Promise<DeviceGrantDecisionOutcome> {
-    const existing = await this.getLoginGrantByUserCode(input.user_code_hash);
-    if (!existing) {
-      return "not_found";
-    }
-    if (existing.consumed_at) {
-      return "consumed";
-    }
-    if (existing.approved_at || existing.denied_at) {
-      return "already_decided";
-    }
-    if (Date.parse(existing.expires_at) <= Date.parse(input.decided_at)) {
-      return "expired";
-    }
-    const column = input.decision === "approve" ? "approved_at" : "denied_at";
-    const result = await this.database
-      .prepare(
-        `UPDATE login_grants
-         SET account_id = ?2, ${column} = ?3
-         WHERE user_code_hash = ?1 AND grant_kind = 'device_code' AND expires_at > ?3
-           AND approved_at IS NULL AND denied_at IS NULL AND consumed_at IS NULL`,
-      )
-      .bind(input.user_code_hash, input.account_id, input.decided_at)
-      .run();
-    if (result.meta.changes === 1) {
-      return input.decision === "approve" ? "approved" : "denied";
-    }
-    return "already_decided";
-  }
-
-  async pollDeviceGrant(hash: string, checkedAt: string): Promise<DeviceGrantPollResult> {
-    const row = await this.database
-      .prepare(
-        `SELECT id, grant_kind, client_id, account_id, installation_id_hash,
-                device_display_name, platform, pkce_challenge, redirect_uri, client_state, expires_at,
-                approved_at, denied_at, consumed_at, poll_interval_seconds, last_polled_at
-         FROM login_grants WHERE device_code_hash = ?1 AND grant_kind = 'device_code'`,
-      )
-      .bind(hash)
-      .first<LoginGrantRecord & { poll_interval_seconds: number; last_polled_at: string | null }>();
-    if (!row) {
-      return { outcome: "not_found", poll_interval_seconds: 5 };
-    }
-    const interval = row.poll_interval_seconds;
-    if (row.consumed_at) {
-      return { outcome: "consumed", poll_interval_seconds: interval };
-    }
-    if (row.denied_at) {
-      return { outcome: "denied", poll_interval_seconds: interval };
-    }
-    if (Date.parse(row.expires_at) <= Date.parse(checkedAt)) {
-      return { outcome: "expired", poll_interval_seconds: interval };
-    }
-    if (
-      row.last_polled_at &&
-      Date.parse(checkedAt) < Date.parse(row.last_polled_at) + interval * 1000
-    ) {
-      const slowedInterval = interval + 5;
-      await this.database
-        .prepare(
-          `UPDATE login_grants
-           SET poll_interval_seconds = ?2, last_polled_at = ?3
-           WHERE id = ?1 AND consumed_at IS NULL`,
-        )
-        .bind(row.id, slowedInterval, checkedAt)
-        .run();
-      return { outcome: "slow_down", poll_interval_seconds: slowedInterval };
-    }
-    await this.database
-      .prepare("UPDATE login_grants SET last_polled_at = ?2 WHERE id = ?1 AND consumed_at IS NULL")
-      .bind(row.id, checkedAt)
-      .run();
-    if (!row.approved_at || !row.account_id) {
-      return { outcome: "pending", poll_interval_seconds: interval };
-    }
-    return { outcome: "ready", grant: row, poll_interval_seconds: interval };
-  }
-
+  /**
+   * Turn a completed browser grant into this Device and the one session that speaks for it.
+   *
+   * The Device is found or created by installation, every session it already had is revoked, and
+   * one row is written carrying both what this login may read and what it may write. A second
+   * sign-in on the same Mac therefore leaves exactly one live token, not two families to keep in
+   * step.
+   */
   async consumeLoginGrant(input: ConsumeLoginGrantInput): Promise<LoginGrantConsumeResult> {
-    const accountScopes = encodeScopes(["account:read", "session:revoke:self"], ACCOUNT_SCOPES);
-    const deviceScopes = encodeScopes(DEVICE_SCOPES, DEVICE_SCOPES);
+    const scopes = encodeScopes(QUOTABAR_SESSION_SCOPES);
     let results: D1Result<unknown>[];
     try {
       results = await this.database.batch([
@@ -342,8 +237,8 @@ export class D1AccountState implements AccountState {
           .prepare(
             `UPDATE login_grants
            SET consumed_at = ?4, consume_nonce_hash = ?3
-           WHERE id = ?1 AND (code_hash = ?2 OR device_code_hash = ?2)
-             AND account_id IS NOT NULL AND approved_at IS NOT NULL AND denied_at IS NULL
+           WHERE id = ?1 AND code_hash = ?2
+             AND account_id IS NOT NULL AND completed_at IS NOT NULL
              AND consumed_at IS NULL AND expires_at > ?4
            RETURNING account_id`,
           )
@@ -367,7 +262,7 @@ export class D1AccountState implements AccountState {
                WHERE tombstone.account_id = grants.account_id
                  AND tombstone.installation_id_hash = ?2
                  AND tombstone.deleted_at IS NOT NULL
-                 AND grants.approved_at <= tombstone.deleted_at
+                 AND grants.completed_at <= tombstone.deleted_at
              )
            ON CONFLICT(account_id, installation_id_hash) DO UPDATE SET
              display_name = excluded.display_name,
@@ -391,7 +286,7 @@ export class D1AccountState implements AccountState {
           ),
         this.database
           .prepare(
-            `UPDATE account_sessions SET revoked_at = ?3
+            `UPDATE sessions SET revoked_at = ?3
            WHERE device_id = (
              SELECT id FROM devices WHERE account_id = (
                SELECT account_id FROM login_grants WHERE id = ?1
@@ -401,22 +296,13 @@ export class D1AccountState implements AccountState {
           .bind(input.grant_id, input.installation_id_hash, input.consumed_at),
         this.database
           .prepare(
-            `UPDATE device_sessions SET revoked_at = ?3
-           WHERE device_id = (
-             SELECT id FROM devices WHERE account_id = (
-               SELECT account_id FROM login_grants WHERE id = ?1
-             ) AND installation_id_hash = ?2
-           ) AND revoked_at IS NULL`,
-          )
-          .bind(input.grant_id, input.installation_id_hash, input.consumed_at),
-        this.database
-          .prepare(
-            `INSERT INTO account_sessions (
-             id, family_id, account_id, device_id, client_kind, access_token_hash, refresh_token_hash,
-             scopes_json, authenticated_at, expires_at, refresh_expires_at,
-             last_used_at, created_at
+            `INSERT INTO sessions (
+             id, family_id, account_id, device_id, device_generation, client_kind,
+             access_token_hash, refresh_token_hash, scopes_json,
+             authenticated_at, expires_at, refresh_expires_at, last_used_at, created_at
            )
-           SELECT ?1, ?2, grants.account_id, devices.id, 'cli', ?3, ?4, ?5, ?6, ?7, ?8, ?6, ?6
+           SELECT ?1, ?2, grants.account_id, devices.id, devices.generation, 'quotabar',
+                  ?3, ?4, ?5, ?6, ?7, ?8, ?6, ?6
            FROM login_grants AS grants
            INNER JOIN devices ON devices.account_id = grants.account_id
              AND devices.installation_id_hash = ?9
@@ -424,40 +310,14 @@ export class D1AccountState implements AccountState {
            WHERE grants.id = ?10 AND grants.consume_nonce_hash = ?11`,
           )
           .bind(
-            input.account_session.session_id,
+            input.session.session_id,
             input.family_id,
-            input.account_session.access_token_hash,
-            input.account_session.refresh_token_hash,
-            accountScopes,
+            input.session.access_token_hash,
+            input.session.refresh_token_hash,
+            scopes,
             input.consumed_at,
-            input.account_session.access_expires_at,
-            input.account_session.refresh_expires_at,
-            input.installation_id_hash,
-            input.grant_id,
-            input.completion_nonce_hash,
-          ),
-        this.database
-          .prepare(
-            `INSERT INTO device_sessions (
-             id, family_id, device_id, device_generation, access_token_hash, refresh_token_hash,
-             scopes_json, expires_at, refresh_expires_at, last_used_at, created_at
-           )
-           SELECT ?1, ?2, devices.id, devices.generation, ?3, ?4, ?5, ?6, ?7, ?8, ?8
-           FROM login_grants AS grants
-           INNER JOIN devices ON devices.account_id = grants.account_id
-             AND devices.installation_id_hash = ?9
-             AND devices.deleted_at IS NULL AND devices.signed_out_at IS NULL
-           WHERE grants.id = ?10 AND grants.consume_nonce_hash = ?11`,
-          )
-          .bind(
-            input.device_session.session_id,
-            input.family_id,
-            input.device_session.access_token_hash,
-            input.device_session.refresh_token_hash,
-            deviceScopes,
-            input.device_session.access_expires_at,
-            input.device_session.refresh_expires_at,
-            input.consumed_at,
+            input.session.access_expires_at,
+            input.session.refresh_expires_at,
             input.installation_id_hash,
             input.grant_id,
             input.completion_nonce_hash,
@@ -497,13 +357,13 @@ export class D1AccountState implements AccountState {
     if (Date.parse(grant.expires_at) <= Date.parse(input.consumed_at)) {
       return { outcome: "expired" };
     }
-    return { outcome: "not_approved" };
+    return { outcome: "not_completed" };
   }
 
   async consumeAccountLoginGrant(
     input: ConsumeAccountLoginGrantInput,
   ): Promise<AccountLoginGrantConsumeResult> {
-    const accountScopes = encodeScopes(["account:read", "session:revoke:self"], ACCOUNT_SCOPES);
+    const scopes = encodeScopes(IOS_SESSION_SCOPES);
     let results: D1Result<unknown>[];
     try {
       results = await this.database.batch([
@@ -512,9 +372,9 @@ export class D1AccountState implements AccountState {
             `UPDATE login_grants
            SET consumed_at = ?4, consume_nonce_hash = ?3
            WHERE id = ?1 AND code_hash = ?2
-             AND account_id IS NOT NULL AND approved_at IS NOT NULL AND denied_at IS NULL
+             AND account_id IS NOT NULL AND completed_at IS NOT NULL
              AND consumed_at IS NULL AND expires_at > ?4
-             AND client_id = ?5 AND installation_id_hash IS NULL
+             AND client_id = ?5
            RETURNING account_id`,
           )
           .bind(
@@ -526,25 +386,25 @@ export class D1AccountState implements AccountState {
           ),
         this.database
           .prepare(
-            `INSERT INTO account_sessions (
-             id, family_id, account_id, device_id, client_kind, access_token_hash, refresh_token_hash,
-             scopes_json, authenticated_at, expires_at, refresh_expires_at,
-             last_used_at, created_at
+            `INSERT INTO sessions (
+             id, family_id, account_id, device_id, device_generation, client_kind,
+             access_token_hash, refresh_token_hash, scopes_json,
+             authenticated_at, expires_at, refresh_expires_at, last_used_at, created_at
            )
-           SELECT ?1, ?2, grants.account_id, NULL, 'ios', ?3, ?4, ?5, ?6, ?7, ?8, ?6, ?6
+           SELECT ?1, ?2, grants.account_id, NULL, NULL, 'ios', ?3, ?4, ?5, ?6, ?7, ?8, ?6, ?6
            FROM login_grants AS grants
            WHERE grants.id = ?9 AND grants.consume_nonce_hash = ?10
-             AND grants.client_id = ?11 AND grants.installation_id_hash IS NULL`,
+             AND grants.client_id = ?11`,
           )
           .bind(
-            input.account_session.session_id,
+            input.session.session_id,
             input.family_id,
-            input.account_session.access_token_hash,
-            input.account_session.refresh_token_hash,
-            accountScopes,
+            input.session.access_token_hash,
+            input.session.refresh_token_hash,
+            scopes,
             input.consumed_at,
-            input.account_session.access_expires_at,
-            input.account_session.refresh_expires_at,
+            input.session.access_expires_at,
+            input.session.refresh_expires_at,
             input.grant_id,
             input.completion_nonce_hash,
             IOS_OAUTH_CLIENT_ID,
@@ -574,7 +434,7 @@ export class D1AccountState implements AccountState {
     if (Date.parse(grant.expires_at) <= Date.parse(input.consumed_at)) {
       return { outcome: "expired" };
     }
-    return { outcome: "not_approved" };
+    return { outcome: "not_completed" };
   }
 
   /**
@@ -598,17 +458,17 @@ export class D1AccountState implements AccountState {
         .bind(input.account_id, input.display_label, input.authenticated_at),
       this.database
         .prepare(
-          `INSERT INTO account_sessions (
-             id, family_id, account_id, device_id, client_kind,
+          `INSERT INTO sessions (
+             id, family_id, account_id, device_id, device_generation, client_kind,
              access_token_hash, refresh_token_hash, scopes_json,
              authenticated_at, expires_at, refresh_expires_at, last_used_at, created_at
-           ) VALUES (?1, ?1, ?2, NULL, 'web', ?3, NULL, ?4, ?5, ?6, ?6, ?5, ?5)`,
+           ) VALUES (?1, ?1, ?2, NULL, NULL, 'web', ?3, NULL, ?4, ?5, ?6, ?6, ?5, ?5)`,
         )
         .bind(
           input.session_id,
           input.account_id,
           input.access_token_hash,
-          encodeScopes(ACCOUNT_SCOPES, ACCOUNT_SCOPES),
+          encodeScopes(WEB_SESSION_SCOPES),
           input.authenticated_at,
           input.expires_at,
         ),
@@ -620,118 +480,84 @@ export class D1AccountState implements AccountState {
     return account;
   }
 
-  async authorizeAccountSession(
+  /**
+   * Whoever holds this Bearer token, if the session behind it is still allowed to act.
+   *
+   * One query answers for every client. A session that names a Device carries the generation that
+   * Device had when the session opened, and the join insists the Device still exists, is signed
+   * in, and is still at that generation — so Delete Device, which advances the generation, ends
+   * every token issued before it without having to find them. A session that names no Device
+   * skips that condition rather than being answered by a second table.
+   */
+  async authorizeSession(
     accessTokenHash: string,
     checkedAt: string,
-  ): Promise<AccountPrincipal | null> {
+  ): Promise<SessionPrincipal | null> {
     const row = await this.database
       .prepare(
-        `SELECT id, family_id, account_id, device_id, client_kind, scopes_json, authenticated_at
-         FROM account_sessions
-         WHERE access_token_hash = ?1 AND revoked_at IS NULL AND expires_at > ?2`,
-      )
-      .bind(accessTokenHash, checkedAt)
-      .first<AccountPrincipalRow>();
-    if (!row) {
-      return null;
-    }
-    await this.database
-      .prepare("UPDATE account_sessions SET last_used_at = ?2 WHERE id = ?1 AND revoked_at IS NULL")
-      .bind(row.id, checkedAt)
-      .run();
-    return accountPrincipal(row);
-  }
-
-  async authorizeDeviceSession(
-    accessTokenHash: string,
-    checkedAt: string,
-  ): Promise<DevicePrincipal | null> {
-    const row = await this.database
-      .prepare(
-        `SELECT sessions.id, sessions.family_id, devices.account_id,
-                sessions.device_id, sessions.device_generation, sessions.scopes_json
-         FROM device_sessions AS sessions
-         INNER JOIN devices ON devices.id = sessions.device_id
+        `SELECT sessions.id, sessions.family_id, sessions.account_id, sessions.device_id,
+                sessions.device_generation, sessions.client_kind, sessions.scopes_json,
+                sessions.authenticated_at
+         FROM sessions
+         LEFT JOIN devices ON devices.id = sessions.device_id
          WHERE sessions.access_token_hash = ?1 AND sessions.revoked_at IS NULL
-           AND sessions.expires_at > ?2 AND sessions.device_generation = devices.generation
-           AND devices.signed_out_at IS NULL AND devices.deleted_at IS NULL`,
+           AND sessions.expires_at > ?2
+           AND (
+             sessions.device_id IS NULL
+             OR (devices.generation = sessions.device_generation
+                 AND devices.account_id = sessions.account_id
+                 AND devices.signed_out_at IS NULL AND devices.deleted_at IS NULL)
+           )`,
       )
       .bind(accessTokenHash, checkedAt)
-      .first<DevicePrincipalRow>();
+      .first<SessionPrincipalRow>();
     if (!row) {
       return null;
     }
-    await this.database.batch([
+    const statements = [
       this.database
-        .prepare(
-          "UPDATE device_sessions SET last_used_at = ?2 WHERE id = ?1 AND revoked_at IS NULL",
-        )
+        .prepare("UPDATE sessions SET last_used_at = ?2 WHERE id = ?1 AND revoked_at IS NULL")
         .bind(row.id, checkedAt),
-      this.database
-        .prepare(
-          `UPDATE devices SET last_seen_at = ?3
-           WHERE id = ?1 AND generation = ?2 AND signed_out_at IS NULL AND deleted_at IS NULL`,
-        )
-        .bind(row.device_id, row.device_generation, checkedAt),
-    ]);
-    return devicePrincipal(row);
+    ];
+    // A Device is "last seen" when the session that speaks for it calls, which is the only thing
+    // Relay witnesses about it.
+    if (row.device_id !== null) {
+      statements.push(
+        this.database
+          .prepare(
+            `UPDATE devices SET last_seen_at = ?3
+             WHERE id = ?1 AND generation = ?2 AND signed_out_at IS NULL AND deleted_at IS NULL`,
+          )
+          .bind(row.device_id, row.device_generation, checkedAt),
+      );
+    }
+    await this.database.batch(statements);
+    return sessionPrincipal(row);
   }
 
-  async refreshAccountSession(input: RefreshSessionInput): Promise<AccountPrincipal | null> {
-    const row = await this.database
+  /**
+   * Rotate one refresh token, compare-and-swap.
+   *
+   * The update matches on the refresh token being spent, so two racing refreshes cannot both
+   * succeed: the second finds no row to update and the caller is told to sign in again. The
+   * rotated row is read back through the same authorization every request takes, so a refresh
+   * cannot outlive the Device the session names.
+   */
+  async refreshSession(input: RefreshSessionInput): Promise<SessionPrincipal | null> {
+    const rotated = await this.database
       .prepare(
-        `UPDATE account_sessions
+        `UPDATE sessions
          SET access_token_hash = ?2, refresh_token_hash = ?3, expires_at = ?4,
              refresh_expires_at = ?5, last_used_at = ?6
          WHERE refresh_token_hash = ?1 AND revoked_at IS NULL AND refresh_expires_at > ?6
-         RETURNING id, family_id, account_id, device_id, client_kind, scopes_json, authenticated_at`,
-      )
-      .bind(
-        input.refresh_token_hash,
-        input.new_access_token_hash,
-        input.new_refresh_token_hash,
-        input.access_expires_at,
-        input.refresh_expires_at,
-        input.refreshed_at,
-      )
-      .first<AccountPrincipalRow>();
-    return row ? accountPrincipal(row) : null;
-  }
-
-  async refreshAccountOnlySession(input: RefreshSessionInput): Promise<AccountPrincipal | null> {
-    const row = await this.database
-      .prepare(
-        `UPDATE account_sessions
-         SET access_token_hash = ?2, refresh_token_hash = ?3, expires_at = ?4,
-             refresh_expires_at = ?5, last_used_at = ?6
-         WHERE refresh_token_hash = ?1 AND revoked_at IS NULL AND refresh_expires_at > ?6
-           AND device_id IS NULL
-         RETURNING id, family_id, account_id, device_id, client_kind, scopes_json, authenticated_at`,
-      )
-      .bind(
-        input.refresh_token_hash,
-        input.new_access_token_hash,
-        input.new_refresh_token_hash,
-        input.access_expires_at,
-        input.refresh_expires_at,
-        input.refreshed_at,
-      )
-      .first<AccountPrincipalRow>();
-    return row ? accountPrincipal(row) : null;
-  }
-
-  async refreshDeviceSession(input: RefreshSessionInput): Promise<DevicePrincipal | null> {
-    const updated = await this.database
-      .prepare(
-        `UPDATE device_sessions
-         SET access_token_hash = ?2, refresh_token_hash = ?3, expires_at = ?4,
-             refresh_expires_at = ?5, last_used_at = ?6
-         WHERE refresh_token_hash = ?1 AND revoked_at IS NULL AND refresh_expires_at > ?6
-           AND EXISTS (
-             SELECT 1 FROM devices
-             WHERE devices.id = device_sessions.device_id
-               AND devices.generation = device_sessions.device_generation
-               AND devices.signed_out_at IS NULL AND devices.deleted_at IS NULL
+           AND (
+             device_id IS NULL
+             OR EXISTS (
+               SELECT 1 FROM devices
+               WHERE devices.id = sessions.device_id
+                 AND devices.generation = sessions.device_generation
+                 AND devices.signed_out_at IS NULL AND devices.deleted_at IS NULL
+             )
            )`,
       )
       .bind(
@@ -743,87 +569,59 @@ export class D1AccountState implements AccountState {
         input.refreshed_at,
       )
       .run();
-    if (updated.meta.changes !== 1) {
+    if (rotated.meta.changes !== 1) {
       return null;
     }
-    return this.authorizeDeviceSession(input.new_access_token_hash, input.refreshed_at);
+    return this.authorizeSession(input.new_access_token_hash, input.refreshed_at);
   }
 
+  /**
+   * End the session behind this refresh token, and the Device it spoke for.
+   *
+   * Revoking by family rather than by row is what makes a rotation race safe to revoke: the token
+   * presented may already have been replaced, and its successor belongs to the same family.
+   */
   async revokeRefreshSession(input: RevokeRefreshSessionInput): Promise<void> {
-    const accountAudience = input.token_audience === "account";
-    const familySelect = accountAudience
-      ? "SELECT family_id FROM account_sessions WHERE refresh_token_hash = ?1"
-      : "SELECT family_id FROM device_sessions WHERE refresh_token_hash = ?1";
-    const signOutDevice = accountAudience
-      ? this.database
-          .prepare(
-            `UPDATE devices SET signed_out_at = ?2
-             WHERE id = (
-               SELECT device_id FROM account_sessions
-               WHERE refresh_token_hash = ?1 AND revoked_at IS NULL
-             )
-               AND generation = (
-                 SELECT device_generation FROM device_sessions
-                 WHERE family_id = (${familySelect}) AND revoked_at IS NULL
-                 LIMIT 1
-               )
-               AND signed_out_at IS NULL AND deleted_at IS NULL`,
-          )
-          .bind(input.refresh_token_hash, input.revoked_at)
-      : this.database
-          .prepare(
-            `UPDATE devices SET signed_out_at = ?2
-             WHERE id = (
-               SELECT device_id FROM device_sessions
-               WHERE refresh_token_hash = ?1 AND revoked_at IS NULL
-             )
-               AND generation = (
-                 SELECT device_generation FROM device_sessions
-                 WHERE refresh_token_hash = ?1 AND revoked_at IS NULL
-               )
-               AND signed_out_at IS NULL AND deleted_at IS NULL`,
-          )
-          .bind(input.refresh_token_hash, input.revoked_at);
+    const family = "SELECT family_id FROM sessions WHERE refresh_token_hash = ?1";
     await this.database.batch([
-      signOutDevice,
       this.database
         .prepare(
-          `UPDATE account_sessions SET revoked_at = COALESCE(revoked_at, ?2)
-           WHERE family_id = (${familySelect})`,
+          `UPDATE devices SET signed_out_at = ?2
+           WHERE id = (
+             SELECT device_id FROM sessions
+             WHERE refresh_token_hash = ?1 AND revoked_at IS NULL
+           )
+             AND generation = (
+               SELECT device_generation FROM sessions
+               WHERE refresh_token_hash = ?1 AND revoked_at IS NULL
+             )
+             AND signed_out_at IS NULL AND deleted_at IS NULL`,
         )
         .bind(input.refresh_token_hash, input.revoked_at),
       this.database
         .prepare(
-          `UPDATE device_sessions SET revoked_at = COALESCE(revoked_at, ?2)
-           WHERE family_id = (${familySelect})`,
+          `UPDATE sessions SET revoked_at = COALESCE(revoked_at, ?2)
+           WHERE family_id = (${family})`,
         )
         .bind(input.refresh_token_hash, input.revoked_at),
     ]);
   }
 
   async revokePrincipalFamily(
-    principal: AccountPrincipal | DevicePrincipal,
+    principal: SessionPrincipal,
     revokedAt: string,
     signOutDevice: boolean,
   ): Promise<void> {
-    const deviceId = principal.kind === "device" ? principal.device_id : principal.device_id;
     const statements = [
       this.database
-        .prepare(
-          "UPDATE account_sessions SET revoked_at = ?2 WHERE family_id = ?1 AND revoked_at IS NULL",
-        )
-        .bind(principal.family_id, revokedAt),
-      this.database
-        .prepare(
-          "UPDATE device_sessions SET revoked_at = ?2 WHERE family_id = ?1 AND revoked_at IS NULL",
-        )
+        .prepare("UPDATE sessions SET revoked_at = ?2 WHERE family_id = ?1 AND revoked_at IS NULL")
         .bind(principal.family_id, revokedAt),
     ];
-    if (signOutDevice && deviceId) {
+    if (signOutDevice && principal.device_id) {
       statements.push(
         this.database
           .prepare("UPDATE devices SET signed_out_at = ?2 WHERE id = ?1 AND deleted_at IS NULL")
-          .bind(deviceId, revokedAt),
+          .bind(principal.device_id, revokedAt),
       );
     }
     await this.database.batch(statements);
@@ -964,15 +762,7 @@ export class D1AccountState implements AccountState {
         .bind(accountId, deviceId, deletedAt),
       this.database
         .prepare(
-          `UPDATE device_sessions SET revoked_at = ?3
-           WHERE device_id = ?2 AND EXISTS (
-             SELECT 1 FROM devices WHERE id = ?2 AND account_id = ?1
-           ) AND revoked_at IS NULL`,
-        )
-        .bind(accountId, deviceId, deletedAt),
-      this.database
-        .prepare(
-          `UPDATE account_sessions SET revoked_at = ?3
+          `UPDATE sessions SET revoked_at = ?3
            WHERE device_id = ?2 AND account_id = ?1 AND revoked_at IS NULL`,
         )
         .bind(accountId, deviceId, deletedAt),
@@ -1024,10 +814,7 @@ export class D1AccountState implements AccountState {
       this.database
         .prepare(`DELETE FROM quota_snapshots WHERE device_id IN (${ownedDevices})`)
         .bind(accountId),
-      this.database
-        .prepare(`DELETE FROM device_sessions WHERE device_id IN (${ownedDevices})`)
-        .bind(accountId),
-      this.database.prepare("DELETE FROM account_sessions WHERE account_id = ?1").bind(accountId),
+      this.database.prepare("DELETE FROM sessions WHERE account_id = ?1").bind(accountId),
       this.database.prepare("DELETE FROM login_grants WHERE account_id = ?1").bind(accountId),
       this.database.prepare("DELETE FROM devices WHERE account_id = ?1").bind(accountId),
       this.database.prepare("DELETE FROM accounts WHERE id = ?1 RETURNING id").bind(accountId),
@@ -1045,7 +832,7 @@ export class D1AccountState implements AccountState {
    * rather than waiting out retention.
    */
   async recordSnapshot(
-    principal: DevicePrincipal,
+    principal: DeviceWriterPrincipal,
     envelope: QuotaSnapshotSubmission,
     receivedAt: string,
   ): Promise<SnapshotWriteResult> {
@@ -1059,8 +846,8 @@ export class D1AccountState implements AccountState {
       .first<{ generation: number }>();
     if (
       !control ||
-      control.generation !== principal.generation ||
-      envelope.generation !== principal.generation
+      control.generation !== principal.device_generation ||
+      envelope.generation !== principal.device_generation
     ) {
       return { outcome: "stale_device" };
     }
@@ -1112,7 +899,7 @@ export class D1AccountState implements AccountState {
             JSON.stringify(snapshot),
             receivedAt,
             principal.account_id,
-            principal.generation,
+            principal.device_generation,
           ),
       );
     }
@@ -1137,7 +924,7 @@ export class D1AccountState implements AccountState {
            WHERE id = ?1 AND account_id = ?4 AND generation = ?2
              AND signed_out_at IS NULL AND deleted_at IS NULL`,
         )
-        .bind(principal.device_id, principal.generation, receivedAt, principal.account_id),
+        .bind(principal.device_id, principal.device_generation, receivedAt, principal.account_id),
     );
     await this.database.batch(statements);
     return {
@@ -1210,62 +997,42 @@ export class D1AccountState implements AccountState {
       .first<LoginGrantRecord>();
   }
 
-  private async getLoginGrantByUserCode(hash: string): Promise<LoginGrantRecord | null> {
-    return this.database
-      .prepare(`${loginGrantSelect} WHERE user_code_hash = ?1 AND grant_kind = 'device_code'`)
-      .bind(hash)
-      .first<LoginGrantRecord>();
-  }
-
   private async getLoginGrantByIdAndCredential(
     id: string,
     hash: string,
   ): Promise<LoginGrantRecord | null> {
     return this.database
-      .prepare(`${loginGrantSelect} WHERE id = ?1 AND (code_hash = ?2 OR device_code_hash = ?2)`)
+      .prepare(`${loginGrantSelect} WHERE id = ?1 AND code_hash = ?2`)
       .bind(id, hash)
       .first<LoginGrantRecord>();
   }
 }
 
-const loginGrantSelect = `SELECT id, grant_kind, client_id, account_id, installation_id_hash,
-  device_display_name, platform, pkce_challenge, redirect_uri, client_state, expires_at,
-  approved_at, denied_at, consumed_at FROM login_grants`;
+const loginGrantSelect = `SELECT id, client_id, account_id, pkce_challenge, redirect_uri,
+  client_state, expires_at, completed_at, consumed_at FROM login_grants`;
 
 const deviceSelect = `SELECT id, account_id, display_name, platform, generation,
   usage_sync_revision, created_at, last_login_at, last_seen_at,
   signed_out_at, deleted_at, deleted_before FROM devices`;
 
-function accountPrincipal(row: AccountPrincipalRow): AccountPrincipal {
+function sessionPrincipal(row: SessionPrincipalRow): SessionPrincipal {
   return {
-    kind: "account",
     session_id: row.id,
     family_id: row.family_id,
     account_id: row.account_id,
     device_id: row.device_id,
-    client_kind: accountClientKind(row.client_kind),
-    scopes: decodeAccountScopes(row.scopes_json),
+    device_generation: row.device_generation,
+    client_kind: sessionClientKind(row.client_kind),
+    scopes: decodeSessionScopes(row.scopes_json),
     authenticated_at: row.authenticated_at,
   };
 }
 
-function accountClientKind(value: string): AccountClientKind {
-  if (value !== "web" && value !== "cli" && value !== "ios") {
+function sessionClientKind(value: string): SessionClientKind {
+  if (value !== "web" && value !== "quotabar" && value !== "ios") {
     throw new Error("Persisted session names an unknown client kind");
   }
   return value;
-}
-
-function devicePrincipal(row: DevicePrincipalRow): DevicePrincipal {
-  return {
-    kind: "device",
-    session_id: row.id,
-    family_id: row.family_id,
-    account_id: row.account_id,
-    device_id: row.device_id,
-    generation: row.device_generation,
-    scopes: decodeDeviceScopes(row.scopes_json),
-  };
 }
 
 function resultChanged(result: D1Result<unknown> | undefined): boolean {

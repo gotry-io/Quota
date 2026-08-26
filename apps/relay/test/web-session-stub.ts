@@ -1,11 +1,11 @@
-import { ACCOUNT_SCOPES, type AccountPrincipal } from "@gotry-io/relay-core";
+import type { SessionPrincipal } from "@gotry-io/relay-core";
 import type { WebSessionPort } from "../src/account/web-session.ts";
 
 /**
  * A browser already signed in as one Account, for the routes that only need a Web principal.
  *
- * `beginSignIn` records where the sign-in was told to return to, which is how the native browser
- * grant hands its login token back to `/oauth/v2/complete`.
+ * `beginSignIn` records where the sign-in was told to return to, which is how the browser grant
+ * hands its login token back to `/oauth/v2/complete`.
  */
 export class SignedInWebSessionStub implements WebSessionPort {
   returnTo = "";
@@ -30,15 +30,15 @@ export class SignedInWebSessionStub implements WebSessionPort {
     return { outcome: "rejected" };
   }
 
-  async authorize(): Promise<AccountPrincipal | null> {
+  async authorize(): Promise<SessionPrincipal | null> {
     return {
-      kind: "account",
       session_id: `web_${this.accountId}`,
       family_id: `web_${this.accountId}`,
       account_id: this.accountId,
       device_id: null,
+      device_generation: null,
       client_kind: "web",
-      scopes: [...ACCOUNT_SCOPES],
+      scopes: ["account:read", "account:manage"],
       authenticated_at: this.authenticatedAt.toISOString(),
     };
   }

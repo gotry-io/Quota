@@ -1,11 +1,7 @@
 import { applyD1Migrations, env } from "cloudflare:test";
 import type { D1Migration } from "@cloudflare/vitest-pool-workers";
-import {
-  type DeviceAuthorizationResponse,
-  MAXIMUM_USAGE_PERIOD_LEAVES,
-  type OAuthTokenResponse,
-} from "@gotry-io/quota-protocol";
-import type { DevicePrincipal, UsageUpload } from "@gotry-io/relay-core";
+import { MAXIMUM_USAGE_PERIOD_LEAVES, type OAuthTokenResponse } from "@gotry-io/quota-protocol";
+import type { DeviceWriterPrincipal, UsageUpload } from "@gotry-io/relay-core";
 import { beforeEach, describe, expect, inject, it } from "vitest";
 import { AccountService } from "../src/account/service.ts";
 import { accountMaintenanceInput, createRelayApp } from "../src/app.ts";
@@ -591,6 +587,26 @@ describe("managed Relay on real Workers and D1", () => {
     expect(stored.map((observation) => observation.snapshot.provider)).toEqual(["cursor"]);
   });
 
+  it("keeps every session in one table", async () => {
+    // `d1_migrations` is the ladder itself, not storage this deployment designed.
+    const tables = await env.DB.prepare(
+      `SELECT name FROM sqlite_master
+       WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%'
+         AND name <> 'd1_migrations'
+       ORDER BY name`,
+    ).all<{ name: string }>();
+    expect(tables.results.map((row) => row.name)).toEqual([
+      "accounts",
+      "devices",
+      "login_grants",
+      "quota_snapshots",
+      "rate_limit_counters",
+      "sessions",
+      "usage_daily",
+      "usage_hourly",
+    ]);
+  });
+
   it("no longer stores anything an unauthenticated reader could have asked for", async () => {
     const columns = await env.DB.prepare("PRAGMA table_info(accounts)").all<{ name: string }>();
     const names = columns.results.map((column) => column.name);
@@ -670,7 +686,7 @@ describe("managed Relay on real Workers and D1", () => {
     expect(rows.results.map((row) => row.window_started_at)).toEqual(["2026-08-10T00:00:00.000Z"]);
   });
 
-  it("completes browser PKCE through a Web principal and issues device tokens", async () => {
+  it("completes browser PKCE through a Web principal and issues one session", async () => {
     const state = new D1AccountState(env.DB);
     const hasher = new SecretHasher(secret);
     const service = new AccountService(state, hasher, secret);
@@ -690,48 +706,6 @@ describe("managed Relay on real Workers and D1", () => {
       now: () => now,
     });
     const callbackURL = (): string => `https://quota.gotry.io${webSessions.returnTo}`;
-    const decisionBody = JSON.stringify({
-      protocol_version: 2,
-      user_code: "ABCD-EFGH",
-      decision: "approve",
-    });
-    expect(
-      (
-        await app.request("https://quota.gotry.io/oauth/v2/device/authorize", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: decisionBody,
-        })
-      ).status,
-    ).toBe(403);
-    expect(
-      (
-        await app.request("https://quota.gotry.io/oauth/v2/device/authorize", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Origin: "https://quota.gotry.io",
-            "Sec-Fetch-Site": "same-origin",
-          },
-          body: decisionBody,
-        })
-      ).status,
-    ).toBe(404);
-    webSessions.authenticatedAt = new Date(now.getTime() - 10 * 60_000 - 1);
-    expect(
-      (
-        await app.request("https://quota.gotry.io/oauth/v2/device/authorize", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Origin: "https://quota.gotry.io",
-            "Sec-Fetch-Site": "same-origin",
-          },
-          body: decisionBody,
-        })
-      ).status,
-    ).toBe(403);
-    webSessions.authenticatedAt = now;
 
     const verifier = "a".repeat(43);
     const challengeBuffer = await crypto.subtle.digest(
@@ -745,7 +719,7 @@ describe("managed Relay on real Workers and D1", () => {
     const authorize = new URL("https://quota.gotry.io/oauth/v2/authorize");
     authorize.search = new URLSearchParams({
       response_type: "code",
-      client_id: "quotacli",
+      client_id: "quotabar",
       redirect_uri: "http://127.0.0.1:43210/callback",
       state: "client-state-123456789",
       code_challenge: challenge,
@@ -764,7 +738,7 @@ describe("managed Relay on real Workers and D1", () => {
       body: JSON.stringify({
         protocol_version: 2,
         grant_type: "authorization_code",
-        client_id: "quotacli",
+        client_id: "quotabar",
         code,
         code_verifier: verifier,
         redirect_uri: "http://127.0.0.1:43210/callback",
@@ -782,18 +756,34 @@ describe("managed Relay on real Workers and D1", () => {
         .bind(tokens.device_id)
         .first("count"),
     ).toBe(1);
+    // One login, one row, and it carries both halves of what that login is for.
+    expect(
+      await env.DB.prepare("SELECT COUNT(*) AS count FROM sessions WHERE device_id = ?1")
+        .bind(tokens.device_id)
+        .first("count"),
+    ).toBe(1);
 
-    const oldAccessHash = await hasher.hash("device-access", tokens.device_session.access_token);
-    expect(await state.authorizeDeviceSession(oldAccessHash, now.toISOString())).toMatchObject({
+    const oldAccessHash = await hasher.hash("quotabar-access", tokens.session.access_token);
+    expect(await state.authorizeSession(oldAccessHash, now.toISOString())).toMatchObject({
       device_id: tokens.device_id,
-      generation: 1,
+      device_generation: 1,
+      client_kind: "quotabar",
+      scopes: ["account:read", "device:write"],
     });
+    // The one token reads the Account it was issued for, and writes only its own Device.
+    expect(
+      (
+        await app.request("https://quota.gotry.io/api/v6/account/summary", {
+          headers: { Authorization: `Bearer ${tokens.session.access_token}` },
+        })
+      ).status,
+    ).toBe(200);
     expect(
       (
         await app.request("https://quota.gotry.io/api/v2/device/profile", {
           method: "PUT",
           headers: {
-            Authorization: `Bearer ${tokens.device_session.access_token}`,
+            Authorization: `Bearer ${tokens.session.access_token}`,
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
@@ -811,7 +801,7 @@ describe("managed Relay on real Workers and D1", () => {
     ).toBe("Kyle's Mac mini");
     // Reads are tolerant of a field this build cannot name; a write is not. (ADR 0023)
     const deviceHeaders = {
-      Authorization: `Bearer ${tokens.device_session.access_token}`,
+      Authorization: `Bearer ${tokens.session.access_token}`,
       "Content-Type": "application/json",
     };
     expect(
@@ -868,15 +858,17 @@ describe("managed Relay on real Workers and D1", () => {
       (
         await app.request("https://quota.gotry.io/oauth/v2/revoke", {
           method: "POST",
-          headers: { Authorization: `Bearer ${tokens.device_session.refresh_token}` },
+          headers: { Authorization: `Bearer ${tokens.session.refresh_token}` },
         })
       ).status,
     ).toBe(204);
     await env.DB.prepare("UPDATE devices SET signed_out_at = NULL WHERE id = ?1")
       .bind(tokens.device_id)
       .run();
-    expect(await state.authorizeDeviceSession(oldAccessHash, now.toISOString())).toBeNull();
+    expect(await state.authorizeSession(oldAccessHash, now.toISOString())).toBeNull();
 
+    // Delete Device advances the generation, and a token issued at the old one is refused even
+    // with every other reason to refuse it removed.
     const deletedAt = new Date(now.getTime() + 1_000).toISOString();
     expect(
       await state.deleteDeviceData(tokens.account_id, tokens.device_id, deletedAt),
@@ -884,7 +876,10 @@ describe("managed Relay on real Workers and D1", () => {
     await env.DB.prepare("UPDATE devices SET signed_out_at = NULL, deleted_at = NULL WHERE id = ?1")
       .bind(tokens.device_id)
       .run();
-    expect(await state.authorizeDeviceSession(oldAccessHash, deletedAt)).toBeNull();
+    await env.DB.prepare("UPDATE sessions SET revoked_at = NULL WHERE device_id = ?1")
+      .bind(tokens.device_id)
+      .run();
+    expect(await state.authorizeSession(oldAccessHash, deletedAt)).toBeNull();
     expect(await state.getDeviceSyncControl(tokens.device_id, 1)).toBeNull();
     expect(await state.getDeviceSyncControl(tokens.device_id, 2)).toMatchObject({ generation: 2 });
 
@@ -917,88 +912,6 @@ describe("managed Relay on real Workers and D1", () => {
         .first("count"),
     ).toBe(0);
   });
-
-  it("completes the headless device authorization grant", async () => {
-    const state = new D1AccountState(env.DB);
-    const hasher = new SecretHasher(secret);
-    let checkedAt = now;
-    await env.DB.prepare(
-      `INSERT INTO accounts (id, identity_subject, display_label, created_at, updated_at)
-       VALUES ('device_account', 'device_account', 'Device Tester', ?1, ?1)`,
-    )
-      .bind(now.toISOString())
-      .run();
-    const app = createRelayApp({
-      state,
-      usageState: new D1UsageState(env.DB),
-      accountService: new AccountService(state, hasher, secret),
-      webSessions: new SignedInWebSessionStub("device_account", now),
-      hasher,
-      now: () => checkedAt,
-    });
-
-    const started = await app.request("https://quota.gotry.io/oauth/v2/device/code", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        protocol_version: 2,
-        client_id: "quotacli",
-        installation_id: "dd4e60c6-fd44-4ac4-ad1f-28f2eeb52ca1",
-        device_display_name: "Headless Linux",
-        platform: "linux",
-      }),
-    });
-    expect(started.status).toBe(201);
-    const grant = (await started.json()) as DeviceAuthorizationResponse;
-    expect(grant.verification_uri).toBe("https://quota.gotry.io/activate");
-    expect(grant.verification_uri_complete).toContain(encodeURIComponent(grant.user_code));
-
-    const tokenBody = JSON.stringify({
-      protocol_version: 2,
-      grant_type: "urn:ietf:params:oauth:grant-type:device_code",
-      client_id: "quotacli",
-      device_code: grant.device_code,
-    });
-    const pending = await app.request("https://quota.gotry.io/oauth/v2/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: tokenBody,
-    });
-    expect(pending.status).toBe(400);
-    expect(pending.headers.get("Retry-After")).toBe(String(grant.interval));
-    expect(await pending.json()).toMatchObject({ error: { code: "authorization_pending" } });
-
-    const approved = await app.request("https://quota.gotry.io/oauth/v2/device/authorize", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Origin: "https://quota.gotry.io",
-        "Sec-Fetch-Site": "same-origin",
-      },
-      body: JSON.stringify({
-        protocol_version: 2,
-        user_code: grant.user_code,
-        decision: "approve",
-      }),
-    });
-    expect(approved.status).toBe(204);
-
-    checkedAt = new Date(now.getTime() + grant.interval * 1_000);
-    const exchanged = await app.request("https://quota.gotry.io/oauth/v2/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: tokenBody,
-    });
-    expect(exchanged.status).toBe(200);
-    const tokens = (await exchanged.json()) as OAuthTokenResponse;
-    expect(tokens.account_id).toBe("device_account");
-    expect(tokens.device_generation).toBe(1);
-    expect(
-      await env.DB.prepare("SELECT COUNT(*) AS count FROM devices WHERE id = ?1")
-        .bind(tokens.device_id)
-        .first("count"),
-    ).toBe(1);
-  });
 });
 
 async function seedDevice(name: string, generation = 1): Promise<void> {
@@ -1015,15 +928,16 @@ async function seedDevice(name: string, generation = 1): Promise<void> {
   ]);
 }
 
-function devicePrincipal(name: string, generation: number): DevicePrincipal {
+function devicePrincipal(name: string, generation: number): DeviceWriterPrincipal {
   return {
-    kind: "device",
     session_id: `session_${name}`,
     family_id: `family_${name}`,
     account_id: `account_${name}`,
     device_id: `device_${name}`,
-    generation,
-    scopes: ["usage:write:self"],
+    device_generation: generation,
+    client_kind: "quotabar",
+    scopes: ["account:read", "device:write"],
+    authenticated_at: now.toISOString(),
   };
 }
 

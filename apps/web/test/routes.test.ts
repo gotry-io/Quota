@@ -21,8 +21,8 @@ test("sends a signed-out visitor to Relay, and back to the page they wanted", ()
   assert.equal(signInHref(), SIGN_IN_PATH);
   assert.equal(signInHref(DASHBOARD_PATH), SIGN_IN_PATH);
   assert.equal(
-    signInHref("/activate?user_code=ABCD-EFGH"),
-    "/api/auth/github/start?return_to=%2Factivate%3Fuser_code%3DABCD-EFGH",
+    signInHref("/my?device=device_1"),
+    "/api/auth/github/start?return_to=%2Fmy%3Fdevice%3Ddevice_1",
   );
 });
 

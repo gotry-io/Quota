@@ -1,17 +1,18 @@
 import type { ProviderId, QuotaSnapshot, QuotaSnapshotEnvelope } from "@gotry-io/quota-protocol";
 
-export const ACCOUNT_SCOPES = ["account:read", "account:manage", "session:revoke:self"] as const;
-export type AccountScope = (typeof ACCOUNT_SCOPES)[number];
+/**
+ * Everything a session can be allowed to do.
+ *
+ * One vocabulary, because there is one session table. `device:write` is the whole write side of a
+ * collection client — quota, Usage, and the device profile and sync control behind them — and it
+ * is meaningful only on a session that names a Device. Ending a session is not a scope: holding
+ * its refresh token is the proof, which is what `POST /oauth/v2/revoke` asks for.
+ */
+export const SESSION_SCOPES = ["account:read", "account:manage", "device:write"] as const;
+export type SessionScope = (typeof SESSION_SCOPES)[number];
 
-export const DEVICE_SCOPES = [
-  "quota:write:self",
-  "usage:write:self",
-  "sync:read:self",
-  "session:revoke:self",
-] as const;
-export type DeviceScope = (typeof DEVICE_SCOPES)[number];
-export type AccountClientKind = "web" | "cli" | "ios";
-export type LoginGrantKind = "browser_pkce" | "device_code";
+/** Which client holds a session. It decides the rules, not what the session is stored in. */
+export type SessionClientKind = "web" | "quotabar" | "ios";
 
 export interface AccountRecord {
   id: string;
@@ -36,59 +37,58 @@ export interface DeviceRecord {
   deleted_before: string | null;
 }
 
-export interface AccountPrincipal {
-  kind: "account";
+/**
+ * Whoever is making this request, as one session row states them.
+ *
+ * A browser cookie, QuotaBar's Bearer token, and the iOS viewer's Bearer token all resolve to
+ * this. `device_id` and `device_generation` are set together or not at all: a session either
+ * names the Device it speaks for, at the generation that Device had when the session opened, or
+ * it names none.
+ */
+export interface SessionPrincipal {
   session_id: string;
   family_id: string;
   account_id: string;
   device_id: string | null;
-  client_kind: AccountClientKind;
-  scopes: AccountScope[];
+  device_generation: number | null;
+  client_kind: SessionClientKind;
+  scopes: SessionScope[];
   authenticated_at: string;
 }
 
-export interface DevicePrincipal {
-  kind: "device";
-  session_id: string;
-  family_id: string;
-  account_id: string;
+/** A principal that carries `device:write` and the Device it carries it for. */
+export interface DeviceWriterPrincipal extends SessionPrincipal {
   device_id: string;
-  generation: number;
-  scopes: DeviceScope[];
+  device_generation: number;
 }
 
+/**
+ * One browser sign-in in flight, on its way to an authorization code.
+ *
+ * Authorization Code with PKCE over a loopback callback is the only grant Relay issues, so a
+ * grant is one shape: the login token that identifies it while the browser is at GitHub, the
+ * challenge the exchange must answer, and where the code goes.
+ */
 export interface CreateLoginGrantInput {
   id: string;
-  grant_kind: LoginGrantKind;
   client_id: string;
-  login_token_hash: string | null;
-  device_code_hash: string | null;
-  user_code_hash: string | null;
-  installation_id_hash: string | null;
-  device_display_name: string | null;
-  platform: string | null;
-  pkce_challenge: string | null;
-  redirect_uri: string | null;
-  client_state: string | null;
-  poll_interval_seconds: number | null;
+  login_token_hash: string;
+  pkce_challenge: string;
+  redirect_uri: string;
+  client_state: string;
   expires_at: string;
   created_at: string;
 }
 
 export interface LoginGrantRecord {
   id: string;
-  grant_kind: LoginGrantKind;
   client_id: string;
   account_id: string | null;
-  installation_id_hash: string | null;
-  device_display_name: string | null;
-  platform: string | null;
   pkce_challenge: string | null;
   redirect_uri: string | null;
   client_state: string | null;
   expires_at: string;
-  approved_at: string | null;
-  denied_at: string | null;
+  completed_at: string | null;
   consumed_at: string | null;
 }
 
@@ -116,28 +116,6 @@ export interface CompleteIdentityLoginResult {
   account: AccountRecord | null;
 }
 
-export interface AuthorizeDeviceGrantInput {
-  user_code_hash: string;
-  account_id: string;
-  decision: "approve" | "deny";
-  decided_at: string;
-}
-
-export type DeviceGrantDecisionOutcome =
-  | "approved"
-  | "denied"
-  | "not_found"
-  | "expired"
-  | "already_decided"
-  | "consumed";
-
-export type DeviceGrantPollResult =
-  | { outcome: "ready"; grant: LoginGrantRecord; poll_interval_seconds: number }
-  | {
-      outcome: "pending" | "slow_down" | "denied" | "expired" | "consumed" | "not_found";
-      poll_interval_seconds: number;
-    };
-
 export interface ConsumeLoginGrantInput {
   grant_id: string;
   credential_hash: string;
@@ -147,8 +125,7 @@ export interface ConsumeLoginGrantInput {
   display_name: string;
   platform: string;
   family_id: string;
-  account_session: SessionCredentialHashes;
-  device_session: SessionCredentialHashes;
+  session: SessionCredentialHashes;
   consumed_at: string;
 }
 
@@ -158,7 +135,7 @@ export type LoginGrantConsumeResult =
       account_id: string;
       device: DeviceRecord;
     }
-  | { outcome: "not_found" | "expired" | "consumed" | "not_approved" };
+  | { outcome: "not_found" | "expired" | "consumed" | "not_completed" };
 
 /**
  * One browser sign-in, as Relay stores it.
@@ -180,13 +157,13 @@ export interface ConsumeAccountLoginGrantInput {
   credential_hash: string;
   completion_nonce_hash: string;
   family_id: string;
-  account_session: SessionCredentialHashes;
+  session: SessionCredentialHashes;
   consumed_at: string;
 }
 
 export type AccountLoginGrantConsumeResult =
   | { outcome: "issued"; account_id: string }
-  | { outcome: "not_found" | "expired" | "consumed" | "not_approved" };
+  | { outcome: "not_found" | "expired" | "consumed" | "not_completed" };
 
 export interface RefreshSessionInput {
   refresh_token_hash: string;
@@ -197,11 +174,8 @@ export interface RefreshSessionInput {
   refreshed_at: string;
 }
 
-export type SessionTokenAudience = "account" | "device";
-
 export interface RevokeRefreshSessionInput {
   refresh_token_hash: string;
-  token_audience: SessionTokenAudience;
   revoked_at: string;
 }
 
@@ -297,27 +271,16 @@ export interface AccountState {
     hash: string,
     checkedAt: string,
   ): Promise<LoginGrantRecord | null>;
-  authorizeDeviceGrant(input: AuthorizeDeviceGrantInput): Promise<DeviceGrantDecisionOutcome>;
-  pollDeviceGrant(hash: string, checkedAt: string): Promise<DeviceGrantPollResult>;
   consumeLoginGrant(input: ConsumeLoginGrantInput): Promise<LoginGrantConsumeResult>;
   consumeAccountLoginGrant(
     input: ConsumeAccountLoginGrantInput,
   ): Promise<AccountLoginGrantConsumeResult>;
   createWebSession(input: CreateWebSessionInput): Promise<AccountRecord>;
-  authorizeAccountSession(
-    accessTokenHash: string,
-    checkedAt: string,
-  ): Promise<AccountPrincipal | null>;
-  authorizeDeviceSession(
-    accessTokenHash: string,
-    checkedAt: string,
-  ): Promise<DevicePrincipal | null>;
-  refreshAccountSession(input: RefreshSessionInput): Promise<AccountPrincipal | null>;
-  refreshAccountOnlySession(input: RefreshSessionInput): Promise<AccountPrincipal | null>;
-  refreshDeviceSession(input: RefreshSessionInput): Promise<DevicePrincipal | null>;
+  authorizeSession(accessTokenHash: string, checkedAt: string): Promise<SessionPrincipal | null>;
+  refreshSession(input: RefreshSessionInput): Promise<SessionPrincipal | null>;
   revokeRefreshSession(input: RevokeRefreshSessionInput): Promise<void>;
   revokePrincipalFamily(
-    principal: AccountPrincipal | DevicePrincipal,
+    principal: SessionPrincipal,
     revokedAt: string,
     signOutDevice: boolean,
   ): Promise<void>;
@@ -340,7 +303,7 @@ export interface AccountState {
   ): Promise<DeleteDeviceResult | null>;
   deleteAccountData(accountId: string): Promise<boolean>;
   recordSnapshot(
-    principal: DevicePrincipal,
+    principal: DeviceWriterPrincipal,
     envelope: QuotaSnapshotSubmission,
     receivedAt: string,
   ): Promise<SnapshotWriteResult>;

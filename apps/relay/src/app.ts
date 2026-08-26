@@ -8,10 +8,8 @@ import {
   AccountResponseSchema,
   AccountSummarySchema,
   AccountUsageActivityResponseSchema,
+  BrowserLoginExchangeRequestSchema,
   DeleteDeviceResponseSchema,
-  DeviceAuthorizationDecisionRequestSchema,
-  DeviceAuthorizationRequestSchema,
-  DeviceAuthorizationResponseSchema,
   DeviceProfileUpdateRequestSchema,
   DeviceProfileUpdateResponseSchema,
   DeviceSyncResponseSchema,
@@ -19,13 +17,13 @@ import {
   IosLoginExchangeRequestSchema,
   IosOAuthTokenResponseSchema,
   IosSessionRefreshRequestSchema,
+  IosSessionRefreshResponseSchema,
   LogoutResponseSchema,
   MANAGED_DATA_PROTOCOL_VERSION,
   MAXIMUM_USAGE_SUBMISSION_BYTES,
   MODEL_CATALOG,
   type ModelCatalog,
   ModelCatalogSchema,
-  OAuthTokenRequestSchema,
   OAuthTokenResponseSchema,
   PROTOCOL_VERSION,
   type PricingCatalog,
@@ -42,12 +40,11 @@ import {
 } from "@gotry-io/quota-protocol";
 import type {
   AccountMaintenanceInput,
-  AccountPrincipal,
-  AccountScope,
   AccountState,
-  DevicePrincipal,
   DeviceRecord,
-  DeviceScope,
+  DeviceWriterPrincipal,
+  SessionPrincipal,
+  SessionScope,
   StoredQuotaSnapshot,
   UsageState,
 } from "@gotry-io/relay-core";
@@ -57,8 +54,10 @@ import { consumeNamedRateLimit } from "./account/rate-limit.ts";
 import {
   AccountFlowError,
   type AccountService,
+  accessTokenDomain,
   isIosRedirect,
   isLoopbackRedirect,
+  refreshTokenDomain,
 } from "./account/service.ts";
 import {
   clearedHandoffCookie,
@@ -113,7 +112,6 @@ function requireValidModelCatalog(value: ModelCatalog): ModelCatalog {
 
 const rateLimits = {
   nativeAuthorize: { limit: 60, windowSeconds: 10 * 60 },
-  deviceCode: { limit: 30, windowSeconds: 10 * 60 },
   token: { limit: 180, windowSeconds: 10 * 60 },
   webSignIn: { limit: 30, windowSeconds: 10 * 60 },
   sessionMutation: { limit: 60, windowSeconds: 10 * 60 },
@@ -361,93 +359,12 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     }
   });
 
-  app.post("/oauth/v2/device/code", async (context) => {
-    const body = await parseJSON(context, DeviceAuthorizationRequestSchema);
-    if (body instanceof Response) {
-      return body;
-    }
-    const limited = await enforceRateLimit(
-      context,
-      options.state,
-      options.hasher,
-      "device-code",
-      anonymousClientSubject(context),
-      rateLimits.deviceCode,
-      now(),
-    );
-    if (limited) {
-      return limited;
-    }
-    try {
-      const created = await options.accountService.beginDeviceLogin(body, now());
-      return context.json(
-        DeviceAuthorizationResponseSchema.parse({
-          protocol_version: PROTOCOL_VERSION,
-          device_code: created.device_code,
-          user_code: created.user_code,
-          verification_uri: created.verification_uri,
-          verification_uri_complete: created.verification_uri_complete,
-          expires_in: 10 * 60,
-          interval: created.interval,
-        }),
-        201,
-      );
-    } catch (error) {
-      return accountFlowError(context, error);
-    }
-  });
-
-  app.post("/oauth/v2/device/authorize", async (context) => {
-    const principal = await authorizeAccount(context, options, "account:manage", now());
-    if (principal instanceof Response) {
-      return principal;
-    }
-    const limited = await enforceRateLimit(
-      context,
-      options.state,
-      options.hasher,
-      "device-authorize",
-      principal.account_id,
-      rateLimits.sessionMutation,
-      now(),
-    );
-    if (limited) {
-      return limited;
-    }
-    const unsafe = requireRecentWebMutation(context, principal, now());
-    if (unsafe) {
-      return unsafe;
-    }
-    const body = await parseJSON(context, DeviceAuthorizationDecisionRequestSchema);
-    if (body instanceof Response) {
-      return body;
-    }
-    const outcome = await options.accountService.decideDeviceGrant(
-      body.user_code,
-      principal.account_id,
-      body.decision,
-      now(),
-    );
-    switch (outcome) {
-      case "approved":
-      case "denied":
-        return context.body(null, 204);
-      case "not_found":
-        return notFound(context);
-      case "expired":
-        return relayError(context, 400, "expired_token", "The login request expired.");
-      case "already_decided":
-      case "consumed":
-        return relayError(context, 409, "conflict", "The login request is no longer pending.");
-    }
-  });
-
   app.post("/oauth/v2/token", async (context) => {
     const raw = await parseRawJSON(context);
     if (raw instanceof Response) {
       return raw;
     }
-    const tokenRequest = OAuthTokenRequestSchema.safeParse(raw);
+    const tokenRequest = BrowserLoginExchangeRequestSchema.safeParse(raw);
     const iosTokenRequest = IosLoginExchangeRequestSchema.safeParse(raw);
     const refreshRequest = SessionRefreshRequestSchema.safeParse(raw);
     const iosRefreshRequest = IosSessionRefreshRequestSchema.safeParse(raw);
@@ -475,52 +392,40 @@ export function createRelayApp(options: RelayAppOptions): Hono {
       if (iosRefreshRequest.success) {
         const refreshed = await options.accountService.refresh(
           iosRefreshRequest.data.refresh_token,
-          "account",
           iosRefreshRequest.data.client_id,
           now(),
         );
-        if (refreshed.principal.kind !== "account") {
-          throw new AccountFlowError("invalid_grant");
-        }
         return context.json(
-          SessionRefreshResponseSchema.parse({
+          IosSessionRefreshResponseSchema.parse({
             protocol_version: PROTOCOL_VERSION,
             token_type: "Bearer",
-            token_audience: "account",
             account_id: refreshed.principal.account_id,
-            account_session: sessionToken(refreshed),
+            session: sessionToken(refreshed),
           }),
         );
       }
       if (refreshRequest.success) {
         const refreshed = await options.accountService.refresh(
           refreshRequest.data.refresh_token,
-          refreshRequest.data.token_audience,
           refreshRequest.data.client_id,
           now(),
         );
-        const common = {
-          protocol_version: PROTOCOL_VERSION,
-          token_type: "Bearer" as const,
-          token_audience: refreshRequest.data.token_audience,
-          account_id: refreshed.principal.account_id,
-        };
+        // A collection session names its Device. One that does not is not this client's.
+        if (
+          refreshed.principal.device_id === null ||
+          refreshed.principal.device_generation === null
+        ) {
+          throw new AccountFlowError("invalid_grant");
+        }
         return context.json(
-          SessionRefreshResponseSchema.parse(
-            refreshed.principal.kind === "account"
-              ? {
-                  ...common,
-                  token_audience: "account",
-                  account_session: sessionToken(refreshed),
-                }
-              : {
-                  ...common,
-                  token_audience: "device",
-                  device_id: refreshed.principal.device_id,
-                  device_generation: refreshed.principal.generation,
-                  device_session: sessionToken(refreshed),
-                },
-          ),
+          SessionRefreshResponseSchema.parse({
+            protocol_version: PROTOCOL_VERSION,
+            token_type: "Bearer",
+            account_id: refreshed.principal.account_id,
+            device_id: refreshed.principal.device_id,
+            device_generation: refreshed.principal.device_generation,
+            session: sessionToken(refreshed),
+          }),
         );
       }
       if (iosTokenRequest.success) {
@@ -533,38 +438,25 @@ export function createRelayApp(options: RelayAppOptions): Hono {
       if (!tokenRequest.success) {
         return invalidRequest(context);
       }
-      const request = tokenRequest.data;
-      if (request.grant_type === "authorization_code") {
-        const issued = await options.accountService.exchangeAuthorizationCode(request, now());
-        return context.json(OAuthTokenResponseSchema.parse(oauthTokenResponse(issued)));
-      }
-      const polled = await options.accountService.pollDeviceToken(
-        request.device_code,
-        request.client_id,
+      const issued = await options.accountService.exchangeAuthorizationCode(
+        tokenRequest.data,
         now(),
       );
-      if (polled.outcome === "issued") {
-        return context.json(OAuthTokenResponseSchema.parse(oauthTokenResponse(polled.response)));
-      }
-      context.header("Retry-After", String(polled.interval));
-      return relayError(
-        context,
-        400,
-        polled.outcome,
-        "The device authorization request is not ready.",
-      );
+      return context.json(OAuthTokenResponseSchema.parse(oauthTokenResponse(issued)));
     } catch (error) {
       return accountFlowError(context, error);
     }
   });
 
+  // Signing out is holding the refresh token, not holding a scope: the whole family goes, and
+  // the Device the session spoke for is marked signed out with it.
   app.post("/oauth/v2/revoke", async (context) => {
     const token = bearerToken(context.req.header("Authorization"));
-    const tokenAudience = token ? refreshTokenAudience(token) : null;
-    if (!token || !tokenAudience) {
+    const domain = token ? refreshTokenDomain(token) : null;
+    if (!token || !domain) {
       return unauthorized(context);
     }
-    const refreshTokenHash = await options.hasher.hash(`${tokenAudience}-refresh`, token);
+    const refreshTokenHash = await options.hasher.hash(domain, token);
     const limited = await enforceRateLimit(
       context,
       options.state,
@@ -579,7 +471,6 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     }
     await options.state.revokeRefreshSession({
       refresh_token_hash: refreshTokenHash,
-      token_audience: tokenAudience,
       revoked_at: now().toISOString(),
     });
     return context.body(null, 204);
@@ -766,13 +657,13 @@ export function createRelayApp(options: RelayAppOptions): Hono {
   });
 
   app.get("/api/v2/device/sync", async (context) => {
-    const principal = await deviceWriter(context, options, "sync:read:self", now());
+    const principal = await deviceWriter(context, options, now());
     if (principal instanceof Response) {
       return principal;
     }
     const control = await options.state.getDeviceSyncControl(
       principal.device_id,
-      principal.generation,
+      principal.device_generation,
     );
     if (!control) {
       return unauthorized(context);
@@ -790,7 +681,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
   });
 
   app.put("/api/v2/device/profile", async (context) => {
-    const principal = await deviceWriter(context, options, "sync:read:self", now());
+    const principal = await deviceWriter(context, options, now());
     if (principal instanceof Response) {
       return principal;
     }
@@ -804,7 +695,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     }
     const updated = await options.state.updateDeviceProfile(
       principal.device_id,
-      principal.generation,
+      principal.device_generation,
       parsed.data.display_name,
       parsed.data.platform,
       now().toISOString(),
@@ -821,31 +712,8 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     );
   });
 
-  app.post("/api/v2/device/logout", async (context) => {
-    const principal = await deviceWriter(context, options, "session:revoke:self", now());
-    if (principal instanceof Response) {
-      return principal;
-    }
-    const limited = await enforceRateLimit(
-      context,
-      options.state,
-      options.hasher,
-      "device-logout",
-      principal.device_id,
-      rateLimits.sessionMutation,
-      now(),
-    );
-    if (limited) {
-      return limited;
-    }
-    await options.state.revokePrincipalFamily(principal, now().toISOString(), true);
-    return context.json(
-      LogoutResponseSchema.parse({ protocol_version: PROTOCOL_VERSION, status: "signed_out" }),
-    );
-  });
-
   app.put("/api/v6/device/snapshots", async (context) => {
-    const principal = await deviceWriter(context, options, "quota:write:self", now());
+    const principal = await deviceWriter(context, options, now());
     if (principal instanceof Response) {
       return principal;
     }
@@ -861,7 +729,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
       QuotaSnapshotUploadResponseSchema.parse({
         protocol_version: MANAGED_DATA_PROTOCOL_VERSION,
         device_id: principal.device_id,
-        device_generation: principal.generation,
+        device_generation: principal.device_generation,
         accepted: written.accepted,
         ignored: written.ignored,
       }),
@@ -869,7 +737,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
   });
 
   app.put("/api/v6/device/usage", async (context) => {
-    const principal = await deviceWriter(context, options, "usage:write:self", now());
+    const principal = await deviceWriter(context, options, now());
     if (principal instanceof Response) {
       return principal;
     }
@@ -885,7 +753,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
       UsageUploadResponseSchema.parse({
         protocol_version: MANAGED_DATA_PROTOCOL_VERSION,
         device_id: principal.device_id,
-        device_generation: principal.generation,
+        device_generation: principal.device_generation,
         accepted: written.accepted,
         ignored: written.ignored,
       }),
@@ -955,7 +823,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
  */
 async function answerConditionally(
   context: Context,
-  principal: AccountPrincipal,
+  principal: SessionPrincipal,
   options: RelayAppOptions,
   input: {
     catalogRevision: string;
@@ -1057,47 +925,56 @@ async function accountReader(
   context: Context,
   options: RelayAppOptions,
   checkedAt: Date,
-): Promise<AccountPrincipal | Response> {
+): Promise<SessionPrincipal | Response> {
   return authorizeAccount(context, options, "account:read", checkedAt);
 }
 
+/**
+ * The principal behind an upload, and the Device it is allowed to write.
+ *
+ * `device:write` is only ever granted to a session that names a Device, and that session is
+ * refused the moment the Device moves past the generation it was opened at, so the scope, the
+ * device id, and the generation are one check rather than three.
+ */
 async function deviceWriter(
   context: Context,
   options: RelayAppOptions,
-  scope: DeviceScope,
   checkedAt: Date,
-): Promise<DevicePrincipal | Response> {
-  const token = bearerToken(context.req.header("Authorization"));
-  if (!token) {
-    return unauthorized(context);
+): Promise<DeviceWriterPrincipal | Response> {
+  const principal = await authorizeAccount(context, options, "device:write", checkedAt);
+  if (principal instanceof Response) {
+    return principal;
   }
-  const principal = await options.state.authorizeDeviceSession(
-    await options.hasher.hash("device-access", token),
-    checkedAt.toISOString(),
-  );
-  if (!principal) {
-    return unauthorized(context);
+  if (principal.device_id === null || principal.device_generation === null) {
+    return forbidden(context);
   }
-  return principal.scopes.includes(scope) ? principal : forbidden(context);
+  return principal as DeviceWriterPrincipal;
 }
 
+/**
+ * Whoever is asking, from the one place a session is stored.
+ *
+ * A Bearer token names its own credential domain through the prefix it carries; a request with no
+ * Bearer token is a browser, whose cookie is hashed under a domain of its own, so a cookie cannot
+ * be presented as a Bearer token or the reverse ([ADR 0025](../../docs/decisions/0025-one-session-system.md)).
+ */
 async function authorizeAccount(
   context: Context,
   options: RelayAppOptions,
-  scope: AccountScope,
+  scope: SessionScope,
   checkedAt: Date,
-): Promise<AccountPrincipal | Response> {
+): Promise<SessionPrincipal | Response> {
   const token = bearerToken(context.req.header("Authorization"));
   if (token) {
-    const principal = await options.state.authorizeAccountSession(
-      await options.hasher.hash("account-access", token),
+    const domain = accessTokenDomain(token);
+    if (!domain) return unauthorized(context);
+    const principal = await options.state.authorizeSession(
+      await options.hasher.hash(domain, token),
       checkedAt.toISOString(),
     );
     if (!principal) return unauthorized(context);
     return principal.scopes.includes(scope) ? principal : forbidden(context);
   }
-  // A browser session is a row in the same table, so nothing has to be synthesized here and a
-  // revoked or expired cookie stops working the moment that row says so.
   const principal = await options.webSessions.authorize(context.req.raw.headers, checkedAt);
   if (!principal) return unauthorized(context);
   return principal.scopes.includes(scope) ? principal : forbidden(context);
@@ -1105,7 +982,7 @@ async function authorizeAccount(
 
 function requireRecentWebMutation(
   context: Context,
-  principal: AccountPrincipal,
+  principal: SessionPrincipal,
   checkedAt: Date,
 ): Response | null {
   const authenticatedAt = Date.parse(principal.authenticated_at);
@@ -1118,15 +995,7 @@ function requireRecentWebMutation(
   return requireWebOrigin(context, principal);
 }
 
-function refreshTokenAudience(value: string): "account" | "device" | null {
-  if (/^qar_[A-Za-z0-9_-]{43}$/.test(value) || /^qiar_[A-Za-z0-9_-]{43}$/.test(value)) {
-    return "account";
-  }
-  if (/^qdr_[A-Za-z0-9_-]{43}$/.test(value)) return "device";
-  return null;
-}
-
-function requireWebOrigin(context: Context, principal: AccountPrincipal): Response | null {
+function requireWebOrigin(context: Context, principal: SessionPrincipal): Response | null {
   if (principal.client_kind !== "web") return forbidden(context);
   const origin = context.req.header("Origin");
   const fetchSite = context.req.header("Sec-Fetch-Site");
@@ -1171,7 +1040,7 @@ function publicDevice(device: DeviceRecord, lastObserved: ReadonlyMap<string, st
   return {
     id: device.id,
     display_name: device.display_name ?? "Quota client",
-    platform: device.platform ?? "linux",
+    platform: device.platform ?? "macos",
     last_seen_at: device.last_seen_at,
     last_observed_at: lastObserved.get(device.id) ?? null,
   };
@@ -1184,12 +1053,7 @@ function iosOAuthTokenResponse(
     protocol_version: PROTOCOL_VERSION,
     token_type: issued.token_type,
     account_id: issued.account_id,
-    account_session: {
-      access_token: issued.account_access_token,
-      access_expires_at: issued.account_access_expires_at,
-      refresh_token: issued.account_refresh_token,
-      refresh_expires_at: issued.account_refresh_expires_at,
-    },
+    session: sessionToken(issued.session),
   };
 }
 
@@ -1204,18 +1068,7 @@ function oauthTokenResponse(
     device_generation: issued.device_generation,
     usage_deleted_before: issued.usage_deleted_before,
     usage_sync_revision: issued.usage_sync_revision,
-    account_session: {
-      access_token: issued.account_access_token,
-      access_expires_at: issued.account_access_expires_at,
-      refresh_token: issued.account_refresh_token,
-      refresh_expires_at: issued.account_refresh_expires_at,
-    },
-    device_session: {
-      access_token: issued.device_access_token,
-      access_expires_at: issued.device_access_expires_at,
-      refresh_token: issued.device_refresh_token,
-      refresh_expires_at: issued.device_refresh_expires_at,
-    },
+    session: sessionToken(issued.session),
   };
 }
 
