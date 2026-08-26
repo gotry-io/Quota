@@ -9,6 +9,7 @@
 //! at all, whether the provider is explicitly configured here — so the copy is written at
 //! the boundary that knows those, and there is exactly one such place.
 
+mod cli_version;
 mod config;
 mod http;
 mod identity;
@@ -16,6 +17,10 @@ mod io;
 mod json;
 mod types;
 
+pub use cli_version::{
+    CliTool, CliVersionResolution, ProbeCache, ProbeEnvironment, ProbeRecord,
+    resolve as resolve_cli_versions,
+};
 pub use config::{ApiKeyCredentials, resolve_api_key};
 pub use http::{HTTP_BODY_LIMIT, HTTP_TIMEOUT, HttpClient, VALIDATION_TIMEOUT};
 pub use identity::{

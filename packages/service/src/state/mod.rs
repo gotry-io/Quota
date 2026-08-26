@@ -53,6 +53,8 @@ const REBUILDING_KEY: &str = "rebuilding";
 const BROWSER_ACCESS_DENIED_KEY: &str = "browser_access_denied";
 /// The monotonic revision each rescanned hour is stamped with.
 const USAGE_SCAN_VERSION_KEY: &str = "usage_scan_version";
+/// The last `--version` this device read out of each installed provider CLI.
+const CLI_VERSION_KEY: &str = "provider_cli_versions";
 const MAX_DIAGNOSTIC_ATTEMPTS: i64 = 5_000;
 const DIAGNOSTIC_ATTEMPT_RETENTION_DAYS: i64 = 7;
 const ATTEMPT_PRUNE_INTERVAL_SECONDS: u64 = 3_600;
@@ -1593,6 +1595,27 @@ impl StateStore {
         denials.insert(provider.to_owned(), denial.clone());
         self.write_browser_access_denials(&denials)?;
         self.bump_revision()
+    }
+
+    /// What the last `--version` read out of each installed provider CLI, as the collection
+    /// layer wrote it.  Derived from binaries this device can re-read, so it lives in the
+    /// disposable cache: a reset costs one `--version` per installed CLI and nothing else.
+    pub fn provider_cli_versions(&self) -> Result<Option<String>, StateError> {
+        self.with_cache(|conn| metadata_value(conn, CLI_VERSION_KEY))
+    }
+
+    pub fn write_provider_cli_versions(&self, encoded: &str) -> Result<(), StateError> {
+        if encoded.len() > crate::protocol::MAXIMUM_LINE_BYTES {
+            return Err(StateError::InvalidState);
+        }
+        self.with_cache_mut(|conn| {
+            conn.execute(
+                "INSERT INTO metadata(key, value) VALUES (?1, ?2)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                params![CLI_VERSION_KEY, encoded],
+            )?;
+            Ok(())
+        })
     }
 
     /// Clears a recorded refusal. A stored session, or a disconnect, both answer it.

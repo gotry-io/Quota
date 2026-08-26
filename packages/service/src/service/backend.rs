@@ -26,7 +26,10 @@ use crate::protocol::{
     QuotaOverviewIdentity, QuotaOverviewItem, QuotaOverviewSource, RecoveryAction, UsagePeriod,
     UsageSource,
 };
-use crate::providers::common::{ErrorCategory, ProviderError, ProviderSession};
+use crate::providers::common::{
+    CliTool, ErrorCategory, ProbeCache, ProbeEnvironment, ProviderError, ProviderSession,
+    resolve_cli_versions,
+};
 use crate::providers::{self, CollectionContext};
 use crate::relay::{AccountManager, RelayClient};
 use crate::service::{BackendError, LocalBackend, LoginOutcome, RefreshOutcome};
@@ -1029,7 +1032,7 @@ impl NativeBackend {
         provider_ids: &[ProviderId],
         cancel: Arc<AtomicBool>,
     ) -> Result<Value, BackendError> {
-        let context = self.collection_context(cancel.clone())?;
+        let mut context = self.collection_context(cancel.clone())?;
         let captured_at = context.observed_at();
         let diagnostic_snapshot = self
             .state
@@ -1048,13 +1051,24 @@ impl NativeBackend {
                     .map(|value| value.provider),
             )
             .collect::<HashSet<_>>();
+        // Discovery first, then the CLI version probe, then collection: a collector must be
+        // handed the version it presents rather than reach for it, so that nothing running on
+        // the five-minute timer can start a process of its own.
+        let discovered = provider_ids
+            .iter()
+            .copied()
+            .map(|provider| {
+                let sessions = providers::discover(provider, &context);
+                (provider, sessions)
+            })
+            .collect::<Vec<_>>();
+        context.cli_versions = self.provider_cli_versions(&discovered, &context, &cancel);
         let attempts =
             thread::scope(|scope| {
                 let mut jobs = Vec::with_capacity(provider_ids.len());
-                for provider in provider_ids.iter().copied() {
+                for (provider, sessions) in discovered {
                     let context = context.clone();
                     let explicit = configured.contains(provider.as_str());
-                    let sessions = providers::discover(provider, &context);
                     if sessions.is_empty() && !explicit {
                         jobs.push((provider, explicit, None, None));
                         continue;
@@ -1160,6 +1174,57 @@ impl NativeBackend {
         }))
     }
 
+    /// The installed version of every provider CLI this refresh will identify as.
+    ///
+    /// Only CLIs whose provider actually holds a sign-in here are asked, so a Mac without
+    /// Codex never runs `codex --version`.  The answer is a property of the binary, kept in
+    /// the cache against its real path, size, and mtime: an unchanged install costs a `stat`,
+    /// and `--version` runs at most once per installed binary and at most once an hour.  A
+    /// probe that fails or is absent leaves the collector on its own fallback constant, and
+    /// nothing about collection waits on it.
+    fn provider_cli_versions(
+        &self,
+        discovered: &[(ProviderId, Vec<ProviderSession>)],
+        context: &CollectionContext,
+        cancel: &Arc<AtomicBool>,
+    ) -> BTreeMap<CliTool, String> {
+        let wanted = discovered
+            .iter()
+            .filter(|(_, sessions)| !sessions.is_empty())
+            .filter_map(|(provider, _)| match provider {
+                ProviderId::Claude => Some(CliTool::Claude),
+                ProviderId::Codex => Some(CliTool::Codex),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if wanted.is_empty() {
+            return BTreeMap::new();
+        }
+        let cached = self
+            .state
+            .provider_cli_versions()
+            .ok()
+            .flatten()
+            .and_then(|raw| serde_json::from_str::<ProbeCache>(&raw).ok())
+            .unwrap_or_default();
+        let resolution = resolve_cli_versions(
+            &wanted,
+            &cached,
+            &ProbeEnvironment::new(
+                context.home_directory.clone(),
+                context.env("PATH").map(str::to_owned),
+            ),
+            crate::providers::common::unix_now(),
+            Some(cancel),
+        );
+        if resolution.changed
+            && let Ok(encoded) = serde_json::to_string(&resolution.cache)
+        {
+            let _ = self.state.write_provider_cli_versions(&encoded);
+        }
+        resolution.versions
+    }
+
     fn collection_context(
         &self,
         cancel: Arc<AtomicBool>,
@@ -1181,6 +1246,7 @@ impl NativeBackend {
             now: Some(now_rfc3339()),
             cancel: Some(cancel),
             keychain: Default::default(),
+            cli_versions: BTreeMap::new(),
         })
     }
 
@@ -3081,6 +3147,82 @@ mod tests {
         );
     }
 
+    /// The probe belongs to the binary, not to the refresh: it is stored in the cache and
+    /// re-read from it, so the second refresh presents the same version without starting
+    /// anything.  A CLI whose provider holds no sign-in here is never asked at all.
+    #[test]
+    fn a_second_refresh_reads_the_cli_version_from_the_cache_without_spawning() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let root =
+                std::env::temp_dir().join(format!("quota-cli-version-{}", uuid::Uuid::new_v4()));
+            let home = root.join("home");
+            let bin = root.join("bin");
+            fs::create_dir_all(&home).expect("home");
+            fs::create_dir_all(&bin).expect("bin");
+            let log = root.join("spawns.log");
+            fs::write(
+                bin.join("claude"),
+                format!(
+                    "#!/bin/sh\necho ran >> {}\necho '2.4.7 (Claude Code)'\n",
+                    log.display()
+                ),
+            )
+            .expect("fake claude");
+            fs::set_permissions(bin.join("claude"), fs::Permissions::from_mode(0o755))
+                .expect("mode");
+
+            let state = Arc::new(StateStore::open(&root).expect("state"));
+            let relay = Arc::new(RelayClient::new().expect("relay"));
+            let mut backend = NativeBackend::new(state.clone(), relay, "QuotaTest", "test");
+            backend.home = home.clone();
+            backend.environment.clear();
+            backend
+                .environment
+                .insert("PATH".to_owned(), bin.to_string_lossy().into_owned());
+            let cancel = Arc::new(AtomicBool::new(false));
+            let context = backend.collection_context(cancel.clone()).expect("context");
+            let signed_in = vec![(
+                ProviderId::Claude,
+                vec![ProviderSession {
+                    provider: ProviderId::Claude,
+                    credential_source: "fixture".to_owned(),
+                }],
+            )];
+
+            let first = backend.provider_cli_versions(&signed_in, &context, &cancel);
+            assert_eq!(
+                first.get(&CliTool::Claude).map(String::as_str),
+                Some("2.4.7")
+            );
+            let spawns = |log: &std::path::Path| {
+                fs::read_to_string(log)
+                    .map(|text| text.lines().count())
+                    .unwrap_or(0)
+            };
+            assert_eq!(spawns(&log), 1);
+
+            let second = backend.provider_cli_versions(&signed_in, &context, &cancel);
+            assert_eq!(second, first);
+            assert_eq!(spawns(&log), 1);
+
+            // Codex is not signed in here, so its binary is never looked for or run.
+            let none = backend.provider_cli_versions(
+                &[(ProviderId::Codex, Vec::new())],
+                &context,
+                &cancel,
+            );
+            assert!(none.is_empty());
+            assert_eq!(spawns(&log), 1);
+
+            drop(backend);
+            drop(state);
+            fs::remove_dir_all(root).expect("cleanup");
+        }
+    }
+
     #[test]
     fn native_backend_collects_empty_home_without_unavailable_fallback() {
         let root = std::env::temp_dir().join(format!("quota-backend-{}", uuid::Uuid::new_v4()));
@@ -3531,6 +3673,7 @@ mod tests {
             now: Some("2026-08-15T08:00:00Z".to_owned()),
             cancel: None,
             keychain: Default::default(),
+            cli_versions: Default::default(),
         };
         let sessions = providers::discover(ProviderId::LiteLlm, &context);
         assert_eq!(sessions.len(), 1);
@@ -3564,6 +3707,7 @@ mod tests {
             now: Some("2026-08-15T08:00:00Z".to_owned()),
             cancel: None,
             keychain: Default::default(),
+            cli_versions: Default::default(),
         };
         let rejected = collect_discovered_provider(
             ProviderId::Claude,

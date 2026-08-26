@@ -1,10 +1,11 @@
 use crate::catalog::ProviderId;
 use chrono_tz::Tz;
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock, atomic::AtomicBool};
 
+use super::cli_version::CliTool;
 use super::json::{parse_date, unix_now, unix_seconds_to_iso};
 
 pub const BROWSER_COOKIE_HEADER_LIMIT: usize = 8_192;
@@ -154,8 +155,12 @@ pub struct CollectionContext {
     /// The one macOS Keychain read a refresh performs, shared by every collector running
     /// under this context.  Claude Code's credential entry is the only Keychain item any
     /// collector reads, and `/usr/bin/security` is the only process the scheduled refresh
-    /// still starts.
+    /// starts on its own account.
     pub keychain: Arc<OnceLock<KeychainSecret>>,
+    /// The installed version of each provider CLI this refresh identifies as, resolved on the
+    /// refresh worker before collection.  A collector reads it; it never probes for it, so no
+    /// collector can turn a five-minute timer into a spawn.
+    pub cli_versions: BTreeMap<CliTool, String>,
 }
 
 impl Default for CollectionContext {
@@ -174,6 +179,7 @@ impl Default for CollectionContext {
             now: None,
             cancel: None,
             keychain: Arc::new(OnceLock::new()),
+            cli_versions: BTreeMap::new(),
         }
     }
 }
@@ -199,6 +205,11 @@ impl CollectionContext {
 
     pub fn user_agent(&self) -> String {
         format!("{}/{}", self.client_name, self.client_version)
+    }
+
+    /// The installed version of a provider CLI, when this device has one and it answered.
+    pub fn cli_version(&self, tool: CliTool) -> Option<&str> {
+        self.cli_versions.get(&tool).map(String::as_str)
     }
 
     pub fn env(&self, key: &str) -> Option<&str> {

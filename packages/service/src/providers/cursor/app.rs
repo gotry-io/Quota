@@ -194,6 +194,7 @@ mod tests {
             now: Some("2026-08-21T00:00:00Z".to_owned()),
             cancel: None,
             keychain: Default::default(),
+            cli_versions: Default::default(),
         }
     }
 

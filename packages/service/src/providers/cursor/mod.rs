@@ -469,6 +469,7 @@ mod tests {
             now: Some("2026-08-10T00:00:00Z".to_owned()),
             cancel: None,
             keychain: Default::default(),
+            cli_versions: Default::default(),
         };
         assert!(discover(&context).is_empty());
         context

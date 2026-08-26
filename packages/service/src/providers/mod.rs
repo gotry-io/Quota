@@ -118,11 +118,18 @@ mod tests {
     /// Split so that scanning this file does not find the scanner.
     const SPAWN: &str = concat!("Command", "::new(");
 
-    fn visit(directory: &Path, found: &mut BTreeSet<String>) {
+    /// The one module allowed to start a program a variable names, and the one function in
+    /// it that may: `cli_version::probe`, which runs `<binary> --version` at most once per
+    /// installed binary — never once per refresh — and is called only from the refresh
+    /// worker, before collection.
+    const VERSION_PROBE_MODULE: &str = "common/cli_version.rs";
+    const VERSION_PROBE_FUNCTION: &str = "probe";
+
+    fn visit(directory: &Path, found: &mut BTreeSet<String>, probes: &mut Vec<String>) {
         for entry in std::fs::read_dir(directory).expect("provider sources") {
             let path = entry.expect("entry").path();
             if path.is_dir() {
-                visit(&path, found);
+                visit(&path, found, probes);
                 continue;
             }
             if path.extension().and_then(std::ffi::OsStr::to_str) != Some("rs") {
@@ -135,32 +142,59 @@ mod tests {
                     .next()
                     .unwrap_or_default()
                     .trim();
+                if argument.starts_with('"') {
+                    found.insert(argument.trim_matches('"').to_owned());
+                    continue;
+                }
                 assert!(
-                    argument.starts_with('"'),
+                    path.ends_with(VERSION_PROBE_MODULE),
                     "{}: {SPAWN}{argument}) starts a program a variable names, which is how a \
                      provider CLI ends up spawned on a five-minute timer",
                     path.display()
                 );
-                found.insert(argument.trim_matches('"').to_owned());
+                probes.push(enclosing_function(&text[..index]));
             }
         }
     }
 
-    /// Collection reads files and speaks HTTP.  The one process it starts is the macOS
-    /// Keychain lookup that finds Claude's grant; everything else was a provider CLI driven
-    /// on a five-minute timer, and this counts the call sites so a new one cannot arrive
-    /// quietly.
+    /// The name of the function a byte offset sits in, so the allowance above can be spent on
+    /// one function rather than on a file.
+    fn enclosing_function(before: &str) -> String {
+        before
+            .rfind("fn ")
+            .map(|index| {
+                before[index + 3..]
+                    .split(['(', '<'])
+                    .next()
+                    .unwrap_or_default()
+                    .trim()
+                    .to_owned()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Collection reads files and speaks HTTP.  The processes it starts are the macOS Keychain
+    /// lookup that finds Claude's grant and the one `--version` a newly installed provider CLI
+    /// earns; everything else was a provider CLI driven on a five-minute timer, and this counts
+    /// the call sites so a new one cannot arrive quietly.
     #[test]
     fn collection_starts_no_process_it_did_not_name() {
         let mut found = BTreeSet::new();
+        let mut probes = Vec::new();
         visit(
             &Path::new(env!("CARGO_MANIFEST_DIR")).join("src/providers"),
             &mut found,
+            &mut probes,
         );
         assert_eq!(
             found,
             // `/bin/sh` is the bounded runner proving its own timeout, in its own test.
             BTreeSet::from(["/bin/sh".to_owned(), "/usr/bin/security".to_owned()])
+        );
+        assert_eq!(
+            probes,
+            [VERSION_PROBE_FUNCTION],
+            "the version probe is allowed exactly one call site, in {VERSION_PROBE_MODULE}"
         );
     }
 }
