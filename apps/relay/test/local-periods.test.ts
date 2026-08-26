@@ -43,12 +43,23 @@ describe("local periods", () => {
     }
   });
 
-  it("reads the hours of at most four UTC days, whatever the caller's offset", () => {
+  it("reads a handful of UTC days, whatever the caller's offset", () => {
     for (const zone of zones) {
       for (const text of instants) {
         const plan = planLocalPeriods(zone, new Date(text));
-        const dates = new Set(plan.boundaries.map((edge) => edge.range.from.slice(0, 10)));
-        expect(dates.size, `${zone} ${text}`).toBeLessThanOrEqual(4);
+        const dates = new Set<string>();
+        for (const edge of plan.boundaries) {
+          for (
+            let hour = Date.parse(edge.range.from);
+            hour < Date.parse(edge.range.to);
+            hour += HOUR
+          ) {
+            dates.add(instant(hour).slice(0, 10));
+          }
+        }
+        // The three periods share an end, so the edges are three starts and one end. A period
+        // with no whole UTC day inside it reads both of the days it touches.
+        expect(dates.size, `${zone} ${text}`).toBeLessThanOrEqual(5);
         expect(plan.boundaries.every((edge) => edge.periods.length > 0)).toBe(true);
       }
     }
@@ -71,9 +82,12 @@ describe("local periods", () => {
     // Today has no UTC day wholly inside it, so it is read entirely from the two days it cuts.
     expect(plan.days.today).toBeNull();
     expect(plan.days.last_7_days).toEqual({ from: "2026-08-20", to: "2026-08-25" });
+    expect(plan.days.last_30_days).toEqual({ from: "2026-07-28", to: "2026-08-25" });
+    // The wider two share the hours of 26 August that have happened, and each cuts its own
+    // first day out of the day before it.
     expect(plan.boundaries).toEqual([
       {
-        range: { from: "2026-08-25T16:00:00Z", to: "2026-08-26T00:00:00Z" },
+        range: { from: "2026-08-25T16:00:00Z", to: "2026-08-26T16:00:00Z" },
         periods: ["today"],
       },
       {
@@ -81,23 +95,23 @@ describe("local periods", () => {
         periods: ["last_7_days"],
       },
       {
-        range: { from: "2026-07-27T16:00:00Z", to: "2026-07-28T00:00:00Z" },
-        periods: ["last_30_days"],
+        range: { from: "2026-08-26T00:00:00Z", to: "2026-08-26T16:00:00Z" },
+        periods: ["last_7_days", "last_30_days"],
       },
       {
-        range: { from: "2026-08-26T00:00:00Z", to: "2026-08-26T16:00:00Z" },
-        periods: ["today", "last_7_days", "last_30_days"],
+        range: { from: "2026-07-27T16:00:00Z", to: "2026-07-28T00:00:00Z" },
+        periods: ["last_30_days"],
       },
     ]);
   });
 
   it("rounds a sub-hour offset up, so no hour lands in two periods", () => {
-    // Kolkata reads 05:30 ahead, so its midnight falls inside the hour beginning 18:30 UTC. That
-    // hour is reported with the day before it rather than split.
+    // Kolkata reads 05:30 ahead, so its midnight falls inside the hour beginning 18:00 UTC. That
+    // hour is reported with the day before it rather than split, at either edge of the day.
     const plan = planLocalPeriods("Asia/Kolkata", new Date("2026-08-26T02:00:00Z"));
     expect(plan.boundaries[0]?.range).toEqual({
       from: "2026-08-25T19:00:00Z",
-      to: "2026-08-26T00:00:00Z",
+      to: "2026-08-26T19:00:00Z",
     });
   });
 });

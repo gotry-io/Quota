@@ -16,7 +16,7 @@ export interface UsageDateWindow {
   to: string;
 }
 
-/** Hours that no period's rollup covers, and the periods that have to fold them one by one. */
+/** Hours a period's rollup does not cover, and the periods that have to fold them one by one. */
 export interface UsageBoundary {
   range: UsageHourRange;
   periods: LocalPeriodKey[];
@@ -28,15 +28,15 @@ export interface UsageBoundary {
  * A local day begins at local midnight, so a period is a half-open range of instants rather than
  * a run of UTC dates. Every UTC day that lies wholly inside such a range still comes from
  * `usage_daily`; only the day at each edge has to be read an hour at a time. The three periods
- * end together, so the edges are the three starts and the one shared end: at most four UTC days
- * of hourly rows, against the thirty-one daily rows the widest period folds.
+ * end together, so the edges are three starts and one shared end: a handful of UTC days of hourly
+ * rows, against the thirty-one daily rows the widest period folds.
  */
 export interface LocalPeriodPlan {
   /** The caller's calendar date, which is when this answer turns over with no write behind it. */
   localDate: string;
   /** The whole UTC days each period folds, or null when its edges cut every day it touches. */
   days: Record<LocalPeriodKey, UsageDateWindow | null>;
-  /** Disjoint hour ranges, each tagged with the periods that no rollup row already covers. */
+  /** The hour ranges to read, each tagged with the periods that fold what it answers. */
   boundaries: UsageBoundary[];
 }
 
@@ -53,43 +53,42 @@ export function planLocalPeriods(timezone: string, checkedAt: Date): LocalPeriod
   });
   const localDate = localDateAt(clock, checkedAt.getTime());
   const end = startOfLocalHour(clock, shiftDate(localDate, 1));
-
-  const starts = {} as Record<LocalPeriodKey, number>;
   const days = {} as Record<LocalPeriodKey, UsageDateWindow | null>;
-  const cuts: { from: number; to: number }[] = [];
+  const boundaries: UsageBoundary[] = [];
+
   for (const key of LOCAL_PERIOD_KEYS) {
     const start = startOfLocalHour(clock, shiftDate(localDate, -daysBack[key]));
-    starts[key] = start;
     const firstWhole = ceilDay(start);
     const lastWholeEnd = floorDay(end);
-    days[key] =
-      firstWhole < lastWholeEnd
-        ? { from: utcDate(firstWhole), to: utcDate(lastWholeEnd - DAY) }
-        : null;
-    const head = Math.min(firstWhole, end);
-    if (start < head) cuts.push({ from: start, to: head });
+    if (firstWhole < lastWholeEnd) {
+      // The rollup answers the days between the two edges; the edges themselves are hours.
+      days[key] = { from: utcDate(firstWhole), to: utcDate(lastWholeEnd - DAY) };
+      cut(boundaries, key, start, firstWhole);
+      cut(boundaries, key, lastWholeEnd, end);
+    } else {
+      // No UTC day lies wholly inside, so this period is read hour by hour end to end.
+      days[key] = null;
+      cut(boundaries, key, start, end);
+    }
   }
-  const lastMidnight = floorDay(end);
-  if (lastMidnight < end && lastMidnight >= starts.today) {
-    cuts.push({ from: lastMidnight, to: end });
-  }
-
-  return {
-    localDate,
-    days,
-    // A period folds a cut only when the cut is inside it and outside the days it rolls up, so
-    // every instant a period covers is counted once: from the rollup, or from these hours.
-    boundaries: cuts.map((cut) => ({
-      range: { from: utcHour(cut.from), to: utcHour(cut.to) },
-      periods: LOCAL_PERIOD_KEYS.filter(
-        (key) => cut.from >= starts[key] && !covers(days[key], utcDate(cut.from)),
-      ),
-    })),
-  };
+  return { localDate, days, boundaries };
 }
 
-function covers(window: UsageDateWindow | null, date: string): boolean {
-  return window !== null && date >= window.from && date <= window.to;
+/**
+ * Record that one period folds the hours in `[from, to)`.
+ *
+ * What a period folds is its own rollup days plus its own cuts, which together are exactly the
+ * instants it covers, each once. Two periods asking for the same hours share one read; two
+ * asking for overlapping but different ones do not, because neither is counting the other's.
+ */
+function cut(boundaries: UsageBoundary[], key: LocalPeriodKey, from: number, to: number): void {
+  if (from >= to) return;
+  const range = { from: utcHour(from), to: utcHour(to) };
+  const shared = boundaries.find(
+    (edge) => edge.range.from === range.from && edge.range.to === range.to,
+  );
+  if (shared) shared.periods.push(key);
+  else boundaries.push({ range, periods: [key] });
 }
 
 /**

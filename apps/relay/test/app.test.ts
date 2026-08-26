@@ -290,8 +290,8 @@ describe("managed Relay on real Workers and D1", () => {
     expect(unchanged.headers.get("ETag")).toBe(etag);
     expect(await unchanged.text()).toBe("");
 
-    // Two routes answer with different bodies, and a different calendar names different days,
-    // so neither may reuse the other's validator.
+    // Two routes answer with different bodies, and a different calendar puts a period around
+    // different instants, so neither may reuse the other's validator.
     const activity = await app.request(
       "https://quota.gotry.io/api/v6/account/usage/activity?from=2026-08-01&to=2026-08-10",
     );
