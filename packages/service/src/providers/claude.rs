@@ -6,10 +6,10 @@ use std::process::Command;
 use std::time::Duration;
 
 use super::common::{
-    CollectionContext, ErrorCategory, HttpClient, KeychainSecret, LOCAL_FILE_LIMIT, ProviderError,
-    ProviderSession, QuotaAccount, QuotaSnapshot, QuotaWindow, account_identity, clamp_percent,
-    mask_email, number, obj_get, obj_get_any, parse_date, read_bounded_file, run_bounded_command,
-    slug, string,
+    CliTool, CollectionContext, ErrorCategory, HttpClient, KeychainSecret, LOCAL_FILE_LIMIT,
+    ProviderError, ProviderSession, QuotaAccount, QuotaSnapshot, QuotaWindow, account_identity,
+    clamp_percent, mask_email, number, obj_get, obj_get_any, parse_date, read_bounded_file,
+    run_bounded_command, slug, string,
 };
 
 pub const SOURCE: &str = "anthropic_oauth_usage_api";
@@ -17,6 +17,19 @@ pub const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 pub const PROFILE_URL: &str = "https://api.anthropic.com/api/oauth/profile";
 pub const KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
 const AUTH_REFRESH_SKEW: i64 = 60;
+/// What the header claims when this device has no readable Claude Code install to ask.
+const FALLBACK_CLI_VERSION: &str = "2.1.0";
+
+/// The usage endpoint answers Claude Code, so the request identifies as Claude Code — with
+/// the version of the install that is actually on this device when one could be read.
+fn user_agent(context: &CollectionContext) -> String {
+    format!(
+        "claude-code/{}",
+        context
+            .cli_version(CliTool::Claude)
+            .unwrap_or(FALLBACK_CLI_VERSION)
+    )
+}
 
 #[derive(Clone, Debug)]
 struct Credentials {
@@ -68,7 +81,7 @@ fn collect_official(context: &CollectionContext) -> Result<QuotaSnapshot, Provid
     if is_expiring(&credentials, context.observed_unix()) {
         return Err(ProviderError::new(ErrorCategory::AuthRequired, SOURCE));
     }
-    collect_with_credentials(&credentials, context)
+    collect_at(&credentials, context, USAGE_URL, PROFILE_URL)
 }
 
 /// This device's Claude sign-in, and whether the Keychain refused to hand one over.
@@ -312,9 +325,11 @@ fn inherit_weekly_reset(windows: &mut [QuotaWindow], group: &[String]) {
     }
 }
 
-fn collect_with_credentials(
+fn collect_at(
     credentials: &Credentials,
     context: &CollectionContext,
+    usage_url: &str,
+    profile_url: &str,
 ) -> Result<QuotaSnapshot, ProviderError> {
     if !credentials
         .scopes
@@ -325,13 +340,14 @@ fn collect_with_credentials(
     }
     let client = HttpClient::new()?;
     let bearer = format!("Bearer {}", credentials.access_token);
+    let user_agent = user_agent(context);
     let headers = [
         ("Authorization", bearer.as_str()),
         ("Accept", "application/json"),
         ("anthropic-beta", "oauth-2025-04-20"),
-        ("User-Agent", "claude-code/2.1.0"),
+        ("User-Agent", user_agent.as_str()),
     ];
-    let usage = match client.get_json(USAGE_URL, &headers, SOURCE) {
+    let usage = match client.get_json(usage_url, &headers, SOURCE) {
         Ok((_, value)) => value,
         Err(error) => return Err(error),
     };
@@ -349,7 +365,7 @@ fn collect_with_credentials(
             ("Authorization", bearer.as_str()),
             ("Accept", "application/json"),
         ];
-        match client.get_json(PROFILE_URL, &profile_headers, SOURCE) {
+        match client.get_json(profile_url, &profile_headers, SOURCE) {
             Ok((_, value)) => map_profile(&value),
             Err(_) => (None, None),
         }
@@ -610,6 +626,63 @@ mod tests {
             cancel: None,
             keychain: Default::default(),
             cli_versions: Default::default(),
+        }
+    }
+
+    /// The usage endpoint answers Claude Code, so the request says it is Claude Code — and
+    /// says which one.  A device that could not read an install still asks, under the version
+    /// this build falls back to, because the reading matters more than the accuracy of a
+    /// header field neither side can verify.
+    #[test]
+    fn the_usage_request_names_the_installed_claude_code() {
+        use std::io::{Read as _, Write as _};
+        use std::net::TcpListener;
+
+        for (installed, expected) in [
+            (Some("2.4.7"), "user-agent: claude-code/2.4.7"),
+            (None, "user-agent: claude-code/2.1.0"),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+            let address = listener.local_addr().expect("address");
+            let server = std::thread::spawn(move || {
+                let mut heads = Vec::new();
+                for body in [
+                    r#"{"five_hour":{"utilization":12}}"#,
+                    r#"{"account":{"email":"ada@example.com"}}"#,
+                ] {
+                    let Ok((mut stream, _)) = listener.accept() else {
+                        break;
+                    };
+                    let mut request = [0_u8; 2048];
+                    let read = stream.read(&mut request).unwrap_or(0);
+                    heads.push(String::from_utf8_lossy(&request[..read]).to_lowercase());
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                }
+                heads
+            });
+            let mut context = isolated_context();
+            if let Some(version) = installed {
+                context
+                    .cli_versions
+                    .insert(CliTool::Claude, version.to_owned());
+            }
+            let mut credentials = credential("fixture", None);
+            credentials.scopes = vec!["user:profile".to_owned()];
+            let snapshot = collect_at(
+                &credentials,
+                &context,
+                &format!("http://{address}/usage"),
+                &format!("http://{address}/profile"),
+            )
+            .expect("snapshot");
+            assert_eq!(snapshot.windows.len(), 1);
+            let heads = server.join().expect("server");
+            assert!(heads[0].contains(expected), "{}", heads[0]);
+            assert!(heads[0].contains("anthropic-beta: oauth-2025-04-20"));
         }
     }
 

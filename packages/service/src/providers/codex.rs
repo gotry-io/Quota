@@ -4,9 +4,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::common::{
-    CollectionContext, ErrorCategory, HttpClient, LOCAL_FILE_LIMIT, ProviderError, ProviderSession,
-    QuotaAccount, QuotaSnapshot, QuotaWindow, account_identity, clamp_percent, decode_jwt_payload,
-    mask_email, number, obj_get, obj_get_any, parse_date, read_bounded_file, slug, string,
+    CliTool, CollectionContext, ErrorCategory, HttpClient, LOCAL_FILE_LIMIT, ProviderError,
+    ProviderSession, QuotaAccount, QuotaSnapshot, QuotaWindow, account_identity, clamp_percent,
+    decode_jwt_payload, mask_email, number, obj_get, obj_get_any, parse_date, read_bounded_file,
+    slug, string,
 };
 
 pub const SOURCE_API: &str = "chatgpt_usage_api";
@@ -132,16 +133,25 @@ fn parse_oauth_credentials(value: &Value) -> Option<Credentials> {
 }
 
 fn collect_pat(token: &str, context: &CollectionContext) -> Result<QuotaSnapshot, ProviderError> {
+    collect_pat_at(token, context, WHOAMI_URL, USAGE_URL)
+}
+
+fn collect_pat_at(
+    token: &str,
+    context: &CollectionContext,
+    whoami_url: &str,
+    usage_url: &str,
+) -> Result<QuotaSnapshot, ProviderError> {
     let client = HttpClient::new()?;
     let bearer = format!("Bearer {token}");
-    let user_agent = pat_user_agent();
+    let user_agent = pat_user_agent(context);
     let headers = [
         ("Authorization", bearer.as_str()),
         ("Accept", "application/json"),
         ("User-Agent", user_agent.as_str()),
         ("originator", "codex_cli_rs"),
     ];
-    let (_, whoami) = client.get_json(WHOAMI_URL, &headers, SOURCE_PAT)?;
+    let (_, whoami) = client.get_json(whoami_url, &headers, SOURCE_PAT)?;
     let account_id = obj_get_any(&whoami, &["chatgpt_account_id", "chatgptAccountId"])
         .and_then(|v| string(Some(v)));
     let email = obj_get(&whoami, "email").and_then(|v| string(Some(v)));
@@ -156,7 +166,7 @@ fn collect_pat(token: &str, context: &CollectionContext) -> Result<QuotaSnapshot
     if let Some(account_id) = account_id.as_deref() {
         usage_headers.push(("ChatGPT-Account-Id", account_id));
     }
-    let (_, value) = client.get_json(USAGE_URL, &usage_headers, SOURCE_PAT)?;
+    let (_, value) = client.get_json(usage_url, &usage_headers, SOURCE_PAT)?;
     let mapped = map_usage(&value);
     if mapped.malformed_success {
         return Err(ProviderError::new(ErrorCategory::Error, SOURCE_PAT));
@@ -173,8 +183,14 @@ fn collect_pat(token: &str, context: &CollectionContext) -> Result<QuotaSnapshot
     ))
 }
 
-/// Codex only honors personal access tokens from requests that identify as its CLI.
-fn pat_user_agent() -> String {
+/// Codex only honors personal access tokens from requests that identify as its CLI, so the
+/// request presents the CLI's own user agent — carrying the version of the Codex install that
+/// is actually on this device when one could be read, and no version at all when it could not.
+fn pat_user_agent(context: &CollectionContext) -> String {
+    build_pat_user_agent(context.cli_version(CliTool::Codex), os_version().as_deref())
+}
+
+fn build_pat_user_agent(cli_version: Option<&str>, os_version: Option<&str>) -> String {
     let platform = if cfg!(target_os = "macos") {
         "Mac OS"
     } else if cfg!(target_os = "linux") {
@@ -189,7 +205,49 @@ fn pat_user_agent() -> String {
     } else {
         "unknown"
     };
-    format!("codex_cli_rs ({platform}; {arch})")
+    let system = match os_version {
+        Some(version) => format!("{platform} {version}"),
+        None => platform.to_owned(),
+    };
+    match cli_version {
+        Some(version) => format!("codex_cli_rs/{version} ({system}; {arch})"),
+        None => format!("codex_cli_rs ({system}; {arch})"),
+    }
+}
+
+/// The macOS product version, read from the kernel rather than by starting `sw_vers`: a
+/// scheduled refresh starts no process it did not have to.
+#[cfg(target_os = "macos")]
+fn os_version() -> Option<String> {
+    let mut buffer = [0_u8; 32];
+    let mut length = buffer.len();
+    let result = unsafe {
+        libc::sysctlbyname(
+            c"kern.osproductversion".as_ptr(),
+            buffer.as_mut_ptr().cast(),
+            &mut length,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if result != 0 {
+        return None;
+    }
+    let end = length.min(buffer.len());
+    let value = std::str::from_utf8(&buffer[..end])
+        .ok()?
+        .trim_end_matches('\0');
+    // A user agent carries the version and nothing else; anything unexpected is dropped.
+    (!value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || byte == b'.'))
+    .then(|| value.to_owned())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn os_version() -> Option<String> {
+    None
 }
 
 fn extract_identity(credentials: &Credentials) -> Identity {
@@ -563,11 +621,86 @@ mod tests {
     use super::*;
     use base64::Engine as _;
 
+    /// The endpoint only honors a personal access token from the Codex CLI, so the request
+    /// says it is the Codex CLI — and, when this device could read one, which one.
+    #[test]
+    fn the_personal_access_token_request_names_the_installed_codex() {
+        use std::io::{Read as _, Write as _};
+        use std::net::TcpListener;
+
+        for (installed, expected) in [
+            (Some("0.42.1"), "user-agent: codex_cli_rs/0.42.1 ("),
+            (None, "user-agent: codex_cli_rs ("),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+            let address = listener.local_addr().expect("address");
+            let server = std::thread::spawn(move || {
+                let mut heads = Vec::new();
+                for body in [
+                    r#"{"chatgpt_account_id":"acct-owner","email":"ada@example.com"}"#,
+                    r#"{"rate_limit":{"primary_window":{"used_percent":12,"limit_window_seconds":18000}}}"#,
+                ] {
+                    let Ok((mut stream, _)) = listener.accept() else {
+                        break;
+                    };
+                    let mut request = [0_u8; 2048];
+                    let read = stream.read(&mut request).unwrap_or(0);
+                    heads.push(String::from_utf8_lossy(&request[..read]).to_lowercase());
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                }
+                heads
+            });
+            let mut context = isolated_context();
+            if let Some(version) = installed {
+                context
+                    .cli_versions
+                    .insert(CliTool::Codex, version.to_owned());
+            }
+            let snapshot = collect_pat_at(
+                "pat-token",
+                &context,
+                &format!("http://{address}/whoami"),
+                &format!("http://{address}/usage"),
+            )
+            .expect("snapshot");
+            assert_eq!(snapshot.windows.len(), 1);
+            let heads = server.join().expect("server");
+            for head in &heads {
+                assert!(head.contains(expected), "{head}");
+                assert!(head.contains("originator: codex_cli_rs"));
+            }
+            // The account id whoami named travels as a header, never as reported identity.
+            assert!(heads[1].contains("chatgpt-account-id: acct-owner"));
+        }
+    }
+
+    /// The user agent states the platform whether or not a version could be read, and never
+    /// invents a version field.
+    #[test]
+    fn the_user_agent_states_a_version_only_when_one_was_read() {
+        let known = build_pat_user_agent(Some("0.42.1"), Some("15.6"));
+        assert!(known.starts_with("codex_cli_rs/0.42.1 ("), "{known}");
+        assert!(known.contains(" 15.6; "), "{known}");
+        assert!(known.ends_with(')'), "{known}");
+        let unknown = build_pat_user_agent(None, Some("15.6"));
+        assert!(unknown.starts_with("codex_cli_rs ("), "{unknown}");
+        assert!(!unknown.contains('/'), "{unknown}");
+        // Without an OS version the platform stands alone rather than trailing a blank.
+        let bare = build_pat_user_agent(None, None);
+        assert!(!bare.contains("  ") && !bare.contains(" ;"), "{bare}");
+        assert!(build_pat_user_agent(Some("1.0.0"), None).starts_with("codex_cli_rs/1.0.0 ("));
+        // The kernel answers on macOS and is not consulted anywhere else.
+        assert_eq!(os_version().is_some(), cfg!(target_os = "macos"));
+    }
+
     /// Codex owns this grant, so a Mac without one has nothing for this collector to try.
     /// There is no second rung to fall to.
-    #[test]
-    fn no_local_grant_discovers_nothing() {
-        let context = CollectionContext {
+    fn isolated_context() -> CollectionContext {
+        CollectionContext {
             home_directory: PathBuf::from("/tmp/quota-codex-missing-home"),
             environment: std::collections::HashMap::new(),
             config_path: None,
@@ -578,7 +711,12 @@ mod tests {
             cancel: None,
             keychain: Default::default(),
             cli_versions: Default::default(),
-        };
+        }
+    }
+
+    #[test]
+    fn no_local_grant_discovers_nothing() {
+        let context = isolated_context();
         assert!(discover(&context).is_empty());
         assert!(ProviderId::Codex.metadata().browser_session.is_none());
     }
