@@ -8,23 +8,29 @@ struct MenuBarLabelModelTests {
   private let now = Date(timeIntervalSince1970: 1_786_300_000)
 
   @Test
-  func nothingCurrentLeavesTheIconAlone() {
+  func nothingCurrentLeavesTheQuotaMarkAlone() {
     let label = MenuBarLabelModel.make(
       overview: [],
-      preference: .iconAndPercent,
+      style: .iconAndPercent,
+      provider: .automatic,
       now: now
     )
 
-    #expect(label.showsIcon)
+    #expect(label.icon == .quota)
     #expect(label.text == nil)
     #expect(label.accessibilityLabel == "QuotaBar")
   }
 
   @Test
-  func percentOnlyStillShowsTheIconWhenThereIsNoPercentToShow() {
-    let label = MenuBarLabelModel.make(overview: [], preference: .percent, now: now)
+  func percentOnlyStillShowsTheMarkWhenThereIsNoPercentToShow() {
+    let label = MenuBarLabelModel.make(
+      overview: [],
+      style: .percent,
+      provider: .automatic,
+      now: now
+    )
 
-    #expect(label.showsIcon)
+    #expect(label.icon == .quota)
     #expect(label.text == nil)
   }
 
@@ -48,56 +54,96 @@ struct MenuBarLabelModelTests {
 
     let label = MenuBarLabelModel.make(
       overview: [serviceStale, agedOut, failed],
-      preference: .iconAndPercent,
+      style: .iconAndPercent,
+      provider: .automatic,
       now: now
     )
 
-    #expect(label.showsIcon)
+    #expect(label.icon == .quota)
     #expect(label.text == nil)
   }
 
   @Test
   func theTightestWindowOfEveryCurrentReadingWins() {
-    let overview = [
-      item(
-        fingerprint: "codex",
-        windows: [
-          window(id: "five_hour", usedPercent: 32),
-          window(id: "weekly", usedPercent: 16),
-        ]
-      ),
-      item(fingerprint: "claude", windows: [window(id: "session", usedPercent: 47)]),
-      item(fingerprint: "grok", windows: [window(id: "monthly", usedPercent: 73)]),
-      item(
-        fingerprint: "stale_and_tighter",
-        windows: [window(id: "weekly", usedPercent: 99)],
-        isStale: true
-      ),
-    ]
-
-    let label = MenuBarLabelModel.make(overview: overview, preference: .iconAndPercent, now: now)
+    let label = MenuBarLabelModel.make(
+      overview: mixedProviders,
+      style: .iconAndPercent,
+      provider: .automatic,
+      now: now
+    )
 
     #expect(label.text == "27%")
-    #expect(label.accessibilityLabel == "QuotaBar, 27% remaining")
+    // The item wears the mark of the provider the number belongs to, and says so aloud.
+    #expect(label.icon == .provider(.claude))
+    #expect(label.accessibilityLabel == "QuotaBar, Claude Code 27% remaining")
+  }
+
+  @Test
+  func oneChosenProviderAnswersEvenWhenAnotherIsTighter() {
+    let label = MenuBarLabelModel.make(
+      overview: mixedProviders,
+      style: .iconAndPercent,
+      provider: .provider(.codex),
+      now: now
+    )
+
+    // Codex's own tightest window, not Claude Code's tighter one.
+    #expect(label.text == "68%")
+    #expect(label.icon == .provider(.codex))
+    #expect(label.accessibilityLabel == "QuotaBar, Codex 68% remaining")
+  }
+
+  @Test
+  func aChosenProviderWithNoCurrentReadingShowsNoOtherProvidersNumber() {
+    let label = MenuBarLabelModel.make(
+      overview: mixedProviders,
+      style: .iconAndPercent,
+      provider: .provider(.grok),
+      now: now
+    )
+
+    #expect(label.text == nil)
+    #expect(label.icon == .quota)
+    #expect(label.accessibilityLabel == "QuotaBar")
+  }
+
+  @Test
+  func theProviderChoiceOffersAutomaticAndWhateverOverviewShows() {
+    let choices = MenuBarProviderPreference.choices(visibleProviders: [.grok, .codex])
+
+    #expect(choices == [.automatic, .provider(.grok), .provider(.codex)])
+    #expect(choices.map(\.label) == ["Automatic", "Grok", "Codex"])
+    #expect(choices.map(\.rawValue) == ["automatic", "grok", "codex"])
+  }
+
+  @Test
+  func theStoredProviderChoiceSurvivesButAnUnknownIdIsNotAChoice() {
+    #expect(MenuBarProviderPreference(rawValue: "automatic") == .automatic)
+    #expect(MenuBarProviderPreference(rawValue: "codex") == .provider(.codex))
+    #expect(MenuBarProviderPreference(rawValue: "not_a_provider") == nil)
+    #expect(MenuBarProviderPreference.fallback == .automatic)
+    #expect(MenuBarProviderPreference.storageKey == "menubar.provider")
   }
 
   @Test
   func lowRemainingQuotaSaysSoInPunctuationBecauseTheMenuBarHasNoColor() {
     let label = MenuBarLabelModel.make(
       overview: [item(fingerprint: "codex", windows: [window(id: "weekly", usedPercent: 92)])],
-      preference: .iconAndPercent,
+      style: .iconAndPercent,
+      provider: .automatic,
       now: now
     )
 
     #expect(label.text == "!8%")
-    #expect(label.accessibilityLabel == "QuotaBar, 8% remaining")
+    #expect(label.accessibilityLabel == "QuotaBar, Codex 8% remaining")
   }
 
   @Test
   func tenPercentIsNotYetAWarning() {
     let label = MenuBarLabelModel.make(
       overview: [item(fingerprint: "codex", windows: [window(id: "weekly", usedPercent: 90)])],
-      preference: .iconAndPercent,
+      style: .iconAndPercent,
+      provider: .automatic,
       now: now
     )
 
@@ -105,19 +151,23 @@ struct MenuBarLabelModelTests {
   }
 
   @Test
-  func everyPreferenceSelectsWhatTheItemShows() {
+  func everyStyleSelectsWhatTheItemShows() {
     let overview = [item(fingerprint: "codex", windows: [window(id: "weekly", usedPercent: 63)])]
 
-    let icon = MenuBarLabelModel.make(overview: overview, preference: .icon, now: now)
-    #expect(icon.showsIcon)
+    let icon = MenuBarLabelModel.make(
+      overview: overview, style: .icon, provider: .automatic, now: now)
+    // Icon-only is the one style that says nothing about a provider, so it wears Quota's mark.
+    #expect(icon.icon == .quota)
     #expect(icon.text == nil)
 
-    let percent = MenuBarLabelModel.make(overview: overview, preference: .percent, now: now)
-    #expect(!percent.showsIcon)
+    let percent = MenuBarLabelModel.make(
+      overview: overview, style: .percent, provider: .automatic, now: now)
+    #expect(percent.icon == nil)
     #expect(percent.text == "37%")
 
-    let both = MenuBarLabelModel.make(overview: overview, preference: .iconAndPercent, now: now)
-    #expect(both.showsIcon)
+    let both = MenuBarLabelModel.make(
+      overview: overview, style: .iconAndPercent, provider: .automatic, now: now)
+    #expect(both.icon == .provider(.codex))
     #expect(both.text == "37%")
   }
 
@@ -139,7 +189,8 @@ struct MenuBarLabelModelTests {
     #expect(
       MenuBarLabelModel.make(
         overview: [balanceOnly],
-        preference: .iconAndPercent,
+        style: .iconAndPercent,
+        provider: .automatic,
         now: now
       ).text == nil
     )
@@ -151,17 +202,44 @@ struct MenuBarLabelModelTests {
     #expect(
       MenuBarLabelModel.make(
         overview: [balanceOnly, withMeter],
-        preference: .iconAndPercent,
+        style: .iconAndPercent,
+        provider: .automatic,
         now: now
       ).text == "45%"
     )
   }
 
   @Test
-  func theStoredPreferenceKeepsItsWireSpelling() {
-    #expect(MenuBarDisplayPreference.iconAndPercent.rawValue == "icon_and_percent")
-    #expect(MenuBarDisplayPreference.fallback == .iconAndPercent)
-    #expect(MenuBarDisplayPreference.allCases.count == 3)
+  func theStoredStyleKeepsItsWireSpellingAndItsKey() {
+    #expect(MenuBarStylePreference.iconAndPercent.rawValue == "icon_and_percent")
+    #expect(MenuBarStylePreference.fallback == .iconAndPercent)
+    #expect(MenuBarStylePreference.allCases.count == 3)
+    #expect(MenuBarStylePreference.storageKey == "menubar.display")
+  }
+
+  /// Codex at 68% and 74% remaining, Claude Code at 27%, and a Grok reading that aged out.
+  private var mixedProviders: [LocalServiceOverviewItem] {
+    [
+      item(
+        provider: .codex,
+        fingerprint: "codex",
+        windows: [
+          window(id: "five_hour", usedPercent: 32),
+          window(id: "weekly", usedPercent: 26),
+        ]
+      ),
+      item(
+        provider: .claude,
+        fingerprint: "claude",
+        windows: [window(id: "session", usedPercent: 73)]
+      ),
+      item(
+        provider: .grok,
+        fingerprint: "grok",
+        windows: [window(id: "monthly", usedPercent: 5)],
+        isStale: true
+      ),
+    ]
   }
 
   private func window(id: String, usedPercent: Double) -> QuotaWindow {
@@ -169,6 +247,7 @@ struct MenuBarLabelModelTests {
   }
 
   private func item(
+    provider: ProviderID = .codex,
     fingerprint: String,
     windows: [QuotaWindow],
     status: QuotaStatus = .available,
@@ -185,13 +264,13 @@ struct MenuBarLabelModelTests {
     )
     return LocalServiceOverviewItem(
       identity: LocalServiceOverviewIdentity(
-        provider: .codex,
+        provider: provider,
         fingerprint: fingerprint,
         scope: .global,
         sourceID: nil
       ),
       snapshot: QuotaSnapshot(
-        provider: .codex,
+        provider: provider,
         account: QuotaAccount(
           fingerprint: fingerprint,
           label: nil,

@@ -226,9 +226,22 @@ func accountActionErrorSurvivesAStateWithoutAServiceError() async throws {
 
   model.startLogin()
   model.cancelLogin()
-  try await Task.sleep(nanoseconds: 20_000_000)
+  await settle { model.accountErrorMessage != nil }
 
   #expect(model.accountErrorMessage == "QuotaBar's local service is unavailable.")
+}
+
+/// Waits for something the model reaches on its own. A fixed sleep asserts how fast the machine
+/// is as much as what the code does; this asserts only the latter.
+@MainActor
+private func settle(
+  within timeout: Duration = .seconds(5),
+  until condition: () -> Bool
+) async {
+  let deadline = ContinuousClock.now + timeout
+  while !condition(), ContinuousClock.now < deadline {
+    try? await Task.sleep(for: .milliseconds(5))
+  }
 }
 
 @Test @MainActor

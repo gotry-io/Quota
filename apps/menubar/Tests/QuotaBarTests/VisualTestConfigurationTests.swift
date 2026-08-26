@@ -180,16 +180,26 @@
     #expect(today.text.hasPrefix("Today · "))
     #expect(today.text.hasSuffix("1.7M tokens"))
 
-    // The tightest current window in the fixture is Grok's monthly quota at 73% used.
+    // The tightest current window in the fixture is Grok's monthly quota at 73% used, so the
+    // item wears Grok's mark.
+    let item = content.menuBarLabel(style: .iconAndPercent, now: referenceDate)
+    #expect(item.text == "27%")
+    #expect(item.icon == .provider(.grok))
+
+    // Watching one provider answers with that provider, tighter or not.
     #expect(
-      content.menuBarLabel(preference: .iconAndPercent, now: referenceDate).text == "27%"
+      content.menuBarLabel(
+        style: .iconAndPercent,
+        provider: .provider(.claude),
+        now: referenceDate
+      ).text == "53%"
     )
 
     // Nothing has been read yet, and a signed-out Mac has no Usage to report.
     for fixture in [VisualTestFixture.loading, .empty] {
       let model = try configuration(fixture: fixture, referenceDate: referenceDate).makeModel()
       #expect(model.todayUsageSummary(source: .account) == nil)
-      #expect(model.menuBarLabel(preference: .iconAndPercent, now: referenceDate).text == nil)
+      #expect(model.menuBarLabel(style: .iconAndPercent, now: referenceDate).text == nil)
     }
   }
 

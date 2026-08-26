@@ -3,13 +3,14 @@ import QuotaPresentation
 import QuotaWire
 
 /// What the menu-bar item shows. Persisted in UserDefaults so the choice survives relaunch.
-enum MenuBarDisplayPreference: String, CaseIterable, Identifiable, Sendable {
+enum MenuBarStylePreference: String, CaseIterable, Identifiable, Sendable {
   case icon
   case percent
   case iconAndPercent = "icon_and_percent"
 
+  /// The key is older than the name on screen. A rename is not worth losing what someone chose.
   static let storageKey = "menubar.display"
-  static let fallback = MenuBarDisplayPreference.iconAndPercent
+  static let fallback = MenuBarStylePreference.iconAndPercent
 
   var id: Self { self }
 
@@ -25,15 +26,64 @@ enum MenuBarDisplayPreference: String, CaseIterable, Identifiable, Sendable {
   var showsPercent: Bool { self != .icon }
 }
 
-/// The menu-bar item's content: the mark, and the remaining percent of the subscription
-/// closest to running out.
+/// Which subscription the menu-bar item answers for: whichever is closest to running out, or
+/// one named provider for a person who only cares about that one.
+enum MenuBarProviderPreference: RawRepresentable, Hashable, Identifiable, Sendable {
+  case automatic
+  case provider(ProviderID)
+
+  static let storageKey = "menubar.provider"
+  static let fallback = MenuBarProviderPreference.automatic
+  private static let automaticRawValue = "automatic"
+
+  init?(rawValue: String) {
+    if rawValue == Self.automaticRawValue {
+      self = .automatic
+      return
+    }
+    guard let provider = ProviderID(rawValue: rawValue) else { return nil }
+    self = .provider(provider)
+  }
+
+  var rawValue: String {
+    switch self {
+    case .automatic: Self.automaticRawValue
+    case .provider(let provider): provider.rawValue
+    }
+  }
+
+  var id: String { rawValue }
+
+  var label: String {
+    switch self {
+    case .automatic: "Automatic"
+    case .provider(let provider): provider.displayName
+    }
+  }
+
+  /// Automatic, then the providers Overview is actually showing, in Overview's own order. A
+  /// provider hidden from Overview is not a choice, because its number is not on screen anywhere.
+  static func choices(visibleProviders: [ProviderID]) -> [MenuBarProviderPreference] {
+    [.automatic] + visibleProviders.map(MenuBarProviderPreference.provider)
+  }
+}
+
+/// The mark the item wears: the provider the number belongs to, or Quota's own when there is no
+/// number to attribute.
+enum MenuBarLabelIcon: Equatable, Sendable {
+  case quota
+  case provider(ProviderID)
+}
+
+/// The menu-bar item's content: a mark, and the remaining percent of the subscription the
+/// person chose to watch — by default the one closest to running out.
 ///
 /// The point of the item is that the tightest number is readable without opening anything,
-/// so it names the single most constrained current reading rather than an average or a
-/// count. A reading that no longer describes live quota answers for nothing, and a menu bar
-/// with nothing to say is the icon alone.
+/// so it names a single reading rather than an average or a count. A reading that no longer
+/// describes live quota answers for nothing, and a menu bar with nothing to say is the mark
+/// alone.
 struct MenuBarLabelModel: Equatable, Sendable {
-  let showsIcon: Bool
+  let icon: MenuBarLabelIcon?
   let text: String?
   let accessibilityLabel: String
 
@@ -43,36 +93,55 @@ struct MenuBarLabelModel: Equatable, Sendable {
 
   static func make(
     overview: [LocalServiceOverviewItem],
-    preference: MenuBarDisplayPreference,
+    style: MenuBarStylePreference,
+    provider: MenuBarProviderPreference,
     now: Date
   ) -> MenuBarLabelModel {
-    guard preference.showsPercent, let remaining = lowestRemainingPercent(in: overview, now: now)
+    guard
+      style.showsPercent,
+      let tightest = tightestReading(in: overview, provider: provider, now: now)
     else {
-      return MenuBarLabelModel(showsIcon: true, text: nil, accessibilityLabel: "QuotaBar")
+      // Nothing to attribute, so the mark is Quota's own — including for Percent, because an
+      // item with no content cannot be clicked.
+      return MenuBarLabelModel(icon: .quota, text: nil, accessibilityLabel: "QuotaBar")
     }
-    let percent = RemainingQuotaFormat.percent(remaining)
+    let percent = RemainingQuotaFormat.percent(tightest.remainingPercent)
     return MenuBarLabelModel(
-      showsIcon: preference.showsIcon,
-      text: remaining < warningPercent ? "!\(percent)" : percent,
-      accessibilityLabel: "QuotaBar, \(percent) remaining"
+      icon: style.showsIcon ? .provider(tightest.provider) : nil,
+      text: tightest.remainingPercent < warningPercent ? "!\(percent)" : percent,
+      accessibilityLabel: "QuotaBar, \(tightest.provider.displayName) \(percent) remaining"
     )
   }
 
-  /// The smallest remaining percent any window of any current reading reports.
+  private struct Reading {
+    let provider: ProviderID
+    let remainingPercent: Double
+  }
+
+  /// The smallest remaining percent any window of any current reading reports, among the
+  /// readings the provider choice allows.
   ///
   /// Balance-only windows carry no budget to be a percent of, so they cannot be the
   /// constraint; every other window can.
-  private static func lowestRemainingPercent(
+  private static func tightestReading(
     in overview: [LocalServiceOverviewItem],
+    provider preference: MenuBarProviderPreference,
     now: Date
-  ) -> Double? {
-    var lowest: Double?
+  ) -> Reading? {
+    var tightest: Reading?
     for item in overview where isCurrent(item, now: now) {
+      if case .provider(let chosen) = preference, item.identity.provider != chosen { continue }
       for window in item.snapshot.windows where window.showsPercentMeter {
-        lowest = min(lowest ?? window.remainingPercent, window.remainingPercent)
+        guard tightest.map({ window.remainingPercent < $0.remainingPercent }) ?? true else {
+          continue
+        }
+        tightest = Reading(
+          provider: item.identity.provider,
+          remainingPercent: window.remainingPercent
+        )
       }
     }
-    return lowest
+    return tightest
   }
 
   /// A reading that still describes live quota: the source reported it could read, and the

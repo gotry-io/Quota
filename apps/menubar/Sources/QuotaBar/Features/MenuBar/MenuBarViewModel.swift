@@ -424,10 +424,11 @@ final class MenuBarViewModel {
   }
 
   func menuBarLabel(
-    preference: MenuBarDisplayPreference,
+    style: MenuBarStylePreference,
+    provider: MenuBarProviderPreference = .automatic,
     now: Date = Date()
   ) -> MenuBarLabelModel {
-    MenuBarLabelModel.make(overview: overview, preference: preference, now: now)
+    MenuBarLabelModel.make(overview: overview, style: style, provider: provider, now: now)
   }
 
   func isPreparingUsage(source: UsageSource) -> Bool {
