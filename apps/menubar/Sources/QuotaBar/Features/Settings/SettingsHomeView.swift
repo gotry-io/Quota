@@ -9,8 +9,10 @@ struct SettingsHomeView: View {
   let onOpenSupport: () -> Void
 
   @State private var launchAtLoginEnabled = LaunchAtLoginController.isEnabled
-  @AppStorage(MenuBarDisplayPreference.storageKey) private var menuBarDisplay =
-    MenuBarDisplayPreference.fallback
+  @AppStorage(MenuBarStylePreference.storageKey) private var menuBarStyle =
+    MenuBarStylePreference.fallback
+  @AppStorage(MenuBarProviderPreference.storageKey) private var menuBarProvider =
+    MenuBarProviderPreference.fallback
 
   var body: some View {
     ScrollView {
@@ -44,9 +46,15 @@ struct SettingsHomeView: View {
           }
         }
 
+        SettingsSection(title: "Display") {
+          VStack(alignment: .leading, spacing: 0) {
+            menuBarStyleRow
+            menuBarProviderRow
+          }
+        }
+
         SettingsSection(title: "General") {
           VStack(alignment: .leading, spacing: 0) {
-            menuBarDisplayRow
             settingsToggleRow(
               title: "Launch at Login",
               systemImage: "power",
@@ -135,20 +143,54 @@ struct SettingsHomeView: View {
   }
 
   /// The menu-bar item is the product's first sentence, so what it says is a setting rather
-  /// than a fixed choice. The compact menu matches the Usage source control's treatment.
-  private var menuBarDisplayRow: some View {
-    SettingsListRow(title: "Menu Bar Display", systemImage: "menubar.rectangle") {
+  /// than a fixed choice.
+  private var menuBarStyleRow: some View {
+    compactChoiceRow(
+      title: "Menu Bar Style",
+      systemImage: "menubar.rectangle",
+      hint: "What the QuotaBar menu-bar item shows",
+      selection: $menuBarStyle,
+      options: MenuBarStylePreference.allCases,
+      label: \.label
+    )
+  }
+
+  /// Which subscription that sentence is about. Only providers Overview shows are offered,
+  /// because a number the panel does not carry has no business in the menu bar either.
+  private var menuBarProviderRow: some View {
+    compactChoiceRow(
+      title: "Menu Bar Provider",
+      systemImage: "chart.bar.doc.horizontal",
+      hint: "Which provider's remaining quota the menu-bar item shows",
+      selection: $menuBarProvider,
+      options: MenuBarProviderPreference.choices(
+        visibleProviders: ProviderDisplayOrder.enabledProviders()
+      ),
+      label: \.label
+    )
+  }
+
+  /// The compact trailing menu shared with the Usage source control.
+  private func compactChoiceRow<Value: Hashable>(
+    title: String,
+    systemImage: String,
+    hint: String,
+    selection: Binding<Value>,
+    options: [Value],
+    label: KeyPath<Value, String>
+  ) -> some View {
+    SettingsListRow(title: title, systemImage: systemImage) {
       Menu {
-        Picker("Menu Bar Display", selection: $menuBarDisplay) {
-          ForEach(MenuBarDisplayPreference.allCases) { option in
-            Text(option.label).tag(option)
+        Picker(title, selection: selection) {
+          ForEach(options, id: \.self) { option in
+            Text(option[keyPath: label]).tag(option)
           }
         }
         .pickerStyle(.inline)
         .labelsHidden()
       } label: {
         HStack(spacing: QuotaDesign.Spacing.xxs) {
-          Text(menuBarDisplay.label)
+          Text(selection.wrappedValue[keyPath: label])
           Image(systemName: "chevron.down")
             .font(.system(size: 8, weight: .semibold))
         }
@@ -164,10 +206,10 @@ struct SettingsHomeView: View {
       .menuStyle(.borderlessButton)
       .menuIndicator(.hidden)
       .fixedSize()
-      .accessibilityLabel("Menu Bar Display")
-      .accessibilityValue(menuBarDisplay.label)
+      .accessibilityLabel(title)
+      .accessibilityValue(selection.wrappedValue[keyPath: label])
     }
-    .accessibilityHint("What the QuotaBar menu-bar item shows")
+    .accessibilityHint(hint)
   }
 
   private var signedOutMessage: String {

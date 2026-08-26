@@ -113,19 +113,31 @@ targets stay at least 28pt. Technical strings and chevrons never receive primary
 ## Menu bar item
 
 The item is the product's first sentence: the tightest number is legible without opening anything.
-It is the template mark plus the remaining percent of the most constrained current subscription —
-the smallest remaining percent across every window of every Overview reading that still describes
-live quota. A reading the source reported as failed, or one the shared freshness rule has aged out,
-answers for nothing. Balance-only windows have no budget to be a percent of and never set it.
+It is a template mark plus the remaining percent of one current subscription. By default that is the
+most constrained one — the smallest remaining percent across every window of every Overview reading
+that still describes live quota. A reading the source reported as failed, or one the shared
+freshness rule has aged out, answers for nothing. Balance-only windows have no budget to be a
+percent of and never set it.
+
+The mark is the brand of the provider the number belongs to, drawn monochrome at 18pt from the same
+catalog assets Overview uses. Quota's own mark appears in exactly two places: the Icon style, which
+says nothing about a provider, and an item with no current number to attribute.
 
 The status bar renders a template image, so low quota cannot be said in color; below 10% remaining
 the text takes a `!` prefix. Digits are monospaced so the item does not twitch as the number moves.
-When nothing current is left to report, the item is the mark alone.
+The item is one fixed 18pt box in every style, and the number is placed in that box by the optical
+middle of its digits — half a cap height above the baseline — not by the middle of a line box that
+reserves room for descenders no digit uses. That is what keeps the number level with the mark, and
+in the same place when the mark is switched off; `MenuBarLabelLayoutTests` renders the real view and
+measures it.
 
-**Menu Bar Display** in Settings chooses **Icon**, **Percent**, or **Icon and percent** (the
-default), persisted in UserDefaults. **Percent** still falls back to the mark alone when there is no
-percent to show, because an item with no content cannot be clicked. VoiceOver announces **QuotaBar**
-and the remaining percent.
+**Menu Bar Style** in Settings chooses **Icon**, **Percent**, or **Icon and percent** (the default).
+**Menu Bar Provider** chooses **Automatic** — the tightest current subscription — or one provider
+from those Overview is showing. Both persist in UserDefaults. A chosen provider with no current
+reading shows the mark alone and never borrows another provider's number, and **Percent** likewise
+falls back to the mark alone when there is no percent to show, because an item with no content
+cannot be clicked. VoiceOver announces **QuotaBar**, the provider the number belongs to, and the
+remaining percent.
 
 ## Shell
 
@@ -236,7 +248,8 @@ Settings section order is fixed:
 
 1. **Account**
 2. **Quota**
-3. **General**
+3. **Display**
+4. **General**
 
 The Account group on Settings is one row deep in every state:
 
@@ -252,8 +265,10 @@ The Account group is the only place for account authentication actions. Buttons 
 service operations; there are no embedded web views.
 
 Quota contains the **Usage** and **Agents** destinations. The Usage root summary uses account-wide
-totals while signed in with Usage sync enabled, and local totals otherwise. General contains the
-native mini **Launch at Login** switch, then the **Support** destination.
+totals while signed in with Usage sync enabled, and local totals otherwise. Display contains
+**Menu Bar Style** and **Menu Bar Provider**, both using the same compact trailing menu as the Usage
+source control. General contains the native mini **Launch at Login** switch, then the **Support**
+destination.
 Support is the diagnostic page. It is backed by the private `diagnose` operation and opens with the
 report's status line: a semantic icon, **All systems working** / **Some checks need attention** /
 **Action needed**, and a fixed locale-shortened evaluation time (`Checked 3:40 PM`), not relative
