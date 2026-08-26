@@ -45,13 +45,12 @@ message naming what restores collection, because a stored sign-in the provider n
 recovers differently from one that never existed, and a browser session saved here is re-added here
 while a provider's own grant is renewed by opening that provider's program.
 
-A scheduled refresh starts at most two kinds of process, neither of them a provider CLI doing
-provider work: the macOS Keychain lookup that finds Claude Code's grant, performed once per refresh
-and shared by discovery and collection, and the `--version` described under
-[Official CLI identity](#official-cli-identity), which a given installed binary earns at most once
-however many refreshes run. No collector runs a provider's CLI to read quota. Requests otherwise
-identify as `Quota/<version>`, except where a section below says the provider only answers its own
-client.
+A scheduled refresh starts at most three kinds of process, none of them a provider CLI reading
+quota: the macOS Keychain lookup that finds Claude Code's grant, the `--version` a newly installed
+provider CLI earns, and the one `grok agent stdio` an already-expired Grok token earns. Each is
+listed with its trigger and its bounds under [Bounded subprocesses](#bounded-subprocesses). Requests
+otherwise identify as `Quota/<version>`, except where a section below says the provider only answers
+its own client.
 
 How long a collected snapshot describes current quota is derived from the reading itself, as
 described in [`architecture.md`](architecture.md). Collectors do not report it, providers do not
@@ -66,9 +65,9 @@ than repeated.
 
 The version in those headers is the version of the CLI installed on this device, not a constant:
 
-- The binary is resolved as `claude` or `codex` on the service's `PATH`, then in `~/.local/bin`,
-  `~/.npm-global/bin`, `~/.volta/bin`, `/opt/homebrew/bin`, and `/usr/local/bin`. Symlinks are
-  followed to the real file.
+- The binary is resolved by name — `claude`, `codex`, and `grok` alike — on the service's `PATH`,
+  then in `~/.local/bin`, `~/.npm-global/bin`, `~/.volta/bin`, `/opt/homebrew/bin`, and
+  `/usr/local/bin`. Symlinks are followed to the real file.
 - That file's real path, size, and mtime are its fingerprint, stored with the version and the time
   it was read in `cache.sqlite` metadata. The store is rebuildable: a cache reset costs one read
   per installed CLI.
@@ -82,6 +81,22 @@ The version in those headers is the version of the CLI installed on this device,
   actually holds a sign-in for, so a Mac without Codex never runs `codex --version`. Collection
   never waits on it and never fails because of it: an absent or failed read leaves the header on
   the fallback stated in that provider's section.
+
+## Bounded subprocesses
+
+A refresh starts three processes and no others. No collector starts any of them: the two that
+concern a provider CLI run on the refresh worker before collection, so nothing driven by the
+five-minute timer can spawn on its own account.
+
+| Process | Trigger | Bounds |
+| --- | --- | --- |
+| `/usr/bin/security` | Claude Code's Keychain grant, when collection home is the process `HOME` | Once per refresh, shared by discovery and collection; secret held in a redacted type |
+| `<binary> --version` | The installed binary's fingerprint is absent or changed, for a CLI this device holds a sign-in for | Once per installed binary, never more than once an hour; 5 s, 4 KiB, no stdin, `HOME` + `PATH` |
+| `grok agent stdio` | Grok's local token is already expired or within a minute of expiry | Once an hour whatever the outcome; 5 s for the whole handshake, 64 KiB, `HOME` + `PATH` + `GROK_HOME` |
+
+Each is started as an explicit executable with an argument array, never through a shell, and is
+terminated on success, failure, timeout, and cancellation. The binary is resolved by the rules
+under [Official CLI identity](#official-cli-identity) in every case.
 
 ## Codex
 
@@ -285,8 +300,21 @@ upload partitions are summarized by the QuotaBar diagnostics report.
 1. Discover `$GROK_HOME/auth.json` or `~/.grok/auth.json`.
 2. Prefer the non-empty `https://auth.x.ai::<client-id>` entry with the latest expiry, then legacy
    sign-in entries.
-3. A cached token that is expired or within one minute of expiry is `auth_required`: the Grok CLI
-   owns renewal, and this build no longer drives it.
+3. A cached token that is expired or within one minute of expiry is the one case where this build
+   starts a provider's CLI. Grok's access token lives about six hours and only the Grok CLI can
+   renew it, so a Mac that has not opened Grok since breakfast would otherwise report an expired
+   sign-in all day. On the refresh worker, before collection, `grok agent stdio` is run once:
+   `initialize`, then `authenticate` with `methodId: cached_token`, which renews from the refresh
+   token the CLI already holds. The reply is read before stdin closes, because closing it is how a
+   stdio agent is told to shut down. `cached_token` is the only method ever asked for — the method
+   Grok 1.0.5 advertises, `grok.com`, prints a device code and waits for a person, which nothing on
+   a timer may start. Bounded to five seconds for the whole exchange, 64 KiB of stdout, stderr
+   discarded, and an environment holding only `HOME`, `PATH`, and `GROK_HOME`; the child is
+   terminated on timeout, cancellation, or an over-long answer. At most one attempt per hour,
+   recorded in `cache.sqlite` metadata with the binary's fingerprint and the outcome, so a CLI that
+   cannot renew is not started every five minutes. Afterwards `auth.json` is read again: an
+   unexpired token continues to step 4 in the same refresh, and anything else is `auth_required`
+   with "Open Grok to refresh the sign-in". No Grok CLI on this Mac means no attempt and no record.
 4. Call `GET https://cli-chat-proxy.grok.com/v1/billing?format=credits` with the local Grok OAuth
    token. HTTP 401/403 is `auth_required`. A valid cached token works without the `grok` executable.
 5. Prefer `config.creditUsagePercent` and `config.currentPeriod`. For non-unified accounts, retain the
@@ -307,9 +335,10 @@ upload partitions are summarized by the QuotaBar diagnostics report.
    exposes only the reset instant: 20–45 days out is **Monthly**, anything nearer is the **Weekly**
    credit pool, and no reset stays **Billing cycle**.
 
-The local service never submits the refresh token itself, never starts Grok's interactive browser
-login, and never starts the Grok CLI at all. That CLI is solely responsible for refresh-token
-rotation and credential-file writes, and the reader runs it by opening Grok. Proxy requests carry
+The local service never submits the refresh token itself, never writes `auth.json`, and never
+starts Grok's interactive browser login. That CLI is solely responsible for refresh-token rotation
+and credential-file writes; step 3 asks it to perform one, and never performs one itself. Proxy
+requests carry
 `X-XAI-Token-Auth: xai-grok-cli` and the gRPC-web billing call carries `x-user-agent: connect-es/2.1.1`
 with grok.com `Origin` and `Referer`, because those endpoints answer only requests that identify as
 Grok's own clients; sending another program's client identity is a provider-terms risk this build

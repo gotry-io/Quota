@@ -288,13 +288,13 @@ Cost：本机 projects JSONL；Admin 另出 org spend。
 | Codex UA 版本 | `ProviderVersionDetector.codexVersion()` 跑 `codex --version`（`--version`/`version`/`-v` 依次尝试）；`CodexCLIUserAgent` 拼 `codex_cli_rs/<version> (<platform> <os>; <arch>)` | 已对齐：同一 UA 形状，含 OS 版本（由 `kern.osproductversion` 读出，不起 `sw_vers`）。**实现差异**：只试 `--version`，且按二进制真实路径 + size + mtime 缓存在 `cache.sqlite`，指纹未变不 spawn、同一 CLI 每小时至多一次；读不到版本时退回无版本号的 `codex_cli_rs (...)` |
 | Claude Auto | Planner oauth→cli→web | 仅 OAuth。**有意差异**：不跑 `/status`、`/usage` PTY 探针——同上；也不读 claude.ai cookie——同 Codex 理由；过期 grant 直接报 `auth_required`。取额度的子进程只有读 Keychain 的 `/usr/bin/security`，每次刷新至多一次 |
 | Claude UA 版本 | `ProviderVersionDetector.claudeVersion()` 跑 `claude --version`，按 realpath + mtime + size + inode 指纹缓存 30 分钟 | 已对齐：同样的指纹思路（realpath + size + mtime），UA 变为 `claude-code/<version>`。**实现差异**：缓存写在 `cache.sqlite` 而非进程内存，所以跨重启仍不 spawn；不设 TTL——指纹不变就永不重读，指纹变了每小时至多重读一次；读不到版本时退回 `claude-code/2.1.0` |
-| Grok Auto | CLI→OAuth(proxy)→Web→OAuth(grpc)；套餐名来自 `/v1/settings` `subscription_tier_display` | OAuth(proxy)→OAuth(grpc)，settings 套餐名一致。**有意差异**：完全不启动 grok CLI——既不取额度（grok 1.0.5 `agent stdio` 对 `x.ai/billing` 返回 `-32601 Method not found`），也不用它刷新 token；也不读 grok.com cookie——OAuth(grpc) 用同一个 token 打同一个 RPC，cookie 阶梯不增加任何能力 |
+| Grok Auto | CLI→OAuth(proxy)→Web→OAuth(grpc)；套餐名来自 `/v1/settings` `subscription_tier_display` | OAuth(proxy)→OAuth(grpc)，settings 套餐名一致。**已对齐（限定触发）**：token 过期或距过期不足一分钟时，同样用 `grok agent stdio` 的 `authenticate` 让 CLI 续期，随后重读 `auth.json`。**实现差异**：只在过期时跑，不在每次采集前跑；每小时至多一次（`cache.sqlite` 记 fingerprint + 时间 + 结果）；整个握手 5 秒、64 KiB、只带 `HOME`/`PATH`/`GROK_HOME`；只请求 `cached_token` 方法——grok 1.0.5 只公布 `grok.com`（设备码交互登录），定时任务不得启动它。**有意差异**：不用 CLI 取额度（grok 1.0.5 `agent stdio` 对 `x.ai/billing` 返回 `-32601 Method not found`）；也不读 grok.com cookie——OAuth(grpc) 用同一个 token 打同一个 RPC，cookie 阶梯不增加任何能力 |
 | Kimi | API→CLI cred→Web | API key→`~/.kimi-code` CLI 凭据。**有意差异**：不读 kimi.com cookie——同 Codex 理由 |
 | DeepSeek | 有 key→API（可叠加 Chrome localStorage `userToken` 取月度明细）；无 key→Platform Web（同一 token） | **有意差异**：仅 API balance。Platform 路径的 token 来源是浏览器 localStorage（安全基线排除）或 `DEEPSEEK_PLATFORM_TOKEN` 手工粘贴；其增量是月度花费明细（cost，不是 quota），余额与 API key 路径相同 |
 | OpenRouter | `/credits` + `/key` 额度；`/activity` 花费历史 | 额度已对齐；`/activity` 属 cost，不在 quota 范围 |
 | LiteLLM | `key/info` → `user/info` / `team/info`，含 `budget_reset_at` | 已对齐 |
 | Usage & Spend 集合 | 11 个 supportsTokenCost | Quota Usage 为本机 agent 扫描集 |
-| 采集阶梯总则 | 各 provider 允许 CLI / PTY / cookie 阶梯 | **有意差异**：定时刷新路径不 spawn 任何 provider CLI 取额度，`browser_session` 只声明给 Cursor。凭据过期一律报 `auth_required`，恢复文案指向拥有该 grant 的程序。唯一的 CLI 子进程是上面两行的 `--version`：它不读额度，且按二进制指纹缓存，装好的同一个 binary 至多跑一次 |
+| 采集阶梯总则 | 各 provider 允许 CLI / PTY / cookie 阶梯 | **有意差异**：定时刷新路径不 spawn 任何 provider CLI 取额度，`browser_session` 只声明给 Cursor。凭据过期一律报 `auth_required`，恢复文案指向拥有该 grant 的程序。CLI 子进程只有两种，都跑在采集之前的 refresh worker 上、都不读额度：上面两行的 `--version`（按二进制指纹缓存，同一 binary 至多跑一次），以及 Grok 过期时的一次 `agent stdio` 续期（每小时至多一次）|
 
 ---
 

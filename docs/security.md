@@ -163,18 +163,29 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
 - Provider credentials go only to the fixed endpoints in
   [`provider-collection.md`](provider-collection.md); apart from the acquisition above, do not
   import browser Cookies, and hidden WebView state is never an authentication source.
-- Collection starts two processes and no others. `/usr/bin/security` reads Claude Code's Keychain
-  grant once per refresh, for both discovery and collection. `<binary> --version` reads the
-  installed Claude Code or Codex version the request headers claim, on the refresh worker before
-  collection, only for a provider this device holds a sign-in for, and only when the binary's real
-  path, size, and mtime differ from the fingerprint stored in the disposable cache — so a given
-  installed binary is run at most once, and never more than once an hour. It is bounded to five
-  seconds and 4 KiB of stdout, gets no stdin, discards stderr, and runs with only `HOME` and `PATH`
-  in its environment; a failed or absent read leaves the header on its fallback constant, and
-  collection neither waits on it nor fails because of it. No collector runs a provider's CLI to read
-  quota, and an expired grant is reported as `auth_required` rather than renewed by driving its
-  owner. Spawn explicit executables with argument arrays, never interpolate provider or user data
-  into a shell, and terminate subprocesses on success, failure, timeout, and cancellation.
+- A refresh starts three processes and no others, and no collector starts any of them: the two that
+  drive a provider CLI run on the refresh worker before collection, so nothing on the five-minute
+  timer can spawn on its own account.
+  - `/usr/bin/security` reads Claude Code's Keychain grant once per refresh, for both discovery and
+    collection.
+  - `<binary> --version` reads the installed Claude Code or Codex version the request headers claim,
+    only for a provider this device holds a sign-in for, and only when the binary's real path, size,
+    and mtime differ from the fingerprint stored in the disposable cache — so a given installed
+    binary is run at most once, and never more than once an hour. Bounded to five seconds and 4 KiB
+    of stdout, no stdin, stderr discarded, and only `HOME` and `PATH` in its environment. A failed or
+    absent read leaves the header on its fallback constant, and collection neither waits on it nor
+    fails because of it.
+  - `grok agent stdio` asks the Grok CLI to renew the sign-in it owns, and only when the token on
+    disk is already expired or within a minute of expiry — at most one attempt an hour whatever the
+    outcome, recorded in the disposable cache. Bounded to five seconds for the whole handshake and
+    64 KiB of stdout, stderr discarded, and only `HOME`, `PATH`, and `GROK_HOME` in its environment.
+    It asks for the `cached_token` method and no other: the CLI's interactive sign-in prints a device
+    code and waits for a person, and nothing on a timer may start that. The service never submits a
+    refresh token itself and never writes a provider's credential file.
+  - Everywhere else an expired grant is reported as `auth_required` rather than renewed by driving
+    its owner, and no collector runs a provider's CLI to read quota. Spawn explicit executables with
+    argument arrays, never interpolate provider or user data into a shell, and terminate subprocesses
+    on success, failure, timeout, and cancellation.
 - Provider HTTP uses the same twenty-second, 1 MiB bounds; browser-session validation tightens the
   timeout to ten seconds so it finishes inside private IPC, and the Keychain lookup is bounded the
   same way with its secret in a type whose `Debug` is redacted. Private IPC limits each line to 1
