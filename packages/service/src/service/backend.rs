@@ -8,7 +8,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 
-use chrono::{DateTime, Days, Duration, SecondsFormat, Timelike, Utc};
+use chrono::{
+    DateTime, Days, Duration, LocalResult, NaiveDate, SecondsFormat, TimeZone, Timelike, Utc,
+};
 use chrono_tz::Tz;
 use serde_json::{Value, json};
 
@@ -1367,7 +1369,7 @@ impl NativeBackend {
         self.state
             .replace_usage_periods(UsageSource::Local, &periods)
             .map_err(|_| BackendError::unavailable())?;
-        let today = usage_period_range(UsagePeriod::Today, &usage.timezone, generated_at)?.0;
+        let today = usage_period_window(UsagePeriod::Today, &usage.timezone, generated_at)?.0;
         let (from, to) = periods
             .last()
             .and_then(|(_, detail)| detail.get("range"))
@@ -1390,9 +1392,9 @@ impl NativeBackend {
 
     /// One period, folded from the hours this device has stored.
     ///
-    /// A day is a UTC day, because that is the grain an hour rolls into. The device's own
-    /// calendar decides which days a period names, not where a day begins — the same rule the
-    /// Account read follows, so the two sides of the panel agree.
+    /// A local day begins at local midnight, so a period bounds the hours it folds by instant
+    /// rather than by UTC date — the same rule the Account read follows, so the two sides of the
+    /// panel agree for a Mac keeping the calendar the caller asked about.
     fn local_usage_detail(
         &self,
         period: UsagePeriod,
@@ -1402,19 +1404,20 @@ impl NativeBackend {
         model_catalog: Option<&crate::model_catalog::ModelCatalog>,
         incomplete: bool,
     ) -> Result<Value, BackendError> {
-        let (today, range) = usage_period_range(period, timezone, generated_at)?;
+        let (today, span) = usage_period_window(period, timezone, generated_at)?;
         let (rows, partial) = self
             .state
             .usage_period_rows(
-                range
-                    .as_ref()
-                    .map(|(from, to)| (from.as_str(), to.as_str())),
+                span.as_ref()
+                    .map(|span| (span.start.as_str(), span.end.as_str())),
             )
             .map_err(|_| BackendError::unavailable())?;
         let summary = usage::build_local_usage_summary(&rows, pricing_catalog, model_catalog)
             .map_err(|_| BackendError::unavailable())?;
         let details_truncated = summary.models_truncated || summary.cost.unpriced_truncated;
-        let (from, to) = range.unwrap_or_else(|| usage_date_range(&rows, &today));
+        let (from, to) = span
+            .map(|span| span.dates)
+            .unwrap_or_else(|| usage_date_range(&rows, &today));
         Ok(json!({
             "range": {"from": from, "to": to},
             "usage": summary,
@@ -1729,8 +1732,10 @@ impl NativeBackend {
             let Some(value) = usage.get(key) else {
                 continue;
             };
-            let (today, range) = usage_period_range(period, &timezone, now)?;
-            let range = range.unwrap_or_else(|| (today.clone(), today.clone()));
+            let (today, span) = usage_period_window(period, &timezone, now)?;
+            let range = span
+                .map(|span| span.dates)
+                .unwrap_or_else(|| (today.clone(), today.clone()));
             if let Ok(detail) = account_usage_detail(value, &range) {
                 periods.push((period, detail));
             }
@@ -2376,29 +2381,69 @@ struct AgentUsage {
     coverage: usage::ScanCoverage,
 }
 
-fn usage_period_range(
+/// One period as this device's own calendar draws it.
+///
+/// A local day begins at local midnight, so a period is a half-open range of instants rather
+/// than a run of UTC dates: `start` is when its first local day begins and `end` is when the day
+/// after its last one does. An hour is the finest fact stored, so a zone offset by less than an
+/// hour reports the hour its midnight falls in with the day before — comparing a stored hour
+/// against these instants rounds the edge up, which is the rule the Account read follows too.
+pub(crate) struct LocalPeriodSpan {
+    dates: (String, String),
+    pub(crate) start: String,
+    pub(crate) end: String,
+}
+
+pub(crate) fn usage_period_window(
     period: UsagePeriod,
     timezone: &str,
     now: DateTime<Utc>,
-) -> Result<(String, Option<(String, String)>), BackendError> {
+) -> Result<(String, Option<LocalPeriodSpan>), BackendError> {
     let timezone = Tz::from_str(timezone).map_err(|_| BackendError::unavailable())?;
     let today = now.with_timezone(&timezone).date_naive();
     let today_text = today.format("%Y-%m-%d").to_string();
     let previous_days = match period {
-        UsagePeriod::Today => Some(0),
-        UsagePeriod::Last7Days => Some(6),
-        UsagePeriod::Last30Days => Some(29),
-        UsagePeriod::All => None,
+        UsagePeriod::Today => 0,
+        UsagePeriod::Last7Days => 6,
+        UsagePeriod::Last30Days => 29,
+        UsagePeriod::All => return Ok((today_text, None)),
     };
-    let Some(previous_days) = previous_days else {
-        return Ok((today_text, None));
-    };
-    let from = today
+    let first = today
         .checked_sub_days(Days::new(previous_days))
-        .ok_or_else(BackendError::unavailable)?
-        .format("%Y-%m-%d")
-        .to_string();
-    Ok((today_text.clone(), Some((from, today_text))))
+        .ok_or_else(BackendError::unavailable)?;
+    let after = today
+        .checked_add_days(Days::new(1))
+        .ok_or_else(BackendError::unavailable)?;
+    Ok((
+        today_text.clone(),
+        Some(LocalPeriodSpan {
+            dates: (first.format("%Y-%m-%d").to_string(), today_text),
+            start: local_day_start(&timezone, first)?,
+            end: local_day_start(&timezone, after)?,
+        }),
+    ))
+}
+
+/// The instant a local date begins, as the hour comparison in `usage_period_rows` reads it.
+///
+/// A date whose midnight a daylight change repeated begins at the earlier of the two; one whose
+/// midnight a change skipped begins when the clocks land after it.
+fn local_day_start(timezone: &Tz, date: NaiveDate) -> Result<String, BackendError> {
+    let midnight = date
+        .and_hms_opt(0, 0, 0)
+        .ok_or_else(BackendError::unavailable)?;
+    for minutes in [0, 30, 60, 90, 120, 150, 180] {
+        let candidate = midnight + Duration::minutes(minutes);
+        let resolved = match timezone.from_local_datetime(&candidate) {
+            LocalResult::Single(value) => value,
+            LocalResult::Ambiguous(earliest, _) => earliest,
+            LocalResult::None => continue,
+        };
+        return Ok(resolved
+            .with_timezone(&Utc)
+            .to_rfc3339_opts(SecondsFormat::Secs, true));
+    }
+    Err(BackendError::unavailable())
 }
 
 /// One managed period as the panel reads it.
@@ -2877,21 +2922,41 @@ mod tests {
     }
 
     #[test]
-    fn usage_periods_are_inclusive_and_use_the_service_timezone() {
+    fn usage_periods_begin_at_local_midnight_in_the_service_timezone() {
         let now = DateTime::parse_from_rfc3339("2026-08-12T18:00:00Z")
             .expect("instant")
             .with_timezone(&Utc);
-        assert_eq!(
-            usage_period_range(UsagePeriod::Last7Days, "Asia/Singapore", now)
-                .expect("range")
-                .1,
-            Some(("2026-08-07".into(), "2026-08-13".into()))
-        );
+        let span = usage_period_window(UsagePeriod::Last7Days, "Asia/Singapore", now)
+            .expect("window")
+            .1
+            .expect("span");
+        // 18:00 UTC is already the 13th in Singapore, and its days begin at 16:00 UTC.
+        assert_eq!(span.dates, ("2026-08-07".into(), "2026-08-13".into()));
+        assert_eq!(span.start, "2026-08-06T16:00:00Z");
+        assert_eq!(span.end, "2026-08-13T16:00:00Z");
         assert!(
-            usage_period_range(UsagePeriod::All, "Asia/Singapore", now)
-                .expect("range")
+            usage_period_window(UsagePeriod::All, "Asia/Singapore", now)
+                .expect("window")
                 .1
                 .is_none()
+        );
+    }
+
+    /// A change that skips or repeats midnight still leaves the day one instant to begin at.
+    #[test]
+    fn a_local_day_begins_once_across_a_daylight_change() {
+        let santiago = Tz::from_str("America/Santiago").expect("zone");
+        let skipped = NaiveDate::from_ymd_opt(2026, 9, 6).expect("date");
+        assert_eq!(
+            local_day_start(&santiago, skipped).expect("start"),
+            "2026-09-06T04:00:00Z"
+        );
+
+        let havana = Tz::from_str("America/Havana").expect("zone");
+        let repeated = NaiveDate::from_ymd_opt(2026, 11, 1).expect("date");
+        assert_eq!(
+            local_day_start(&havana, repeated).expect("start"),
+            "2026-11-01T04:00:00Z"
         );
     }
 
