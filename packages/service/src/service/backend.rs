@@ -4013,6 +4013,37 @@ mod tests {
             Some("auth_required")
         );
         assert_eq!(never_configured.get("message"), None);
+
+        // A Claude Code that emptied its own credential is a third state again. It is
+        // discovered, because the device holds the entry, and its recovery is the one that
+        // does not say "open Claude Code": the app would open onto the same emptied entry.
+        let home = std::env::temp_dir().join(format!("quota-signed-out-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(home.join(".claude")).expect("home");
+        fs::write(
+            home.join(".claude/.credentials.json"),
+            "{\"claudeAiOauth\": {\"accessToken\": \"\", \"refreshToken\": \"\", \"expiresAt\": 0}}",
+        )
+        .expect("credential");
+        let context = CollectionContext {
+            home_directory: home.clone(),
+            ..context
+        };
+        let sessions = providers::discover(ProviderId::Claude, &context);
+        assert_eq!(sessions.len(), 1);
+        let signed_out = collect_discovered_provider(ProviderId::Claude, sessions, &context);
+        assert_eq!(
+            signed_out.get("message").and_then(Value::as_str),
+            Some("Claude Code is signed out. Run `claude` and sign in again.")
+        );
+        assert_eq!(
+            signed_out.get("sources"),
+            Some(&json!([{
+                "source_id": crate::providers::claude::SIGNED_OUT_SOURCE,
+                "outcome": "auth_required",
+                "category": "auth_required"
+            }]))
+        );
+        fs::remove_dir_all(&home).expect("cleanup");
     }
 
     /// Every reader resolves one subscription the same way, so the rule is stated once as
