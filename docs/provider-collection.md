@@ -138,7 +138,10 @@ reset-credit redemption are not used.
    Claude Code that signed itself out — it empties the tokens in place and sets `expiresAt` to 0 —
    and is reported as `auth_required` under its own source, whose recovery is "Claude Code is
    signed out. Run `claude` and sign in again." A grant needs `accessToken` with a usable
-   `user:profile` scope. The Keychain entry wins unless it is the only expiring one of the two.
+   `user:profile` scope. The Keychain entry wins unless it is the only expiring one of the two, an
+   emptied entry counting as expiring; a Keychain that withheld its entry outranks an emptied file
+   beside it, because that file is what an older Claude Code left behind and says nothing about
+   the grant this device was refused.
 3. A grant that is expired or within one minute of expiry, and that carries a non-empty
    `refreshToken`, is the one case where this build starts Claude Code. Its access token lives
    about eight hours and only Claude Code renews it, so a Mac that has not opened it since
