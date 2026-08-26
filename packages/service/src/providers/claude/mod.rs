@@ -125,13 +125,17 @@ fn collect_official(context: &CollectionContext) -> Result<QuotaSnapshot, Provid
             SOURCE,
         ));
     };
-    // Claude Code emptied its own credential rather than renew it, which is the one sign-in
-    // problem that opening Claude Code does not fix: it opens onto the same emptied entry.
     let Some(credentials) = entry.grant() else {
-        return Err(ProviderError::new(
-            ErrorCategory::AuthRequired,
-            SIGNED_OUT_SOURCE,
-        ));
+        // Claude Code emptied its own credential rather than renew it, which is the one
+        // sign-in problem that opening Claude Code does not fix: it opens onto the same
+        // emptied entry.  Unless the Keychain withheld the entry it holds — then the emptied
+        // one is a file an older Claude Code left behind, and it says nothing about the grant
+        // this device was refused.
+        return Err(if lookup.keychain_refused {
+            ProviderError::new(ErrorCategory::AccessDenied, SOURCE)
+        } else {
+            ProviderError::new(ErrorCategory::AuthRequired, SIGNED_OUT_SOURCE)
+        });
     };
     // Claude Code owns token renewal. The refresh worker already gave it its one chance to
     // renew an expired grant ([`refresh`]); one still out of time here is a sign-in only the
@@ -699,6 +703,51 @@ mod tests {
             preferred(emptied(), expired("file")).as_deref(),
             Some("keychain")
         );
+    }
+
+    /// A withheld secret is not a sign-out.  An emptied file next to a Keychain this device
+    /// was refused is what an older Claude Code left behind, and the grant that was withheld
+    /// may be perfectly good — so the reader is told about the refusal, which they can act on,
+    /// rather than sent to sign in again for as long as the access decision stands.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn an_emptied_file_beside_a_refused_keychain_reports_the_refusal() {
+        let home = std::env::temp_dir().join(format!("quota-claude-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(home.join(".claude")).expect("home");
+        fs::write(
+            home.join(".claude/.credentials.json"),
+            r#"{"claudeAiOauth": {"accessToken": "", "refreshToken": "", "expiresAt": 0}}"#,
+        )
+        .expect("credential");
+        let context = |secret: KeychainSecret| {
+            let context = CollectionContext {
+                home_directory: home.clone(),
+                environment: std::collections::HashMap::from([(
+                    "HOME".to_owned(),
+                    home.to_string_lossy().into_owned(),
+                )]),
+                now: Some("2026-08-26T12:00:00Z".to_owned()),
+                ..CollectionContext::default()
+            };
+            // Seeded, so the one Keychain read of this refresh has already happened and no
+            // test starts `/usr/bin/security`.
+            context.keychain.set(secret).expect("unread");
+            context
+        };
+        assert!(context(KeychainSecret::Absent).allows_host_keychain());
+        let verdict = |secret| {
+            let error = collect_official(&context(secret)).expect_err("no reading");
+            (error.category, error.source_id)
+        };
+        assert_eq!(
+            verdict(KeychainSecret::Refused),
+            (ErrorCategory::AccessDenied, SOURCE)
+        );
+        assert_eq!(
+            verdict(KeychainSecret::Absent),
+            (ErrorCategory::AuthRequired, SIGNED_OUT_SOURCE)
+        );
+        fs::remove_dir_all(&home).expect("cleanup");
     }
 
     fn isolated_context() -> CollectionContext {
