@@ -4,7 +4,6 @@ import SwiftUI
 struct QuotaOverviewView: View {
   let model: MenuBarViewModel
   let enabledProviders: [ProviderID]
-  let usageSource: UsageSource
   let now: Date
   let onOpenSettings: () -> Void
 
@@ -48,40 +47,16 @@ struct QuotaOverviewView: View {
         )
       }
     case .content(let providers, let refreshWarning):
-      VStack(spacing: 0) {
-        ScrollView {
-          VStack(spacing: QuotaDesign.Spacing.sm) {
-            if model.showsCacheRebuildNotice {
-              CacheRebuildNotice()
-            }
-            loadedProviderContent(providers: providers, refreshWarning: refreshWarning, now: now)
+      ScrollView {
+        VStack(spacing: QuotaDesign.Spacing.sm) {
+          if model.showsCacheRebuildNotice {
+            CacheRebuildNotice()
           }
-          .frame(maxWidth: .infinity, alignment: .topLeading)
-          .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
+          loadedProviderContent(providers: providers, refreshWarning: refreshWarning, now: now)
         }
-
-        if let today = model.todayUsageSummary(source: usageSource) {
-          todayFooter(today)
-        }
-      }
-    }
-  }
-
-  /// Quota is what Overview is for; today's spend is the one supporting number that belongs
-  /// with it, so it sits below the list instead of scrolling away inside it.
-  private func todayFooter(_ summary: UsageTodaySummary) -> some View {
-    VStack(spacing: 0) {
-      Divider()
-        .opacity(0.35)
-
-      Text(summary.text)
-        .quotaMetaStyle()
-        .lineLimit(1)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
         .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
-        .padding(.vertical, QuotaDesign.Spacing.sm)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(summary.accessibilityLabel)
+      }
     }
   }
 

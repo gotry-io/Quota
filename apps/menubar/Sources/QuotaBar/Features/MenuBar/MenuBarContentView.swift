@@ -37,6 +37,7 @@ struct MenuBarContentView: View {
       MenuBarShell(
         model: model,
         title: navigation.title,
+        usageSource: usageSource,
         now: context.date,
         canNavigateBack: navigation.canNavigateBack,
         onNavigateBack: navigateBack,
@@ -170,7 +171,6 @@ struct MenuBarContentView: View {
       QuotaOverviewView(
         model: model,
         enabledProviders: ProviderDisplayOrder.enabledProviders(),
-        usageSource: usageSource,
         now: now,
         onOpenSettings: openSettings
       )

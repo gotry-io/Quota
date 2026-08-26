@@ -402,7 +402,7 @@ final class MenuBarViewModel {
     !usageUploadEnabled || accountSummary == nil ? .local : selected
   }
 
-  /// The Overview footer's one line of today's spend, or `nil` when there is nothing to say.
+  /// The bottom bar's one line of today's spend, or `nil` when there is nothing to say.
   func todayUsageSummary(source: UsageSource) -> UsageTodaySummary? {
     guard let detail = usageDetail(source: effectiveUsageSource(source), period: .today) else {
       return nil

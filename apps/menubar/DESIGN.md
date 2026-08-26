@@ -59,7 +59,7 @@ These rules apply to every Quota client, not only the menu panel. `apps/web/DESI
 | `panelHorizontalPadding` | 16pt | Header, content, and footer gutter |
 | `pageVerticalPadding` | 16pt | Page content inset |
 | `headerHeight` | 44pt | Navigation and title chrome |
-| `footerHeight` | 36pt | Last-sync action |
+| `footerHeight` | 36pt | Today's spend and the refresh action |
 | `minimumInteractiveDimension` | 28pt | Minimum pointer target |
 | `settingsRowHeight` | 38pt | Single-line settings row |
 | `settingsListRowHeight` | 46pt | Title/subtitle list row |
@@ -140,10 +140,18 @@ The header shows:
   disabled. If the bounded UI wait ends first, keep the prior completed report on screen.
 - Settings root: Back, **Settings**, and an overflow menu containing **Quit QuotaBar**.
 
-The footer is a single quiet button showing when the last sync finished, in the shared freshness
-words (**Updated 3m ago**), or **Not checked** before any sync. It is the age of the last sync, not
-of every provider observation. Selecting it runs one sync; clicks while a sync is active are
-ignored.
+The bottom bar is fixed at `footerHeight` on every page and carries two things: today's spend on
+the left, and one icon-only refresh action on the right. The left reads `Today · $12.34 · 1.2M
+tokens` from the Usage source the Usage page would show; cost drops out when the day is unpriced,
+and the whole line is absent when there are no tokens. Today's number belongs beside quota
+everywhere, so it lives in the bar every page already has rather than in an Overview line of its
+own.
+
+When the last sync finished is a fact about the refresh action, not a number worth a permanent
+line: `arrow.clockwise` carries **Refresh all quota. Updated 3m ago** — or **Not checked** before
+any sync — as both its tooltip and its VoiceOver label. It is the age of the last sync, not of
+every provider observation. Selecting it runs one sync; while a sync is active the glyph becomes a
+small spinner and clicks are ignored.
 
 Navigation transitions move horizontally by direction and combine with opacity. Reduce Motion uses
 opacity only. A page change clears transient focus/menu state. Escape dismisses a transient menu;
@@ -167,14 +175,9 @@ Render the service-provided Overview in saved catalog order. Each provider row m
 account observations; Rust has already merged global identities and selected one freshest valid
 observation. Swift never repeats that policy. Never add or average percentages across devices.
 
-Overview is quota, plus one line of what today cost. Provider groups carry quota only: models,
-messages, and period totals stay on the Usage detail page in Settings and never create or extend an
-Overview provider group.
-
-Pinned below the scrolling provider list, one quiet line reads `Today · $12.34 · 1.2M tokens` from
-the Usage source the Usage page would show. Cost drops out when the day is unpriced; the line does
-not appear at all when there are no tokens, and never when a page state owns the body. VoiceOver
-reads the exact counts rather than the compact ones.
+Overview is quota and nothing else. Provider groups carry quota only: models, messages, and period
+totals stay on the Usage detail page in Settings and never create or extend an Overview provider
+group. What today cost is the shell's bottom bar, not an Overview row.
 
 Each quota observation shows:
 

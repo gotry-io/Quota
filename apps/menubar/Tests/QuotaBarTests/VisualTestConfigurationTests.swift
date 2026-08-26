@@ -158,8 +158,10 @@
     )
   }
 
+  /// The bottom bar's left half and the menu-bar item answer the same fixtures: the content
+  /// fixture has a day to report, and a Mac that has read nothing has none.
   @Test @MainActor
-  func overviewFooterAndMenuBarItemReadTheSameFixtures() throws {
+  func bottomBarTodayAndMenuBarItemReadTheSameFixtures() throws {
     let referenceDate = Date(timeIntervalSince1970: 1_785_752_430)
 
     let content = try configuration(fixture: .content, referenceDate: referenceDate).makeModel()

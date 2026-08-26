@@ -325,7 +325,7 @@ func anotherDeviceReadingDoesNotHideThisMacsOwnCollectionFailure() async throws 
 }
 
 @Test @MainActor
-func overviewTodayLineFollowsTheSourceTheUsagePageWouldActuallyShow() async throws {
+func bottomBarTodayLineFollowsTheSourceTheUsagePageWouldActuallyShow() async throws {
   let now = Date(timeIntervalSince1970: 1_786_300_000)
   let state = LocalServiceState(
     ipcVersion: 1,
