@@ -3319,11 +3319,11 @@ mod tests {
         }
     }
 
-    /// The renewal rung end to end: an expired Grok token and an expired Claude Code
-    /// credential each buy exactly one run of the CLI that owns them, on the refresh worker;
-    /// both attempts land in one cache record; and that record is what stops the next
-    /// five-minute refresh from starting either CLI again.  The rest of the refresh — here,
-    /// the Claude version probe — is untouched by any of it.
+    /// The renewal rung end to end: an expired Grok token, an expired Claude Code credential,
+    /// and an expired Codex token each buy exactly one run of the CLI that owns them, on the
+    /// refresh worker; all three attempts land in one cache record; and that record is what
+    /// stops the next five-minute refresh from starting any of them again.  The rest of the
+    /// refresh — here, the Claude version probe — is untouched by any of it.
     #[test]
     fn expired_sign_ins_are_renewed_once_each_and_one_record_outlives_the_refresh() {
         #[cfg(unix)]
@@ -3335,12 +3335,15 @@ mod tests {
             let bin = root.join("bin");
             let grok_home = home.join(".grok");
             let claude_home = home.join(".claude");
+            let codex_home = home.join(".codex");
             fs::create_dir_all(&grok_home).expect("grok home");
             fs::create_dir_all(&claude_home).expect("claude home");
+            fs::create_dir_all(&codex_home).expect("codex home");
             fs::create_dir_all(&bin).expect("bin");
             let log = root.join("spawns.log");
             let auth = grok_home.join("auth.json");
             let credential = claude_home.join(".credentials.json");
+            let codex_auth = codex_home.join("auth.json");
             let grok_credentials = |expires_at: &str, token: &str| {
                 format!(
                     "{{\"https://auth.x.ai::fixture\": {{\"key\": \"{token}\", \
@@ -3354,9 +3357,26 @@ mod tests {
                      \"refreshToken\": \"refresh\", \"expiresAt\": {expires_at_ms}}}}}"
                 )
             };
+            // Codex writes the expiry inside the access token, so the fixture writes one too:
+            // a base64url payload carrying nothing but `exp`, in 2020 and then in 2099.
+            let codex_access_token = |expires_at: i64| {
+                use base64::Engine as _;
+                let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+                    .encode(format!("{{\"exp\":{expires_at}}}"));
+                format!("header.{payload}.signature")
+            };
+            let codex_credentials = |expires_at: i64| {
+                format!(
+                    "{{\"tokens\": {{\"access_token\": \"{token}\", \
+                     \"refresh_token\": \"refresh\"}}, \
+                     \"last_refresh\": \"2020-01-01T00:00:00Z\"}}",
+                    token = codex_access_token(expires_at),
+                )
+            };
             fs::write(&auth, grok_credentials("2020-01-01T00:00:00Z", "stale")).expect("auth");
             fs::write(&credential, claude_credentials(1_577_836_800_000, "stale"))
                 .expect("credential");
+            fs::write(&codex_auth, codex_credentials(1_577_836_800)).expect("codex auth");
             fs::write(
                 bin.join("grok"),
                 format!(
@@ -3395,7 +3415,26 @@ mod tests {
                 ),
             )
             .expect("fake claude");
-            for program in ["grok", "claude"] {
+            // The Codex CLI renews on its own startup path, so the stand-in rewrites
+            // `auth.json` on the way out rather than in answer to a request.
+            fs::write(
+                bin.join("codex"),
+                format!(
+                    "#!/bin/sh\n\
+                     echo \"ran codex $*\" >> {log}\n\
+                     read -r first || exit 1\n\
+                     printf '%s\\n' '{{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{{}}}}'\n\
+                     read -r rest\n\
+                     cat > {auth} <<'AUTHJSON'\n\
+                     {renewed}\n\
+                     AUTHJSON\n",
+                    log = log.display(),
+                    auth = codex_auth.display(),
+                    renewed = codex_credentials(4_070_908_800),
+                ),
+            )
+            .expect("fake codex");
+            for program in ["grok", "claude", "codex"] {
                 fs::set_permissions(bin.join(program), fs::Permissions::from_mode(0o755))
                     .expect("mode");
             }
@@ -3420,7 +3459,11 @@ mod tests {
                     }],
                 )
             };
-            let discovered = vec![session(ProviderId::Grok), session(ProviderId::Claude)];
+            let discovered = vec![
+                session(ProviderId::Grok),
+                session(ProviderId::Claude),
+                session(ProviderId::Codex),
+            ];
             let spawns = |program: &str| {
                 fs::read_to_string(&log)
                     .map(|text| {
@@ -3432,10 +3475,19 @@ mod tests {
             };
 
             backend.renew_provider_sign_ins(&discovered, &mut context);
-            assert_eq!((spawns("grok"), spawns("claude")), (1, 1));
+            assert_eq!(
+                (spawns("grok"), spawns("claude"), spawns("codex")),
+                (1, 1, 1)
+            );
             assert!(
                 fs::read_to_string(&auth).expect("auth").contains("fresh"),
                 "collection reads the file the CLI wrote"
+            );
+            assert!(
+                fs::read_to_string(&codex_auth)
+                    .expect("codex auth")
+                    .contains(&codex_access_token(4_070_908_800)),
+                "collection reads the token the CLI wrote"
             );
             assert!(
                 fs::read_to_string(&credential)
@@ -3454,8 +3506,8 @@ mod tests {
                 .expect("recorded");
             let attempts =
                 serde_json::from_str::<RenewalAttempts>(&recorded).expect("decodes as a map");
-            assert_eq!(attempts.len(), 2, "{recorded}");
-            for provider in [ProviderId::Claude, ProviderId::Grok] {
+            assert_eq!(attempts.len(), 3, "{recorded}");
+            for provider in [ProviderId::Claude, ProviderId::Codex, ProviderId::Grok] {
                 assert_eq!(
                     attempts
                         .get(provider.as_str())
@@ -3467,25 +3519,36 @@ mod tests {
 
             // Tokens with time left are not sign-in problems, so nothing is started.
             backend.renew_provider_sign_ins(&discovered, &mut context);
-            assert_eq!((spawns("grok"), spawns("claude")), (1, 1));
+            assert_eq!(
+                (spawns("grok"), spawns("claude"), spawns("codex")),
+                (1, 1, 1)
+            );
 
             // Expired again inside the hour: the record from the first attempt is what keeps
             // the five-minute timer from turning into a spawn schedule.
             fs::write(&auth, grok_credentials("2020-01-01T00:00:00Z", "stale")).expect("auth");
             fs::write(&credential, claude_credentials(1_577_836_800_000, "stale"))
                 .expect("credential");
+            fs::write(&codex_auth, codex_credentials(1_577_836_800)).expect("codex auth");
             backend.renew_provider_sign_ins(&discovered, &mut context);
-            assert_eq!((spawns("grok"), spawns("claude")), (1, 1));
+            assert_eq!(
+                (spawns("grok"), spawns("claude"), spawns("codex")),
+                (1, 1, 1)
+            );
 
-            // A Mac that never signed into either never looks for a binary at all.
+            // A Mac that never signed into any of them never looks for a binary at all.
             backend.renew_provider_sign_ins(
                 &[
                     (ProviderId::Grok, Vec::new()),
                     (ProviderId::Claude, Vec::new()),
+                    (ProviderId::Codex, Vec::new()),
                 ],
                 &mut context,
             );
-            assert_eq!((spawns("grok"), spawns("claude")), (1, 1));
+            assert_eq!(
+                (spawns("grok"), spawns("claude"), spawns("codex")),
+                (1, 1, 1)
+            );
 
             // And the rest of the refresh is exactly where it was.
             let versions =
