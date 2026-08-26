@@ -1065,7 +1065,7 @@ impl NativeBackend {
             })
             .collect::<Vec<_>>();
         context.cli_versions = self.provider_cli_versions(&discovered, &context, &cancel);
-        self.renew_provider_sign_ins(&discovered, &context);
+        self.renew_provider_sign_ins(&discovered, &mut context);
         let attempts =
             thread::scope(|scope| {
                 let mut jobs = Vec::with_capacity(provider_ids.len());
@@ -1231,25 +1231,26 @@ impl NativeBackend {
     /// Asks the CLI that owns a provider's sign-in to renew it, when that sign-in is the only
     /// thing standing between the refresh and a reading.
     ///
-    /// Grok's token lives about six hours and only its CLI can renew it, so a Mac that has not
-    /// opened Grok since breakfast would otherwise report an expired sign-in all day. An
-    /// expired grant — and nothing else — earns one bounded `grok agent stdio`, at most once
-    /// an hour whatever it produced; [`grok::refresh`] holds the rules and the bounds.
+    /// Two providers hold a token only their own program can renew. Grok's lives about six
+    /// hours and Claude Code's about eight, so a Mac that has not opened either since
+    /// breakfast would otherwise report an expired sign-in all day. An expired grant — and
+    /// nothing else — earns one bounded run of that CLI, at most once an hour whatever it
+    /// produced; [`grok::refresh`] and [`claude::refresh`] hold the rules and the bounds.
     ///
     /// Runs here, beside the version probe and before collection, so no collector gains the
     /// ability to start a process. Collection reads the credential afterwards and neither
-    /// knows nor waits for any of this beyond the renewal's own deadline.
+    /// knows nor waits for any of this beyond the renewals' own deadlines.
     fn renew_provider_sign_ins(
         &self,
         discovered: &[(ProviderId, Vec<ProviderSession>)],
-        context: &CollectionContext,
+        context: &mut CollectionContext,
     ) {
         let signed_in = |wanted: ProviderId| {
             discovered
                 .iter()
                 .any(|(provider, sessions)| *provider == wanted && !sessions.is_empty())
         };
-        let wanted = [ProviderId::Grok]
+        let wanted = [ProviderId::Claude, ProviderId::Grok]
             .into_iter()
             .filter(|provider| signed_in(*provider))
             .collect::<Vec<_>>();
@@ -1271,13 +1272,27 @@ impl NativeBackend {
         let mut recorded = false;
         for provider in wanted {
             let attempted = attempts.get(provider.as_str()).cloned();
-            let environment = ProbeEnvironment::new(home.clone(), path.clone());
-            let attempt = grok::refresh::renew_expired_sign_in(
-                context,
-                &environment,
-                attempted.as_ref(),
-                now,
-            );
+            let mut environment = ProbeEnvironment::new(home.clone(), path.clone());
+            if provider == ProviderId::Claude {
+                // A renewal waits on the provider's own network round trip, so it is not
+                // bounded like a `--version` read. `claude mcp list` also health-checks the
+                // MCP servers this device approved, and ten seconds bounds that too.
+                environment.timeout = claude::refresh::RENEWAL_TIMEOUT;
+            }
+            let attempt = match provider {
+                ProviderId::Claude => claude::refresh::renew_expired_sign_in(
+                    context,
+                    &environment,
+                    attempted.as_ref(),
+                    now,
+                ),
+                _ => grok::refresh::renew_expired_sign_in(
+                    context,
+                    &environment,
+                    attempted.as_ref(),
+                    now,
+                ),
+            };
             if let Some(attempt) = attempt {
                 attempts.insert(provider.as_str().to_owned(), attempt);
                 recorded = true;
@@ -3294,37 +3309,49 @@ mod tests {
         }
     }
 
-    /// The renewal rung end to end: an expired Grok token buys one `grok agent stdio` on the
-    /// refresh worker, the attempt is written to the cache, and the record is what stops the
-    /// next five-minute refresh from starting the CLI again.  The rest of the refresh — here,
+    /// The renewal rung end to end: an expired Grok token and an expired Claude Code
+    /// credential each buy exactly one run of the CLI that owns them, on the refresh worker;
+    /// both attempts land in one cache record; and that record is what stops the next
+    /// five-minute refresh from starting either CLI again.  The rest of the refresh — here,
     /// the Claude version probe — is untouched by any of it.
     #[test]
-    fn an_expired_grok_sign_in_is_renewed_once_and_the_record_outlives_the_refresh() {
+    fn expired_sign_ins_are_renewed_once_each_and_one_record_outlives_the_refresh() {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
 
-            let root =
-                std::env::temp_dir().join(format!("quota-grok-renew-{}", uuid::Uuid::new_v4()));
+            let root = std::env::temp_dir().join(format!("quota-renew-{}", uuid::Uuid::new_v4()));
             let home = root.join("home");
             let bin = root.join("bin");
             let grok_home = home.join(".grok");
+            let claude_home = home.join(".claude");
             fs::create_dir_all(&grok_home).expect("grok home");
+            fs::create_dir_all(&claude_home).expect("claude home");
             fs::create_dir_all(&bin).expect("bin");
             let log = root.join("spawns.log");
             let auth = grok_home.join("auth.json");
-            let credentials = |expires_at: &str, token: &str| {
+            let credential = claude_home.join(".credentials.json");
+            let grok_credentials = |expires_at: &str, token: &str| {
                 format!(
                     "{{\"https://auth.x.ai::fixture\": {{\"key\": \"{token}\", \
                      \"expires_at\": \"{expires_at}\"}}}}"
                 )
             };
-            fs::write(&auth, credentials("2020-01-01T00:00:00Z", "stale")).expect("auth");
+            // Milliseconds, as Claude Code writes them: 2020, then 2099.
+            let claude_credentials = |expires_at_ms: i64, token: &str| {
+                format!(
+                    "{{\"claudeAiOauth\": {{\"accessToken\": \"{token}\", \
+                     \"refreshToken\": \"refresh\", \"expiresAt\": {expires_at_ms}}}}}"
+                )
+            };
+            fs::write(&auth, grok_credentials("2020-01-01T00:00:00Z", "stale")).expect("auth");
+            fs::write(&credential, claude_credentials(1_577_836_800_000, "stale"))
+                .expect("credential");
             fs::write(
                 bin.join("grok"),
                 format!(
                     "#!/bin/sh\n\
-                     echo ran >> {log}\n\
+                     echo \"ran grok\" >> {log}\n\
                      read -r first || exit 1\n\
                      printf '%s\\n' '{{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{{}}}}'\n\
                      read -r second || exit 1\n\
@@ -3335,13 +3362,27 @@ mod tests {
                      AUTHJSON\n",
                     log = log.display(),
                     auth = auth.display(),
-                    renewed = credentials("2099-01-01T00:00:00Z", "fresh"),
+                    renewed = grok_credentials("2099-01-01T00:00:00Z", "fresh"),
                 ),
             )
             .expect("fake grok");
+            // One binary answering both things this build ever asks a CLI for: the version
+            // the request headers claim, and the renewal an expired credential earns.
             fs::write(
                 bin.join("claude"),
-                "#!/bin/sh\necho '2.4.7 (Claude Code)'\n",
+                format!(
+                    "#!/bin/sh\n\
+                     case \"$1\" in\n\
+                       --version) echo '2.4.7 (Claude Code)'; exit 0 ;;\n\
+                     esac\n\
+                     echo \"ran claude $*\" >> {log}\n\
+                     cat > {credential} <<'CREDENTIAL'\n\
+                     {renewed}\n\
+                     CREDENTIAL\n",
+                    log = log.display(),
+                    credential = credential.display(),
+                    renewed = claude_credentials(4_070_908_800_000, "fresh"),
+                ),
             )
             .expect("fake claude");
             for program in ["grok", "claude"] {
@@ -3359,7 +3400,7 @@ mod tests {
                 format!("{}:/usr/bin:/bin", bin.display()),
             );
             let cancel = Arc::new(AtomicBool::new(false));
-            let context = backend.collection_context(cancel.clone()).expect("context");
+            let mut context = backend.collection_context(cancel.clone()).expect("context");
             let session = |provider: ProviderId| {
                 (
                     provider,
@@ -3369,46 +3410,72 @@ mod tests {
                     }],
                 )
             };
-            let discovered = vec![session(ProviderId::Grok)];
-            let spawns = |log: &std::path::Path| {
-                fs::read_to_string(log)
-                    .map(|text| text.lines().count())
+            let discovered = vec![session(ProviderId::Grok), session(ProviderId::Claude)];
+            let spawns = |program: &str| {
+                fs::read_to_string(&log)
+                    .map(|text| {
+                        text.lines()
+                            .filter(|line| line.starts_with(&format!("ran {program}")))
+                            .count()
+                    })
                     .unwrap_or(0)
             };
 
-            backend.renew_provider_sign_ins(&discovered, &context);
-            assert_eq!(spawns(&log), 1);
+            backend.renew_provider_sign_ins(&discovered, &mut context);
+            assert_eq!((spawns("grok"), spawns("claude")), (1, 1));
             assert!(
                 fs::read_to_string(&auth).expect("auth").contains("fresh"),
                 "collection reads the file the CLI wrote"
             );
+            assert!(
+                fs::read_to_string(&credential)
+                    .expect("credential")
+                    .contains("fresh"),
+                "collection reads the credential the CLI wrote"
+            );
+            assert!(
+                fs::read_to_string(&log).expect("log").contains("mcp list"),
+                "the renewal is the one invocation that reaches Claude Code's refresh path"
+            );
+            // One record for both providers, so the refresh reads and writes it once.
             let recorded = state
                 .provider_refresh_attempts()
                 .expect("attempts")
                 .expect("recorded");
             let attempts =
                 serde_json::from_str::<RenewalAttempts>(&recorded).expect("decodes as a map");
-            assert_eq!(
-                attempts
-                    .get(ProviderId::Grok.as_str())
-                    .map(|attempt| attempt.outcome),
-                Some(crate::providers::common::RenewalOutcome::Renewed),
-                "{recorded}"
-            );
+            assert_eq!(attempts.len(), 2, "{recorded}");
+            for provider in [ProviderId::Claude, ProviderId::Grok] {
+                assert_eq!(
+                    attempts
+                        .get(provider.as_str())
+                        .map(|attempt| attempt.outcome),
+                    Some(crate::providers::common::RenewalOutcome::Renewed),
+                    "{recorded}"
+                );
+            }
 
-            // A token with time left is not a sign-in problem, so nothing is started.
-            backend.renew_provider_sign_ins(&discovered, &context);
-            assert_eq!(spawns(&log), 1);
+            // Tokens with time left are not sign-in problems, so nothing is started.
+            backend.renew_provider_sign_ins(&discovered, &mut context);
+            assert_eq!((spawns("grok"), spawns("claude")), (1, 1));
 
             // Expired again inside the hour: the record from the first attempt is what keeps
             // the five-minute timer from turning into a spawn schedule.
-            fs::write(&auth, credentials("2020-01-01T00:00:00Z", "stale")).expect("auth");
-            backend.renew_provider_sign_ins(&discovered, &context);
-            assert_eq!(spawns(&log), 1);
+            fs::write(&auth, grok_credentials("2020-01-01T00:00:00Z", "stale")).expect("auth");
+            fs::write(&credential, claude_credentials(1_577_836_800_000, "stale"))
+                .expect("credential");
+            backend.renew_provider_sign_ins(&discovered, &mut context);
+            assert_eq!((spawns("grok"), spawns("claude")), (1, 1));
 
-            // A Mac that never signed into Grok never looks for the binary at all.
-            backend.renew_provider_sign_ins(&[(ProviderId::Grok, Vec::new())], &context);
-            assert_eq!(spawns(&log), 1);
+            // A Mac that never signed into either never looks for a binary at all.
+            backend.renew_provider_sign_ins(
+                &[
+                    (ProviderId::Grok, Vec::new()),
+                    (ProviderId::Claude, Vec::new()),
+                ],
+                &mut context,
+            );
+            assert_eq!((spawns("grok"), spawns("claude")), (1, 1));
 
             // And the rest of the refresh is exactly where it was.
             let versions =

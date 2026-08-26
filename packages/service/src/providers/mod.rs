@@ -123,9 +123,13 @@ mod tests {
     const SPAWN: &str = concat!("Command", "::new(");
 
     /// The only functions allowed to start a program a variable names, each with the rule
-    /// that keeps it off the five-minute timer. Both run on the refresh worker before
+    /// that keeps it off the five-minute timer. All three run on the refresh worker before
     /// collection; no collector starts anything.
     const NAMED_SPAWNS: &[(&str, &str)] = &[
+        // `claude mcp list`, to have Claude Code renew the sign-in it owns. Runs only when the
+        // credential on disk is already expired or within a minute of it and holds a refresh
+        // token to renew from, and at most once an hour whatever the last attempt produced.
+        ("claude/refresh.rs", "renew"),
         // `<binary> --version`, to fill in the header this build sends as the provider's own
         // CLI. Runs when the installed binary's fingerprint is absent or has changed, at most
         // once per installed binary and never more than once an hour.
@@ -191,9 +195,9 @@ mod tests {
 
     /// Collection reads files and speaks HTTP.  The processes a refresh starts are the macOS
     /// Keychain lookup that finds Claude's grant, the one `--version` a newly installed
-    /// provider CLI earns, and the `grok agent stdio` an already-expired Grok token earns;
-    /// everything else was a provider CLI driven on a five-minute timer, and this counts the
-    /// call sites so a new one cannot arrive quietly.
+    /// provider CLI earns, and the two renewals an already-expired Claude Code or Grok
+    /// credential earns; everything else was a provider CLI driven on a five-minute timer,
+    /// and this counts the call sites so a new one cannot arrive quietly.
     #[test]
     fn collection_starts_no_process_it_did_not_name() {
         let mut found = BTreeSet::new();

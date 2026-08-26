@@ -7,10 +7,12 @@ use std::time::Duration;
 
 use super::common::{
     CliTool, CollectionContext, ErrorCategory, HttpClient, KeychainSecret, LOCAL_FILE_LIMIT,
-    ProviderError, ProviderSession, QuotaAccount, QuotaSnapshot, QuotaWindow, account_identity,
-    clamp_percent, mask_email, number, obj_get, obj_get_any, parse_date, read_bounded_file,
-    run_bounded_command, slug, string,
+    ProviderError, ProviderSession, QuotaAccount, QuotaSnapshot, QuotaWindow, RenewalOutcome,
+    account_identity, clamp_percent, mask_email, number, obj_get, obj_get_any, parse_date,
+    read_bounded_file, run_bounded_command, slug, string,
 };
+
+pub mod refresh;
 
 pub const SOURCE: &str = "anthropic_oauth_usage_api";
 /// What an emptied credential reports under.
@@ -45,6 +47,10 @@ struct Credentials {
     scopes: Vec<String>,
     subscription_type: Option<String>,
     rate_limit_tier: Option<String>,
+    /// Whether Claude Code holds a refresh token in this entry.  The token itself is never
+    /// read into this process — only the CLI that owns it may ever spend it — and this
+    /// decides one thing: whether asking that CLI to renew is worth a spawn.
+    refresh_token_present: bool,
     source: String,
 }
 
@@ -127,9 +133,9 @@ fn collect_official(context: &CollectionContext) -> Result<QuotaSnapshot, Provid
             SIGNED_OUT_SOURCE,
         ));
     };
-    // Claude Code owns token renewal, and this build does not drive its CLI to trigger one.
-    // A grant that is out of time is therefore a sign-in only Claude Code can renew, and
-    // saying so is what sends the reader somewhere that can actually fix it.
+    // Claude Code owns token renewal. The refresh worker already gave it its one chance to
+    // renew an expired grant ([`refresh`]); one still out of time here is a sign-in only the
+    // reader can restore, and saying so sends them somewhere that can actually fix it.
     if is_expiring(&credentials, context.observed_unix()) {
         return Err(ProviderError::new(ErrorCategory::AuthRequired, SOURCE));
     }
@@ -180,6 +186,36 @@ fn preferred_entry(keychain: Option<Entry>, file: Option<Entry>, now: i64) -> Op
     }
 }
 
+/// Whether this device's Claude sign-in is the thing standing between the refresh and a
+/// reading, and Claude Code holds what it needs to renew it.
+///
+/// The refresh token is that: 2.1.x can leave a Keychain item holding only `mcpOAuth`, and an
+/// entry carrying no refresh token cannot be renewed by anything, so neither earns a spawn.
+fn sign_in_renewable(context: &CollectionContext) -> bool {
+    matches!(
+        look_up_credentials(context).entry,
+        Some(Entry::Grant(credentials))
+            if credentials.refresh_token_present
+                && is_expiring(&credentials, context.observed_unix())
+    )
+}
+
+/// What the credential says once the CLI has run, under the preference discovery uses.
+///
+/// The CLI rewrites whichever store it owns, so this reads both again and answers about the
+/// one the collector is about to read.  A grant with time left is the renewal; an emptied
+/// entry is a Claude Code that signed itself out; anything else is an attempt that changed
+/// nothing, and only the hour it costs distinguishes those.
+fn sign_in_after_renewal(context: &CollectionContext) -> RenewalOutcome {
+    match look_up_credentials(context).entry {
+        Some(Entry::Grant(credentials)) if !is_expiring(&credentials, context.observed_unix()) => {
+            RenewalOutcome::Renewed
+        }
+        Some(Entry::SignedOut(_)) => RenewalOutcome::SignedOut,
+        _ => RenewalOutcome::Failed,
+    }
+}
+
 fn read_credentials_file(path: &Path) -> Option<Entry> {
     let metadata = fs::symlink_metadata(path).ok()?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
@@ -192,8 +228,8 @@ fn read_credentials_file(path: &Path) -> Option<Entry> {
 /// The Claude Code credential entry, or why it did not produce one.
 ///
 /// The collection context memoizes this, so one refresh reads the Keychain once however
-/// many collectors ask.  `/usr/bin/security` is the only process a scheduled refresh
-/// still starts.
+/// many collectors ask.  A renewal that actually ran forgets that memo and costs a second
+/// read, because the CLI rewrites the entry the first one described.
 fn read_keychain(context: &CollectionContext) -> KeychainSecret {
     let mut command = Command::new("/usr/bin/security");
     command.args(["find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"]);
@@ -277,6 +313,12 @@ fn parse_credentials(value: &Value, source: &str) -> Option<Credentials> {
             &["rateLimitTier", "rate_limit_tier"],
         )
         .and_then(|v| string(Some(v))),
+        refresh_token_present: obj_get_any(
+            &Value::Object(oauth.clone()),
+            &["refreshToken", "refresh_token"],
+        )
+        .and_then(|v| string(Some(v)))
+        .is_some(),
         source: source.to_owned(),
     })
 }
@@ -609,6 +651,7 @@ mod tests {
             scopes: Vec::new(),
             subscription_type: None,
             rate_limit_tier: None,
+            refresh_token_present: true,
             source: source.to_owned(),
         }
     }
@@ -776,6 +819,19 @@ mod tests {
         assert_eq!(credentials.expires_at, Some(1786406400));
         assert_eq!(credentials.scopes, ["user:profile"]);
         assert_eq!(credentials.subscription_type.as_deref(), Some("pro"));
+        // The token itself is never read into this process: only whether Claude Code holds
+        // one, which is the whole question a renewal turns on.
+        assert!(credentials.refresh_token_present);
+        assert!(
+            !parse_credentials(
+                &serde_json::json!({
+                    "claudeAiOauth": {"accessToken": "claude-access", "refreshToken": "  "}
+                }),
+                "fixture"
+            )
+            .expect("credentials")
+            .refresh_token_present
+        );
     }
 
     /// The three shapes a Claude Code credential comes in, and what each one is.

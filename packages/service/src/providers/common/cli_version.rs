@@ -18,9 +18,9 @@ use std::time::Duration;
 
 use super::io::run_bounded_command;
 
-/// How long any provider CLI this build starts may run, and how much a `--version` read may
-/// print. The deadline is shared: a spawn that collection waits on gets five seconds, whether
-/// it is reading a version or asking a CLI to renew a sign-in.
+/// How long a provider CLI this build starts may run by default, and how much a `--version`
+/// read may print. Every spawn shares one deadline, and this is it unless the caller states a
+/// longer one: the Claude renewal does, because it waits on a network round trip.
 pub const CLI_TIMEOUT: Duration = Duration::from_secs(5);
 pub const VERSION_OUTPUT_LIMIT: usize = 4_096;
 
@@ -176,7 +176,7 @@ pub fn resolve(
 
 /// Runs `<binary> --version` once.
 ///
-/// One of the two functions in `src/providers` allowed to start a program a variable names,
+/// One of the three functions in `src/providers` allowed to start a program a variable names,
 /// and [`resolve`] is its only caller: it runs at most once per installed binary, never once
 /// per refresh. The child gets no stdin, no stderr, a bounded stdout, a deadline, and an
 /// `env -i`-style environment holding only `HOME` and `PATH`.

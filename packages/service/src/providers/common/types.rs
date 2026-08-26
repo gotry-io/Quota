@@ -267,6 +267,17 @@ impl CollectionContext {
     pub fn keychain_secret(&self, read: impl FnOnce() -> KeychainSecret) -> &KeychainSecret {
         self.keychain.get_or_init(read)
     }
+
+    /// Forgets that read, so the next ask starts a fresh `/usr/bin/security`.
+    ///
+    /// One caller: the Claude renewal, which runs a CLI that rewrites the Keychain entry in
+    /// place.  A memo taken before it ran describes the grant that was replaced, and every
+    /// collector after it would spend a token that no longer exists.  Nothing else may call
+    /// this — the memo is what holds a refresh to one Keychain read — and it is `&mut`
+    /// because the renewal runs before any collector has a clone.
+    pub fn forget_keychain(&mut self) {
+        self.keychain = Arc::new(OnceLock::new());
+    }
 }
 
 pub fn normalize_browser_cookie_header(
