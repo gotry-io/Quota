@@ -1,6 +1,8 @@
 import type {
   DevicePrincipal,
   StoredUsageDailyRow,
+  UsageBoundaryQuery,
+  UsageBoundaryResult,
   UsageDailyQuery,
   UsageDailyResult,
   UsageState,
@@ -148,11 +150,56 @@ export class D1UsageState implements UsageState {
       .bind(...parameters)
       .all<StoredDailyRow>();
     return {
-      rows: rows.results.slice(0, query.limit).map(({ source_cost_microusd, ...row }) => ({
-        ...row,
-        ...(source_cost_microusd === null ? {} : { source_cost_microusd }),
-      })),
+      rows: rows.results.slice(0, query.limit).map(dailyRow),
       truncated: rows.results.length > query.limit,
+    };
+  }
+
+  /**
+   * The hours a local period's edge cuts out of a UTC day, rolled up the same way a day is.
+   *
+   * One statement per range, in one batch: a range is a contiguous run of `bucket_start_utc`,
+   * which is what the stored key can be walked by. The caller asks for at most four of them —
+   * the day each period starts in and the day they all end in — so this never reaches past the
+   * edges into the hourly history the rollup exists to keep closed.
+   */
+  async queryBoundaryHours(
+    accountId: string,
+    query: UsageBoundaryQuery,
+  ): Promise<UsageBoundaryResult> {
+    if (query.ranges.length === 0) return { ranges: [], truncated: false };
+    const results = await this.database.batch<StoredDailyRow>(
+      query.ranges.map((range) =>
+        this.database
+          .prepare(
+            `SELECT hourly.device_id, substr(hourly.bucket_start_utc, 1, 10) AS date, hourly.agent,
+                    ${identityColumns.map((column) => `hourly.${column}`).join(", ")},
+                    ${countColumns.map((column) => `SUM(hourly.${column}) AS ${column}`).join(", ")},
+                    CASE
+                      WHEN SUM(hourly.source_cost_covered_requests) > 0
+                        THEN CAST(
+                          SUM(CAST(COALESCE(hourly.source_cost_microusd, '0') AS INTEGER)) AS TEXT
+                        )
+                      ELSE NULL
+                    END AS source_cost_microusd,
+                    SUM(hourly.source_cost_covered_requests) AS source_cost_covered_requests,
+                    SUM(hourly.partial) AS partial_hours
+             FROM usage_hourly AS hourly
+             INNER JOIN devices ON devices.id = hourly.device_id
+             WHERE devices.account_id = ?1 AND devices.deleted_at IS NULL
+               AND hourly.bucket_start_utc >= ?2 AND hourly.bucket_start_utc < ?3
+             GROUP BY hourly.device_id, date, hourly.agent,
+                      ${identityColumns.map((column) => `hourly.${column}`).join(", ")}
+             ORDER BY date ASC, hourly.device_id ASC, hourly.agent ASC,
+                      ${identityColumns.map((column) => `hourly.${column} ASC`).join(", ")}
+             LIMIT ?4`,
+          )
+          .bind(accountId, range.from, range.to, query.limit + 1),
+      ),
+    );
+    return {
+      ranges: results.map((result) => result.results.slice(0, query.limit).map(dailyRow)),
+      truncated: results.some((result) => result.results.length > query.limit),
     };
   }
 
@@ -287,6 +334,10 @@ function deviceIsCurrent(account: string, generation: string): string {
              WHERE id = ?1 AND account_id = ${account} AND generation = ${generation}
                AND signed_out_at IS NULL AND deleted_at IS NULL
            )`;
+}
+
+function dailyRow({ source_cost_microusd, ...row }: StoredDailyRow): StoredUsageDailyRow {
+  return { ...row, ...(source_cost_microusd === null ? {} : { source_cost_microusd }) };
 }
 
 function nextUtcDate(date: string): string {

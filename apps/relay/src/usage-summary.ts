@@ -25,6 +25,7 @@ import {
   type UsageUnpricedItem,
 } from "@gotry-io/quota-protocol";
 import type { StoredUsageDailyRow } from "@gotry-io/relay-core";
+import { LOCAL_PERIOD_KEYS, type LocalPeriodKey, type UsageDateWindow } from "./local-periods.ts";
 
 /**
  * Cost is resolved from the catalog and falls back to what a provider itself reported when the
@@ -40,44 +41,45 @@ export class UsageSummaryLimitError extends Error {
   }
 }
 
-/** Inclusive UTC dates. */
-export interface UsageDateWindow {
-  from: string;
-  to: string;
+/** Rows the rollup could not answer for, and the periods that fold them. */
+export interface AccountUsageBoundary {
+  periods: readonly LocalPeriodKey[];
+  rows: readonly StoredUsageDailyRow[];
 }
 
 export interface AccountUsageInput {
-  rows: readonly StoredUsageDailyRow[];
+  /** Every retained day of the rollup, which is what `all` is. */
+  daily: readonly StoredUsageDailyRow[];
+  boundaries: readonly AccountUsageBoundary[];
+  /** The whole UTC days each local period folds from the rollup. */
+  days: Record<LocalPeriodKey, UsageDateWindow | null>;
   catalog: PricingCatalog;
   modelCatalog: ModelCatalog;
-  today: UsageDateWindow;
-  last7Days: UsageDateWindow;
-  last30Days: UsageDateWindow;
 }
 
 /**
- * The four periods an Account read answers, folded once from the daily rollup.
+ * The four periods an Account read answers.
+ *
+ * `all` is the rollup entire. The other three cover local days, so each folds the whole UTC days
+ * inside it from the rollup and the hours its edges cut from `usage_hourly` — every instant it
+ * covers counted once, from exactly one of the two.
  *
  * Prices are resolved once per row and every period selects from that, so a row inside three
  * windows is priced once rather than three times.
  */
 export function buildAccountUsage(input: AccountUsageInput): AccountUsage {
-  const facts = input.rows.map(usageRow);
+  const rows = [...input.daily, ...input.boundaries.flatMap((boundary) => boundary.rows)];
+  const facts = rows.map(usageRow);
   const prepared = prepareUsageCosts(facts, input.catalog, accountCostMode);
-  const period = (window: UsageDateWindow | null) =>
-    buildUsagePeriod(
-      input.rows,
-      facts,
-      prepared,
-      selectWindow(input.rows, window),
-      input.modelCatalog,
-    );
+  const selected = selectPeriods(input);
+  const period = (indexes: readonly number[]) =>
+    buildUsagePeriod(rows, facts, prepared, indexes, input.modelCatalog);
   return boundedResult(() =>
     AccountUsageSchema.parse({
-      today: period(input.today),
-      last_7_days: period(input.last7Days),
-      last_30_days: period(input.last30Days),
-      all: period(null),
+      today: period(selected.today),
+      last_7_days: period(selected.last_7_days),
+      last_30_days: period(selected.last_30_days),
+      all: period(input.daily.map((_, index) => index)),
     }),
   );
 }
@@ -109,15 +111,27 @@ export function buildActivityDays(input: {
   );
 }
 
-function selectWindow(
-  rows: readonly StoredUsageDailyRow[],
-  window: UsageDateWindow | null,
-): number[] {
-  const indexes: number[] = [];
-  for (const [index, row] of rows.entries()) {
-    if (window === null || (row.date >= window.from && row.date <= window.to)) indexes.push(index);
+/** Which of the folded rows each local period takes, over the rows `buildAccountUsage` laid out. */
+function selectPeriods(input: AccountUsageInput): Record<LocalPeriodKey, number[]> {
+  const selected: Record<LocalPeriodKey, number[]> = {
+    today: [],
+    last_7_days: [],
+    last_30_days: [],
+  };
+  for (const [index, row] of input.daily.entries()) {
+    for (const key of LOCAL_PERIOD_KEYS) {
+      const window = input.days[key];
+      if (window && row.date >= window.from && row.date <= window.to) selected[key].push(index);
+    }
   }
-  return indexes;
+  let offset = input.daily.length;
+  for (const boundary of input.boundaries) {
+    for (const index of boundary.rows.keys()) {
+      for (const key of boundary.periods) selected[key].push(offset + index);
+    }
+    offset += boundary.rows.length;
+  }
+  return selected;
 }
 
 function usageRow(row: StoredUsageDailyRow): DatedUsageRow {
