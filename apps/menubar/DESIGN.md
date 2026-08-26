@@ -119,17 +119,25 @@ that still describes live quota. A reading the source reported as failed, or one
 freshness rule has aged out, answers for nothing. Balance-only windows have no budget to be a
 percent of and never set it.
 
-The mark is the brand of the provider the number belongs to, drawn monochrome at 18pt from the same
-catalog assets Overview uses. Quota's own mark appears in exactly two places: the Icon style, which
-says nothing about a provider, and an item with no current number to attribute.
+The mark and the number are composed into **one template image**, which is what the menu bar is
+given. A status item is one image to AppKit, and AppKit places it exactly as it places every other
+one; a stack of views asks two layout systems to agree about where a baseline is, and they do not.
 
-The status bar renders a template image, so low quota cannot be said in color; below 10% remaining
-the text takes a `!` prefix. Digits are monospaced so the item does not twitch as the number moves.
-The item is one fixed 18pt box in every style, and the number is placed in that box by the optical
-middle of its digits — half a cap height above the baseline — not by the middle of a line box that
-reserves room for descenders no digit uses. That is what keeps the number level with the mark, and
-in the same place when the mark is switched off; `MenuBarLabelLayoutTests` renders the real view and
-measures it.
+The image is the standard status-item height — the bar's own thickness less the padding every item
+leaves, which is 18pt in the 22pt bar macOS ships — drawn at 2× and marked template. The mark is the
+brand of the provider the number belongs to, fitted **by its ink** into a 14.5pt square: catalog
+assets fill their own viewBox by wildly different amounts, and matching the box instead of the ink
+would make one provider's logo tower over another's, and all of them over the SF Symbol glyphs
+beside them. Quota's own mark appears in exactly two places: the Icon style, which says nothing about
+a provider, and an item with no current number to attribute.
+
+The number follows 4pt after the mark, set in the **menu-bar font** with monospaced digits so the
+item does not twitch as it moves, and its baseline is placed so the digits' cap-height middle is the
+image's middle. A line box would center the room it reserves for descenders no digit uses, which is
+how a number ends up riding high next to a mark. The status bar renders a template image, so low
+quota cannot be said in color; below 10% remaining the text takes a `!` prefix.
+`MenuBarLabelLayoutTests` renders the image and measures the drawn pixels: the mark's ink and the
+digits' ink share a center within a quarter point, and every mark lands at the same size.
 
 **Menu Bar Style** in Settings chooses **Icon**, **Percent**, or **Icon and percent** (the default).
 **Menu Bar Provider** chooses **Automatic** — the tightest current subscription — or one provider

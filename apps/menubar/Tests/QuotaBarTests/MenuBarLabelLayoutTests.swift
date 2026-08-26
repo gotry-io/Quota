@@ -1,63 +1,75 @@
 import AppKit
 import Foundation
-import SwiftUI
 import Testing
 
 @testable import QuotaBar
 
-/// What the status item actually draws, measured off-screen.
+/// What the status item actually draws, measured from the image it hands AppKit.
 ///
-/// The menu bar centers whatever box the item hands it, so two things have to hold: the box is
-/// the same height whatever the style is, and inside it the mark and the digits sit on the same
-/// line. Neither is provable by reading the view, and both are the kind of thing a later edit
-/// breaks silently, so this renders the real view and looks at the pixels.
+/// The item is one template image, so the only thing that decides whether the number looks
+/// centered next to the mark is where this code put the ink. That is measurable, and it is the
+/// kind of thing a later edit breaks silently, so it is measured.
 @MainActor
 struct MenuBarLabelLayoutTests {
-  /// Half a point at the scale these are rendered: below what anyone can see, above the noise
-  /// of glyph antialiasing.
-  private let tolerance: CGFloat = 0.3
+  /// A quarter point: finer than anyone can see at menu-bar size, coarser than glyph
+  /// antialiasing noise.
+  private let tolerance: CGFloat = 0.25
 
   @Test
-  func theItemIsTheSameHeightInEveryStyle() throws {
+  func theMarkAndTheNumberShareACenter() throws {
+    let ink = try #require(itemInk(of: iconAndPercent))
+    let mark = try #require(ink.mark)
+    let text = try #require(ink.text)
+
+    #expect(abs(text.midY - mark.midY) <= tolerance)
+    #expect(abs(mark.midY - ink.height / 2) <= tolerance)
+  }
+
+  @Test
+  func theMarkIsTheSizeOfAMenuBarGlyphAndNotTheWholeItem() throws {
+    let ink = try #require(itemInk(of: iconAndPercent))
+    let mark = try #require(ink.mark)
+
+    #expect(mark.height >= 14)
+    #expect(mark.height <= 15.5)
+    #expect(mark.height < ink.height)
+  }
+
+  @Test
+  func everyMarkLandsAtTheSameSize() throws {
+    let provider = try #require(itemInk(of: iconAndPercent)).mark
+    let quota = try #require(itemInk(of: iconOnly)).mark
+    let claudeLabel = MenuBarLabelModel(
+      icon: .provider(.claude),
+      text: "27%",
+      accessibilityLabel: "QuotaBar, Claude Code 27% remaining"
+    )
+    let claude = try #require(itemInk(of: claudeLabel)).mark
+
+    let heights = [provider, quota, claude].compactMap { $0?.height }
+    #expect(heights.count == 3)
+    #expect((heights.max() ?? 0) - (heights.min() ?? 0) <= tolerance)
+  }
+
+  @Test
+  func theItemIsTheStandardStatusItemHeightInEveryStyle() throws {
     for label in [iconAndPercent, percentOnly, iconOnly] {
-      let rendering = try #require(render(label))
-      #expect(rendering.height == MenuBarLabelLayout.contentHeight)
+      let image = MenuBarItemImage.make(label)
+      #expect(image.size.height == MenuBarItemImage.height)
+      #expect(image.isTemplate)
     }
+    // 18pt in the 22pt bar macOS ships, and never smaller than a glyph needs.
+    #expect(MenuBarItemImage.height >= 16)
+    #expect(MenuBarItemImage.height <= 20)
   }
 
   @Test
-  func theMarkAndTheNumberSitOnTheSameLine() throws {
-    let rendering = try #require(render(iconAndPercent))
-    let mark = try #require(rendering.marks.first)
-    let digits = try #require(rendering.digits)
+  func theNumberIsCenteredWithNoMarkBesideIt() throws {
+    let ink = try #require(itemInk(of: percentOnly))
+    let text = try #require(ink.text)
 
-    #expect(abs(digits.center - mark.center) < tolerance)
-    #expect(abs(digits.center - rendering.height / 2) < tolerance)
-    #expect(abs(mark.center - rendering.height / 2) < tolerance)
-  }
-
-  @Test
-  func theNumberDoesNotMoveWhenTheMarkIsSwitchedOff() throws {
-    let paired = try #require(render(iconAndPercent))
-    let alone = try #require(render(percentOnly))
-    let pairedDigits = try #require(paired.digits)
-    let aloneDigits = try #require(alone.digits)
-
-    #expect(abs(pairedDigits.center - aloneDigits.center) < tolerance)
-    #expect(abs(aloneDigits.center - MenuBarLabelLayout.contentHeight / 2) < tolerance)
-  }
-
-  @Test
-  func theProvidersMarkIsWhatAPercentWears() throws {
-    let paired = try #require(render(iconAndPercent))
-    let quotaOnly = try #require(render(iconOnly))
-    let providerMark = try #require(paired.marks.first)
-    let quotaMark = try #require(quotaOnly.marks.first)
-
-    // Both are drawn, and the percent is not wearing the Quota mark.
-    #expect(providerMark.height > 0)
-    #expect(quotaMark.height > 0)
-    #expect(providerMark != quotaMark)
+    #expect(ink.mark == nil)
+    #expect(abs(text.midY - ink.height / 2) <= tolerance)
   }
 
   private var iconAndPercent: MenuBarLabelModel {
@@ -76,87 +88,81 @@ struct MenuBarLabelLayoutTests {
     MenuBarLabelModel(icon: .quota, text: nil, accessibilityLabel: "QuotaBar")
   }
 
-  private func render(_ label: MenuBarLabelModel) -> Rendering? {
-    let renderer = ImageRenderer(
-      content: QuotaMenuBarLabel(label: label)
-        .environment(\.colorScheme, .light)
-        .background(Color.white)
-    )
-    renderer.scale = Rendering.scale
-    guard let image = renderer.cgImage else { return nil }
-    return Rendering(image)
+  /// Drawn at eight samples a point: the item ships at two, and a half-point pixel row cannot
+  /// answer a quarter-point question.
+  private func itemInk(of label: MenuBarLabelModel) -> ItemInk? {
+    ItemInk(MenuBarItemImage.make(label, samplingScale: 8))
   }
 }
 
-/// One rendered item, split into the ink it drew: everything the mark covers, and the digits
-/// beside it. The `%` is dropped, because its ink is taller than a digit's and would move a
-/// measurement that is about where the number sits.
-private struct Rendering {
-  struct Band: Equatable {
-    let top: CGFloat
-    let bottom: CGFloat
-
-    var center: CGFloat { (top + bottom) / 2 }
-    var height: CGFloat { bottom - top }
-  }
-
-  static let scale: CGFloat = 8
-
+/// The drawn pixels of one rendered item, split at the gap between the mark and the number.
+private struct ItemInk {
   let height: CGFloat
-  /// Ink columns grouped into the runs the layout separates them into, in drawing order.
-  let bands: [Band]
+  let mark: CGRect?
+  /// The digits only. A percent sign dips below the baseline, and centering a number on ink
+  /// that includes that dip is the mistake this measurement exists to catch.
+  let text: CGRect?
 
-  /// The mark is the first band: it is drawn before the text and the two never overlap.
-  var marks: [Band] { bands.count > 1 ? [bands[0]] : bands }
+  init?(_ image: NSImage) {
+    guard let rep = image.representations.first as? NSBitmapImageRep, let data = rep.bitmapData
+    else { return nil }
+    let bytesPerPixel = rep.bitsPerPixel / 8
+    let horizontal = rep.size.width / CGFloat(rep.pixelsWide)
+    let vertical = rep.size.height / CGFloat(rep.pixelsHigh)
+    height = rep.size.height
 
-  /// The digits, with the trailing `%` band left out.
-  var digits: Band? {
-    let text = bands.count > 1 ? Array(bands.dropFirst().dropLast()) : []
-    guard let first = text.first else { return nil }
-    return text.dropFirst()
-      .reduce(first) { Band(top: min($0.top, $1.top), bottom: max($0.bottom, $1.bottom)) }
-  }
-
-  init?(_ image: CGImage) {
-    guard let data = image.dataProvider?.data as Data? else { return nil }
-    let bytesPerRow = image.bytesPerRow
-    let bytesPerPixel = image.bitsPerPixel / 8
-    var runs: [(first: Int, last: Int)] = []
-    var column: [(top: Int, bottom: Int)?] = Array(repeating: nil, count: image.width)
-
-    data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
-      for y in 0..<image.height {
-        for x in 0..<image.width {
-          let offset = y * bytesPerRow + x * bytesPerPixel
-          let luminance = (Int(raw[offset]) + Int(raw[offset + 1]) + Int(raw[offset + 2])) / 3
-          guard luminance < 160 else { continue }
-          if let existing = column[x] {
-            column[x] = (min(existing.top, y), max(existing.bottom, y))
-          } else {
-            column[x] = (y, y)
-          }
-        }
+    var columns: [(top: Int, bottom: Int)?] = Array(repeating: nil, count: rep.pixelsWide)
+    for y in 0..<rep.pixelsHigh {
+      for x in 0..<rep.pixelsWide {
+        guard data[y * rep.bytesPerRow + x * bytesPerPixel + 3] > 16 else { continue }
+        columns[x] = columns[x].map { (min($0.top, y), max($0.bottom, y)) } ?? (y, y)
       }
     }
 
+    // Runs of drawn columns, then the widest empty span between them: the mark and the number
+    // are 4pt apart, and nothing inside either is.
+    var runs: [(first: Int, last: Int)] = []
     var start: Int?
-    for x in 0..<image.width {
-      if column[x] != nil {
+    for x in 0..<rep.pixelsWide {
+      if columns[x] != nil {
         if start == nil { start = x }
       } else if let first = start {
         runs.append((first, x - 1))
         start = nil
       }
     }
-    if let first = start { runs.append((first, image.width - 1)) }
+    if let first = start { runs.append((first, rep.pixelsWide - 1)) }
+    guard !runs.isEmpty else { return nil }
 
-    height = CGFloat(image.height) / Self.scale
-    bands = runs.map { run in
-      let bounds = (run.first...run.last).compactMap { column[$0] }
-      return Band(
-        top: CGFloat(bounds.map(\.top).min() ?? 0) / Self.scale,
-        bottom: CGFloat(bounds.map(\.bottom).max() ?? 0) / Self.scale
+    func box(_ group: ArraySlice<(first: Int, last: Int)>) -> CGRect? {
+      guard let first = group.first, let last = group.last else { return nil }
+      let bounds = (first.first...last.last).compactMap { columns[$0] }
+      guard let top = bounds.map(\.top).min(), let bottom = bounds.map(\.bottom).max() else {
+        return nil
+      }
+      return CGRect(
+        x: CGFloat(first.first) * horizontal,
+        y: CGFloat(rep.pixelsHigh - 1 - bottom) * vertical,
+        width: CGFloat(last.last - first.first + 1) * horizontal,
+        height: CGFloat(bottom - top + 1) * vertical
       )
     }
+
+    let widestGap = runs.indices.dropFirst().max {
+      runs[$0].first - runs[$0 - 1].last < runs[$1].first - runs[$1 - 1].last
+    }
+    guard
+      let split = widestGap,
+      CGFloat(runs[split].first - runs[split - 1].last) * horizontal >= 2.5
+    else {
+      // One group: either a mark on its own or a number on its own.
+      let isMarkAlone = image.size.width <= MenuBarItemImage.markSize + 1
+      mark = isMarkAlone ? box(runs[...]) : nil
+      text = isMarkAlone ? nil : box(runs.count > 1 ? runs[..<(runs.count - 1)] : runs[...])
+      return
+    }
+    mark = box(runs[..<split])
+    let glyphs = runs[split...]
+    text = box(glyphs.count > 1 ? glyphs.dropLast() : glyphs)
   }
 }
