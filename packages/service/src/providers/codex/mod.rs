@@ -5,14 +5,17 @@ use std::path::{Path, PathBuf};
 
 use super::common::{
     CliTool, CollectionContext, ErrorCategory, HttpClient, LOCAL_FILE_LIMIT, ProviderError,
-    ProviderSession, QuotaAccount, QuotaSnapshot, QuotaWindow, account_identity, clamp_percent,
-    decode_jwt_payload, mask_email, number, obj_get, obj_get_any, parse_date, read_bounded_file,
-    slug, string,
+    ProviderSession, QuotaAccount, QuotaSnapshot, QuotaWindow, ValidatedBrowserSession,
+    account_identity, clamp_percent, collect_official_or_browser, decode_jwt_payload,
+    discover_official_or_browser, mask_email, number, obj_get, obj_get_any, parse_date,
+    read_bounded_file, slug, string,
 };
 
 pub mod refresh;
+mod web;
 
 pub const SOURCE_API: &str = "chatgpt_usage_api";
+pub const WEB_SOURCE: &str = web::SOURCE;
 
 /// How close to its own expiry an access token has to be before this build asks Codex to
 /// renew it. The same minute Claude Code and Grok get, and well inside the five minutes the
@@ -38,6 +41,22 @@ pub(super) struct Credentials {
     last_refresh: Option<i64>,
 }
 
+impl Credentials {
+    /// The bearer a ChatGPT web session hands out, as the WHAM rung's credential.
+    ///
+    /// It carries no expiry and no refresh stamp: those describe `auth.json`, which this token
+    /// never came from and which no renewal will rewrite on its behalf.
+    pub(super) fn from_web_session(access_token: &str, account_id: Option<String>) -> Self {
+        Self {
+            access_token: access_token.to_owned(),
+            id_token: None,
+            account_id,
+            expires_at: None,
+            last_refresh: None,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 struct AuthMaterial {
     pat: Option<String>,
@@ -52,24 +71,38 @@ pub(super) struct Identity {
     account_id: Option<String>,
 }
 
+/// This device's Codex sign-in, and a stored ChatGPT browser session only when there is none.
 pub fn discover(context: &CollectionContext) -> Vec<ProviderSession> {
-    load_auth(context)
-        .map(|auth| ProviderSession {
+    discover_official_or_browser(
+        ProviderId::Codex,
+        load_auth(context).map(|auth| ProviderSession {
             provider: ProviderId::Codex,
             credential_source: auth.source,
-        })
-        .into_iter()
-        .collect()
+        }),
+        context,
+    )
 }
 
+pub fn validate_browser_session(
+    cookie_header: &str,
+    context: &CollectionContext,
+) -> Result<ValidatedBrowserSession, ProviderError> {
+    web::validate_browser_session(cookie_header, context)
+}
+
+/// Personal access token, then OAuth, then the stored browser session.
 pub fn collect(
-    _session: &ProviderSession,
+    session: &ProviderSession,
     context: &CollectionContext,
 ) -> Result<QuotaSnapshot, ProviderError> {
-    if context.cancelled() {
-        return Err(ProviderError::new(ErrorCategory::Unavailable, SOURCE_API));
-    }
-    collect_local(context)
+    collect_official_or_browser(
+        session,
+        context,
+        ProviderId::Codex,
+        SOURCE_API,
+        || collect_local(context),
+        || web::collect(context),
+    )
 }
 
 fn collect_local(context: &CollectionContext) -> Result<QuotaSnapshot, ProviderError> {
@@ -803,11 +836,22 @@ mod tests {
         }
     }
 
+    /// Without a Codex grant and without a stored cookie there is nothing to try; a stored
+    /// cookie alone is the last rung, and it is discovered as one.
     #[test]
-    fn no_local_grant_discovers_nothing() {
-        let context = isolated_context();
+    fn the_browser_session_is_discovered_only_without_a_local_grant() {
+        let mut context = isolated_context();
         assert!(discover(&context).is_empty());
-        assert!(ProviderId::Codex.metadata().browser_session.is_none());
+        context.browser_sessions.insert(
+            ProviderId::Codex,
+            "__Secure-next-auth.session-token=abc".to_owned(),
+        );
+        let sessions = discover(&context);
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(
+            sessions[0].credential_source,
+            super::super::BROWSER_SESSION_SOURCE
+        );
     }
 
     #[test]

@@ -113,7 +113,12 @@ extension ProviderID {
 
   var browserSession: BrowserSessionSpec? {
     switch self {
-    case .`codex`: nil
+    case .`codex`: BrowserSessionSpec(
+      loginURL: "https://chatgpt.com/",
+      cookieHosts: ["chatgpt.com", "www.chatgpt.com"],
+      cookieNames: ["__Secure-next-auth.session-token", "__Secure-next-auth.session-token.0", "__Secure-next-auth.session-token.1", "__Secure-next-auth.session-token.2", "__Host-next-auth.session-token", "__Secure-authjs.session-token", "authjs.session-token", "_account"],
+      browserPriority: ["safari", "chrome", "edge", "brave", "arc", "dia", "chromium", "firefox"],
+      exclusive: false)
     case .`claude`: nil
     case .`grok`: nil
     case .`openrouter`: nil
