@@ -276,7 +276,19 @@ export interface AccountState {
     input: ConsumeAccountLoginGrantInput,
   ): Promise<AccountLoginGrantConsumeResult>;
   createWebSession(input: CreateWebSessionInput): Promise<AccountRecord>;
-  authorizeSession(accessTokenHash: string, checkedAt: string): Promise<SessionPrincipal | null>;
+  /**
+   * Resolve a Bearer token to its session.
+   *
+   * `marksDeviceSeen` is what a device route passes: a Device is "last seen" when it uses the
+   * session that speaks for it. An Account read must not move that instant, because the
+   * conditional answer to that read is derived from it — a read that changed its own validator
+   * could never be answered 304.
+   */
+  authorizeSession(
+    accessTokenHash: string,
+    checkedAt: string,
+    marksDeviceSeen: boolean,
+  ): Promise<SessionPrincipal | null>;
   refreshSession(input: RefreshSessionInput): Promise<SessionPrincipal | null>;
   revokeRefreshSession(input: RevokeRefreshSessionInput): Promise<void>;
   revokePrincipalFamily(

@@ -37,6 +37,12 @@ CREATE TABLE sessions (
 -- half is dropped: keeping it would leave two live tokens for one login, which is the thing this
 -- migration exists to end. `authenticated_at` comes from that dropped row, because a device
 -- session never recorded when the person behind it proved who they were.
+--
+-- It is carried over revoked. These tokens were hashed under the domains a two-family login used,
+-- and this change renames those domains, so no request can ever resolve one of these rows again.
+-- A row that cannot authorize must not sit unrevoked for the ninety days its refresh window has
+-- left: revoking it here is what the row actually means, and what lets retention collect it.
+-- Every QuotaBar and iOS client signs in once more.
 INSERT INTO sessions (
   id, family_id, account_id, device_id, device_generation, client_kind,
   access_token_hash, refresh_token_hash, scopes_json,
@@ -53,11 +59,14 @@ SELECT
     device_rows.created_at
   ),
   device_rows.expires_at, device_rows.refresh_expires_at, device_rows.last_used_at,
-  device_rows.revoked_at, device_rows.created_at
+  COALESCE(device_rows.revoked_at, strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+  device_rows.created_at
 FROM device_sessions AS device_rows
 INNER JOIN devices ON devices.id = device_rows.device_id;
 
--- The browser keeps everything it had, and the read-only viewer keeps the one thing it does.
+-- The browser keeps everything it had — its cookie's hash domain is unchanged, so it stays signed
+-- in. The read-only viewer keeps the one thing it does, but is revoked for the same reason the
+-- collection rows above are: its tokens were hashed under a domain this change renames.
 -- Ending a session is no longer a scope: holding the refresh token is the proof.
 INSERT INTO sessions (
   id, family_id, account_id, device_id, device_generation, client_kind,
@@ -71,7 +80,12 @@ SELECT
     WHEN 'web' THEN '["account:read","account:manage"]'
     ELSE '["account:read"]'
   END,
-  authenticated_at, expires_at, refresh_expires_at, last_used_at, revoked_at, created_at
+  authenticated_at, expires_at, refresh_expires_at, last_used_at,
+  CASE
+    WHEN client_kind = 'web' THEN revoked_at
+    ELSE COALESCE(revoked_at, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+  END,
+  created_at
 FROM account_sessions
 WHERE client_kind IN ('web', 'ios');
 

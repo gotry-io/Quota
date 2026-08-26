@@ -764,20 +764,41 @@ describe("managed Relay on real Workers and D1", () => {
     ).toBe(1);
 
     const oldAccessHash = await hasher.hash("quotabar-access", tokens.session.access_token);
-    expect(await state.authorizeSession(oldAccessHash, now.toISOString())).toMatchObject({
+    expect(await state.authorizeSession(oldAccessHash, now.toISOString(), true)).toMatchObject({
       device_id: tokens.device_id,
       device_generation: 1,
       client_kind: "quotabar",
       scopes: ["account:read", "device:write"],
     });
     // The one token reads the Account it was issued for, and writes only its own Device.
+    const lastSeen = () =>
+      env.DB.prepare("SELECT last_seen_at FROM devices WHERE id = ?1")
+        .bind(tokens.device_id)
+        .first("last_seen_at");
+    const before = "2026-08-09T00:00:00.000Z";
+    await env.DB.prepare("UPDATE devices SET last_seen_at = ?2 WHERE id = ?1")
+      .bind(tokens.device_id, before)
+      .run();
+    const summary = await app.request("https://quota.gotry.io/api/v6/account/summary", {
+      headers: { Authorization: `Bearer ${tokens.session.access_token}` },
+    });
+    expect(summary.status).toBe(200);
+    // Reading must not move `last_seen_at`. The validator for this very read is derived from it,
+    // so a read that touched it could never be answered 304 — which is the whole point of a
+    // client polling this route.
+    expect(await lastSeen()).toBe(before);
+    const validator = summary.headers.get("ETag") ?? "";
+    expect(validator).not.toBe("");
     expect(
       (
         await app.request("https://quota.gotry.io/api/v6/account/summary", {
-          headers: { Authorization: `Bearer ${tokens.session.access_token}` },
+          headers: {
+            Authorization: `Bearer ${tokens.session.access_token}`,
+            "If-None-Match": validator,
+          },
         })
       ).status,
-    ).toBe(200);
+    ).toBe(304);
     expect(
       (
         await app.request("https://quota.gotry.io/api/v2/device/profile", {
@@ -799,6 +820,8 @@ describe("managed Relay on real Workers and D1", () => {
         .bind(tokens.device_id)
         .first("display_name"),
     ).toBe("Kyle's Mac mini");
+    // A device route does move it: that is what "last seen" witnesses.
+    expect(await lastSeen()).toBe(now.toISOString());
     // Reads are tolerant of a field this build cannot name; a write is not. (ADR 0023)
     const deviceHeaders = {
       Authorization: `Bearer ${tokens.session.access_token}`,
@@ -865,7 +888,7 @@ describe("managed Relay on real Workers and D1", () => {
     await env.DB.prepare("UPDATE devices SET signed_out_at = NULL WHERE id = ?1")
       .bind(tokens.device_id)
       .run();
-    expect(await state.authorizeSession(oldAccessHash, now.toISOString())).toBeNull();
+    expect(await state.authorizeSession(oldAccessHash, now.toISOString(), true)).toBeNull();
 
     // Delete Device advances the generation, and a token issued at the old one is refused even
     // with every other reason to refuse it removed.
@@ -879,7 +902,7 @@ describe("managed Relay on real Workers and D1", () => {
     await env.DB.prepare("UPDATE sessions SET revoked_at = NULL WHERE device_id = ?1")
       .bind(tokens.device_id)
       .run();
-    expect(await state.authorizeSession(oldAccessHash, deletedAt)).toBeNull();
+    expect(await state.authorizeSession(oldAccessHash, deletedAt, true)).toBeNull();
     expect(await state.getDeviceSyncControl(tokens.device_id, 1)).toBeNull();
     expect(await state.getDeviceSyncControl(tokens.device_id, 2)).toMatchObject({ generation: 2 });
 

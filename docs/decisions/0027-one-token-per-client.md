@@ -43,10 +43,12 @@ their removal.
 ## What was given up
 
 Signing in from a machine with no browser is no longer possible; so is running Quota on Linux at all,
-though `packages/service` stays platform-neutral in style. A QuotaBar session issued before this
-change no longer resolves — the local envelope changed shape with the wire — so every signed-in Mac
-signs in once more. The owner-only configuration and state root moves from `~/.config/quotacli/` to
-`~/.config/quota/`, which makes that device a new installation.
+though `packages/service` stays platform-neutral in style. Every collection and viewer session open
+today ends: their tokens were hashed under the domains a two-family login used, and this change
+renames those domains, so migration 0021 carries those rows over already revoked rather than leaving
+credentials nothing can resolve sitting live. Browser cookies keep their domain and stay signed in.
+The owner-only configuration and state root also moves from `~/.config/quotacli/` to
+`~/.config/quota/`, which makes each Mac a new installation.
 
 Re-adding a command-line client later means restoring `apps/cli` from history and re-adding a
 device-code or loopback grant beside the browser one; the shared crate it was built on never moved.

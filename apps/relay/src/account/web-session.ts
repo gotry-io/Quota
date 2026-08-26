@@ -163,6 +163,7 @@ export class GitHubWebSessions implements WebSessionPort {
     const principal = await this.environment.state.authorizeSession(
       await this.#sessionTokenHash(token),
       checkedAt.toISOString(),
+      false,
     );
     return principal?.client_kind === "web" ? principal : null;
   }

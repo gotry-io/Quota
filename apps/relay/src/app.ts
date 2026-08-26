@@ -971,6 +971,7 @@ async function authorizeAccount(
     const principal = await options.state.authorizeSession(
       await options.hasher.hash(domain, token),
       checkedAt.toISOString(),
+      scope === "device:write",
     );
     if (!principal) return unauthorized(context);
     return principal.scopes.includes(scope) ? principal : forbidden(context);

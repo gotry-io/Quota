@@ -284,16 +284,24 @@ export class D1AccountState implements AccountState {
             input.grant_id,
             input.completion_nonce_hash,
           ),
+        // Fenced by the consume nonce like every other statement in this batch: only a call
+        // that actually consumed the grant may end the sessions this Device already had.
         this.database
           .prepare(
             `UPDATE sessions SET revoked_at = ?3
            WHERE device_id = (
-             SELECT id FROM devices WHERE account_id = (
-               SELECT account_id FROM login_grants WHERE id = ?1
-             ) AND installation_id_hash = ?2
+             SELECT devices.id FROM devices
+             INNER JOIN login_grants AS grants ON grants.account_id = devices.account_id
+             WHERE grants.id = ?1 AND grants.consume_nonce_hash = ?4
+               AND devices.installation_id_hash = ?2
            ) AND revoked_at IS NULL`,
           )
-          .bind(input.grant_id, input.installation_id_hash, input.consumed_at),
+          .bind(
+            input.grant_id,
+            input.installation_id_hash,
+            input.consumed_at,
+            input.completion_nonce_hash,
+          ),
         this.database
           .prepare(
             `INSERT INTO sessions (
@@ -492,6 +500,7 @@ export class D1AccountState implements AccountState {
   async authorizeSession(
     accessTokenHash: string,
     checkedAt: string,
+    marksDeviceSeen: boolean,
   ): Promise<SessionPrincipal | null> {
     const row = await this.database
       .prepare(
@@ -519,9 +528,8 @@ export class D1AccountState implements AccountState {
         .prepare("UPDATE sessions SET last_used_at = ?2 WHERE id = ?1 AND revoked_at IS NULL")
         .bind(row.id, checkedAt),
     ];
-    // A Device is "last seen" when the session that speaks for it calls, which is the only thing
-    // Relay witnesses about it.
-    if (row.device_id !== null) {
+    // Only a device route moves this instant; see `authorizeSession` on `AccountState`.
+    if (marksDeviceSeen && row.device_id !== null) {
       statements.push(
         this.database
           .prepare(
@@ -555,6 +563,7 @@ export class D1AccountState implements AccountState {
              OR EXISTS (
                SELECT 1 FROM devices
                WHERE devices.id = sessions.device_id
+                 AND devices.account_id = sessions.account_id
                  AND devices.generation = sessions.device_generation
                  AND devices.signed_out_at IS NULL AND devices.deleted_at IS NULL
              )
@@ -572,7 +581,8 @@ export class D1AccountState implements AccountState {
     if (rotated.meta.changes !== 1) {
       return null;
     }
-    return this.authorizeSession(input.new_access_token_hash, input.refreshed_at);
+    // Rotation is not the Device speaking for itself; the request that spends the new token is.
+    return this.authorizeSession(input.new_access_token_hash, input.refreshed_at, false);
   }
 
   /**
