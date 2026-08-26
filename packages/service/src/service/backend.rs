@@ -1296,12 +1296,15 @@ impl NativeBackend {
                         now,
                     )
                 }
-                _ => grok::refresh::renew_expired_sign_in(
-                    context,
-                    &environment,
-                    attempted.as_ref(),
-                    now,
-                ),
+                _ => {
+                    environment.timeout = grok::refresh::RENEWAL_TIMEOUT;
+                    grok::refresh::renew_expired_sign_in(
+                        context,
+                        &environment,
+                        attempted.as_ref(),
+                        now,
+                    )
+                }
             };
             if let Some(attempt) = attempt {
                 attempts.insert(provider.as_str().to_owned(), attempt);

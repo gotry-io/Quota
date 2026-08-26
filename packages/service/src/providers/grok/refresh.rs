@@ -16,6 +16,7 @@
 //! a device code and waits for a person; a scheduled refresh must never start that.
 
 use serde_json::{Value, json};
+use std::time::Duration;
 
 use crate::providers::common::{
     BoundedExchange, CollectionContext, ProbeEnvironment, RenewalAttempt, RenewalPlan,
@@ -37,6 +38,13 @@ const CACHED_TOKEN_METHOD: &str = "cached_token";
 
 const INITIALIZE_ID: u64 = 1;
 const AUTHENTICATE_ID: u64 = 2;
+
+/// How long the whole renewal may take.
+///
+/// Two round trips: the handshake, then a token exchange against x.ai. Five seconds has been
+/// enough for both against Grok 1.0.5, and it is short enough that a hung CLI cannot hold a
+/// five-minute refresh.
+pub const RENEWAL_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Renews an expired Grok sign-in through the CLI that owns it, at most once an hour.
 ///
