@@ -3,10 +3,10 @@ use serde_json::Value;
 use std::time::Duration;
 
 use super::common::{
-    BROWSER_SESSION_SOURCE, CollectionContext, ErrorCategory, HttpClient, ProviderError,
-    ProviderSession, QuotaAccount, QuotaSnapshot, QuotaWindow, VALIDATION_TIMEOUT,
-    ValidatedBrowserSession, account_identity, clamp_percent, mask_email, number, obj_get,
-    parse_date, unix_seconds_to_iso, url_encode,
+    CollectionContext, ErrorCategory, HttpClient, ProviderError, ProviderSession, QuotaAccount,
+    QuotaSnapshot, QuotaWindow, VALIDATION_TIMEOUT, ValidatedBrowserSession, account_identity,
+    clamp_percent, collect_official_or_browser, discover_official_or_browser, mask_email, number,
+    obj_get, parse_date, unix_seconds_to_iso, url_encode,
 };
 
 mod app;
@@ -27,23 +27,16 @@ struct Identity {
 }
 
 /// Cursor has no CLI to sign in with and no API key, so a signed-in Cursor.app is the only
-/// credential this Mac can find on its own. A stored browser session is the fallback, and
-/// the only one in the product.
+/// credential this Mac can find on its own, and a stored browser session is the rung after it.
 pub fn discover(context: &CollectionContext) -> Vec<ProviderSession> {
-    if app::usable_session(context) {
-        return vec![ProviderSession {
+    discover_official_or_browser(
+        ProviderId::Cursor,
+        app::usable_session(context).then(|| ProviderSession {
             provider: ProviderId::Cursor,
             credential_source: app::SOURCE.to_owned(),
-        }];
-    }
-    context
-        .browser_session(ProviderId::Cursor)
-        .map(|_| ProviderSession {
-            provider: ProviderId::Cursor,
-            credential_source: BROWSER_SESSION_SOURCE.to_owned(),
-        })
-        .into_iter()
-        .collect()
+        }),
+        context,
+    )
 }
 
 pub fn validate_browser_session(
@@ -127,30 +120,23 @@ pub fn collect(
     session: &ProviderSession,
     context: &CollectionContext,
 ) -> Result<QuotaSnapshot, ProviderError> {
-    let stored = || {
-        let cookie_header = context
-            .browser_session(ProviderId::Cursor)
-            .ok_or_else(|| ProviderError::new(ErrorCategory::AuthRequired, SOURCE))?;
-        collect_with_cookie(cookie_header, context)
-    };
-    if session.credential_source == BROWSER_SESSION_SOURCE {
-        return stored();
-    }
-    if context.cancelled() {
-        return Err(ProviderError::new(ErrorCategory::Unavailable, SOURCE));
-    }
-    let app_result = app::cookie_header(context)
-        .ok_or_else(|| ProviderError::new(ErrorCategory::AuthRequired, SOURCE))
-        .and_then(|cookie_header| collect_with_cookie(&cookie_header, context));
-    match app_result {
-        Err(error)
-            if error.category == ErrorCategory::AuthRequired
-                && context.browser_session(ProviderId::Cursor).is_some() =>
-        {
-            stored()
-        }
-        result => result,
-    }
+    collect_official_or_browser(
+        session,
+        context,
+        ProviderId::Cursor,
+        SOURCE,
+        || {
+            let cookie_header = app::cookie_header(context)
+                .ok_or_else(|| ProviderError::new(ErrorCategory::AuthRequired, SOURCE))?;
+            collect_with_cookie(&cookie_header, context)
+        },
+        || {
+            let cookie_header = context
+                .browser_session(ProviderId::Cursor)
+                .ok_or_else(|| ProviderError::new(ErrorCategory::AuthRequired, SOURCE))?;
+            collect_with_cookie(cookie_header, context)
+        },
+    )
 }
 
 fn collect_with_cookie(
@@ -430,6 +416,7 @@ fn money_window(
 
 #[cfg(test)]
 mod tests {
+    use super::super::common::BROWSER_SESSION_SOURCE;
     use super::*;
 
     #[test]
@@ -444,17 +431,6 @@ mod tests {
                 .map(|session| session.exclusive),
             Some(true)
         );
-    }
-
-    /// Cursor is the only provider that declares a browser session, so it is the only one a
-    /// stored cookie header can be discovered for.
-    #[test]
-    fn cursor_is_the_only_browser_session_provider() {
-        let with_session = ProviderId::ALL
-            .iter()
-            .filter(|provider| provider.metadata().browser_session.is_some())
-            .collect::<Vec<_>>();
-        assert_eq!(with_session, [&ProviderId::Cursor]);
     }
 
     #[test]

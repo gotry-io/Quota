@@ -280,6 +280,78 @@ impl CollectionContext {
     }
 }
 
+/// The ladder every provider with a stored browser session ends on.
+///
+/// A browser session is the last rung: it is only ever reported when this Mac holds no
+/// official credential for the provider at all.  A device that has one reports that, and
+/// [`collect_official_or_browser`] decides at collection time whether the stored session is
+/// reached.
+pub fn discover_official_or_browser(
+    provider: ProviderId,
+    official: Option<ProviderSession>,
+    context: &CollectionContext,
+) -> Vec<ProviderSession> {
+    if let Some(session) = official {
+        return vec![session];
+    }
+    context
+        .browser_session(provider)
+        .map(|_| ProviderSession {
+            provider,
+            credential_source: BROWSER_SESSION_SOURCE.to_owned(),
+        })
+        .into_iter()
+        .collect()
+}
+
+/// Reads the provider's own credential path, and falls back to the stored browser session
+/// only when that path ended in [`ErrorCategory::AuthRequired`].
+///
+/// **`collect_official` must report `AuthRequired` when no usable official credential
+/// exists.** That category is the only one that reaches `collect_web`; any other ends the
+/// refresh, so a provider whose official closure chains several rungs internally has to
+/// surface the chain's verdict rather than the last rung's incidental error.  A refusal
+/// ([`ErrorCategory::AccessDenied`]) is deliberately not that verdict: a secret this Mac was
+/// withheld says nothing about the account, and spending a cookie on it would report a
+/// sign-in problem the reader does not have.
+pub fn collect_official_or_browser(
+    session: &ProviderSession,
+    context: &CollectionContext,
+    provider: ProviderId,
+    official_source: &'static str,
+    collect_official: impl FnOnce() -> Result<QuotaSnapshot, ProviderError>,
+    collect_web: impl FnOnce() -> Result<QuotaSnapshot, ProviderError>,
+) -> Result<QuotaSnapshot, ProviderError> {
+    if session.credential_source == BROWSER_SESSION_SOURCE {
+        return collect_web();
+    }
+    if context.cancelled() {
+        return Err(ProviderError::new(
+            ErrorCategory::Unavailable,
+            official_source,
+        ));
+    }
+    match collect_official() {
+        Ok(snapshot) => Ok(snapshot),
+        Err(error)
+            if error.category == ErrorCategory::AuthRequired
+                && context.browser_session(provider).is_some() =>
+        {
+            collect_web()
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// One cookie's value out of a `Cookie:` header this build assembled itself.
+pub fn cookie_named_value<'a>(header: &'a str, name: &str) -> Option<&'a str> {
+    header.split(';').find_map(|pair| {
+        let pair = pair.trim_matches([' ', '\t']);
+        let (cookie_name, value) = pair.split_once('=')?;
+        (cookie_name == name && !value.is_empty()).then_some(value)
+    })
+}
+
 pub fn normalize_browser_cookie_header(
     provider: ProviderId,
     header: &str,
@@ -326,6 +398,140 @@ fn is_cookie_octet(byte: u8) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The browser session is the last rung and only the last rung: a credential path that
+    /// answered anything but "sign in again" is this refresh's answer, and a refusal is
+    /// never a reason to spend a cookie.
+    #[test]
+    fn only_auth_required_reaches_the_browser_session() {
+        let mut context = CollectionContext::default();
+        context
+            .browser_sessions
+            .insert(ProviderId::Claude, "sessionKey=sk-ant-x".to_owned());
+        let session = ProviderSession {
+            provider: ProviderId::Claude,
+            credential_source: "local".to_owned(),
+        };
+        let web = || {
+            Err::<QuotaSnapshot, _>(ProviderError::new(ErrorCategory::Unsupported, "web_source"))
+        };
+        // A missing local credential hands off to the stored session...
+        let handed_off = collect_official_or_browser(
+            &session,
+            &context,
+            ProviderId::Claude,
+            "official_source",
+            || {
+                Err(ProviderError::new(
+                    ErrorCategory::AuthRequired,
+                    "official_source",
+                ))
+            },
+            web,
+        );
+        assert_eq!(handed_off.unwrap_err().source_id, "web_source");
+        // ...while every other failure is the refresh's final answer.
+        for category in [
+            ErrorCategory::Error,
+            ErrorCategory::Unavailable,
+            ErrorCategory::Unsupported,
+            ErrorCategory::AccessDenied,
+        ] {
+            let error = collect_official_or_browser(
+                &session,
+                &context,
+                ProviderId::Claude,
+                "official_source",
+                || Err(ProviderError::new(category, "official_source")),
+                web,
+            )
+            .expect_err("official failure");
+            assert_eq!(error.category, category);
+            assert_eq!(error.source_id, "official_source");
+        }
+        // And a working official credential never reaches the cookie at all.
+        let snapshot = collect_official_or_browser(
+            &session,
+            &context,
+            ProviderId::Claude,
+            "official_source",
+            || {
+                Ok(QuotaSnapshot {
+                    provider: ProviderId::Claude,
+                    account: QuotaAccount {
+                        fingerprint: "fp".to_owned(),
+                        fingerprint_scope: "source",
+                        label: None,
+                        plan: None,
+                    },
+                    windows: Vec::new(),
+                    status: "available",
+                    observed_at: "2026-08-10T00:00:00Z".to_owned(),
+                })
+            },
+            || panic!("browser session reached"),
+        );
+        assert!(snapshot.is_ok());
+    }
+
+    /// A stored session is discovered only when this Mac holds no official credential.
+    #[test]
+    fn the_browser_session_is_discovered_last() {
+        let mut context = CollectionContext::default();
+        assert!(discover_official_or_browser(ProviderId::Claude, None, &context).is_empty());
+        context
+            .browser_sessions
+            .insert(ProviderId::Claude, "sessionKey=sk-ant-x".to_owned());
+        let stored = discover_official_or_browser(ProviderId::Claude, None, &context);
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].credential_source, BROWSER_SESSION_SOURCE);
+        let official = ProviderSession {
+            provider: ProviderId::Claude,
+            credential_source: "keychain".to_owned(),
+        };
+        let discovered = discover_official_or_browser(ProviderId::Claude, Some(official), &context);
+        assert_eq!(discovered.len(), 1);
+        assert_eq!(discovered[0].credential_source, "keychain");
+    }
+
+    #[test]
+    fn cancelled_browser_session_collect_uses_web_source() {
+        let session = ProviderSession {
+            provider: ProviderId::Claude,
+            credential_source: BROWSER_SESSION_SOURCE.to_owned(),
+        };
+        let context = CollectionContext {
+            cancel: Some(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
+                true,
+            ))),
+            ..CollectionContext::default()
+        };
+        let error = collect_official_or_browser(
+            &session,
+            &context,
+            ProviderId::Claude,
+            "official",
+            || panic!("official collect"),
+            || {
+                Err(ProviderError::new(
+                    ErrorCategory::Unavailable,
+                    "claude_web_usage_api",
+                ))
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.source_id, "claude_web_usage_api");
+    }
+
+    #[test]
+    fn one_cookie_value_is_read_out_of_a_header() {
+        assert_eq!(
+            cookie_named_value("sessionKey=sk-ant-ok; lastActiveOrg=org-2", "lastActiveOrg"),
+            Some("org-2")
+        );
+        assert_eq!(cookie_named_value("sessionKey=", "sessionKey"), None);
+        assert_eq!(cookie_named_value("sso-rw=alt", "sso"), None);
+    }
 
     /// Discovery and collection both need this device's Claude grant, and asking twice
     /// starts a second `/usr/bin/security` for an answer the first already gave.
