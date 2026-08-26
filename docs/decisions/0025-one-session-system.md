@@ -51,3 +51,9 @@ would be another start and callback route resolving to the same `accounts` row. 
 GitHub only, and said so before this change. A browser session also does not rotate: the cookie is
 the whole credential for ninety days, revocable by sign-out, Delete Account, or expiry — the
 lifetime Better Auth was configured for, without the refresh machinery it never used.
+
+## When to revisit
+
+If a second sign-in method is scheduled, evaluate a library again at that point — as an identity
+front behind `WebSessionPort`, still writing `account_sessions` — rather than carrying one now for a
+method that is not planned. Session ownership does not move back either way.
