@@ -18,8 +18,10 @@ use std::time::Duration;
 
 use super::io::run_bounded_command;
 
-/// A `--version` run gets five seconds, 4 KiB of stdout, no stdin, and no stderr.
-pub const VERSION_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long any provider CLI this build starts may run, and how much a `--version` read may
+/// print. The deadline is shared: a spawn that collection waits on gets five seconds, whether
+/// it is reading a version or asking a CLI to renew a sign-in.
+pub const CLI_TIMEOUT: Duration = Duration::from_secs(5);
 pub const VERSION_OUTPUT_LIMIT: usize = 4_096;
 
 /// The floor between two runs for the same CLI, however often its fingerprint changes.
@@ -80,6 +82,7 @@ pub struct ProbeEnvironment {
     pub directories: Vec<PathBuf>,
     pub home: PathBuf,
     pub path: Option<String>,
+    /// The deadline every spawn under this environment shares.
     pub timeout: Duration,
 }
 
@@ -105,7 +108,7 @@ impl ProbeEnvironment {
             directories,
             home,
             path,
-            timeout: VERSION_TIMEOUT,
+            timeout: CLI_TIMEOUT,
         }
     }
 }
@@ -136,7 +139,7 @@ pub fn resolve(
         // A binary that cannot be resolved right now says nothing about the one that was
         // read before, so its record stays: a `PATH` that momentarily lost the install must
         // not buy a fresh spawn when it comes back unchanged.
-        let Some(binary) = resolve_binary(tool, environment) else {
+        let Some(binary) = resolve_binary(tool.binary(), environment) else {
             continue;
         };
         let Some(fingerprint) = fingerprint(&binary) else {
@@ -173,9 +176,9 @@ pub fn resolve(
 
 /// Runs `<binary> --version` once.
 ///
-/// The only place in `src/providers` where a variable names the program that is started, and
-/// [`resolve`] is its only caller: it runs at most once per installed binary, never once per
-/// refresh. The child gets no stdin, no stderr, a bounded stdout, a deadline, and an
+/// One of the two functions in `src/providers` allowed to start a program a variable names,
+/// and [`resolve`] is its only caller: it runs at most once per installed binary, never once
+/// per refresh. The child gets no stdin, no stderr, a bounded stdout, a deadline, and an
 /// `env -i`-style environment holding only `HOME` and `PATH`.
 pub fn probe(
     binary: &Path,
@@ -200,11 +203,14 @@ pub fn probe(
 /// The real file behind `<name>` in the first of [`ProbeEnvironment::directories`] that holds
 /// one. Symlinks are followed, because the shim is not what changes when the install is
 /// upgraded.
-pub fn resolve_binary(tool: CliTool, environment: &ProbeEnvironment) -> Option<PathBuf> {
+///
+/// Every provider CLI this build starts is found this way, so there is one answer to "which
+/// `grok` is that" and one list of places a service `PATH` is allowed to be missing.
+pub fn resolve_binary(name: &str, environment: &ProbeEnvironment) -> Option<PathBuf> {
     environment
         .directories
         .iter()
-        .map(|directory| directory.join(tool.binary()))
+        .map(|directory| directory.join(name))
         .find(|candidate| is_executable_file(candidate))
         .and_then(|candidate| std::fs::canonicalize(candidate).ok())
 }
