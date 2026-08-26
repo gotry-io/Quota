@@ -3,6 +3,9 @@
 - Status: Accepted
 - Date: 2026-08-14
 - Related: [ADR 0006](./0006-managed-account-device-usage.md)
+- Updated 2026-08-26 by [ADR 0027](./0027-one-token-per-client.md)
+
+> Updated 2026-08-26: every client now holds one session; `quotacli` and the Device Authorization Grant are gone ([ADR 0027](./0027-one-token-per-client.md)).
 
 ## Context
 

@@ -12,7 +12,7 @@ links to it rather than restating it.
   snapshot its widgets render. It is not a collection Device.
 - **QuotaBar** is the macOS presentation product. Its bundle contains one private Rust service; Swift
   owns views, UI preferences, accessibility, Launch at Login, and wire decoding only.
-- **QuotaRelay** owns GitHub-backed Accounts, Devices, scoped native and browser sessions, normalized
+- **QuotaRelay** owns GitHub-backed Accounts, Devices, one scoped session per client, normalized
   quota/Usage storage, deletion controls, pricing distribution, and account queries. It runs only as
   a Cloudflare Worker backed by D1.
 - **Quota Web** owns the public site and browser account UI, sharing `quota.gotry.io` with the Worker
@@ -288,8 +288,8 @@ by SvelteKit `Server.respond`. The Worker reads the `__Host-quota_session` cooki
 when unsigned and otherwise a streaming dashboard whose document load starts the existing
 `GET /api/v6/account/summary` handler inside the composed Worker and reuses the request's memoized
 session read, so Account data resolves in parallel with hydration without a second round trip. Every
-page requires a session and Quota Web publishes no account data anonymously; `/activate` approves or
-denies native authorization and `/app` redirects to `/my`. Relay owns GitHub login and browser
+page requires a session and Quota Web publishes no account data anonymously, and `/app` redirects
+to `/my`. Relay owns GitHub login and browser
 sessions ([ADR 0025](decisions/0025-one-session-system.md)); the composition decision is
 [ADR 0011](decisions/0011-sveltekit-document-worker.md).
 

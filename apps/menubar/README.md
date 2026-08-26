@@ -20,7 +20,10 @@ tell Swift when to reload state.
 The Rust service returns persisted component state immediately, then performs startup collection in
 the background. It owns the five-minute schedule, providers, Usage, pricing, OAuth/account sync,
 its owner-only identity store and disposable cache, the hours it still owes an Account, and the
-two-way merge of a subscription Relay resolved against this Mac's own reading.
+two-way merge of a subscription Relay resolved against this Mac's own reading. Signing in is
+Authorization Code with PKCE over a loopback callback and issues one session, which reads the
+Account and writes this Mac's Device
+([ADR 0027](../../docs/decisions/0027-one-token-per-client.md)).
 When it has to rebuild that cache, `get_state.cache.rebuilding` says so and Overview shows one
 notice until the next complete Usage scan. QuotaBar owns presentation, provider visibility
 and ordering preferences, native provider configuration fields, account actions, accessibility, and

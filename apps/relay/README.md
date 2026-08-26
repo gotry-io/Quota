@@ -55,13 +55,17 @@ Register the GitHub OAuth App callback as
 `https://quota.gotry.io/api/auth/github/callback`. QuotaRelay owns the browser sign-in itself:
 `GET /api/auth/github/start` seals a 256-bit `state` and a PKCE verifier in a signed ten-minute
 `__Host-quota_oauth` cookie and redirects to GitHub with no scope; the callback checks that cookie, spends
-the code once, and opens one `account_sessions` row with `client_kind = 'web'` behind a
+the code once, and opens one `sessions` row with `client_kind = 'web'` behind a
 `__Host-quota_session` cookie. `POST /api/auth/logout` revokes it, and `DELETE /api/v2/account` removes
 the Account and everything stored for it in one D1 batch. See
-[ADR 0025](../../docs/decisions/0025-one-session-system.md). QuotaRelay also retains the native
-grants and their separate account/device token families. The registered `quota-ios` public client
-is a read-only Account login: Authorization Code with PKCE and the exact redirect
-`io.gotry.quota:/oauth/callback`. It never receives a Device session or upload authority. The
+[ADR 0025](../../docs/decisions/0025-one-session-system.md).
+
+Every client's session is a row in that same table, and one login issues one access/refresh family
+([ADR 0027](../../docs/decisions/0027-one-token-per-client.md)). The `quotabar` client exchanges an
+authorization code over a loopback redirect for a session scoped `[account:read, device:write]`,
+which is the only way a Device is registered; Authorization Code with PKCE is the only grant Relay
+offers. The registered `quota-ios` public client is a read-only Account login over the exact
+redirect `io.gotry.quota:/oauth/callback`, scoped `[account:read]`, and it registers no Device. The
 checked-in Worker enables Cloudflare `nodejs_compat`, which the SvelteKit server runtime requires.
 
 Each keyed secret is independent and must contain at least 32 random characters. OAuth and session

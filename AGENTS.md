@@ -18,6 +18,7 @@ Read the relevant source before changing that area:
 | Persistent Relay storage decision and rationale | `docs/decisions/0001-persistent-relay-storage.md` |
 | Managed account, device, authentication, and deletion lifecycle | `docs/decisions/0006-managed-account-device-usage.md` |
 | Browser sign-in and the one session table behind every client | `docs/decisions/0025-one-session-system.md` |
+| One token per client, and why there is no CLI or device grant | `docs/decisions/0027-one-token-per-client.md` |
 | Managed-data v6: hour-versioned Usage, daily rollups, resolved subscriptions | `docs/decisions/0024-hour-versioned-usage-and-daily-rollups.md` |
 | Strict writes, tolerant reads, and unknown enum members | `docs/decisions/0023-strict-writes-tolerant-reads.md` |
 | Local identity store, disposable cache, and what a damaged image costs | `docs/decisions/0021-identity-store-and-disposable-cache.md` |
@@ -144,6 +145,10 @@ Do not commit generated state such as `node_modules/`, `dist/`, `target/`, `.bui
   `pnpm generate:provider-catalog` before type check and Swift tests.
 - Managed-data change: managed reads and writes are v6 on `/api/v6`. Exercise the hour-replacement
   and daily-rollup paths and the resolved `subscriptions[]` a summary answers with.
+- Authentication change: a client holds one session, and its scopes are what it may do
+  (`docs/decisions/0027-one-token-per-client.md`). Cover the session that writes a Device, the one
+  that only reads, and the browser cookie, and keep the case proving a token from a Device's earlier
+  generation is refused.
 - Relay change: run Vitest, local D1 migration verification, and the Cloudflare dry-run build.
 - QuotaBar account-path change: on macOS, run affected Swift and Relay tests plus the signed-service
   integration tests available in the app package.

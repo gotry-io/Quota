@@ -96,8 +96,11 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
   the current Keychain session owns, and is cleared when orphaned, mismatched, or signed out. The
   app target alone performs OAuth, holds the session, and calls Relay; the extension has no network,
   Keychain, Security, or account modules.
-- Access tokens are short-lived, a replayed refresh revokes its whole token family, and only HMACs
-  of server session and grant secrets are stored.
+- A collection or viewer login issues one access/refresh family, and what it may do is the scopes
+  on its own session row ([ADR 0027](decisions/0027-one-token-per-client.md)). Access tokens are
+  short-lived, a replayed refresh revokes its whole token family, and only HMACs of server session
+  and grant secrets are stored. Each client's tokens are hashed under a domain its prefix names, so
+  a token issued to one cannot be presented as another's.
 - A browser session has no refresh token: `__Host-quota_session` is the whole credential, is
   `HttpOnly; Secure; SameSite=Lax; Path=/`, and is stored only as an HMAC under its own label, so it
   cannot be presented as a Bearer token nor a native token as a cookie. JavaScript never reads it,
@@ -106,18 +109,21 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
   never receives `env.DB` or Relay secrets, and every document and load response is `Cache-Control:
   private, no-store`.
 - `POST /api/auth/logout` revokes that row and clears the cookie, and requires an exact same-origin
-  `Origin` with same-origin Fetch Metadata when present. Delete Account, Delete Device, and device
-  authorization decisions require that same check and a session authenticated within ten minutes,
-  which nothing advances except signing in again. Cross-account or unknown user codes return a
-  generic not-found.
+  `Origin` with same-origin Fetch Metadata when present. Delete Account and Delete Device require
+  that same check, `account:manage`, and a session authenticated within ten minutes, which nothing
+  advances except signing in again — so only a browser can make either. `POST /oauth/v2/revoke`
+  needs no scope: presenting the refresh token is the proof, and it ends the whole family and signs
+  out the Device the session spoke for.
 
 ## Upload, Usage, and deletion safety
 
-- Quota and Usage uploads require the device token to match the envelope Device ID and current
-  generation. Account tokens are read or manage only and cannot write device data; device tokens
-  cannot read another Device or the Account aggregate. The device profile endpoint takes only the
-  current Device's token and generation and updates only that Device's bounded display name and
-  platform: it cannot select a Device ID, read Account data, or change authorization.
+- Quota and Usage uploads require `device:write` and a session whose Device ID and generation match
+  the envelope. That scope is only ever granted to a session that names a Device, and such a session
+  stops authorizing the moment its Device moves past the generation it was opened at, so Delete
+  Device ends every token issued before it. A session that names no Device — the browser's, the iOS
+  viewer's — cannot write device data at all. The device profile endpoint writes only the Device its
+  own session names, and only that Device's bounded display name and platform: it cannot select a
+  Device ID, read Account data, or change authorization.
 - An upload carries no sequence: a reading is placed by `(provider, fingerprint)` and ordered by
   when it was observed, an hour is replaced only by a strictly newer `scan_version`, and the
   response names what it accepted and ignored.

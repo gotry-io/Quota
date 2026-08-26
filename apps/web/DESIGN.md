@@ -52,7 +52,6 @@ The site has four surfaces:
    path; it is not the production first-load path. Unsigned visits to `/my` are a server redirect to
    `/`. The shipped `/app` bookmark is a single redirect to `/my`. Account data is never published
    without a session.
-3. `/activate` approves or denies a released native-client device authorization code.
 
 GitHub is the only sign-in action. There is no Relay selection, pairing group, owner capability,
 provider-secret form, server administration, or self-hosted setup in the Web UI.
@@ -165,13 +164,6 @@ credentials. Deletion copy must say that both the Device and its Quota/Usage dat
 unauthenticated, recent-auth-required, and service-error states use plain explanatory text and one
 next action.
 
-## Device authorization
-
-`/activate` is a single-task form. It explains that approval issues Account-read and current-Device
-upload sessions without sharing provider credentials. The code input supports one-time-code
-autofill. Approve is primary; Deny is secondary. Success tells the user to return to the requesting
-Quota client.
-
 ## Responsive behavior
 
 - At 840 px, two-column hero and architecture layouts become one column.
@@ -196,8 +188,8 @@ Quota client.
 Before shipping a Web change:
 
 - run the package check and production build;
-- inspect `/`, `/my` (and the shipped `/app` redirect), and `/activate` at desktop and narrow mobile
-  widths in both light and dark appearance when browser tooling is available;
+- inspect `/` and `/my` (and the shipped `/app` redirect) at desktop and narrow mobile widths in
+  both light and dark appearance when browser tooling is available;
 - navigate all controls with a keyboard;
 - verify loading, signed-out, empty, partial/unpriced cost, recent-auth, and failure states;
 - confirm no credential, raw Usage, prompt, path, or untrusted HTML reaches the DOM.

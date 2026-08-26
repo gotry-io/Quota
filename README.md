@@ -141,7 +141,9 @@ Managed data is v6. A Usage upload names whole UTC hours carrying the version of
 each one, Relay replaces an hour only for a strictly newer scan and folds the days it touched into a
 rollup every read answers from, and an Account summary resolves subscriptions once so an account
 collected on three Macs reads as one subscription everywhere. Relay owns GitHub sign-in itself
-through a hand-written OAuth round trip and one session table for browser, CLI, and iOS clients.
+through a hand-written OAuth round trip, and every client — browser, QuotaBar, iOS — holds one
+session in one table, scoped by what that client is for
+([ADR 0027](docs/decisions/0027-one-token-per-client.md)).
 Cursor is the only provider with a browser session, behind a consent sheet and an explicit
 access-denied outcome. Quota iOS refreshes its Account and republishes its widget snapshot in the
 background as well as on screen.

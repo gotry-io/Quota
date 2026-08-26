@@ -259,14 +259,12 @@ describe("quota protocol", () => {
         redirect_uri: "https://example.com/callback",
       }).success,
     ).toBe(false);
-    // The Device Authorization Grant is gone with the client that used it, so its grant type is
-    // no longer a login payload at all.
+    // Authorization Code with PKCE is the only grant, so a request naming another one is not a
+    // login payload at all.
     expect(
       BrowserLoginExchangeRequestSchema.safeParse({
-        protocol_version: 2,
-        grant_type: "urn:ietf:params:oauth:grant-type:device_code",
-        client_id: "quotabar",
-        device_code: "synthetic-device-code",
+        ...browser,
+        grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
       }).success,
     ).toBe(false);
   });

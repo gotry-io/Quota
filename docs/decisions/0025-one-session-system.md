@@ -3,6 +3,9 @@
 - Status: Accepted
 - Date: 2026-08-26
 - Updates: [ADR 0006](0006-managed-account-device-usage.md), [ADR 0011](0011-sveltekit-document-worker.md)
+- Updated 2026-08-26 by [ADR 0027](0027-one-token-per-client.md)
+
+> Updated 2026-08-26: the table is now `sessions`, and it holds one row per client rather than a second one for a Device ([ADR 0027](0027-one-token-per-client.md)).
 
 ## Decision
 
