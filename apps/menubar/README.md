@@ -111,7 +111,7 @@ Build the deterministic visual app with `pnpm build:menubar:visual`. It accepts:
 ```text
 --data-source fixture|live
 --fixture loading|content|cached-refresh-error|empty|unavailable|cache-rebuilding
---route overview|settings|account|agents|provider-codex|provider-openrouter|provider-cursor|devices|usage|support
+--route overview|settings|account|agents|provider-codex|provider-openrouter|provider-cursor|devices|usage|menu-bar-style|menu-bar-provider|support
 --appearance system|light|dark
 --text-size standard|extra-large|accessibility
 ```

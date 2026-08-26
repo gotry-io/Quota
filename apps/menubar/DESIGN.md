@@ -139,9 +139,9 @@ quota cannot be said in color; below 10% remaining the text takes a `!` prefix.
 `MenuBarLabelLayoutTests` renders the image and measures the drawn pixels: the mark's ink and the
 digits' ink share a center within a quarter point, and every mark lands at the same size.
 
-**Menu Bar Style** in Settings chooses **Icon**, **Percent**, or **Icon and percent** (the default).
-**Menu Bar Provider** chooses **Automatic** — the tightest current subscription — or one provider
-from those Overview is showing. Both persist in UserDefaults. A chosen provider with no current
+Settings → Menu Bar → **Style** chooses **Icon**, **Percent**, or **Icon and percent** (the default),
+and → **Provider** chooses **Automatic** — the tightest current subscription — or one provider from
+those Overview is showing. Both persist in UserDefaults. A chosen provider with no current
 reading shows the mark alone and never borrows another provider's number, and **Percent** likewise
 falls back to the mark alone when there is no percent to show, because an item with no content
 cannot be clicked. VoiceOver announces **QuotaBar**, the provider the number belongs to, and the
@@ -185,6 +185,8 @@ Overview
     ├── Account
     │   └── Devices
     ├── Usage
+    ├── Menu Bar Style
+    ├── Menu Bar Provider
     ├── Support
     └── Agents
         └── Provider
@@ -256,7 +258,7 @@ Settings section order is fixed:
 
 1. **Account**
 2. **Quota**
-3. **Display**
+3. **Menu Bar**
 4. **General**
 
 The Account group on Settings is one row deep in every state:
@@ -273,10 +275,16 @@ The Account group is the only place for account authentication actions. Buttons 
 service operations; there are no embedded web views.
 
 Quota contains the **Usage** and **Agents** destinations. The Usage root summary uses account-wide
-totals while signed in with Usage sync enabled, and local totals otherwise. Display contains
-**Menu Bar Style** and **Menu Bar Provider**, both using the same compact trailing menu as the Usage
-source control. General contains the native mini **Launch at Login** switch, then the **Support**
-destination.
+totals while signed in with Usage sync enabled, and local totals otherwise. Menu Bar contains
+**Style** and **Provider**: two rows that state the choice in force on the right and open a page to
+change it, never a menu that drops over the panel. General contains the native mini **Launch at
+Login** switch, then the **Support** destination.
+
+**Menu Bar Style** and **Menu Bar Provider** are one list each, with no section header to repeat the
+page title. Every option is one ordinary settings row; the one in force carries an accent checkmark;
+choosing takes effect and returns, because there is nothing else on the page to confirm. The Provider
+page lists **Automatic** first, without a mark because it is not a provider, then the providers
+Overview is showing, in Overview's order, each with its catalog brand mark.
 Support is the diagnostic page. It is backed by the private `diagnose` operation and opens with the
 report's status line: a semantic icon, **All systems working** / **Some checks need attention** /
 **Action needed**, and a fixed locale-shortened evaluation time (`Checked 3:40 PM`), not relative
@@ -495,7 +503,8 @@ share tokens and accessibility semantics but do not own tasks or form a generic 
 Required fixture states are loading, signed-in content, cached content with a sync warning,
 signed-out provider issues, service unavailable, and a rebuilding cache (`cache-rebuilding`).
 Required routes are Overview, Settings, Account, Agents, provider
-setup variants (CLI, API key, and browser session), Devices, Usage, and Support. Inspect
+setup variants (CLI, API key, and browser session), Devices, Usage, Menu Bar Style, Menu Bar
+Provider, and Support. Inspect
 light and dark appearances, standard and accessibility text sizes, keyboard traversal, VoiceOver
 labels, and Reduce Motion transitions.
 

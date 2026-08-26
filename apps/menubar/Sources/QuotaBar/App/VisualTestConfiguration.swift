@@ -68,6 +68,8 @@
     case providerCursor = "provider-cursor"
     case devices
     case usage
+    case menuBarStyle = "menu-bar-style"
+    case menuBarProvider = "menu-bar-provider"
     case support
 
     fileprivate var path: [MenuBarRoute] {
@@ -81,6 +83,8 @@
       case .providerCursor: [.settings, .agents, .provider(.cursor)]
       case .devices: [.settings, .account, .devices]
       case .usage: [.settings, .usage]
+      case .menuBarStyle: [.settings, .menuBarStyle]
+      case .menuBarProvider: [.settings, .menuBarProvider]
       case .support: [.settings, .support]
       }
     }

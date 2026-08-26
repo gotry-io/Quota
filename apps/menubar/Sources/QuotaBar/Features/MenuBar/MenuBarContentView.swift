@@ -187,6 +187,8 @@ struct MenuBarContentView: View {
         onOpenAccount: { navigate(to: .account) },
         onOpenAgents: { navigate(to: .agents) },
         onOpenUsage: { navigate(to: .usage) },
+        onOpenMenuBarStyle: { navigate(to: .menuBarStyle) },
+        onOpenMenuBarProvider: { navigate(to: .menuBarProvider) },
         onOpenSupport: { navigate(to: .support) }
       )
     case .account:
@@ -211,6 +213,13 @@ struct MenuBarContentView: View {
       AccountDevicesView(model: model)
     case .usage:
       AccountUsageView(model: model, source: $usageSource, period: $usagePeriod)
+    case .menuBarStyle:
+      MenuBarStyleSettingsView(onSelect: navigateBack)
+    case .menuBarProvider:
+      MenuBarProviderSettingsView(
+        providers: ProviderDisplayOrder.enabledProviders(),
+        onSelect: navigateBack
+      )
     case .support:
       SettingsSupportView(
         state: support.pageState,
@@ -299,6 +308,8 @@ enum MenuBarRoute: Hashable {
   case provider(ProviderID)
   case devices
   case usage
+  case menuBarStyle
+  case menuBarProvider
   case support
 
   var title: String {
@@ -309,6 +320,9 @@ enum MenuBarRoute: Hashable {
     case .provider(let provider): provider.displayName
     case .devices: "Devices"
     case .usage: "Usage"
+    // The section header says Menu Bar; a page carries its own context.
+    case .menuBarStyle: "Menu Bar Style"
+    case .menuBarProvider: "Menu Bar Provider"
     case .support: "Support"
     }
   }

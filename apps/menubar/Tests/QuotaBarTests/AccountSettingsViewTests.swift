@@ -32,6 +32,34 @@ struct AccountSettingsPageTests {
   }
 
   @Test
+  func chosingAMenuBarOptionIsOneLevelDownAndReturnsWhenItIsChosen() {
+    var navigation = MenuBarNavigationState()
+    navigation.open(.settings)
+    navigation.open(.menuBarStyle)
+
+    #expect(navigation.path == [.settings, .menuBarStyle])
+    #expect(navigation.title == "Menu Bar Style")
+
+    // Choosing takes effect and returns; there is nothing else on the page to confirm.
+    navigation.navigateBack()
+    #expect(navigation.path == [.settings])
+
+    navigation.open(.menuBarProvider)
+    #expect(navigation.title == "Menu Bar Provider")
+    navigation.navigateBack()
+    #expect(navigation.path == [.settings])
+  }
+
+  @Test
+  func theStylePageOffersEveryStyleAndTheProviderPageOverviewsOwnOrder() {
+    #expect(MenuBarStylePreference.allCases.map(\.label) == ["Icon", "Percent", "Icon and percent"])
+
+    let choices = MenuBarProviderPreference.choices(visibleProviders: [.grok, .codex, .claude])
+    #expect(choices.first == .automatic)
+    #expect(choices.map(\.label) == ["Automatic", "Grok", "Codex", "Claude Code"])
+  }
+
+  @Test
   func signingOutClosesTheAccountPageAndWhateverWasOpenedFromIt() {
     var navigation = MenuBarNavigationState()
     navigation.open(.settings)
