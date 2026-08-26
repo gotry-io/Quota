@@ -389,6 +389,56 @@ mod tests {
         );
     }
 
+    /// The stored session is the last rung, and only the last rung.
+    ///
+    /// It answers when this Mac's own grant said "sign in again"; it never answers first, it
+    /// is not reached at all when nothing was stored, and a cancelled refresh reads neither.
+    #[test]
+    fn the_stored_session_is_reached_only_after_the_grant_says_sign_in_again() {
+        let mut context = CollectionContext {
+            home_directory: PathBuf::from("/tmp/quota-grok-missing-home"),
+            environment: std::collections::HashMap::new(),
+            config_path: None,
+            browser_sessions: std::collections::HashMap::new(),
+            client_name: "QuotaTest".to_owned(),
+            client_version: "test".to_owned(),
+            now: Some("2026-08-10T00:00:00Z".to_owned()),
+            cancel: None,
+            keychain: Default::default(),
+            cli_versions: Default::default(),
+        };
+        let official = ProviderSession {
+            provider: ProviderId::Grok,
+            credential_source: "auth.json".to_owned(),
+        };
+        assert_eq!(
+            collect(&official, &context)
+                .expect_err("no credential")
+                .source_id,
+            SOURCE
+        );
+        // The header is one the browser rung rejects without a request; reaching it at all is
+        // what this asserts.
+        context
+            .browser_sessions
+            .insert(ProviderId::Grok, "sessionKey=sk-ant-ok".to_owned());
+        assert_eq!(
+            collect(&official, &context)
+                .expect_err("stored session")
+                .source_id,
+            WEB_SOURCE
+        );
+        let cancelled = CollectionContext {
+            cancel: Some(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
+                true,
+            ))),
+            ..context.clone()
+        };
+        let error = collect(&official, &cancelled).expect_err("cancelled");
+        assert_eq!(error.category, ErrorCategory::Unavailable);
+        assert_eq!(error.source_id, SOURCE);
+    }
+
     #[test]
     fn maps_weekly_billing_cycle() {
         let value = serde_json::json!({"config": {"creditUsagePercent": 8, "currentPeriod": {"type": "USAGE_PERIOD_TYPE_WEEKLY", "start": "2026-07-30T07:33:06Z", "end": "2026-08-06T07:33:06Z"}}});

@@ -1683,13 +1683,103 @@ mod tests {
     }
 
     fn browser_session_request(operation: &str, cookie_header: &str) -> IpcRequest {
+        provider_browser_session_request("cursor", operation, cookie_header)
+    }
+
+    fn provider_browser_session_request(
+        provider: &str,
+        operation: &str,
+        cookie_header: &str,
+    ) -> IpcRequest {
         serde_json::from_value(serde_json::json!({
             "type": "request",
             "request_id": operation,
             "operation": operation,
-            "payload": {"provider": "cursor", "cookie_header": cookie_header}
+            "payload": {"provider": provider, "cookie_header": cookie_header}
         }))
         .expect("browser-session request")
+    }
+
+    /// Every provider the catalog declares a session for can have one added and taken away.
+    ///
+    /// A commit stores the accepted header with the fingerprint and masked label validation
+    /// produced, and nothing else; disconnecting removes the row rather than emptying it.
+    #[test]
+    fn every_catalog_browser_session_provider_commits_and_disconnects() {
+        let root = std::env::temp_dir().join(format!("quota-service-sessions-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        let service = LocalService::new(
+            state.clone(),
+            Arc::new(RecordingSink::default()),
+            Arc::new(BrowserSessionBackend { reject: false }),
+        );
+        let declared = crate::catalog::ProviderId::ALL
+            .iter()
+            .filter(|provider| provider.metadata().browser_session.is_some())
+            .map(|provider| provider.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(declared, ["codex", "claude", "grok", "kimi", "cursor"]);
+        // One real session cookie per provider, from that provider's own catalog allowlist.
+        let headers = [
+            ("codex", "__Secure-next-auth.session-token=secret"),
+            ("claude", "sessionKey=secret"),
+            ("grok", "sso=secret"),
+            ("kimi", "kimi-auth=secret"),
+            ("cursor", "wos-session=secret"),
+        ];
+        assert_eq!(
+            headers.map(|(provider, _)| provider).as_slice(),
+            declared.as_slice()
+        );
+        for (provider, header) in headers {
+            let committed = service.handle(provider_browser_session_request(
+                provider,
+                "commit_provider_browser_session",
+                header,
+            ));
+            assert!(committed.error.is_none(), "{provider} commit");
+            let stored = state
+                .provider_browser_session(provider)
+                .expect("read")
+                .expect("stored");
+            assert_eq!(stored.cookie_header, header);
+            assert_eq!(stored.account_fingerprint, "b".repeat(64));
+            assert_eq!(stored.account_label.as_deref(), Some("ne***@example.com"));
+
+            // A cookie name from another provider's list is not this provider's session.
+            let foreign = service.handle(provider_browser_session_request(
+                provider,
+                "commit_provider_browser_session",
+                "someone-elses-session=secret",
+            ));
+            assert!(
+                foreign.error.is_some(),
+                "{provider} accepted a foreign name"
+            );
+
+            let removed = service.handle(
+                serde_json::from_value(serde_json::json!({
+                    "type": "request",
+                    "request_id": "remove_provider_browser_session",
+                    "operation": "remove_provider_browser_session",
+                    "payload": {"provider": provider}
+                }))
+                .expect("disconnect request"),
+            );
+            assert!(removed.error.is_none(), "{provider} disconnect");
+            assert!(
+                state
+                    .provider_browser_session(provider)
+                    .expect("read")
+                    .is_none(),
+                "{provider} still stored"
+            );
+        }
+        service.shutdown();
+        drop(service);
+        drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
     }
 
     #[test]

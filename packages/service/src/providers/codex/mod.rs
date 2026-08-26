@@ -854,6 +854,47 @@ mod tests {
         );
     }
 
+    /// The stored session is the last rung, and only the last rung.
+    ///
+    /// It answers when this Mac's own credential said "sign in again"; it never answers first,
+    /// it is not reached at all when nothing was stored, and a cancelled refresh reads neither.
+    #[test]
+    fn the_stored_session_is_reached_only_after_the_grant_says_sign_in_again() {
+        let mut context = isolated_context();
+        let official = ProviderSession {
+            provider: ProviderId::Codex,
+            credential_source: "auth.json".to_owned(),
+        };
+        // Nothing on disk and nothing stored: the credential path's verdict is the answer.
+        assert_eq!(
+            collect(&official, &context)
+                .expect_err("no credential")
+                .source_id,
+            SOURCE_API
+        );
+        // With a session stored, that same verdict hands off to it, and the rung that answers
+        // names itself. The header is one this rung rejects without a request.
+        context
+            .browser_sessions
+            .insert(ProviderId::Codex, "_account=acct".to_owned());
+        assert_eq!(
+            collect(&official, &context)
+                .expect_err("stored session")
+                .source_id,
+            web::SOURCE
+        );
+        // A cancelled refresh reads neither rung.
+        let cancelled = CollectionContext {
+            cancel: Some(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
+                true,
+            ))),
+            ..context.clone()
+        };
+        let error = collect(&official, &cancelled).expect_err("cancelled");
+        assert_eq!(error.category, ErrorCategory::Unavailable);
+        assert_eq!(error.source_id, SOURCE_API);
+    }
+
     #[test]
     fn maps_primary_and_secondary_windows() {
         let usage = map_usage(
