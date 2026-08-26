@@ -127,6 +127,28 @@ describe("browser sign-in through GitHub", () => {
     const viewer = await relay.document.getViewer(new Headers({ Cookie: sessionCookie }));
     expect(viewer).toEqual({ displayLabel: "octocat" });
 
+    // One table, but not one credential domain: the cookie is hashed under `web-access`, and no
+    // Bearer prefix names that domain, so the cookie cannot be presented as a token.
+    expect(
+      (
+        await relay.app.request(`${origin}/api/v2/account`, {
+          headers: { Authorization: `Bearer ${session?.value}` },
+        })
+      ).status,
+    ).toBe(401);
+    expect(
+      (
+        await relay.app.request(`${origin}/api/v6/device/snapshots`, {
+          method: "PUT",
+          headers: {
+            Authorization: `Bearer ${session?.value}`,
+            "Content-Type": "application/json",
+          },
+          body: "{}",
+        })
+      ).status,
+    ).toBe(401);
+
     const signedOut = await relay.app.request(`${origin}/api/auth/logout`, {
       method: "POST",
       headers: {
