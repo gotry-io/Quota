@@ -45,10 +45,10 @@ message naming what restores collection, because a stored sign-in the provider n
 recovers differently from one that never existed, and a browser session saved here is re-added here
 while a provider's own grant is renewed by opening that provider's program.
 
-A scheduled refresh starts at most four kinds of process, none of them a provider CLI reading
+A scheduled refresh starts at most three kinds of process, none of them a provider CLI reading
 quota: the macOS Keychain lookup that finds Claude Code's grant, the `--version` a newly installed
-provider CLI earns, and the two renewals an already-expired Claude Code or Grok credential earns.
-Each is listed with its trigger and its bounds under
+provider CLI earns, and the one renewal an already-expired Claude Code, Codex, or Grok credential
+earns. Each is listed with its trigger and its bounds under
 [Bounded subprocesses](#bounded-subprocesses). Requests
 otherwise identify as `Quota/<version>`, except where a section below says the provider only answers
 its own client.
@@ -83,18 +83,31 @@ The version in those headers is the version of the CLI installed on this device,
   never waits on it and never fails because of it: an absent or failed read leaves the header on
   the fallback stated in that provider's section.
 
+The renewals under [Bounded subprocesses](#bounded-subprocesses) go the other way. They are not
+requests this build makes; they are the provider's own CLI making its own, so nothing here dresses
+them up. Where the protocol asks who woke the CLI — Codex's `initialize` takes a `clientInfo`, and
+the app-server puts it in the `User-Agent` of everything it then sends — this build gives its own
+name and version.
+
 ## Bounded subprocesses
 
-A refresh starts four processes and no others. No collector starts any of them: the three that
-concern a provider CLI run on the refresh worker before collection, so nothing driven by the
+A refresh starts three kinds of process and no others. No collector starts any of them: the two
+that concern a provider CLI run on the refresh worker before collection, so nothing driven by the
 five-minute timer can spawn on its own account.
+
+The renewal is one mechanism serving three providers, not three rungs. A provider states which
+program to run, which arguments, which of this device's variables the child inherits, whether the
+sign-in is expiring, whether it is usable, and how to talk to the child; everything else — the
+binary lookup, the empty private working directory, the minimal environment, the one spawn, the
+hourly floor, and the verdict — is shared, and lives at one call site. "Usable" is deliberately not
+"not expiring": a credential the CLI emptied or removed is neither, and that third answer is what
+tells a program that signed itself out from one that could not renew.
 
 | Process | Trigger | Bounds |
 | --- | --- | --- |
 | `/usr/bin/security` | Claude Code's Keychain grant, when collection home is the process `HOME` | Once per refresh, shared by discovery and collection, plus one more when a renewal actually ran; secret held in a redacted type |
 | `<binary> --version` | The installed binary's fingerprint is absent or changed, for a CLI this device holds a sign-in for | Once per installed binary, never more than once an hour; 5 s, 4 KiB, no stdin, `HOME` + `PATH` |
-| `claude mcp list` | Claude Code's local credential is already expired or within a minute of expiry **and** holds a `claudeAiOauth` refresh token | Once an hour whatever the outcome; 10 s, 64 KiB discarded, no stdin, empty private cwd, `HOME` + `PATH` + `TERM=dumb` + `CLAUDE_CONFIG_DIR` |
-| `grok agent stdio` | Grok's local token is already expired or within a minute of expiry | Once an hour whatever the outcome; 5 s for the whole handshake, 64 KiB, `HOME` + `PATH` + `GROK_HOME` |
+| The renewal — `claude mcp list`, `codex -s read-only -a never app-server`, or `grok agent stdio` | That provider's local credential is already expired or within a minute of expiry; Claude Code additionally needs a `claudeAiOauth` refresh token to renew from, and Codex an OAuth grant rather than a personal access token | Once an hour per provider whatever the outcome; 64 KiB of stdout, stderr discarded, empty owner-only cwd created for the run, `HOME` + `PATH` + the variable that names the provider's credential home (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `GROK_HOME`) and nothing else. The deadline is the CLI's own: 10 s for Claude Code, 8 s for Codex, 5 s for Grok |
 
 Each is started as an explicit executable with an argument array, never through a shell, and is
 terminated on success, failure, timeout, and cancellation. The binary is resolved by the rules
@@ -109,18 +122,57 @@ under [Official CLI identity](#official-cli-identity) in every case.
    `ChatGPT-Account-Id` from whoami (`chatgpt_account_id`). PAT identity comes from whoami, not a
    stale managed-workspace account id. Only HTTP 401/403 falls through to OAuth; a successful but
    malformed WHAM body is reported as an error.
-3. Else prefer `GET https://chatgpt.com/backend-api/wham/usage` using the local OAuth access token and,
+3. An OAuth access token that is expired or within one minute of expiry is the one case where
+   this build starts Codex. That token lives about ten days and only the Codex CLI can renew it,
+   so a Mac that has not opened Codex in a fortnight would otherwise report an expired sign-in
+   until someone does. The expiry is the `exp` in the access token's own JWT payload, decoded
+   without checking the signature — the only claim wanted is a timestamp, and a forged one would
+   buy a spawn rather than a reading. A token whose payload cannot be read counts as expiring:
+   the CLI is the thing that can tell. The `id_token`'s one-hour expiry is not staleness; it is
+   only read for identity. A personal-access-token-only `auth.json` is not renewable by anything
+   and earns nothing.
+
+   On the refresh worker, before collection, `codex -s read-only -a never app-server` is run once
+   — the CLI's own words for a sandbox that cannot write and an approval policy that never asks.
+   Which app-server request renews was settled by experiment against codex-cli 0.149.0, running
+   against a copy of `auth.json` in a throwaway `CODEX_HOME`: **none of them does**. The refresh
+   is on the program's startup path, and a run that sent no request at all still made the token
+   round trip about 2.2 s in. Its gate is that same access-token `exp`, within about five minutes
+   — a fixture whose `last_refresh` was thirty days old but whose token was still live was left
+   untouched, with no refresh attempted, which is why this build does not spawn on that stamp the
+   way CodexBar's eight-day rule does; it would be a spawn the CLI declines to act on for up to
+   two days. `initialize` is sent anyway and its reply read, because that is how this build knows
+   the program came up and is speaking the protocol; stdin then closes, and the CLI finishes the
+   refresh it has already started before it leaves — 1.3–1.4 s to the reply, 2.6–2.9 s to exit.
+   The handshake's `clientInfo` names this build, because the app-server puts that name in the
+   `User-Agent` of the requests it makes on its own account.
+
+   Bounded to eight seconds, about three times the observed run and the same figure CodexBar
+   allows its own `initialize`, with 64 KiB of stdout read only to bound it, stderr discarded, and
+   an empty private working directory. At most one attempt per hour, recorded in `cache.sqlite`
+   metadata with the binary's fingerprint and the outcome. Afterwards `auth.json` is read again: a
+   token with days left continues to step 4 in the same refresh; a file the CLI emptied or removed
+   is a Codex that signed itself out; anything else is `auth_required` with "Open Codex to refresh
+   the sign-in". A rejected refresh leaves `auth.json` exactly as it was — observed with a bogus
+   refresh token, which the endpoint answered `401 token_expired` and the CLI logged rather than
+   wrote — so an unchanged file is the failure signal. `last_refresh` keeps one job: saying a
+   renewal landed when the token that landed carries no readable expiry of its own. No Codex CLI on
+   this Mac means no attempt and no record.
+4. Prefer `GET https://chatgpt.com/backend-api/wham/usage` using the local OAuth access token and,
    when present, `ChatGPT-Account-Id`.
-4. Map primary, secondary, additional, and dedicated `code_review_rate_limit` windows without
+5. Map primary, secondary, additional, and dedicated `code_review_rate_limit` windows without
    changing their used/remaining meaning. Classify primary and secondary by reported duration
    (5-hour, weekly, or 30-day monthly) rather than by payload slot, so a Free-tier monthly
    window is not labeled as 5-hour. A null code-review object is absent, not malformed.
-5. Do not fall back after a successful but malformed response; report the parser failure instead.
+6. Do not fall back after a successful but malformed response; report the parser failure instead.
    There is no further rung: absent or rejected credentials are `auth_required`.
 
 The local service never submits the Codex refresh token or writes `auth.json`, and never starts the
-Codex CLI to read quota: a grant Codex no longer accepts is reported as `auth_required`, and the
-reader renews it by opening Codex. The PAT requests present `originator: codex_cli_rs` and the Codex
+Codex CLI to read quota: step 3 asks Codex to renew a credential, never to report one, and a grant
+still out of time afterwards is reported as the sign-in it is. Redeeming the refresh token here is
+not an option even when the CLI cannot be reached — Codex rotates single-use refresh tokens, so a
+second program spending one strands the CLI with a token the server has already retired. The PAT
+requests present `originator: codex_cli_rs` and the Codex
 CLI's own `User-Agent`, because the endpoint only honors personal access tokens from requests that
 identify as that CLI. That agent is `codex_cli_rs/<version> (<platform> <os version>; <arch>)` with
 the installed Codex version read as [Official CLI identity](#official-cli-identity) describes, and
@@ -340,8 +392,9 @@ upload partitions are summarized by the QuotaBar diagnostics report.
    stdio agent is told to shut down. `cached_token` is the only method ever asked for — the method
    Grok 1.0.5 advertises, `grok.com`, prints a device code and waits for a person, which nothing on
    a timer may start. Bounded to five seconds for the whole exchange, 64 KiB of stdout, stderr
-   discarded, and an environment holding only `HOME`, `PATH`, and `GROK_HOME`; the child is
-   terminated on timeout, cancellation, or an over-long answer. At most one attempt per hour,
+   discarded, an empty private working directory created for the run, and an environment holding
+   only `HOME`, `PATH`, and `GROK_HOME`; the child is terminated on timeout, cancellation, or an
+   over-long answer. At most one attempt per hour,
    recorded in `cache.sqlite` metadata with the binary's fingerprint and the outcome, so a CLI that
    cannot renew is not started every five minutes. Afterwards `auth.json` is read again: an
    unexpired token continues to step 4 in the same refresh, and anything else is `auth_required`

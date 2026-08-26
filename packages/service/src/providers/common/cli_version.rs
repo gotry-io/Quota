@@ -176,7 +176,7 @@ pub fn resolve(
 
 /// Runs `<binary> --version` once.
 ///
-/// One of the three functions in `src/providers` allowed to start a program a variable names,
+/// One of the two functions in `src/providers` allowed to start a program a variable names,
 /// and [`resolve`] is its only caller: it runs at most once per installed binary, never once
 /// per refresh. The child gets no stdin, no stderr, a bounded stdout, a deadline, and an
 /// `env -i`-style environment holding only `HOME` and `PATH`.

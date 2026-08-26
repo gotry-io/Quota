@@ -163,12 +163,12 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
 - Provider credentials go only to the fixed endpoints in
   [`provider-collection.md`](provider-collection.md); apart from the acquisition above, do not
   import browser Cookies, and hidden WebView state is never an authentication source.
-- A refresh starts four processes and no others, and no collector starts any of them: the three
-  that drive a provider CLI run on the refresh worker before collection, so nothing on the
+- A refresh starts three kinds of process and no others, and no collector starts any of them: the
+  two that drive a provider CLI run on the refresh worker before collection, so nothing on the
   five-minute timer can spawn on its own account.
   - `/usr/bin/security` reads Claude Code's Keychain grant once per refresh, for both discovery and
-    collection, plus once more when a renewal actually ran — Claude Code rewrites that entry in
-    place, so the read taken before it ran describes the grant it replaced.
+    collection, plus once more when a renewal actually ran — a renewal replaces a credential this
+    refresh may already have read, so the memo taken before it ran describes the grant it replaced.
   - `<binary> --version` reads the installed Claude Code or Codex version the request headers claim,
     only for a provider this device holds a sign-in for, and only when the binary's real path, size,
     and mtime differ from the fingerprint stored in the disposable cache — so a given installed
@@ -176,26 +176,39 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
     of stdout, no stdin, stderr discarded, and only `HOME` and `PATH` in its environment. A failed or
     absent read leaves the header on its fallback constant, and collection neither waits on it nor
     fails because of it.
-  - `claude mcp list` asks Claude Code to renew the sign-in it owns, and only when the credential
-    on disk is already expired or within a minute of expiry **and** holds a `claudeAiOauth`
-    `refreshToken` — an entry with no refresh token cannot be renewed by anything, and a Keychain
-    item holding only `mcpOAuth` is not a Claude sign-in, so neither is worth a spawn. At most one
-    attempt an hour whatever the outcome, recorded in the disposable cache. Bounded to ten seconds
-    and 64 KiB of stdout that is read only to bound it and then discarded, stderr discarded, no
-    stdin, an empty owner-only directory created for the run as its working directory, and only
-    `HOME`, `PATH`, `TERM=dumb`, and `CLAUDE_CONFIG_DIR` in its environment. It is the invocation
-    that reaches Claude Code's own refresh path without asking for anything else; its one side
-    effect is that it health-checks the MCP servers this device approved, which the empty working
-    directory narrows to the user-scoped ones in `~/.claude.json` and the deadline bounds. The
-    outcome is judged by re-reading the credential, never by an exit status. The service never
-    submits the refresh token itself and never writes the credential file or the Keychain item.
-  - `grok agent stdio` asks the Grok CLI to renew the sign-in it owns, and only when the token on
-    disk is already expired or within a minute of expiry — at most one attempt an hour whatever the
-    outcome, recorded in the disposable cache. Bounded to five seconds for the whole handshake and
-    64 KiB of stdout, stderr discarded, and only `HOME`, `PATH`, and `GROK_HOME` in its environment.
-    It asks for the `cached_token` method and no other: the CLI's interactive sign-in prints a device
-    code and waits for a person, and nothing on a timer may start that. The service never submits a
-    refresh token itself and never writes a provider's credential file.
+  - **The renewal** asks the CLI that owns a sign-in to renew it, and only when the credential on
+    disk is already expired or within a minute of expiry. It is one mechanism serving three
+    providers rather than three rungs: a provider states the program, its arguments, which of this
+    device's variables the child inherits, whether the sign-in is expiring, whether it is usable,
+    and how to talk to the child; the binary lookup, the working directory, the environment, the
+    spawn, the floor, and the verdict are shared, and there is exactly one place in the provider
+    sources where any of these programs is started.
+    - `claude mcp list`, additionally requiring a `claudeAiOauth` `refreshToken` in the entry — one
+      with no refresh token cannot be renewed by anything, and a Keychain item holding only
+      `mcpOAuth` is not a Claude sign-in, so neither is worth a spawn. It is the invocation that
+      reaches Claude Code's own refresh path without asking for anything else; its one side effect
+      is that it health-checks the MCP servers this device approved, which the empty working
+      directory narrows to the user-scoped ones in `~/.claude.json` and the deadline bounds.
+    - `codex -s read-only -a never app-server`, additionally requiring an OAuth grant rather than a
+      personal access token, whose expiry is the `exp` in the access token's own JWT payload —
+      read as a timestamp, with no signature check, because a forged one would buy a spawn rather
+      than a reading, and an unreadable one counts as expiring. The Codex CLI renews on its own
+      startup path rather than in answer to any request; `initialize` is sent to know the program
+      came up, its reply read, and stdin then closed so the CLI can finish and leave.
+    - `grok agent stdio`, which asks for the `cached_token` method and no other: the CLI's
+      interactive sign-in prints a device code and waits for a person, and nothing on a timer may
+      start that.
+    - At most one attempt an hour per provider whatever the outcome, recorded in the disposable
+      cache — on time alone, so a binary that rewrites itself cannot buy an earlier spawn. Bounded
+      to the CLI's own deadline (10 s for Claude Code, 8 s for Codex, 5 s for Grok) and 64 KiB of
+      stdout, stderr discarded, an empty owner-only directory created for the run as its working
+      directory, and only `HOME`, `PATH`, and the one variable naming that provider's credential
+      home in its environment. The outcome is judged by re-reading the credential, never by an exit
+      status; a credential the CLI emptied or removed is a program that signed itself out, which is
+      a different answer from one that could not renew. The service never submits a refresh token
+      itself and never writes a provider's credential file or Keychain item — Codex's refresh
+      tokens are single-use, so a second program spending one would strand the CLI with a token the
+      server has already retired.
   - Everywhere else an expired grant is reported as `auth_required` rather than renewed by driving
     its owner, and no collector runs a provider's CLI to read quota. Spawn explicit executables with
     argument arrays, never interpolate provider or user data into a shell, and terminate subprocesses
