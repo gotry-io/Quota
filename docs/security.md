@@ -39,8 +39,8 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
   provider's own program ([`provider-collection.md`](provider-collection.md)). Cursor.app
   `state.vscdb` is opened read-only for `cursorAuth/accessToken`: the service never writes Cursor
   files, refreshes that JWT, or persists the derived cookie unless a browser session is committed.
-- Optional API-key providers store secrets only in `$XDG_CONFIG_HOME/quotacli/providers.json` or
-  `~/.config/quotacli/providers.json`: mode `0700` directory, `0600` file, no symlinks, shared
+- Optional API-key providers store secrets only in `$XDG_CONFIG_HOME/quota/providers.json` or
+  `~/.config/quota/providers.json`: mode `0700` directory, `0600` file, no symlinks, shared
   owner-only lock, same-directory atomic replace. QuotaBar sends a new key only through the private
   child stdin; Swift never reads the file, persists the secret, puts it on argv, or receives more
   than a masked tip.
@@ -54,8 +54,6 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
 - The cache holds only the typed attempt fields of
   [ADR 0022](decisions/0022-minimal-diagnostics.md), seven days and 5,000 rows; a failed journal
   write is counted on stderr and blocks nothing.
-- QuotaBar's private service and Linux `quotacli` share one owner-only configuration and state
-  boundary; the Linux command is a foreground binary with no separate credential or storage format.
 - The installation ID is a random UUID; Relay stores only an account-scoped HMAC of it derived with
   `QUOTA_INSTALLATION_KEY`, the raw ID is never logged or used as a global identifier, and switching
   Account sets a new upload lower bound.
@@ -86,10 +84,8 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
 - Native browser login uses Authorization Code with PKCE S256, a random state, and a temporary
   `127.0.0.1` callback on a random port that accepts the exact path, state, and an authorization
   code only, rejects tokens in query data, stops after success, cancellation, or timeout, and
-  answers with a static no-store page that drops the query from history. Linux `quotacli` uses the
-  Device Authorization Grant and opens no browser or listener: codes are high entropy or
-  human-readable as appropriate, single-use, short-lived, hashed at rest, and rate-limited, and
-  polling handles `authorization_pending`, `slow_down`, denial, and expiry without printing codes.
+  answers with a static no-store page that drops the query from history. It is the only grant a
+  collection client has: there is no headless or second-screen flow to authorize.
 - The `quota-ios` client's authority is scoped by
   [ADR 0013](decisions/0013-readonly-ios-account-client.md) and its widget snapshot by
   [ADR 0014](decisions/0014-nonsecret-ios-widget-snapshot.md). `ASWebAuthenticationSession` stays in
@@ -169,8 +165,8 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
 - Error output and logs use allowlisted codes and fixed recovery text, never raw HTTP bodies,
   subprocess stderr, JWTs, authorization codes, secrets, installation IDs, raw GitHub subjects, full
   email addresses, or local source paths.
-- The service owns one bounded diagnostic report, which QuotaBar's Support page and Linux `quotacli
-  doctor` consume without inspecting local state or source logs. It may carry fixed statuses,
+- The service owns one bounded diagnostic report, which QuotaBar's Support page consumes without
+  inspecting local state or source logs. It may carry fixed statuses,
   timestamps, recovery codes, catalog-owned `provider:<id>` or `agent:<id>` subjects with an
   optional `source_id`, the service's fixed names for its non-provider paths, and the safe sentences
   it writes. Display names and IDs never become diagnostic identity; paths, filenames, model names,

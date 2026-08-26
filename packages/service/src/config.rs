@@ -25,7 +25,7 @@ pub fn default_config_root() -> Option<PathBuf> {
 }
 
 pub fn default_state_root() -> Option<PathBuf> {
-    default_config_root().map(|root| root.join("quotacli"))
+    default_config_root().map(|root| root.join("quota"))
 }
 
 #[cfg(test)]

@@ -50,13 +50,10 @@ if touches '^(apps/(web|relay)|packages/(protocol|quota-model|relay-core))/|\.(t
   pnpm -r --if-present test
 fi
 
-# Cargo manifests are matched unanchored: three of the four live inside a crate directory.
+# Cargo manifests are matched unanchored: two of the three live inside a crate directory.
 if touches '\.rs$|(^|/)Cargo\.(toml|lock)$'; then
   echo "pre-push: Rust service"
   pnpm test:service
-  if [ "$(uname -s)" = Linux ]; then
-    pnpm test:linux-cli
-  fi
 fi
 
 # apps/menubar/helper is a Rust crate and apps/ios ships no Package.swift, so a bare

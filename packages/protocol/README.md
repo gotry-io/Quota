@@ -1,10 +1,10 @@
 # @gotry-io/quota-protocol
 
 Runtime schemas for QuotaBar's Rust local service, managed QuotaRelay, Swift `Codable` models, and
-the registered `quota-ios` account client. OAuth and Device control remain released v2; quota,
-Usage, and Account summary use managed-data v6. `quota-ios` adds client-specific authorization-code
-and account-session payloads on the v2 OAuth contract; the released `quotacli` request and response
-shapes are unchanged.
+the registered `quota-ios` account client. OAuth and Device control remain v2; quota, Usage, and
+Account summary use managed-data v6. Each client exchanges its authorization code for one session
+on the same v2 OAuth contract, and `quota-ios` names its own request and response payloads because
+it registers no Device.
 
 Strict writes, tolerant reads
 ([ADR 0023](../../docs/decisions/0023-strict-writes-tolerant-reads.md)). A request body is checked against exactly the contract and refused when it names a key the contract

@@ -56,8 +56,8 @@ Packaged builds embed Sparkle 2. Support's **Check for Updates** action, and Spa
 schedule, read the GitHub Releases appcast. Local `swift run` binaries are not packaged and do not
 check for updates.
 
-Settings' **Support** page is backed by the private `diagnose` IPC operation and renders the same
-bounded, redacted report Linux `quotacli doctor` prints. The service evaluates the four Quota/Usage
+Settings' **Support** page is backed by the private `diagnose` IPC operation and renders one
+bounded, redacted report. The service evaluates the four Quota/Usage
 surfaces and the sources behind them and writes one sentence per row; Swift strictly decodes and
 renders it, and never maps a code to copy of its own. **Show in Overview** remains
 presentation-only and never requests local collection. Account provider data remains healthy without

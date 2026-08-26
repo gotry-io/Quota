@@ -794,15 +794,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "quotacli"
-version = "0.0.17"
-dependencies = [
- "libc",
- "quota-service",
- "serde_json",
-]
-
-[[package]]
 name = "quote"
 version = "1.0.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"

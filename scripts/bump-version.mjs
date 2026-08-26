@@ -1,17 +1,14 @@
 #!/usr/bin/env node
 /**
- * Bump one product version and commit it.
+ * Bump QuotaBar's version and commit it.
  *
- *   pnpm version:bump:cli patch|minor|major|<semver>
  *   pnpm version:bump:menubar patch|minor|major|<semver>
  *   … --no-commit
  *
- * CLI: Cargo package version.
  * Menubar: plutil CFBundleShortVersionString.
- * Publish tags: cli-vX.Y.Z | menubar-vX.Y.Z
+ * Publish tag: menubar-vX.Y.Z
  */
 import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -27,16 +24,15 @@ const target = positional[0];
 const bumpArg = positional[1];
 
 if (help || !target || !bumpArg) {
-  console.log(`Usage: pnpm version:bump:<cli|menubar> <patch|minor|major|semver> [--no-commit]
+  console.log(`Usage: pnpm version:bump:menubar <patch|minor|major|semver> [--no-commit]
 
 Examples:
-  pnpm version:bump:cli patch
   pnpm version:bump:menubar minor
   pnpm version:bump:menubar 0.1.0 --no-commit`);
   process.exit(help ? 0 : 2);
 }
 
-if (target !== "cli" && target !== "menubar") {
+if (target !== "menubar") {
   console.error(`unknown target: ${target}`);
   process.exit(1);
 }
@@ -46,25 +42,22 @@ if (!BUMP_KINDS.has(bumpArg) && !VERSION_RE.test(bumpArg)) {
   process.exit(1);
 }
 
-const before = readVersion(target);
-const touched = target === "cli" ? bumpCli(before, bumpArg) : bumpMenubar(before, bumpArg);
-const version = readVersion(target);
+const before = readVersion();
+const touched = bumpMenubar(before, bumpArg);
+const version = readVersion();
 
 if (version === before) {
-  console.log(
-    `Already at ${target === "cli" ? "QuotaCLI" : "QuotaBar"} ${version}; nothing to do.`,
-  );
+  console.log(`Already at QuotaBar ${version}; nothing to do.`);
   process.exit(0);
 }
-console.log(`updated ${target === "cli" ? "QuotaCLI" : "QuotaBar"}: ${before} → ${version}`);
+console.log(`updated QuotaBar: ${before} → ${version}`);
 
-const tag = `${target === "cli" ? "cli" : "menubar"}-v${version}`;
-const label = target === "cli" ? "QuotaCLI" : "QuotaBar";
-const message = `chore(${target}): bump version to ${version}`;
+const tag = `menubar-v${version}`;
+const message = `chore(menubar): bump version to ${version}`;
 
 if (noCommit) {
   console.log("Skipped commit (--no-commit).");
-  console.log(`Publish: git tag -a ${tag} -m "${label} ${version}" && git push origin ${tag}`);
+  console.log(`Publish: git tag -a ${tag} -m "QuotaBar ${version}" && git push origin ${tag}`);
   process.exit(0);
 }
 
@@ -85,18 +78,9 @@ if (commit.status !== 0) {
   process.exit(commit.status ?? 1);
 }
 console.log(`committed: ${message}`);
-console.log(`Publish: git tag -a ${tag} -m "${label} ${version}" && git push origin ${tag}`);
+console.log(`Publish: git tag -a ${tag} -m "QuotaBar ${version}" && git push origin ${tag}`);
 
-function readVersion(product) {
-  if (product === "cli") {
-    const manifest = readFileSync(join(root, "apps/cli/Cargo.toml"), "utf8");
-    const version = manifest.match(/^version = "([^"]+)"$/m)?.[1];
-    if (!version) {
-      console.error("cannot read QuotaCLI version from apps/cli/Cargo.toml");
-      process.exit(1);
-    }
-    return version;
-  }
+function readVersion() {
   const out = run("plutil", [
     "-extract",
     "CFBundleShortVersionString",
@@ -108,27 +92,6 @@ function readVersion(product) {
     process.exit(1);
   }
   return out.stdout.trim();
-}
-
-function bumpCli(current, spec) {
-  const next = BUMP_KINDS.has(spec) ? nextSemver(current, spec) : spec;
-  const manifestPath = join(root, "apps/cli/Cargo.toml");
-  const manifest = readFileSync(manifestPath, "utf8");
-  const currentLine = `version = "${current}"`;
-  if (!manifest.includes(currentLine)) {
-    console.error(`cannot find QuotaCLI version ${current} in apps/cli/Cargo.toml`);
-    process.exit(1);
-  }
-  writeFileSync(manifestPath, manifest.replace(currentLine, `version = "${next}"`));
-  // --workspace pins every non-member to its current lock entry, so the release commit carries
-  // one version line. `cargo generate-lockfile` re-resolves from scratch and would sweep
-  // unrelated dependency upgrades in with the bump.
-  const lockfile = run("cargo", ["update", "--workspace", "--offline"]);
-  if (lockfile.status !== 0) {
-    console.error(lockfile.stderr || "cargo update --workspace failed");
-    process.exit(lockfile.status ?? 1);
-  }
-  return ["apps/cli/Cargo.toml", "Cargo.lock"];
 }
 
 function bumpMenubar(current, spec) {
