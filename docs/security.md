@@ -163,11 +163,18 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
 - Provider credentials go only to the fixed endpoints in
   [`provider-collection.md`](provider-collection.md); apart from the acquisition above, do not
   import browser Cookies, and hidden WebView state is never an authentication source.
-- Collection starts exactly one process: `/usr/bin/security`, reading Claude Code's Keychain grant
-  once per refresh for both discovery and collection. No collector runs a provider's CLI, and an
-  expired grant is reported as `auth_required` rather than renewed by driving its owner. Spawn
-  explicit executables with argument arrays, never interpolate provider or user data into a shell,
-  and terminate subprocesses on success, failure, timeout, and cancellation.
+- Collection starts two processes and no others. `/usr/bin/security` reads Claude Code's Keychain
+  grant once per refresh, for both discovery and collection. `<binary> --version` reads the
+  installed Claude Code or Codex version the request headers claim, on the refresh worker before
+  collection, only for a provider this device holds a sign-in for, and only when the binary's real
+  path, size, and mtime differ from the fingerprint stored in the disposable cache — so a given
+  installed binary is run at most once, and never more than once an hour. It is bounded to five
+  seconds and 4 KiB of stdout, gets no stdin, discards stderr, and runs with only `HOME` and `PATH`
+  in its environment; a failed or absent read leaves the header on its fallback constant, and
+  collection neither waits on it nor fails because of it. No collector runs a provider's CLI to read
+  quota, and an expired grant is reported as `auth_required` rather than renewed by driving its
+  owner. Spawn explicit executables with argument arrays, never interpolate provider or user data
+  into a shell, and terminate subprocesses on success, failure, timeout, and cancellation.
 - Provider HTTP uses the same twenty-second, 1 MiB bounds; browser-session validation tightens the
   timeout to ten seconds so it finishes inside private IPC, and the Keychain lookup is bounded the
   same way with its secret in a type whose `Debug` is redacted. Private IPC limits each line to 1

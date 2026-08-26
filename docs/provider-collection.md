@@ -45,14 +45,43 @@ message naming what restores collection, because a stored sign-in the provider n
 recovers differently from one that never existed, and a browser session saved here is re-added here
 while a provider's own grant is renewed by opening that provider's program.
 
-A scheduled refresh starts exactly one process: the macOS Keychain lookup that finds Claude Code's
-grant, performed once per refresh and shared by discovery and collection. No collector runs a
-provider's CLI. Requests otherwise identify as `Quota/<version>`, except where a section below says
-the provider only answers its own client.
+A scheduled refresh starts at most two kinds of process, neither of them a provider CLI doing
+provider work: the macOS Keychain lookup that finds Claude Code's grant, performed once per refresh
+and shared by discovery and collection, and the `--version` described under
+[Official CLI identity](#official-cli-identity), which a given installed binary earns at most once
+however many refreshes run. No collector runs a provider's CLI to read quota. Requests otherwise
+identify as `Quota/<version>`, except where a section below says the provider only answers its own
+client.
 
 How long a collected snapshot describes current quota is derived from the reading itself, as
 described in [`architecture.md`](architecture.md). Collectors do not report it, providers do not
 report it, and nothing stamps it onto the upload.
+
+## Official CLI identity
+
+Two endpoints answer the provider's own command-line client and nothing else, so the Codex and
+Claude Code requests below present that client's `User-Agent`. Sending another program's client
+identity is a provider-terms risk this build takes knowingly, and it is stated once here rather
+than repeated.
+
+The version in those headers is the version of the CLI installed on this device, not a constant:
+
+- The binary is resolved as `claude` or `codex` on the service's `PATH`, then in `~/.local/bin`,
+  `~/.npm-global/bin`, `~/.volta/bin`, `/opt/homebrew/bin`, and `/usr/local/bin`. Symlinks are
+  followed to the real file.
+- That file's real path, size, and mtime are its fingerprint, stored with the version and the time
+  it was read in `cache.sqlite` metadata. The store is rebuildable: a cache reset costs one read
+  per installed CLI.
+- A refresh only `stat`s. `<binary> --version` runs when the fingerprint is absent or has changed,
+  and never more often than once an hour per CLI, so a binary that rewrites itself cannot turn a
+  five-minute timer into a spawn. It runs bounded: five seconds, 4 KiB of stdout, stderr discarded,
+  no stdin, and an `env -i`-style environment holding only `HOME` and `PATH`.
+- The first semver-looking token of the output is the version, which reads `2.1.0 (Claude Code)`,
+  a bare `2.1.0`, and `codex-cli 0.42.1`. Anything else is no version rather than a guess.
+- The probe runs on the refresh worker before collection, and only for a provider this device
+  actually holds a sign-in for, so a Mac without Codex never runs `codex --version`. Collection
+  never waits on it and never fails because of it: an absent or failed read leaves the header on
+  the fallback stated in that provider's section.
 
 ## Codex
 
@@ -73,11 +102,14 @@ report it, and nothing stamps it onto the upload.
    There is no further rung: absent or rejected credentials are `auth_required`.
 
 The local service never submits the Codex refresh token or writes `auth.json`, and never starts the
-Codex CLI: a grant Codex no longer accepts is reported as `auth_required`, and the reader renews it
-by opening Codex. The PAT requests present the Codex CLI's own `User-Agent` and
-`originator: codex_cli_rs`, because the endpoint only honors personal access tokens from requests
-that identify as that CLI; sending another program's client identity is a provider-terms risk this
-build takes knowingly. Hidden WebView dashboard scraping and reset-credit redemption are not used.
+Codex CLI to read quota: a grant Codex no longer accepts is reported as `auth_required`, and the
+reader renews it by opening Codex. The PAT requests present `originator: codex_cli_rs` and the Codex
+CLI's own `User-Agent`, because the endpoint only honors personal access tokens from requests that
+identify as that CLI. That agent is `codex_cli_rs/<version> (<platform> <os version>; <arch>)` with
+the installed Codex version read as [Official CLI identity](#official-cli-identity) describes, and
+`codex_cli_rs (<platform> <os version>; <arch>)` — no version field at all — when none could be
+read. The OAuth rung sends no `User-Agent` of its own. Hidden WebView dashboard scraping and
+reset-credit redemption are not used.
 
 ## Claude Code
 
@@ -98,13 +130,14 @@ build takes knowingly. Hidden WebView dashboard scraping and reset-credit redemp
 
 An absent, stale, or unreadable session is `auth_required`. A Claude Code installation configured
 only for a third-party API gateway does not provide Anthropic subscription OAuth quota.
-Collection never starts the Claude CLI, in any form:
+Collection never drives the Claude CLI to read quota, in any form:
 an expired grant is reported as the sign-in it is, and the reader renews it by opening Claude Code.
 The local service never submits the Claude refresh token or writes its credential file or Keychain
-entry. The Keychain read is the one process a refresh starts, and it is performed once and shared.
-The usage request presents `User-Agent: claude-code/2.1.0`, which is the official CLI's identity
-rather than this build's; sending another program's client identity is a provider-terms risk this
-build takes knowingly.
+entry. The Keychain read is performed once per refresh and shared. The usage request presents
+`User-Agent: claude-code/<version>`, the official CLI's identity rather than this build's, carrying
+the installed Claude Code version read as [Official CLI identity](#official-cli-identity)
+describes and falling back to `claude-code/2.1.0` when none could be read. The profile request
+sends no `User-Agent` of its own.
 
 ## Local Usage logs
 

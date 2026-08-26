@@ -10,7 +10,7 @@
 | 核对提交 | `f74117a`（2026-08-20） |
 | 核对方式 | 读取 `ProviderManifest.swift`（69 个 descriptor）+ 各 `*ProviderDescriptor.swift` 的 `fetchPlan` / `resolveStrategies`、`ProviderTokenCostConfig.supportsTokenCost`，并以单平台文档补窗口语义 |
 | 优先级 | **Descriptor / strategy 源码 > 单平台 `docs/<provider>.md` > `docs/providers.md` 总览表** |
-| 增量核对 | `27c7f33`（2026-08-22）：仅重读 Quota 已支持 provider 的 descriptor / probe / fetcher（Codex、Claude、Cursor、Grok、Kimi、DeepSeek、OpenRouter、LiteLLM），用于 §7 对照。2026-08-26 复核 §7：上游未变，Quota 侧删掉了全部 provider CLI 阶梯（Claude PTY 探针、Codex `app-server`、Grok `agent stdio`），并把 `browser_session` 收敛到 Cursor 一家；差异按下表逐条记录 |
+| 增量核对 | `27c7f33`（2026-08-22）：仅重读 Quota 已支持 provider 的 descriptor / probe / fetcher（Codex、Claude、Cursor、Grok、Kimi、DeepSeek、OpenRouter、LiteLLM），用于 §7 对照。2026-08-26 复核 §7：上游未变，Quota 侧删掉了全部 provider CLI 阶梯（Claude PTY 探针、Codex `app-server`、Grok `agent stdio`），并把 `browser_session` 收敛到 Cursor 一家；差异按下表逐条记录。2026-08-26 增量：重读 `ProviderVersionDetector.swift` 与 `CodexPAT/CodexCLIUserAgent.swift`，Quota 已按同样思路把 Claude / Codex UA 的版本号改为读取本机安装的 CLI |
 
 已发现并按源码修正的偏差（相对上游 `providers.md` 或初版整理）：
 
@@ -284,15 +284,17 @@ Cost：本机 projects JSONL；Admin 另出 org spend。
 | --- | --- | --- |
 | Cursor 额度 | Probe 内 App→Cookie；`usage-summary` + `get-sand-usage-status`（Grok Bot 周额度）+ `/api/usage?user=`（legacy 按次套餐） | 已对齐：Cursor.app `state.vscdb` → stored browser session；三个端点及 legacy 套餐替换规则一致。Cursor 是 Quota 中唯一声明 `browser_session` 的 provider——它既无 CLI 登录也无 API key，其余各家的 grant 由自己的程序续期，因此不为它们打开任何 cookie store；首次读 cookie 前有同意弹窗，被 macOS 拒绝时报 `browser_access_denied` 而不是「无会话」 |
 | Cursor cost | Dashboard events + token-cost | 本机 bubble/JSONL，不等价 |
-| Codex Auto | PAT→OAuth→CLI | PAT→OAuth(WHAM)；窗口按时长分类。**有意差异**：不启动 `codex app-server`——定时刷新不 spawn provider CLI；也不读 chatgpt.com cookie——Codex 自己续期 grant，多一条 cookie 阶梯只是多要一份浏览器权限；直连失败即 `auth_required`，由用户打开 Codex 续期 |
-| Claude Auto | Planner oauth→cli→web | 仅 OAuth。**有意差异**：不跑 `/status`、`/usage` PTY 探针——同上；也不读 claude.ai cookie——同 Codex 理由；过期 grant 直接报 `auth_required`。唯一保留的子进程是读 Keychain 的 `/usr/bin/security`，每次刷新至多一次 |
+| Codex Auto | PAT→OAuth→CLI | PAT→OAuth(WHAM)；窗口按时长分类。**有意差异**：不启动 `codex app-server`——定时刷新不 spawn provider CLI 取额度；也不读 chatgpt.com cookie——Codex 自己续期 grant，多一条 cookie 阶梯只是多要一份浏览器权限；直连失败即 `auth_required`，由用户打开 Codex 续期 |
+| Codex UA 版本 | `ProviderVersionDetector.codexVersion()` 跑 `codex --version`（`--version`/`version`/`-v` 依次尝试）；`CodexCLIUserAgent` 拼 `codex_cli_rs/<version> (<platform> <os>; <arch>)` | 已对齐：同一 UA 形状，含 OS 版本（由 `kern.osproductversion` 读出，不起 `sw_vers`）。**实现差异**：只试 `--version`，且按二进制真实路径 + size + mtime 缓存在 `cache.sqlite`，指纹未变不 spawn、同一 CLI 每小时至多一次；读不到版本时退回无版本号的 `codex_cli_rs (...)` |
+| Claude Auto | Planner oauth→cli→web | 仅 OAuth。**有意差异**：不跑 `/status`、`/usage` PTY 探针——同上；也不读 claude.ai cookie——同 Codex 理由；过期 grant 直接报 `auth_required`。取额度的子进程只有读 Keychain 的 `/usr/bin/security`，每次刷新至多一次 |
+| Claude UA 版本 | `ProviderVersionDetector.claudeVersion()` 跑 `claude --version`，按 realpath + mtime + size + inode 指纹缓存 30 分钟 | 已对齐：同样的指纹思路（realpath + size + mtime），UA 变为 `claude-code/<version>`。**实现差异**：缓存写在 `cache.sqlite` 而非进程内存，所以跨重启仍不 spawn；不设 TTL——指纹不变就永不重读，指纹变了每小时至多重读一次；读不到版本时退回 `claude-code/2.1.0` |
 | Grok Auto | CLI→OAuth(proxy)→Web→OAuth(grpc)；套餐名来自 `/v1/settings` `subscription_tier_display` | OAuth(proxy)→OAuth(grpc)，settings 套餐名一致。**有意差异**：完全不启动 grok CLI——既不取额度（grok 1.0.5 `agent stdio` 对 `x.ai/billing` 返回 `-32601 Method not found`），也不用它刷新 token；也不读 grok.com cookie——OAuth(grpc) 用同一个 token 打同一个 RPC，cookie 阶梯不增加任何能力 |
 | Kimi | API→CLI cred→Web | API key→`~/.kimi-code` CLI 凭据。**有意差异**：不读 kimi.com cookie——同 Codex 理由 |
 | DeepSeek | 有 key→API（可叠加 Chrome localStorage `userToken` 取月度明细）；无 key→Platform Web（同一 token） | **有意差异**：仅 API balance。Platform 路径的 token 来源是浏览器 localStorage（安全基线排除）或 `DEEPSEEK_PLATFORM_TOKEN` 手工粘贴；其增量是月度花费明细（cost，不是 quota），余额与 API key 路径相同 |
 | OpenRouter | `/credits` + `/key` 额度；`/activity` 花费历史 | 额度已对齐；`/activity` 属 cost，不在 quota 范围 |
 | LiteLLM | `key/info` → `user/info` / `team/info`，含 `budget_reset_at` | 已对齐 |
 | Usage & Spend 集合 | 11 个 supportsTokenCost | Quota Usage 为本机 agent 扫描集 |
-| 采集阶梯总则 | 各 provider 允许 CLI / PTY / cookie 阶梯 | **有意差异**：定时刷新路径不 spawn 任何 provider CLI，`browser_session` 只声明给 Cursor。凭据过期一律报 `auth_required`，恢复文案指向拥有该 grant 的程序 |
+| 采集阶梯总则 | 各 provider 允许 CLI / PTY / cookie 阶梯 | **有意差异**：定时刷新路径不 spawn 任何 provider CLI 取额度，`browser_session` 只声明给 Cursor。凭据过期一律报 `auth_required`，恢复文案指向拥有该 grant 的程序。唯一的 CLI 子进程是上面两行的 `--version`：它不读额度，且按二进制指纹缓存，装好的同一个 binary 至多跑一次 |
 
 ---
 
