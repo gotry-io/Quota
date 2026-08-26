@@ -55,6 +55,8 @@ const BROWSER_ACCESS_DENIED_KEY: &str = "browser_access_denied";
 const USAGE_SCAN_VERSION_KEY: &str = "usage_scan_version";
 /// The last `--version` this device read out of each installed provider CLI.
 const CLI_VERSION_KEY: &str = "provider_cli_versions";
+/// The last time this device asked the Grok CLI to renew the sign-in it owns.
+const GROK_REFRESH_ATTEMPT_KEY: &str = "grok_refresh_attempt";
 const MAX_DIAGNOSTIC_ATTEMPTS: i64 = 5_000;
 const DIAGNOSTIC_ATTEMPT_RETENTION_DAYS: i64 = 7;
 const ATTEMPT_PRUNE_INTERVAL_SECONDS: u64 = 3_600;
@@ -1605,6 +1607,22 @@ impl StateStore {
     }
 
     pub fn write_provider_cli_versions(&self, encoded: &str) -> Result<(), StateError> {
+        self.write_cache_metadata(CLI_VERSION_KEY, encoded)
+    }
+
+    /// The last time this device asked the Grok CLI to renew its sign-in, against which
+    /// binary, and how it went.  This is what keeps a CLI that cannot renew from being
+    /// started every five minutes, so it must outlive the process; it lives in the disposable
+    /// cache because losing it costs one extra attempt and nothing else.
+    pub fn grok_refresh_attempt(&self) -> Result<Option<String>, StateError> {
+        self.with_cache(|conn| metadata_value(conn, GROK_REFRESH_ATTEMPT_KEY))
+    }
+
+    pub fn write_grok_refresh_attempt(&self, encoded: &str) -> Result<(), StateError> {
+        self.write_cache_metadata(GROK_REFRESH_ATTEMPT_KEY, encoded)
+    }
+
+    fn write_cache_metadata(&self, key: &str, encoded: &str) -> Result<(), StateError> {
         if encoded.len() > crate::protocol::MAXIMUM_LINE_BYTES {
             return Err(StateError::InvalidState);
         }
@@ -1612,7 +1630,7 @@ impl StateStore {
             conn.execute(
                 "INSERT INTO metadata(key, value) VALUES (?1, ?2)
                  ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                params![CLI_VERSION_KEY, encoded],
+                params![key, encoded],
             )?;
             Ok(())
         })

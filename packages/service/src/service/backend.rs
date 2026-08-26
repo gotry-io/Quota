@@ -30,6 +30,7 @@ use crate::providers::common::{
     CliTool, ErrorCategory, ProbeCache, ProbeEnvironment, ProviderError, ProviderSession,
     resolve_cli_versions,
 };
+use crate::providers::grok::{self, refresh::RenewalAttempt};
 use crate::providers::{self, CollectionContext};
 use crate::relay::{AccountManager, RelayClient};
 use crate::service::{BackendError, LocalBackend, LoginOutcome, RefreshOutcome};
@@ -1063,6 +1064,7 @@ impl NativeBackend {
             })
             .collect::<Vec<_>>();
         context.cli_versions = self.provider_cli_versions(&discovered, &context, &cancel);
+        self.renew_grok_sign_in(&discovered, &context);
         let attempts =
             thread::scope(|scope| {
                 let mut jobs = Vec::with_capacity(provider_ids.len());
@@ -1223,6 +1225,53 @@ impl NativeBackend {
             let _ = self.state.write_provider_cli_versions(&encoded);
         }
         resolution.versions
+    }
+
+    /// Asks the Grok CLI to renew this device's sign-in, when that sign-in is the only thing
+    /// standing between the refresh and a reading.
+    ///
+    /// Grok's token lives about six hours and only its CLI can renew it, so a Mac that has not
+    /// opened Grok since breakfast would otherwise report an expired sign-in all day. An
+    /// expired grant — and nothing else — earns one bounded `grok agent stdio`, at most once
+    /// an hour whatever it produced; [`grok::refresh`] holds the rules and the bounds.
+    ///
+    /// Runs here, beside the version probe and before collection, so no collector gains the
+    /// ability to start a process. Collection reads `auth.json` afterwards and neither knows
+    /// nor waits for any of this beyond the renewal's own deadline.
+    fn renew_grok_sign_in(
+        &self,
+        discovered: &[(ProviderId, Vec<ProviderSession>)],
+        context: &CollectionContext,
+    ) {
+        if !discovered
+            .iter()
+            .any(|(provider, sessions)| *provider == ProviderId::Grok && !sessions.is_empty())
+        {
+            return;
+        }
+        let attempted = self
+            .state
+            .grok_refresh_attempt()
+            .ok()
+            .flatten()
+            .and_then(|raw| serde_json::from_str::<RenewalAttempt>(&raw).ok());
+        let environment = ProbeEnvironment::new(
+            context.home_directory.clone(),
+            context.env("PATH").map(str::to_owned),
+        );
+        let Some(attempt) = grok::refresh::renew_expired_sign_in(
+            context,
+            &environment,
+            attempted.as_ref(),
+            crate::providers::common::unix_now(),
+        ) else {
+            return;
+        };
+        // An attempt that cannot be recorded must not become an attempt every five minutes,
+        // but a cache that cannot be written is already reporting itself elsewhere.
+        if let Ok(encoded) = serde_json::to_string(&attempt) {
+            let _ = self.state.write_grok_refresh_attempt(&encoded);
+        }
     }
 
     fn collection_context(
@@ -3216,6 +3265,128 @@ mod tests {
             );
             assert!(none.is_empty());
             assert_eq!(spawns(&log), 1);
+
+            drop(backend);
+            drop(state);
+            fs::remove_dir_all(root).expect("cleanup");
+        }
+    }
+
+    /// The renewal rung end to end: an expired Grok token buys one `grok agent stdio` on the
+    /// refresh worker, the attempt is written to the cache, and the record is what stops the
+    /// next five-minute refresh from starting the CLI again.  The rest of the refresh — here,
+    /// the Claude version probe — is untouched by any of it.
+    #[test]
+    fn an_expired_grok_sign_in_is_renewed_once_and_the_record_outlives_the_refresh() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let root =
+                std::env::temp_dir().join(format!("quota-grok-renew-{}", uuid::Uuid::new_v4()));
+            let home = root.join("home");
+            let bin = root.join("bin");
+            let grok_home = home.join(".grok");
+            fs::create_dir_all(&grok_home).expect("grok home");
+            fs::create_dir_all(&bin).expect("bin");
+            let log = root.join("spawns.log");
+            let auth = grok_home.join("auth.json");
+            let credentials = |expires_at: &str, token: &str| {
+                format!(
+                    "{{\"https://auth.x.ai::fixture\": {{\"key\": \"{token}\", \
+                     \"expires_at\": \"{expires_at}\"}}}}"
+                )
+            };
+            fs::write(&auth, credentials("2020-01-01T00:00:00Z", "stale")).expect("auth");
+            fs::write(
+                bin.join("grok"),
+                format!(
+                    "#!/bin/sh\n\
+                     echo ran >> {log}\n\
+                     read -r first || exit 1\n\
+                     printf '%s\\n' '{{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{{}}}}'\n\
+                     read -r second || exit 1\n\
+                     case \"$second\" in *cached_token*) ;; *) exit 3 ;; esac\n\
+                     printf '%s\\n' '{{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{{}}}}'\n\
+                     cat > {auth} <<'AUTHJSON'\n\
+                     {renewed}\n\
+                     AUTHJSON\n",
+                    log = log.display(),
+                    auth = auth.display(),
+                    renewed = credentials("2099-01-01T00:00:00Z", "fresh"),
+                ),
+            )
+            .expect("fake grok");
+            fs::write(
+                bin.join("claude"),
+                "#!/bin/sh\necho '2.4.7 (Claude Code)'\n",
+            )
+            .expect("fake claude");
+            for program in ["grok", "claude"] {
+                fs::set_permissions(bin.join(program), fs::Permissions::from_mode(0o755))
+                    .expect("mode");
+            }
+
+            let state = Arc::new(StateStore::open(&root).expect("state"));
+            let relay = Arc::new(RelayClient::new().expect("relay"));
+            let mut backend = NativeBackend::new(state.clone(), relay, "QuotaTest", "test");
+            backend.home = home.clone();
+            backend.environment.clear();
+            backend.environment.insert(
+                "PATH".to_owned(),
+                format!("{}:/usr/bin:/bin", bin.display()),
+            );
+            let cancel = Arc::new(AtomicBool::new(false));
+            let context = backend.collection_context(cancel.clone()).expect("context");
+            let session = |provider: ProviderId| {
+                (
+                    provider,
+                    vec![ProviderSession {
+                        provider,
+                        credential_source: "fixture".to_owned(),
+                    }],
+                )
+            };
+            let discovered = vec![session(ProviderId::Grok)];
+            let spawns = |log: &std::path::Path| {
+                fs::read_to_string(log)
+                    .map(|text| text.lines().count())
+                    .unwrap_or(0)
+            };
+
+            backend.renew_grok_sign_in(&discovered, &context);
+            assert_eq!(spawns(&log), 1);
+            assert!(
+                fs::read_to_string(&auth).expect("auth").contains("fresh"),
+                "collection reads the file the CLI wrote"
+            );
+            let recorded = state
+                .grok_refresh_attempt()
+                .expect("attempt")
+                .expect("recorded");
+            assert!(recorded.contains("\"outcome\":\"renewed\""), "{recorded}");
+
+            // A token with time left is not a sign-in problem, so nothing is started.
+            backend.renew_grok_sign_in(&discovered, &context);
+            assert_eq!(spawns(&log), 1);
+
+            // Expired again inside the hour: the record from the first attempt is what keeps
+            // the five-minute timer from turning into a spawn schedule.
+            fs::write(&auth, credentials("2020-01-01T00:00:00Z", "stale")).expect("auth");
+            backend.renew_grok_sign_in(&discovered, &context);
+            assert_eq!(spawns(&log), 1);
+
+            // A Mac that never signed into Grok never looks for the binary at all.
+            backend.renew_grok_sign_in(&[(ProviderId::Grok, Vec::new())], &context);
+            assert_eq!(spawns(&log), 1);
+
+            // And the rest of the refresh is exactly where it was.
+            let versions =
+                backend.provider_cli_versions(&[session(ProviderId::Claude)], &context, &cancel);
+            assert_eq!(
+                versions.get(&CliTool::Claude).map(String::as_str),
+                Some("2.4.7")
+            );
 
             drop(backend);
             drop(state);
