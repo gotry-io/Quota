@@ -185,7 +185,15 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
             allow_private_http: false,
             mask_label: "Kimi",
         }),
-        browser_session: None,
+        browser_session: Some(BrowserSessionConfig {
+            login_url: "https://www.kimi.com/code/console",
+            cookie_hosts: &["www.kimi.com", "kimi.com"],
+            cookie_names: &["kimi-auth"],
+            browser_priority: &[
+                "safari", "chrome", "edge", "brave", "arc", "dia", "chromium", "firefox",
+            ],
+            exclusive: false,
+        }),
         default_base_url: Some("https://api.kimi.com"),
         base_url_environment_key: None,
     },

@@ -67,7 +67,7 @@ extension QuotaCollectionSource {
       "OAuth"
     case "codex_pat_usage_api": "Access token"
     case "browser_session", "chatgpt_web_usage_api", "claude_web_usage_api",
-      "grok_web_billing_api", "cursor_dashboard_api":
+      "grok_web_billing_api", "kimi_web_billing_api", "cursor_dashboard_api":
       "Browser session"
     case "cursor_app_auth": "Cursor app session"
     case "kimi_code_cli_credential": "Kimi Code token"

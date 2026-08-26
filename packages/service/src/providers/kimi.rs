@@ -3,15 +3,21 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 
 use super::common::{
-    ApiKeyCredentials, CollectionContext, ErrorCategory, HttpClient, LOCAL_FILE_LIMIT,
-    ProviderError, ProviderSession, QuotaAccount, QuotaSnapshot, QuotaWindow, account_identity,
-    api_key_identity, clamp_percent, number, obj_get, obj_get_any, parse_date, read_bounded_file,
-    resolve_api_key, string,
+    ApiKeyCredentials, CollectionContext, ErrorCategory, HTTP_TIMEOUT, HttpClient,
+    LOCAL_FILE_LIMIT, ProviderError, ProviderSession, QuotaAccount, QuotaSnapshot, QuotaWindow,
+    VALIDATION_TIMEOUT, ValidatedBrowserSession, account_identity, api_key_identity, clamp_percent,
+    collect_official_or_browser, cookie_named_value, discover_official_or_browser, number, obj_get,
+    obj_get_any, parse_date, read_bounded_file, resolve_api_key, string,
 };
 
 pub const SOURCE: &str = "kimi_code_usages_api";
 pub const CLI_SOURCE: &str = "kimi_code_cli_credential";
+pub const WEB_SOURCE: &str = "kimi_web_billing_api";
 const DEFAULT_CODE_BASE_URL: &str = "https://api.kimi.com";
+const WEB_ORIGIN: &str = "https://www.kimi.com";
+const WEB_USAGES_PATH: &str = "/apiv2/kimi.gateway.billing.v1.BillingService/GetUsages";
+/// What a stored Kimi session is called, since the billing RPC names nobody.
+const WEB_ACCOUNT_LABEL: &str = "Kimi";
 const CLI_TOKEN_SKEW_SECONDS: i64 = 60;
 
 #[derive(Clone, Debug)]
@@ -21,26 +27,68 @@ struct CliCredentials {
 }
 
 pub fn discover(context: &CollectionContext) -> Vec<ProviderSession> {
-    resolve(context)
-        .ok()
-        .map(|credentials| credentials.source)
-        .or_else(|| load_cli_credentials(context).map(|credentials| credentials.source))
-        .map(|credential_source| ProviderSession {
-            provider: ProviderId::Kimi,
-            credential_source,
-        })
-        .into_iter()
-        .collect()
+    discover_official_or_browser(
+        ProviderId::Kimi,
+        resolve(context)
+            .ok()
+            .map(|credentials| credentials.source)
+            .or_else(|| load_cli_credentials(context).map(|credentials| credentials.source))
+            .map(|credential_source| ProviderSession {
+                provider: ProviderId::Kimi,
+                credential_source,
+            }),
+        context,
+    )
 }
 
+pub fn validate_browser_session(
+    cookie_header: &str,
+    context: &CollectionContext,
+) -> Result<ValidatedBrowserSession, ProviderError> {
+    validate_at(
+        cookie_header,
+        context,
+        &format!("{WEB_ORIGIN}{WEB_USAGES_PATH}"),
+    )
+}
+
+/// Proves the cookie belongs to a signed-in kimi.com account before anything is stored.
+///
+/// The billing RPC names nobody, so the proof is that it answers with the coding allowance
+/// this build would read: a session kimi.com no longer accepts is refused outright, and one
+/// that carries no coding usage is a session there is nothing here to show.
+fn validate_at(
+    cookie_header: &str,
+    context: &CollectionContext,
+    url: &str,
+) -> Result<ValidatedBrowserSession, ProviderError> {
+    let token = kimi_auth_token(cookie_header)
+        .ok_or_else(|| ProviderError::new(ErrorCategory::Error, WEB_SOURCE))?;
+    let data = fetch_web_usages(&token, context, url, VALIDATION_TIMEOUT)?;
+    if map_web_usages(&data).is_none() {
+        return Err(ProviderError::new(ErrorCategory::Error, WEB_SOURCE));
+    }
+    let (account_fingerprint, _) = account_identity("kimi", "browser_session", None);
+    Ok(ValidatedBrowserSession {
+        cookie_header: cookie_header.to_owned(),
+        account_fingerprint,
+        account_label: Some(WEB_ACCOUNT_LABEL.to_owned()),
+    })
+}
+
+/// An API key, then the token Kimi Code writes, then the stored kimi.com session.
 pub fn collect(
-    _session: &ProviderSession,
+    session: &ProviderSession,
     context: &CollectionContext,
 ) -> Result<QuotaSnapshot, ProviderError> {
-    if context.cancelled() {
-        return Err(ProviderError::new(ErrorCategory::Unavailable, SOURCE));
-    }
-    collect_local(context)
+    collect_official_or_browser(
+        session,
+        context,
+        ProviderId::Kimi,
+        SOURCE,
+        || collect_local(context),
+        || collect_web(context),
+    )
 }
 
 fn collect_local(context: &CollectionContext) -> Result<QuotaSnapshot, ProviderError> {
@@ -190,6 +238,105 @@ fn parse_cli_credentials(value: &Value, source: &str, now: i64) -> Option<CliCre
     })
 }
 
+fn collect_web(context: &CollectionContext) -> Result<QuotaSnapshot, ProviderError> {
+    let cookie_header = context
+        .browser_session(ProviderId::Kimi)
+        .ok_or_else(|| ProviderError::new(ErrorCategory::AuthRequired, WEB_SOURCE))?;
+    collect_web_at(
+        cookie_header,
+        context,
+        &format!("{WEB_ORIGIN}{WEB_USAGES_PATH}"),
+    )
+}
+
+fn collect_web_at(
+    cookie_header: &str,
+    context: &CollectionContext,
+    url: &str,
+) -> Result<QuotaSnapshot, ProviderError> {
+    let token = kimi_auth_token(cookie_header)
+        .ok_or_else(|| ProviderError::new(ErrorCategory::Error, WEB_SOURCE))?;
+    let value = fetch_web_usages(&token, context, url, HTTP_TIMEOUT)?;
+    let data = map_web_usages(&value)
+        .ok_or_else(|| ProviderError::new(ErrorCategory::Error, WEB_SOURCE))?;
+    let windows = map_windows(&data);
+    if windows.is_empty() {
+        return Err(ProviderError::new(ErrorCategory::Error, WEB_SOURCE));
+    }
+    let (fingerprint, scope) = account_identity("kimi", "browser_session", None);
+    Ok(QuotaSnapshot {
+        provider: ProviderId::Kimi,
+        account: QuotaAccount {
+            fingerprint,
+            fingerprint_scope: scope,
+            label: Some(WEB_ACCOUNT_LABEL.to_owned()),
+            plan: None,
+        },
+        windows,
+        status: "available",
+        observed_at: context.observed_at(),
+    })
+}
+
+/// The coding allowance kimi.com's own billing RPC reports for this session.
+///
+/// The request asks for the one scope this app shows, and identifies with both the bearer and
+/// the cookie the value came from, as kimi.com's own console does.
+fn fetch_web_usages(
+    token: &str,
+    context: &CollectionContext,
+    url: &str,
+    timeout: std::time::Duration,
+) -> Result<Value, ProviderError> {
+    if context.cancelled() {
+        return Err(ProviderError::new(ErrorCategory::Unavailable, WEB_SOURCE));
+    }
+    let client = HttpClient::with_timeout(timeout)?;
+    let auth = format!("Bearer {token}");
+    let cookie = format!("kimi-auth={token}");
+    let user_agent = context.user_agent();
+    let headers = [
+        ("Authorization", auth.as_str()),
+        ("Cookie", cookie.as_str()),
+        ("Accept", "application/json"),
+        ("Origin", WEB_ORIGIN),
+        ("Referer", "https://www.kimi.com/code/console"),
+        ("User-Agent", user_agent.as_str()),
+    ];
+    let (_, value) = client.post_json_session(
+        url,
+        &headers,
+        &serde_json::json!({"scope": ["FEATURE_CODING"]}),
+        WEB_SOURCE,
+    )?;
+    Ok(value)
+}
+
+/// The `kimi-auth` cookie is a whole sign-in: kimi.com spends its value as the bearer.
+fn kimi_auth_token(header: &str) -> Option<String> {
+    let value = cookie_named_value(header, "kimi-auth")?.trim();
+    (!value.is_empty() && value.len() <= 8_192 && !value.chars().any(char::is_control))
+        .then(|| value.to_owned())
+}
+
+fn map_web_usages(value: &Value) -> Option<Usage> {
+    let usages = value.get("usages").and_then(Value::as_array)?;
+    let entry = usages.iter().find(|entry| {
+        matches!(
+            string(obj_get(entry, "scope")).as_deref(),
+            Some("FEATURE_CODING" | "coding")
+        )
+    })?;
+    let usage = obj_get(entry, "detail")
+        .or_else(|| obj_get(entry, "usage"))
+        .cloned()
+        .unwrap_or(Value::Null);
+    map_usages(&serde_json::json!({
+        "usage": usage,
+        "limits": entry.get("limits").cloned().unwrap_or(Value::Null),
+    }))
+}
+
 #[derive(Clone, Debug)]
 struct Detail {
     limit: f64,
@@ -323,13 +470,22 @@ mod tests {
         }
     }
 
-    /// Kimi is reached with a key or with the token its own CLI writes. Without either there
-    /// is nothing for this collector to try.
+    /// Kimi is reached with a key or with the token its own CLI writes. Without either, the
+    /// stored kimi.com session is the last thing left to try.
     #[test]
-    fn no_key_or_cli_credential_discovers_nothing() {
-        let context = isolated_context();
+    fn the_browser_session_is_discovered_only_without_a_key_or_cli_credential() {
+        let mut context = isolated_context();
         assert!(discover(&context).is_empty());
-        assert!(ProviderId::Kimi.metadata().browser_session.is_none());
+        context.browser_sessions.insert(
+            ProviderId::Kimi,
+            "kimi-auth=eyJhbGciOiJIUzI1NiJ9.e30.ok".to_owned(),
+        );
+        let sessions = discover(&context);
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(
+            sessions[0].credential_source,
+            crate::providers::BROWSER_SESSION_SOURCE
+        );
     }
 
     #[test]
@@ -373,6 +529,114 @@ mod tests {
         let (fingerprint, scope) = account_identity("kimi", "cli_credential", None);
         assert_eq!(scope, "source");
         assert!(!fingerprint.contains("super-secret"));
+    }
+
+    #[test]
+    fn the_catalog_names_the_kimi_session_cookie() {
+        let spec = ProviderId::Kimi
+            .metadata()
+            .browser_session
+            .expect("kimi browser session");
+        assert_eq!(spec.cookie_names, &["kimi-auth"]);
+        assert_eq!(
+            kimi_auth_token("kimi-auth=eyJhbGciOiJIUzI1NiJ9.e30.ok").as_deref(),
+            Some("eyJhbGciOiJIUzI1NiJ9.e30.ok")
+        );
+        assert!(kimi_auth_token("kimi-auth=").is_none());
+        assert!(kimi_auth_token("sessionKey=sk-ant-ok").is_none());
+    }
+
+    /// One request, one canned answer, and the request head handed back for inspection.
+    fn serve(status: u16, body: &str) -> (String, std::thread::JoinHandle<String>) {
+        use std::io::{Read as _, Write as _};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        let address = listener.local_addr().expect("address").to_string();
+        let body = body.to_owned();
+        let handle = std::thread::spawn(move || {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return String::new();
+            };
+            let mut request = [0_u8; 4096];
+            let read = stream.read(&mut request).unwrap_or(0);
+            let head = String::from_utf8_lossy(&request[..read]).to_lowercase();
+            let _ = write!(
+                stream,
+                "HTTP/1.1 {status} OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            head
+        });
+        (address, handle)
+    }
+
+    const CODING_USAGES: &str = r#"{"usages":[{"scope":"FEATURE_CODING","detail":{"limit":"100","used":"25","remaining":"75"},"limits":[{"window":{"duration":300,"timeUnit":"TIME_UNIT_MINUTE"},"detail":{"limit":"50","used":"10","remaining":"40"}}]}]}"#;
+
+    /// The cookie is kept only once kimi.com has answered with the coding allowance this app
+    /// would read; an answer that carries no coding scope is nothing to store.
+    #[test]
+    fn validate_keeps_only_a_session_with_a_coding_allowance() {
+        let (address, server) = serve(200, CODING_USAGES);
+        let validated = validate_at(
+            "kimi-auth=eyJhbGciOiJIUzI1NiJ9.e30.ok",
+            &isolated_context(),
+            &format!("http://{address}/usages"),
+        )
+        .expect("validated");
+        assert_eq!(validated.account_label.as_deref(), Some("Kimi"));
+        assert_eq!(
+            validated.account_fingerprint,
+            account_identity("kimi", "browser_session", None).0
+        );
+        let head = server.join().expect("server");
+        assert!(head.contains("authorization: bearer eyjhbgcioijiuzi1nij9.e30.ok"));
+        assert!(head.contains("cookie: kimi-auth=eyjhbgcioijiuzi1nij9.e30.ok"));
+        assert!(head.contains("feature_coding"));
+
+        let (address, server) = serve(200, r#"{"usages":[{"scope":"FEATURE_CHAT"}]}"#);
+        let error = validate_at(
+            "kimi-auth=eyJhbGciOiJIUzI1NiJ9.e30.ok",
+            &isolated_context(),
+            &format!("http://{address}/usages"),
+        )
+        .expect_err("no coding scope");
+        assert_eq!(error.category, ErrorCategory::Error);
+        assert_eq!(error.source_id, WEB_SOURCE);
+        server.join().expect("server");
+    }
+
+    /// A header with no `kimi-auth` is refused before a request is made.
+    #[test]
+    fn validate_rejects_a_header_that_names_no_session() {
+        let error = validate_at(
+            "sessionKey=sk-ant-ok",
+            &isolated_context(),
+            "http://127.0.0.1:1",
+        )
+        .expect_err("no kimi-auth");
+        assert_eq!(error.category, ErrorCategory::Error);
+        assert_eq!(error.source_id, WEB_SOURCE);
+    }
+
+    #[test]
+    fn maps_web_coding_usages() {
+        let (address, server) = serve(200, CODING_USAGES);
+        let snapshot = collect_web_at(
+            "kimi-auth=eyJhbGciOiJIUzI1NiJ9.e30.ok",
+            &isolated_context(),
+            &format!("http://{address}/usages"),
+        )
+        .expect("snapshot");
+        assert_eq!(
+            snapshot
+                .windows
+                .iter()
+                .map(|window| window.id.as_str())
+                .collect::<Vec<_>>(),
+            ["weekly", "five_hour"]
+        );
+        server.join().expect("server");
     }
 
     #[test]

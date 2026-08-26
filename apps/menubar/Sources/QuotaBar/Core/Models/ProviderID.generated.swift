@@ -133,7 +133,12 @@ extension ProviderID {
       exclusive: false)
     case .`openrouter`: nil
     case .`deepseek`: nil
-    case .`kimi`: nil
+    case .`kimi`: BrowserSessionSpec(
+      loginURL: "https://www.kimi.com/code/console",
+      cookieHosts: ["www.kimi.com", "kimi.com"],
+      cookieNames: ["kimi-auth"],
+      browserPriority: ["safari", "chrome", "edge", "brave", "arc", "dia", "chromium", "firefox"],
+      exclusive: false)
     case .`litellm`: nil
     case .`cursor`: BrowserSessionSpec(
       loginURL: "https://authenticator.cursor.sh/",

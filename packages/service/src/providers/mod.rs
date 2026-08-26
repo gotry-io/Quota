@@ -89,6 +89,7 @@ pub fn source_display_name(source_id: &str) -> &'static str {
         | claude::WEB_SOURCE
         | codex::WEB_SOURCE
         | grok::WEB_SOURCE
+        | kimi::WEB_SOURCE
         | cursor::SOURCE => "Browser session",
         cursor::APP_SOURCE => "Cursor app session",
         kimi::CLI_SOURCE => "Kimi Code token",
@@ -113,6 +114,7 @@ pub fn validate_browser_session(
         ProviderId::Codex => codex::validate_browser_session(&cookie_header, context),
         ProviderId::Claude => claude::validate_browser_session(&cookie_header, context),
         ProviderId::Grok => grok::validate_browser_session(&cookie_header, context),
+        ProviderId::Kimi => kimi::validate_browser_session(&cookie_header, context),
         ProviderId::Cursor => cursor::validate_browser_session(&cookie_header, context),
         _ => Err(ProviderError::new(
             common::ErrorCategory::Unsupported,
