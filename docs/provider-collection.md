@@ -45,10 +45,11 @@ message naming what restores collection, because a stored sign-in the provider n
 recovers differently from one that never existed, and a browser session saved here is re-added here
 while a provider's own grant is renewed by opening that provider's program.
 
-A scheduled refresh starts at most three kinds of process, none of them a provider CLI reading
+A scheduled refresh starts at most four kinds of process, none of them a provider CLI reading
 quota: the macOS Keychain lookup that finds Claude Code's grant, the `--version` a newly installed
-provider CLI earns, and the one `grok agent stdio` an already-expired Grok token earns. Each is
-listed with its trigger and its bounds under [Bounded subprocesses](#bounded-subprocesses). Requests
+provider CLI earns, and the two renewals an already-expired Claude Code or Grok credential earns.
+Each is listed with its trigger and its bounds under
+[Bounded subprocesses](#bounded-subprocesses). Requests
 otherwise identify as `Quota/<version>`, except where a section below says the provider only answers
 its own client.
 
@@ -84,14 +85,15 @@ The version in those headers is the version of the CLI installed on this device,
 
 ## Bounded subprocesses
 
-A refresh starts three processes and no others. No collector starts any of them: the two that
+A refresh starts four processes and no others. No collector starts any of them: the three that
 concern a provider CLI run on the refresh worker before collection, so nothing driven by the
 five-minute timer can spawn on its own account.
 
 | Process | Trigger | Bounds |
 | --- | --- | --- |
-| `/usr/bin/security` | Claude Code's Keychain grant, when collection home is the process `HOME` | Once per refresh, shared by discovery and collection; secret held in a redacted type |
+| `/usr/bin/security` | Claude Code's Keychain grant, when collection home is the process `HOME` | Once per refresh, shared by discovery and collection, plus one more when a renewal actually ran; secret held in a redacted type |
 | `<binary> --version` | The installed binary's fingerprint is absent or changed, for a CLI this device holds a sign-in for | Once per installed binary, never more than once an hour; 5 s, 4 KiB, no stdin, `HOME` + `PATH` |
+| `claude mcp list` | Claude Code's local credential is already expired or within a minute of expiry **and** holds a `claudeAiOauth` refresh token | Once an hour whatever the outcome; 10 s, 64 KiB discarded, no stdin, empty private cwd, `HOME` + `PATH` + `TERM=dumb` + `CLAUDE_CONFIG_DIR` |
 | `grok agent stdio` | Grok's local token is already expired or within a minute of expiry | Once an hour whatever the outcome; 5 s for the whole handshake, 64 KiB, `HOME` + `PATH` + `GROK_HOME` |
 
 Each is started as an explicit executable with an argument array, never through a shell, and is
@@ -131,24 +133,50 @@ reset-credit redemption are not used.
 1. Discover `$CLAUDE_CONFIG_DIR/.credentials.json`, `~/.claude/.credentials.json`, or the macOS
    Keychain generic password service `Claude Code-credentials` when collection home is the
    process `HOME`. Isolated or remapped homes do not read the live Keychain.
-2. Parse only `claudeAiOauth` and require `accessToken` with a usable `user:profile` scope. A grant
-   that is expired or within one minute of expiry is `auth_required`: Claude Code owns renewal, and
-   this build no longer drives it.
-3. Call `GET https://api.anthropic.com/api/oauth/usage` with
+2. Parse only `claudeAiOauth`; a document without it is not a Claude sign-in, which is what a
+   Keychain item holding only `mcpOAuth` is. An entry with the object but no `accessToken` is a
+   Claude Code that signed itself out — it empties the tokens in place and sets `expiresAt` to 0 —
+   and is reported as `auth_required` under its own source, whose recovery is "Claude Code is
+   signed out. Run `claude` and sign in again." A grant needs `accessToken` with a usable
+   `user:profile` scope. The Keychain entry wins unless it is the only expiring one of the two.
+3. A grant that is expired or within one minute of expiry, and that carries a non-empty
+   `refreshToken`, is the one case where this build starts Claude Code. Its access token lives
+   about eight hours and only Claude Code renews it, so a Mac that has not opened it since
+   breakfast would otherwise report an expired sign-in all day. On the refresh worker, before
+   collection, `claude mcp list` is run once. That command is chosen by experiment against 2.1.246:
+   `claude auth status --json` reports the expired token without renewing, `claude doctor` reaches
+   the CLI's refresh path only when the environment already carries a running Claude Code session's
+   variables, and `mcp list` reaches it deterministically under an `env -i`-style environment of
+   `HOME`, `PATH`, `TERM=dumb`, and `CLAUDE_CONFIG_DIR` where this device sets one — leaving an
+   unexpired credential untouched. Its one side effect is that it health-checks approved MCP
+   servers; started in an empty private directory created for the run, that reaches the
+   user-scoped servers in `~/.claude.json` and no project's `.mcp.json`, and the deadline is what
+   keeps a slow server from holding the refresh. Bounded to ten seconds — measured here at
+   2.97–3.46 s renewing and 2.05–2.44 s not — with 64 KiB of stdout read only to bound it and
+   discarded, stderr discarded, and no stdin. At most one attempt per hour, recorded in
+   `cache.sqlite` metadata with the binary's fingerprint and the outcome, so a Claude Code that
+   cannot renew is not started every five minutes. Afterwards the credential is read again, the
+   Keychain read of this refresh forgotten first because Claude Code rewrites that entry in place:
+   a grant with time left continues to step 4 in the same refresh; an emptied entry is the
+   signed-out outcome above; anything else is `auth_required` with "Open Claude Code to refresh the
+   sign-in". No Claude Code on this Mac, no refresh token in the entry, and no `claudeAiOauth` at
+   all each mean no attempt and no record.
+4. Call `GET https://api.anthropic.com/api/oauth/usage` with
    `anthropic-beta: oauth-2025-04-20`.
-4. Map the five-hour, seven-day, model-scoped, and extra-usage windows that are present. Every
+5. Map the five-hour, seven-day, model-scoped, and extra-usage windows that are present. Every
    weekly limit meters one seven-day cycle, so a weekly window that reports no reset of its own —
    model-scoped or not — takes the seven-day window's reset.
-5. Enrich identity best-effort through `/api/oauth/profile`; usage remains valid if enrichment fails.
-6. Usage accepts `utilization` / `resets_at` and the aliases `utilization_pct` / `reset_at`.
+6. Enrich identity best-effort through `/api/oauth/profile`; usage remains valid if enrichment fails.
+7. Usage accepts `utilization` / `resets_at` and the aliases `utilization_pct` / `reset_at`.
    There is no further rung: absent or rejected credentials are `auth_required`.
 
 An absent, stale, or unreadable session is `auth_required`. A Claude Code installation configured
 only for a third-party API gateway does not provide Anthropic subscription OAuth quota.
-Collection never drives the Claude CLI to read quota, in any form:
-an expired grant is reported as the sign-in it is, and the reader renews it by opening Claude Code.
-The local service never submits the Claude refresh token or writes its credential file or Keychain
-entry. The Keychain read is performed once per refresh and shared. The usage request presents
+Collection never drives the Claude CLI to read quota, in any form: step 3 asks Claude Code to renew
+a credential, never to report one, and a grant still out of time afterwards is reported as the
+sign-in it is. The local service never submits the Claude refresh token or writes its credential
+file or Keychain entry — Claude Code alone rotates that token and writes what it gets back. The
+Keychain read is performed once per refresh and shared, plus once more when a renewal ran. The usage request presents
 `User-Agent: claude-code/<version>`, the official CLI's identity rather than this build's, carrying
 the installed Claude Code version read as [Official CLI identity](#official-cli-identity)
 describes and falling back to `claude-code/2.1.0` when none could be read. The profile request

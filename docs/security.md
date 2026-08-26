@@ -163,11 +163,12 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
 - Provider credentials go only to the fixed endpoints in
   [`provider-collection.md`](provider-collection.md); apart from the acquisition above, do not
   import browser Cookies, and hidden WebView state is never an authentication source.
-- A refresh starts three processes and no others, and no collector starts any of them: the two that
-  drive a provider CLI run on the refresh worker before collection, so nothing on the five-minute
-  timer can spawn on its own account.
+- A refresh starts four processes and no others, and no collector starts any of them: the three
+  that drive a provider CLI run on the refresh worker before collection, so nothing on the
+  five-minute timer can spawn on its own account.
   - `/usr/bin/security` reads Claude Code's Keychain grant once per refresh, for both discovery and
-    collection.
+    collection, plus once more when a renewal actually ran — Claude Code rewrites that entry in
+    place, so the read taken before it ran describes the grant it replaced.
   - `<binary> --version` reads the installed Claude Code or Codex version the request headers claim,
     only for a provider this device holds a sign-in for, and only when the binary's real path, size,
     and mtime differ from the fingerprint stored in the disposable cache — so a given installed
@@ -175,6 +176,19 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
     of stdout, no stdin, stderr discarded, and only `HOME` and `PATH` in its environment. A failed or
     absent read leaves the header on its fallback constant, and collection neither waits on it nor
     fails because of it.
+  - `claude mcp list` asks Claude Code to renew the sign-in it owns, and only when the credential
+    on disk is already expired or within a minute of expiry **and** holds a `claudeAiOauth`
+    `refreshToken` — an entry with no refresh token cannot be renewed by anything, and a Keychain
+    item holding only `mcpOAuth` is not a Claude sign-in, so neither is worth a spawn. At most one
+    attempt an hour whatever the outcome, recorded in the disposable cache. Bounded to ten seconds
+    and 64 KiB of stdout that is read only to bound it and then discarded, stderr discarded, no
+    stdin, an empty owner-only directory created for the run as its working directory, and only
+    `HOME`, `PATH`, `TERM=dumb`, and `CLAUDE_CONFIG_DIR` in its environment. It is the invocation
+    that reaches Claude Code's own refresh path without asking for anything else; its one side
+    effect is that it health-checks the MCP servers this device approved, which the empty working
+    directory narrows to the user-scoped ones in `~/.claude.json` and the deadline bounds. The
+    outcome is judged by re-reading the credential, never by an exit status. The service never
+    submits the refresh token itself and never writes the credential file or the Keychain item.
   - `grok agent stdio` asks the Grok CLI to renew the sign-in it owns, and only when the token on
     disk is already expired or within a minute of expiry — at most one attempt an hour whatever the
     outcome, recorded in the disposable cache. Bounded to five seconds for the whole handshake and
