@@ -118,18 +118,25 @@ mod tests {
     /// Split so that scanning this file does not find the scanner.
     const SPAWN: &str = concat!("Command", "::new(");
 
-    /// The one module allowed to start a program a variable names, and the one function in
-    /// it that may: `cli_version::probe`, which runs `<binary> --version` at most once per
-    /// installed binary — never once per refresh — and is called only from the refresh
-    /// worker, before collection.
-    const VERSION_PROBE_MODULE: &str = "common/cli_version.rs";
-    const VERSION_PROBE_FUNCTION: &str = "probe";
+    /// The only functions allowed to start a program a variable names, each with the rule
+    /// that keeps it off the five-minute timer. Both run on the refresh worker before
+    /// collection; no collector starts anything.
+    const NAMED_SPAWNS: &[(&str, &str)] = &[
+        // `<binary> --version`, to fill in the header this build sends as the provider's own
+        // CLI. Runs when the installed binary's fingerprint is absent or has changed, at most
+        // once per installed binary and never more than once an hour.
+        ("common/cli_version.rs", "probe"),
+        // `grok agent stdio`, to have the CLI that owns Grok's token renew it. Runs only when
+        // the token on disk is already expired or within a minute of it, and at most once an
+        // hour whatever the last attempt produced.
+        ("grok/refresh.rs", "renew"),
+    ];
 
-    fn visit(directory: &Path, found: &mut BTreeSet<String>, probes: &mut Vec<String>) {
+    fn visit(directory: &Path, found: &mut BTreeSet<String>, spawns: &mut Vec<(String, String)>) {
         for entry in std::fs::read_dir(directory).expect("provider sources") {
             let path = entry.expect("entry").path();
             if path.is_dir() {
-                visit(&path, found, probes);
+                visit(&path, found, spawns);
                 continue;
             }
             if path.extension().and_then(std::ffi::OsStr::to_str) != Some("rs") {
@@ -146,13 +153,18 @@ mod tests {
                     found.insert(argument.trim_matches('"').to_owned());
                     continue;
                 }
-                assert!(
-                    path.ends_with(VERSION_PROBE_MODULE),
-                    "{}: {SPAWN}{argument}) starts a program a variable names, which is how a \
-                     provider CLI ends up spawned on a five-minute timer",
-                    path.display()
-                );
-                probes.push(enclosing_function(&text[..index]));
+                let module = NAMED_SPAWNS
+                    .iter()
+                    .find(|(module, _)| path.ends_with(module))
+                    .map(|(module, _)| *module);
+                let Some(module) = module else {
+                    panic!(
+                        "{}: {SPAWN}{argument}) starts a program a variable names, which is how \
+                         a provider CLI ends up spawned on a five-minute timer",
+                        path.display()
+                    );
+                };
+                spawns.push((module.to_owned(), enclosing_function(&text[..index])));
             }
         }
     }
@@ -173,28 +185,33 @@ mod tests {
             .unwrap_or_default()
     }
 
-    /// Collection reads files and speaks HTTP.  The processes it starts are the macOS Keychain
-    /// lookup that finds Claude's grant and the one `--version` a newly installed provider CLI
-    /// earns; everything else was a provider CLI driven on a five-minute timer, and this counts
-    /// the call sites so a new one cannot arrive quietly.
+    /// Collection reads files and speaks HTTP.  The processes a refresh starts are the macOS
+    /// Keychain lookup that finds Claude's grant, the one `--version` a newly installed
+    /// provider CLI earns, and the `grok agent stdio` an already-expired Grok token earns;
+    /// everything else was a provider CLI driven on a five-minute timer, and this counts the
+    /// call sites so a new one cannot arrive quietly.
     #[test]
     fn collection_starts_no_process_it_did_not_name() {
         let mut found = BTreeSet::new();
-        let mut probes = Vec::new();
+        let mut spawns = Vec::new();
         visit(
             &Path::new(env!("CARGO_MANIFEST_DIR")).join("src/providers"),
             &mut found,
-            &mut probes,
+            &mut spawns,
         );
         assert_eq!(
             found,
-            // `/bin/sh` is the bounded runner proving its own timeout, in its own test.
+            // `/bin/sh` is the bounded runner proving its own bounds, in its own test.
             BTreeSet::from(["/bin/sh".to_owned(), "/usr/bin/security".to_owned()])
         );
+        spawns.sort();
+        let named = NAMED_SPAWNS
+            .iter()
+            .map(|(module, function)| ((*module).to_owned(), (*function).to_owned()))
+            .collect::<Vec<_>>();
         assert_eq!(
-            probes,
-            [VERSION_PROBE_FUNCTION],
-            "the version probe is allowed exactly one call site, in {VERSION_PROBE_MODULE}"
+            spawns, named,
+            "each named spawn is allowed exactly one call site, in the function named with it"
         );
     }
 }

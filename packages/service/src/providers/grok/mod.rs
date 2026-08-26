@@ -12,6 +12,7 @@ use super::common::{
 };
 
 mod billing_rpc;
+pub mod refresh;
 
 pub const SOURCE: &str = "grok_billing_api";
 pub const BILLING_RPC_SOURCE: &str = billing_rpc::SOURCE;
@@ -60,16 +61,33 @@ pub fn collect(
 fn collect_local(context: &CollectionContext) -> Result<QuotaSnapshot, ProviderError> {
     let credentials = load_credentials(context)
         .ok_or_else(|| ProviderError::new(ErrorCategory::AuthRequired, SOURCE))?;
-    // The Grok CLI owns token renewal, and this build no longer starts it to trigger one.
-    // A grant that is out of time is a sign-in only that CLI can renew.
-    if credentials
-        .expires_at
-        .map(|expiry| expiry <= context.observed_unix() + AUTH_REFRESH_SKEW)
-        .unwrap_or(false)
-    {
+    // The Grok CLI owns this token. The refresh worker already gave it its one chance to
+    // renew an expired one ([`refresh`]); a grant still out of time here is a sign-in only
+    // the reader can restore, by opening Grok.
+    if expiring(&credentials, context) {
         return Err(ProviderError::new(ErrorCategory::AuthRequired, SOURCE));
     }
     collect_with_credentials(&credentials, context)
+}
+
+/// Whether this device's Grok grant is out of time, or close enough that a billing request
+/// made with it would be answered `401` before it arrived.
+fn expiring(credentials: &Credentials, context: &CollectionContext) -> bool {
+    credentials
+        .expires_at
+        .is_some_and(|expiry| expiry <= context.observed_unix() + AUTH_REFRESH_SKEW)
+}
+
+/// Whether the sign-in on disk is the thing standing between this refresh and a reading.
+/// A device holding no Grok grant at all has no sign-in to renew and answers `false`.
+fn sign_in_expiring(context: &CollectionContext) -> bool {
+    load_credentials(context).is_some_and(|credentials| expiring(&credentials, context))
+}
+
+/// Whether the file now holds a grant this refresh can spend. Not the negation of
+/// [`sign_in_expiring`]: a file that is gone or unreadable is neither expiring nor usable.
+fn sign_in_usable(context: &CollectionContext) -> bool {
+    load_credentials(context).is_some_and(|credentials| !expiring(&credentials, context))
 }
 
 fn load_credentials(context: &CollectionContext) -> Option<Credentials> {
