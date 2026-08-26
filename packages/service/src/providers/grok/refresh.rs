@@ -6,10 +6,11 @@
 //! about a file and a useless one about the account.
 //!
 //! So an expired grant — and nothing else — earns one bounded `grok agent stdio`, and
-//! collection re-reads the file the CLI wrote. This is the one collection path that starts a
-//! provider's CLI, and every bound on it exists to keep it off the five-minute timer: it runs
-//! only when the token on disk is already dead, at most once an hour whatever the last attempt
-//! produced, and for at most five seconds.
+//! collection re-reads the file the CLI wrote. It runs on the refresh worker before
+//! collection, beside the `--version` probe and for the same reason: no collector may start a
+//! process. Every bound on it exists to keep it off the five-minute timer — it runs only when
+//! the token on disk is already dead, at most once an hour whatever the last attempt produced,
+//! and for at most the deadline a spawn gets.
 //!
 //! What it does not do: submit the refresh token itself, write `auth.json`, or ask for any
 //! authentication method other than `cached_token`. The CLI's other method, `grok.com`, prints
