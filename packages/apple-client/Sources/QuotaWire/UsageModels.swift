@@ -642,9 +642,9 @@ public struct UsagePeriod: Codable, Equatable, Sendable {
 
 /// The four periods an Account read answers.
 ///
-/// A day is a UTC day, because that is the grain the daily rollup keeps. The timezone a caller
-/// names decides which calendar days `today` and the trailing windows cover, not where a day
-/// begins.
+/// `all` is every retained UTC day. The three trailing periods are exact in the timezone a caller
+/// names: a local day begins at local midnight, so they are bounded by instants rather than by
+/// UTC dates.
 public struct AccountUsage: Codable, Equatable, Sendable {
   public let today: UsagePeriod
   public let last7Days: UsagePeriod

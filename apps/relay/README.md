@@ -22,11 +22,13 @@ The v6 data contract is four routes
   body. The same D1 batch rewrites `usage_daily` for the UTC dates it touched.
 - `GET /api/v6/account/summary?tz=` answers the account, its devices, `subscriptions[]` resolved
   once here rather than by every client, `usage` as Today / last 7 days / last 30 days / all time,
-  and the pricing and model-catalog revisions. A day is a UTC day; `tz` decides which calendar days
-  the trailing windows name.
-- `GET /api/v6/account/usage/activity?from&to` answers up to 400 daily totals.
+  and the pricing and model-catalog revisions. A local day begins at local midnight, so `tz` decides
+  where the three trailing periods start and end.
+- `GET /api/v6/account/usage/activity?from&to` answers up to 400 daily totals, on UTC dates.
 
-Both reads fold days from `usage_daily` and never open `usage_hourly`.
+`all` and the activity read are `usage_daily` alone. A trailing period folds its whole UTC days
+from `usage_daily` too, and reaches into `usage_hourly` only for the day its edge cuts — four such
+days at most, because the three periods end together. A caller keeping UTC opens no hour at all.
 
 A Device on `GET /api/v6/account/summary` carries `last_seen_at` and `last_observed_at` and nothing
 it asserted about itself. How recently it spoke is derived by the reader from the newer of the two.

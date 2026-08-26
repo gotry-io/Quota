@@ -1094,9 +1094,10 @@ export type UsagePeriod = z.infer<typeof UsagePeriodSchema>;
 /**
  * The four periods an Account read answers.
  *
- * A day is a UTC day, because that is the grain the daily rollup keeps. The `tz` a caller
- * names decides which calendar days `today` and the trailing windows cover, not where a day
- * begins.
+ * `all` is every retained UTC day. The three trailing periods are exact in the `tz` a caller
+ * names: a local day begins at local midnight, so they are bounded by instants rather than by
+ * UTC dates. An hour is the finest fact stored, so a zone offset by less than an hour reports
+ * the hour its midnight falls in with the day before it.
  */
 export const AccountUsageSchema = z
   .object({
@@ -1148,7 +1149,7 @@ export const AccountSummarySchema = z
   .strict();
 export type AccountSummary = z.infer<typeof AccountSummarySchema>;
 
-/** One UTC day of the activity chart. */
+/** One UTC day of the activity chart, which stays on UTC dates whatever calendar reads it. */
 export const UsageActivityDaySchema = z
   .object({
     date: UsageDateSchema,
