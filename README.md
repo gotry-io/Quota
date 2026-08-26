@@ -14,8 +14,9 @@ subscription quota and privacy-preserving Usage together across a user's devices
 Quota collection supports Codex, Claude Code, Grok, OpenRouter, DeepSeek, Kimi Code, LiteLLM, and
 Cursor; local Usage analytics supports Codex, Claude Code, Grok, OpenCode, Pi, and Cursor logs.
 Provider credentials, prompts, completions, raw events, local paths, and conversation identifiers
-never upload. Cursor is the only provider that can be read from a browser session, and QuotaBar asks
-before it opens a cookie store — see [security baseline](docs/security.md).
+never upload. Codex, Claude Code, Grok, Kimi Code, and Cursor can each be read from a browser
+session as their ladder's last rung, and QuotaBar asks before it opens a cookie store — see
+[security baseline](docs/security.md).
 
 The QuotaBar Settings **Support** page renders one service-owned report. It lists the four
 user-visible surfaces — Quota Overview, this Mac's Usage, Account Usage, and Account — and the
@@ -144,8 +145,8 @@ collected on three Macs reads as one subscription everywhere. Relay owns GitHub 
 through a hand-written OAuth round trip, and every client — browser, QuotaBar, iOS — holds one
 session in one table, scoped by what that client is for
 ([ADR 0027](docs/decisions/0027-one-token-per-client.md)).
-Cursor is the only provider with a browser session, behind a consent sheet and an explicit
-access-denied outcome. Quota iOS refreshes its Account and republishes its widget snapshot in the
+Five providers can fall back to a browser session as their last rung, behind a consent sheet and
+an explicit access-denied outcome. Quota iOS refreshes its Account and republishes its widget snapshot in the
 background as well as on screen.
 
 Around those: eight Rust quota collectors, six Usage parsers that read an appended log from where

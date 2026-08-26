@@ -4,8 +4,9 @@
 
 Accepted
 
-> Updated 2026-08-26: `browser_session` is declared for Cursor only, a consent popup gates the
-> first cookie read, and a refused store is its own reported outcome.
+> Updated 2026-08-26: a consent popup gates the first cookie read, a refused store is its own
+> reported outcome, and `browser_session` is declared for every provider with a web session — as
+> the ladder's last rung.
 
 ## Context
 
@@ -17,10 +18,10 @@ enum that cannot accept new local providers without a new protocol version.
 ## Decision
 
 Declare browser-session acquisition and managed-account synchronization independently in the
-[provider catalog](../../packages/provider/catalog.json). Only a provider with no other way to be
-read declares one: Cursor has no CLI sign-in and no API key, and is the only such provider.
-Codex, Claude Code, Grok, and Kimi Code each keep a grant their own program renews, so they
-declare none and QuotaBar never opens a cookie store for them.
+[provider catalog](../../packages/provider/catalog.json). Every provider whose web app has a
+signed-in session declares one — Cursor, Codex, Claude Code, Grok, Kimi Code — and it is always
+the last rung: read only when that provider's own credential is absent or every rung that read it
+answered `auth_required`, never ahead of a working one, and never after one this Mac was refused.
 
 QuotaBar asks before it reads. A confirmation popup names the browser about to be read, the
 permission macOS will ask for (Full Disk Access for Safari, the "Chrome Safe Storage" Keychain
@@ -29,10 +30,13 @@ session is stored in the local service database until disconnected, and that non
 uploaded. Declining opens no store.
 
 QuotaBar then uses the declared allowlist to read matching cookie records into bounded Swift
-memory and sends one candidate at a time over private child stdin. Each allowlisted name on each
-host is its own candidate; hosts and browser profiles are never combined. Rust revalidates the
-catalog rules, verifies the provider account, performs provider networking, and stores the session
-in the owner-only local SQLite state. Catalog `browser_session.exclusive` marks the session as
+memory and sends one candidate at a time over private child stdin. A name that is a whole sign-in
+is its own candidate; the two that are halves — numbered NextAuth chunks and Grok's `sso`/`sso-rw`
+— share one header, and a cookie naming the account a session acts as rides along. Hosts and
+profiles are never combined. Rust revalidates the catalog rules, verifies the provider account,
+performs provider networking, and stores the session in owner-only local SQLite; where a
+provider's official rung has a `global` identity the browser rung builds the same fingerprint, so
+the ladder cannot rename a subscription. Catalog `browser_session.exclusive` marks the session as
 lacking an official CLI or API-key sign-in command; Settings then omits that command row. Cursor is
 exclusive. It still discovers a signed-in Cursor.app session from local desktop state, as defined
 by [provider collection](../provider-collection.md).

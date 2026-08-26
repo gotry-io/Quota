@@ -128,9 +128,10 @@ once at startup and is then removed; nothing derived crosses, because the first 
 
 Catalog browser-session capability contains an HTTPS login URL, exact Cookie hosts and names, a
 browser-priority prefix, and `exclusive` when Settings should omit an official CLI sign-in command.
-Cursor is the only provider that declares it, and still prefers a signed-in Cursor.app session from
-local desktop state first. Swift acquires; Rust validates, persists, and refreshes. Consent,
-redaction, and refusal are canonical in
+Cursor, Codex, Claude, Grok, and Kimi declare it, and for each of them the stored session is the
+rung after every official credential rather than an alternative to one; Cursor still prefers a
+signed-in Cursor.app session from local desktop state first. Swift acquires; Rust validates,
+persists, and refreshes. Consent, redaction, and refusal are canonical in
 [`security.md`](security.md) and [ADR 0010](decisions/0010-provider-browser-session-auth.md).
 
 Usage indexing is file-level invalidation. Each refresh runs bounded source discovery, records parser

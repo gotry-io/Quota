@@ -37,8 +37,9 @@ its startup refresh. Quitting sends the service a `shutdown` and waits up to two
 a helper mid-write finishes before its pipe disappears and one that answers nothing costs the quit
 two seconds and no more; closing stdin says the same thing either way.
 
-Cursor is the only provider QuotaBar reads a browser session for, because it is the only one with
-no CLI sign-in and no API key. Before the first cookie read, a confirmation popup names the browser
+QuotaBar reads a browser session for the five providers whose catalog row declares one — Cursor,
+Codex, Claude, Grok, and Kimi — and always as the last rung, after every official credential that
+provider has. Before the first cookie read, a confirmation popup names the browser
 about to be read, the permission macOS will ask for (Full Disk Access for Safari, the "Chrome Safe
 Storage" Keychain item for a Chrome-family browser), the exact hosts and cookie names, the local
 service database the accepted session is kept in until disconnected, and that nothing is uploaded.
@@ -48,8 +49,9 @@ only exact-host/name allowlist candidates in memory. Swift sends one minimal Coo
 time to Rust for validation/commit; it never calls provider APIs or persists the header. A store
 macOS refuses ends the attempt and is shown as its own state — with the grant to change, not "no
 session found" — and reaches the Support page as the `browser_access_denied` source. Cursor prefers
-a signed-in Cursor.app session and uses the browser session as its fallback. Browser cookies stay
-local.
+a signed-in Cursor.app session and uses the browser session as its fallback; Codex, Claude, Grok,
+and Kimi reach theirs only when their own credential is missing or has been rejected. Browser
+cookies stay local.
 
 Each background refresh precomputes Today, 7 Days, 30 Days, and All for This Mac and, when enabled,
 the signed-in Account. The four values are persisted and returned by `get_state`; Swift only selects

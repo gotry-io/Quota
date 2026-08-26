@@ -413,9 +413,9 @@ Provider detail contains:
   Session unless that session is catalog `exclusive` (Cursor); or
 - **This Mac Configuration**: native secure API-key entry, optional base URL when catalog-enabled,
   masked saved state, Save, and Remove; and
-- **Browser Session** when catalog-enabled (Cursor only): disconnected **Sign In**, bounded
-  **Waiting / Cancel**, non-cancellable **Connecting** after commit begins, or a connected masked
-  account with only **Disconnect**. Sign In, Cancel, and Disconnect are the same compact secondary
+- **Browser Session** when catalog-enabled (Cursor, Codex, Claude, Grok, Kimi): disconnected
+  **Sign In**, bounded **Waiting / Cancel**, non-cancellable **Connecting** after commit begins, or
+  a connected masked account with only **Disconnect**. Sign In, Cancel, and Disconnect are the same compact secondary
   control; do not use an accent capsule or explanatory body copy on this surface. Confirmed
   disconnect is likewise non-cancellable. There is no switch-account action; a different account is
   disconnect, then sign in. A read macOS refused is its own row, carried by
