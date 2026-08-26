@@ -156,7 +156,7 @@ enum Fixtures {
       "protocol_version": 2,
       "token_type": "Bearer",
       "account_id": "account_01",
-      "account_session": [
+      "session": [
         "access_token": access,
         "access_expires_at": "2026-08-14T12:15:00Z",
         "refresh_token": refresh,
@@ -177,9 +177,8 @@ enum Fixtures {
     var object: [String: Any] = [
       "protocol_version": 2,
       "token_type": "Bearer",
-      "token_audience": "account",
       "account_id": "account_01",
-      "account_session": [
+      "session": [
         "access_token": access,
         "access_expires_at": "2026-08-14T13:15:00Z",
         "refresh_token": refresh,

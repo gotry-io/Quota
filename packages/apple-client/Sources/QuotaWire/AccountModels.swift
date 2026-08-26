@@ -44,10 +44,10 @@ public struct QuotaUserAccount: Codable, Equatable, Sendable {
   }
 }
 
+/// What a Device runs. QuotaBar is the only client that registers one, so there is one member
+/// besides the one every tolerant read keeps for a value this build cannot name.
 public enum AccountDevicePlatform: String, Codable, Sendable, TolerantWireEnum {
   case macos
-  case linux
-  case windows
   case unknown
 }
 

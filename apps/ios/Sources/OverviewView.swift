@@ -194,8 +194,6 @@ struct AccountDevicesCard: View {
   ) -> String {
     let platform = switch device.platform {
     case .macos: "macOS"
-    case .linux: "Linux"
-    case .windows: "Windows"
     case .unknown: "Unknown"
     }
     return "\(platform) · \(FreshnessCopy.lastReading(since: activity.since, now: now))"

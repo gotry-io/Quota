@@ -128,26 +128,22 @@ struct DecodingTests {
     // A response shaped for a different client carries keys this one does not read. It reads
     // the session it came for and leaves the rest alone.
     let tokens = try Fixtures.tokenResponse(extra: ["device_id": "device_01"])
-    #expect(try WireCodec.decode(IosOAuthTokenResponse.self, from: tokens).accountSession
+    #expect(try WireCodec.decode(IosOAuthTokenResponse.self, from: tokens).session
       .accessToken.hasPrefix("qia_"))
 
-    let deviceRefresh = try Fixtures.refreshResponse(extra: [
-      "device_session": [
-        "access_token": Fixtures.accessToken,
-        "access_expires_at": "2026-08-14T12:15:00Z",
-        "refresh_token": Fixtures.refreshToken,
-        "refresh_expires_at": "2026-11-01T12:00:00Z",
-      ]
+    let widerRefresh = try Fixtures.refreshResponse(extra: [
+      "device_id": "device_01",
+      "device_generation": 3,
     ])
-    #expect(try WireCodec.decode(AccountSessionRefreshResponse.self, from: deviceRefresh)
-      .accountSession.accessToken.hasPrefix("qia_"))
+    #expect(try WireCodec.decode(SessionRefreshResponse.self, from: widerRefresh)
+      .session.accessToken.hasPrefix("qia_"))
 
     let validTokens = try WireCodec.decode(
       IosOAuthTokenResponse.self,
       from: try Fixtures.tokenResponse()
     )
-    #expect(validTokens.accountSession.accessToken.hasPrefix("qia_"))
-    #expect(validTokens.accountSession.refreshToken.hasPrefix("qiar_"))
+    #expect(validTokens.session.accessToken.hasPrefix("qia_"))
+    #expect(validTokens.session.refreshToken.hasPrefix("qiar_"))
   }
 
   @Test

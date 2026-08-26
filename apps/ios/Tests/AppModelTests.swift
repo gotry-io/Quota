@@ -403,7 +403,7 @@ private func tokenResponse() throws -> Data {
       "protocol_version": 2,
       "token_type": "Bearer",
       "account_id": "account_01",
-      "account_session": [
+      "session": [
         "access_token": Fixtures.accessToken,
         "access_expires_at": "2026-08-14T12:15:00Z",
         "refresh_token": Fixtures.refreshToken,
