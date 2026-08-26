@@ -48,7 +48,9 @@ today ends: their tokens were hashed under the domains a two-family login used, 
 renames those domains, so migration 0021 carries those rows over already revoked rather than leaving
 credentials nothing can resolve sitting live. Browser cookies keep their domain and stay signed in.
 The owner-only configuration and state root also moves from `~/.config/quotacli/` to
-`~/.config/quota/`, which makes each Mac a new installation.
+`~/.config/quota/`; the one-time import that already adopts a released image looks in the old root
+too, so a Mac keeps its installation id and its provider keys rather than becoming a second Device
+on the same Account.
 
 Re-adding a command-line client later means restoring `apps/cli` from history and re-adding a
 device-code or loopback grant beside the browser one; the shared crate it was built on never moved.

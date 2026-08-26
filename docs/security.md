@@ -44,6 +44,10 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
   owner-only lock, same-directory atomic replace. QuotaBar sends a new key only through the private
   child stdin; Swift never reads the file, persists the secret, puts it on argv, or receives more
   than a masked tip.
+- On first run the service adopts the root it was released under beside its own — the released
+  image's identity, session, upload context, and browser sessions, and its `providers.json` under
+  the same `0700`/`0600` rules — then removes what it read. It looks only beside the root it was
+  given, so an isolated run reads nothing else.
 - Operational local state is two owner-only SQLite files under the released user configuration root,
   outside the app bundle and surviving a reinstall
   ([ADR 0021](decisions/0021-identity-store-and-disposable-cache.md)). A newer `identity.sqlite`
