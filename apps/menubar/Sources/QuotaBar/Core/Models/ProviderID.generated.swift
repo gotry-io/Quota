@@ -119,7 +119,12 @@ extension ProviderID {
       cookieNames: ["__Secure-next-auth.session-token", "__Secure-next-auth.session-token.0", "__Secure-next-auth.session-token.1", "__Secure-next-auth.session-token.2", "__Host-next-auth.session-token", "__Secure-authjs.session-token", "authjs.session-token", "_account"],
       browserPriority: ["safari", "chrome", "edge", "brave", "arc", "dia", "chromium", "firefox"],
       exclusive: false)
-    case .`claude`: nil
+    case .`claude`: BrowserSessionSpec(
+      loginURL: "https://claude.ai/",
+      cookieHosts: ["claude.ai", "www.claude.ai"],
+      cookieNames: ["sessionKey", "lastActiveOrg"],
+      browserPriority: ["safari", "chrome", "edge", "brave", "arc", "dia", "chromium", "firefox"],
+      exclusive: false)
     case .`grok`: nil
     case .`openrouter`: nil
     case .`deepseek`: nil

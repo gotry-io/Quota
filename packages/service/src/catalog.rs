@@ -98,7 +98,15 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
         account_sync: true,
         environment_keys: &["CLAUDE_CONFIG_DIR"],
         credential_config: None,
-        browser_session: None,
+        browser_session: Some(BrowserSessionConfig {
+            login_url: "https://claude.ai/",
+            cookie_hosts: &["claude.ai", "www.claude.ai"],
+            cookie_names: &["sessionKey", "lastActiveOrg"],
+            browser_priority: &[
+                "safari", "chrome", "edge", "brave", "arc", "dia", "chromium", "firefox",
+            ],
+            exclusive: false,
+        }),
         default_base_url: None,
         base_url_environment_key: None,
     },
