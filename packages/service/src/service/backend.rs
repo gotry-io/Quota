@@ -28,9 +28,9 @@ use crate::protocol::{
 };
 use crate::providers::common::{
     CliTool, ErrorCategory, ProbeCache, ProbeEnvironment, ProviderError, ProviderSession,
-    resolve_cli_versions,
+    RenewalAttempts, resolve_cli_versions,
 };
-use crate::providers::grok::{self, refresh::RenewalAttempt};
+use crate::providers::grok;
 use crate::providers::{self, CollectionContext};
 use crate::relay::{AccountManager, RelayClient};
 use crate::service::{BackendError, LocalBackend, LoginOutcome, RefreshOutcome};
@@ -1064,7 +1064,7 @@ impl NativeBackend {
             })
             .collect::<Vec<_>>();
         context.cli_versions = self.provider_cli_versions(&discovered, &context, &cancel);
-        self.renew_grok_sign_in(&discovered, &context);
+        self.renew_provider_sign_ins(&discovered, &context);
         let attempts =
             thread::scope(|scope| {
                 let mut jobs = Vec::with_capacity(provider_ids.len());
@@ -1227,8 +1227,8 @@ impl NativeBackend {
         resolution.versions
     }
 
-    /// Asks the Grok CLI to renew this device's sign-in, when that sign-in is the only thing
-    /// standing between the refresh and a reading.
+    /// Asks the CLI that owns a provider's sign-in to renew it, when that sign-in is the only
+    /// thing standing between the refresh and a reading.
     ///
     /// Grok's token lives about six hours and only its CLI can renew it, so a Mac that has not
     /// opened Grok since breakfast would otherwise report an expired sign-in all day. An
@@ -1236,41 +1236,56 @@ impl NativeBackend {
     /// an hour whatever it produced; [`grok::refresh`] holds the rules and the bounds.
     ///
     /// Runs here, beside the version probe and before collection, so no collector gains the
-    /// ability to start a process. Collection reads `auth.json` afterwards and neither knows
-    /// nor waits for any of this beyond the renewal's own deadline.
-    fn renew_grok_sign_in(
+    /// ability to start a process. Collection reads the credential afterwards and neither
+    /// knows nor waits for any of this beyond the renewal's own deadline.
+    fn renew_provider_sign_ins(
         &self,
         discovered: &[(ProviderId, Vec<ProviderSession>)],
         context: &CollectionContext,
     ) {
-        if !discovered
-            .iter()
-            .any(|(provider, sessions)| *provider == ProviderId::Grok && !sessions.is_empty())
-        {
+        let signed_in = |wanted: ProviderId| {
+            discovered
+                .iter()
+                .any(|(provider, sessions)| *provider == wanted && !sessions.is_empty())
+        };
+        let wanted = [ProviderId::Grok]
+            .into_iter()
+            .filter(|provider| signed_in(*provider))
+            .collect::<Vec<_>>();
+        if wanted.is_empty() {
             return;
         }
-        let attempted = self
+        // One read and one write for every provider that asks: the record only exists to hold
+        // the hour, and splitting it per provider would split those too.
+        let mut attempts = self
             .state
-            .grok_refresh_attempt()
+            .provider_refresh_attempts()
             .ok()
             .flatten()
-            .and_then(|raw| serde_json::from_str::<RenewalAttempt>(&raw).ok());
-        let environment = ProbeEnvironment::new(
-            context.home_directory.clone(),
-            context.env("PATH").map(str::to_owned),
-        );
-        let Some(attempt) = grok::refresh::renew_expired_sign_in(
-            context,
-            &environment,
-            attempted.as_ref(),
-            crate::providers::common::unix_now(),
-        ) else {
-            return;
-        };
+            .and_then(|raw| serde_json::from_str::<RenewalAttempts>(&raw).ok())
+            .unwrap_or_default();
+        let now = crate::providers::common::unix_now();
+        let home = context.home_directory.clone();
+        let path = context.env("PATH").map(str::to_owned);
+        let mut recorded = false;
+        for provider in wanted {
+            let attempted = attempts.get(provider.as_str()).cloned();
+            let environment = ProbeEnvironment::new(home.clone(), path.clone());
+            let attempt = grok::refresh::renew_expired_sign_in(
+                context,
+                &environment,
+                attempted.as_ref(),
+                now,
+            );
+            if let Some(attempt) = attempt {
+                attempts.insert(provider.as_str().to_owned(), attempt);
+                recorded = true;
+            }
+        }
         // An attempt that cannot be recorded must not become an attempt every five minutes,
         // but a cache that cannot be written is already reporting itself elsewhere.
-        if let Ok(encoded) = serde_json::to_string(&attempt) {
-            let _ = self.state.write_grok_refresh_attempt(&encoded);
+        if recorded && let Ok(encoded) = serde_json::to_string(&attempts) {
+            let _ = self.state.write_provider_refresh_attempts(&encoded);
         }
     }
 
@@ -3354,30 +3369,38 @@ mod tests {
                     .unwrap_or(0)
             };
 
-            backend.renew_grok_sign_in(&discovered, &context);
+            backend.renew_provider_sign_ins(&discovered, &context);
             assert_eq!(spawns(&log), 1);
             assert!(
                 fs::read_to_string(&auth).expect("auth").contains("fresh"),
                 "collection reads the file the CLI wrote"
             );
             let recorded = state
-                .grok_refresh_attempt()
-                .expect("attempt")
+                .provider_refresh_attempts()
+                .expect("attempts")
                 .expect("recorded");
-            assert!(recorded.contains("\"outcome\":\"renewed\""), "{recorded}");
+            let attempts =
+                serde_json::from_str::<RenewalAttempts>(&recorded).expect("decodes as a map");
+            assert_eq!(
+                attempts
+                    .get(ProviderId::Grok.as_str())
+                    .map(|attempt| attempt.outcome),
+                Some(crate::providers::common::RenewalOutcome::Renewed),
+                "{recorded}"
+            );
 
             // A token with time left is not a sign-in problem, so nothing is started.
-            backend.renew_grok_sign_in(&discovered, &context);
+            backend.renew_provider_sign_ins(&discovered, &context);
             assert_eq!(spawns(&log), 1);
 
             // Expired again inside the hour: the record from the first attempt is what keeps
             // the five-minute timer from turning into a spawn schedule.
             fs::write(&auth, credentials("2020-01-01T00:00:00Z", "stale")).expect("auth");
-            backend.renew_grok_sign_in(&discovered, &context);
+            backend.renew_provider_sign_ins(&discovered, &context);
             assert_eq!(spawns(&log), 1);
 
             // A Mac that never signed into Grok never looks for the binary at all.
-            backend.renew_grok_sign_in(&[(ProviderId::Grok, Vec::new())], &context);
+            backend.renew_provider_sign_ins(&[(ProviderId::Grok, Vec::new())], &context);
             assert_eq!(spawns(&log), 1);
 
             // And the rest of the refresh is exactly where it was.

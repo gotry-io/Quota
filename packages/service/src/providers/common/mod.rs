@@ -15,6 +15,7 @@ mod http;
 mod identity;
 mod io;
 mod json;
+mod renewal;
 mod types;
 
 pub use cli_version::{
@@ -30,6 +31,10 @@ pub use io::{BoundedExchange, LOCAL_FILE_LIMIT, read_bounded_file, run_bounded_c
 pub use json::{
     clamp_percent, decode_jwt_payload, duration_seconds, number, obj_get, obj_get_any, parse_date,
     provider_source, slug, string, unix_now, unix_seconds_to_iso, url_encode,
+};
+pub use renewal::{
+    RENEWAL_FLOOR_SECONDS, RENEWAL_OUTPUT_LIMIT, RenewalAttempt, RenewalAttempts, RenewalOutcome,
+    within_renewal_floor,
 };
 pub use types::{
     BROWSER_COOKIE_HEADER_LIMIT, BROWSER_SESSION_SOURCE, CollectionContext, ErrorCategory,

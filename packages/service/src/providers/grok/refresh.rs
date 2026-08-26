@@ -16,30 +16,18 @@
 //! authentication method other than `cached_token`. The CLI's other method, `grok.com`, prints
 //! a device code and waits for a person; a scheduled refresh must never start that.
 
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::path::Path;
 use std::process::Command;
 
 use crate::providers::common::{
-    BoundedExchange, CollectionContext, ProbeEnvironment, binary_fingerprint, resolve_binary,
+    BoundedExchange, CollectionContext, ProbeEnvironment, RENEWAL_OUTPUT_LIMIT, RenewalAttempt,
+    RenewalOutcome, binary_fingerprint, resolve_binary, within_renewal_floor,
 };
 
 /// The program asked, and the arguments that put it on stdio instead of on a terminal.
 const GROK_BINARY: &str = "grok";
 const AGENT_STDIO: [&str; 2] = ["agent", "stdio"];
-
-/// Everything the CLI may print across the whole handshake. Its `initialize` reply is the big
-/// one — about 4 KiB of capabilities and model listings on 1.0.5 — and this leaves room for a
-/// build that says more without leaving room for a build that never stops.
-pub const RENEWAL_OUTPUT_LIMIT: usize = 65_536;
-
-/// The floor between two renewal attempts, whatever the last one produced.
-///
-/// On time alone, not on the binary: an install that rewrites itself must not be able to buy
-/// an earlier spawn, for the same reason `cli_version` puts a floor under a churning binary.
-/// The fingerprint is recorded because it says *which* program ran, not to shorten this.
-pub const RENEWAL_FLOOR_SECONDS: i64 = 3_600;
 
 /// The one authentication method this build ever asks for. It renews from the refresh token
 /// the CLI already holds, with no browser and no device code.
@@ -47,26 +35,6 @@ const CACHED_TOKEN_METHOD: &str = "cached_token";
 
 const INITIALIZE_ID: u64 = 1;
 const AUTHENTICATE_ID: u64 = 2;
-
-/// What one renewal attempt produced, for the record that rate-limits the next one.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RenewalOutcome {
-    /// The file now holds a token this refresh can use.
-    Renewed,
-    /// It does not. Whether the CLI refused, hung, or was killed does not change what the
-    /// next hour is allowed to do.
-    Failed,
-}
-
-/// The last time this device asked the Grok CLI to renew, against which binary, and how it
-/// went. Rebuildable: losing it to a cache reset costs one extra attempt.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct RenewalAttempt {
-    pub fingerprint: String,
-    pub attempted_at: i64,
-    pub outcome: RenewalOutcome,
-}
 
 /// Renews an expired Grok sign-in through the CLI that owns it, at most once an hour.
 ///
@@ -88,9 +56,7 @@ pub fn renew_expired_sign_in(
     // A Mac without the CLI has nothing to ask, and reports the sign-in it has.
     let binary = resolve_binary(GROK_BINARY, environment)?;
     let fingerprint = binary_fingerprint(&binary)?;
-    if attempted.is_some_and(|attempt| {
-        attempt.attempted_at <= now && now - attempt.attempted_at < RENEWAL_FLOOR_SECONDS
-    }) {
+    if within_renewal_floor(attempted, now) {
         return None;
     }
     renew(&binary, context, environment);
@@ -100,6 +66,8 @@ pub fn renew_expired_sign_in(
     Some(RenewalAttempt {
         fingerprint,
         attempted_at: now,
+        // The Grok CLI leaves `auth.json` alone when it cannot renew, so the shared record's
+        // `SignedOut` — a CLI that emptied its own credential — has nothing to describe here.
         outcome: if super::sign_in_usable(context) {
             RenewalOutcome::Renewed
         } else {
@@ -110,7 +78,7 @@ pub fn renew_expired_sign_in(
 
 /// Runs `grok agent stdio` once and asks it to renew from the token already on disk.
 ///
-/// One of the two functions in `src/providers` allowed to start a program a variable names,
+/// One of the three functions in `src/providers` allowed to start a program a variable names,
 /// and [`renew_expired_sign_in`] is its only caller. The child gets a bounded stdout, no
 /// stderr, the one deadline the whole exchange shares, and an `env -i`-style environment
 /// holding `HOME`, `PATH`, and `GROK_HOME` where this device sets one.
@@ -225,6 +193,7 @@ fn authenticate_request(method: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::providers::common::RENEWAL_FLOOR_SECONDS;
     use std::collections::HashMap;
     use std::fs;
     use std::path::PathBuf;
@@ -421,9 +390,10 @@ mod tests {
         #[cfg(unix)]
         {
             let (directory, context, mut environment) = fixture("hangs", "2026-08-26T11:00:00Z");
-            // Well under the five seconds a refresh allows, and well over the third of a
-            // second macOS spends checking a freshly written executable the first time.
-            environment.timeout = Duration::from_millis(1_500);
+            // Well under the thirty seconds the child would otherwise take, and well over
+            // the time macOS spends checking a freshly written executable the first time —
+            // which on a loaded machine running the rest of this suite is over a second.
+            environment.timeout = Duration::from_secs(3);
             let log = directory.join("spawns.log");
             install(
                 &directory,
@@ -433,7 +403,7 @@ mod tests {
             let attempt =
                 renew_expired_sign_in(&context, &environment, None, 10_000).expect("attempt");
             assert_eq!(attempt.outcome, RenewalOutcome::Failed);
-            assert!(started.elapsed() < Duration::from_secs(5));
+            assert!(started.elapsed() < Duration::from_secs(10));
             assert_eq!(spawns(&log), 1);
             // The sign-in is what it was, so collection reports it as the sign-in it is.
             assert!(super::super::sign_in_expiring(&context));
