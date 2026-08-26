@@ -26,6 +26,7 @@ use crate::protocol::{
     QuotaOverviewIdentity, QuotaOverviewItem, QuotaOverviewSource, RecoveryAction, UsagePeriod,
     UsageSource,
 };
+use crate::providers::claude;
 use crate::providers::common::{
     CliTool, ErrorCategory, ProbeCache, ProbeEnvironment, ProviderError, ProviderSession,
     RenewalAttempts, resolve_cli_versions,
@@ -2147,6 +2148,12 @@ fn browser_access_denied_message(denial: &crate::state::BrowserAccessDenial) -> 
 fn auth_required_message(provider: ProviderId, source_id: &str) -> &'static str {
     if providers::is_browser_session_source(source_id) {
         return "The saved browser session expired or was rejected. Add it again in Settings.";
+    }
+    // Claude Code empties its own credential when the refresh token it holds is rejected.
+    // Opening it would open onto that same emptied entry, so this is the one sign-in the
+    // reader has to restore at a terminal.
+    if source_id == claude::SIGNED_OUT_SOURCE {
+        return "Claude Code is signed out. Run `claude` and sign in again.";
     }
     match provider {
         ProviderId::Claude => {

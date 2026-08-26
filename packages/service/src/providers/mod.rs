@@ -79,7 +79,11 @@ pub fn session_source_id(provider: ProviderId, session: &ProviderSession) -> &'s
 /// because the report crosses the IPC boundary as ids and nothing else.
 pub fn source_display_name(source_id: &str) -> &'static str {
     match source_id {
-        claude::SOURCE | codex::SOURCE_API | grok::SOURCE | grok::BILLING_RPC_SOURCE => "OAuth",
+        claude::SOURCE
+        | claude::SIGNED_OUT_SOURCE
+        | codex::SOURCE_API
+        | grok::SOURCE
+        | grok::BILLING_RPC_SOURCE => "OAuth",
         codex::SOURCE_PAT => "Access token",
         BROWSER_SESSION_SOURCE | cursor::SOURCE => "Browser session",
         cursor::APP_SOURCE => "Cursor app session",

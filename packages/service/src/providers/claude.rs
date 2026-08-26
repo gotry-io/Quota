@@ -13,6 +13,13 @@ use super::common::{
 };
 
 pub const SOURCE: &str = "anthropic_oauth_usage_api";
+/// What an emptied credential reports under.
+///
+/// Not a rung: the same OAuth path answered, and what it found was a Claude Code that signed
+/// itself out. It is a source of its own because it is the one sign-in failure whose recovery
+/// is not "open Claude Code" — the app opens onto the same emptied entry — and the recovery
+/// text is chosen by the source that reached the verdict.
+pub const SIGNED_OUT_SOURCE: &str = "anthropic_oauth_signed_out";
 pub const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 pub const PROFILE_URL: &str = "https://api.anthropic.com/api/oauth/profile";
 pub const KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
@@ -41,11 +48,48 @@ struct Credentials {
     source: String,
 }
 
+/// One credential document as this build reads it.
+#[derive(Clone, Debug)]
+enum Entry {
+    Grant(Credentials),
+    /// The entry Claude Code leaves when it signs itself out, and the store it was read from.
+    SignedOut(String),
+}
+
+impl Entry {
+    fn source(&self) -> &str {
+        match self {
+            Self::Grant(credentials) => &credentials.source,
+            Self::SignedOut(source) => source,
+        }
+    }
+
+    /// Whether this entry is the thing standing between the refresh and a reading. An emptied
+    /// one always is, and no clock will change that.
+    fn expiring(&self, now: i64) -> bool {
+        match self {
+            Self::Grant(credentials) => is_expiring(credentials, now),
+            Self::SignedOut(_) => true,
+        }
+    }
+
+    fn grant(self) -> Option<Credentials> {
+        match self {
+            Self::Grant(credentials) => Some(credentials),
+            Self::SignedOut(_) => None,
+        }
+    }
+}
+
+/// The Claude sign-in this device holds, emptied entries included: a Claude Code that signed
+/// itself out is a credential this Mac has and cannot use, which is a different thing to tell
+/// the reader from a Mac that never had one.
 pub fn discover(context: &CollectionContext) -> Vec<ProviderSession> {
-    load_credentials(context)
-        .map(|credentials| ProviderSession {
+    look_up_credentials(context)
+        .entry
+        .map(|entry| ProviderSession {
             provider: ProviderId::Claude,
-            credential_source: credentials.source,
+            credential_source: entry.source().to_owned(),
         })
         .into_iter()
         .collect()
@@ -63,7 +107,7 @@ pub fn collect(
 
 fn collect_official(context: &CollectionContext) -> Result<QuotaSnapshot, ProviderError> {
     let lookup = look_up_credentials(context);
-    let Some(credentials) = lookup.credentials else {
+    let Some(entry) = lookup.entry else {
         // A withheld secret is not an expired sign-in, and reporting it as one sends the
         // reader to sign in again for as long as the access decision stands.
         return Err(ProviderError::new(
@@ -75,18 +119,26 @@ fn collect_official(context: &CollectionContext) -> Result<QuotaSnapshot, Provid
             SOURCE,
         ));
     };
-    // Claude Code owns token renewal, and this build no longer drives its CLI to trigger
-    // one. A grant that is out of time is therefore a sign-in only Claude Code can renew,
-    // and saying so is what sends the reader somewhere that can actually fix it.
+    // Claude Code emptied its own credential rather than renew it, which is the one sign-in
+    // problem that opening Claude Code does not fix: it opens onto the same emptied entry.
+    let Some(credentials) = entry.grant() else {
+        return Err(ProviderError::new(
+            ErrorCategory::AuthRequired,
+            SIGNED_OUT_SOURCE,
+        ));
+    };
+    // Claude Code owns token renewal, and this build does not drive its CLI to trigger one.
+    // A grant that is out of time is therefore a sign-in only Claude Code can renew, and
+    // saying so is what sends the reader somewhere that can actually fix it.
     if is_expiring(&credentials, context.observed_unix()) {
         return Err(ProviderError::new(ErrorCategory::AuthRequired, SOURCE));
     }
     collect_at(&credentials, context, USAGE_URL, PROFILE_URL)
 }
 
-/// This device's Claude sign-in, and whether the Keychain refused to hand one over.
+/// This device's Claude credential, and whether the Keychain refused to hand one over.
 struct CredentialLookup {
-    credentials: Option<Credentials>,
+    entry: Option<Entry>,
     keychain_refused: bool,
 }
 
@@ -96,61 +148,45 @@ fn look_up_credentials(context: &CollectionContext) -> CredentialLookup {
         .filter(|value| !value.trim().is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| context.home_directory.join(".claude"));
-    let file_credentials = read_credentials_file(&root.join(".credentials.json"));
+    let file_entry = read_credentials_file(&root.join(".credentials.json"));
     let keychain = (cfg!(target_os = "macos") && context.allows_host_keychain())
         .then(|| context.keychain_secret(|| read_keychain(context)));
     let keychain_refused = matches!(keychain, Some(KeychainSecret::Refused));
-    let keychain_credentials = match keychain {
+    let keychain_entry = match keychain {
         Some(KeychainSecret::Found(secret)) => serde_json::from_slice::<Value>(secret)
             .ok()
-            .and_then(|value| {
-                parse_credentials(&value, &format!("macOS Keychain: {KEYCHAIN_SERVICE}"))
-            }),
+            .and_then(|value| parse_entry(&value, &format!("macOS Keychain: {KEYCHAIN_SERVICE}"))),
         Some(KeychainSecret::Absent | KeychainSecret::Refused) | None => None,
     };
     // Claude renews the Keychain entry in place, so that is the live grant and the file is
     // what an older version left behind.  Reading the file first let one that had been
     // revoked but not yet expired mask the renewed grant for as long as its clock ran.
     CredentialLookup {
-        credentials: preferred_credentials(
-            keychain_credentials,
-            file_credentials,
-            context.observed_unix(),
-        ),
+        entry: preferred_entry(keychain_entry, file_entry, context.observed_unix()),
         keychain_refused,
     }
 }
 
-/// The Keychain grant wins unless it is the only expiring one of the two.
-fn preferred_credentials(
-    keychain: Option<Credentials>,
-    file: Option<Credentials>,
-    now: i64,
-) -> Option<Credentials> {
+/// The Keychain entry wins unless it is the only expiring one of the two.
+fn preferred_entry(keychain: Option<Entry>, file: Option<Entry>, now: i64) -> Option<Entry> {
     match (keychain, file) {
-        (Some(keychain), Some(file)) => {
-            Some(if !is_expiring(&keychain, now) || is_expiring(&file, now) {
-                keychain
-            } else {
-                file
-            })
-        }
+        (Some(keychain), Some(file)) => Some(if !keychain.expiring(now) || file.expiring(now) {
+            keychain
+        } else {
+            file
+        }),
         (Some(keychain), None) => Some(keychain),
         (None, file) => file,
     }
 }
 
-fn load_credentials(context: &CollectionContext) -> Option<Credentials> {
-    look_up_credentials(context).credentials
-}
-
-fn read_credentials_file(path: &Path) -> Option<Credentials> {
+fn read_credentials_file(path: &Path) -> Option<Entry> {
     let metadata = fs::symlink_metadata(path).ok()?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         return None;
     }
     let value: Value = serde_json::from_slice(&read_bounded_file(path, LOCAL_FILE_LIMIT)?).ok()?;
-    parse_credentials(&value, &path.to_string_lossy())
+    parse_entry(&value, &path.to_string_lossy())
 }
 
 /// The Claude Code credential entry, or why it did not produce one.
@@ -198,10 +234,22 @@ fn keychain_entry_exists(context: &CollectionContext) -> bool {
     .is_some()
 }
 
+/// The Claude sign-in a credential document holds, or the emptied entry in its place.
+///
+/// A document with no `claudeAiOauth` object is no Claude sign-in at all — 2.1.x can leave a
+/// Keychain item holding only `mcpOAuth`, which belongs to MCP servers — and is no entry
+/// here. One that has the object without a usable access token is the opposite: Claude Code
+/// signs itself out by emptying the entry in place, blanking the tokens and setting
+/// `expiresAt` to zero, and that is a credential this device holds and cannot use.
+fn parse_entry(value: &Value, source: &str) -> Option<Entry> {
+    value.get("claudeAiOauth")?.as_object()?;
+    Some(match parse_credentials(value, source) {
+        Some(credentials) => Entry::Grant(credentials),
+        None => Entry::SignedOut(source.to_owned()),
+    })
+}
+
 fn parse_credentials(value: &Value, source: &str) -> Option<Credentials> {
-    if value.get("claudeAiOauth").is_none() && value.get("mcpOAuth").is_some() {
-        return None;
-    }
     let oauth = value.get("claudeAiOauth")?.as_object()?;
     let access_token = obj_get_any(
         &Value::Object(oauth.clone()),
@@ -572,46 +620,42 @@ mod tests {
     #[test]
     fn the_renewed_grant_outranks_the_file_left_behind() {
         let now = 1_000_000;
-        let live = || Some(credential("keychain", Some(now + 86_400)));
-        let stale = || Some(credential("file", Some(now + 86_400)));
-        let expired = |source: &'static str| Some(credential(source, Some(now - 1)));
+        let entry = |source: &'static str, expires_at| {
+            Some(Entry::Grant(credential(source, Some(expires_at))))
+        };
+        let live = || entry("keychain", now + 86_400);
+        let stale = || entry("file", now + 86_400);
+        let expired = |source: &'static str| entry(source, now - 1);
+        let preferred = |keychain, file| {
+            preferred_entry(keychain, file, now).map(|entry| entry.source().to_owned())
+        };
 
         // Both usable: the Keychain is the one Claude renews.
-        assert_eq!(
-            preferred_credentials(live(), stale(), now)
-                .expect("credentials")
-                .source,
-            "keychain"
-        );
+        assert_eq!(preferred(live(), stale()).as_deref(), Some("keychain"));
         // Only the file is usable: an expiring Keychain grant is not worth preferring.
         assert_eq!(
-            preferred_credentials(expired("keychain"), stale(), now)
-                .expect("credentials")
-                .source,
-            "file"
+            preferred(expired("keychain"), stale()).as_deref(),
+            Some("file")
         );
         // Both expiring: still the Keychain, so the caller reports one expired sign-in
         // rather than reporting the one that cannot be renewed.
         assert_eq!(
-            preferred_credentials(expired("keychain"), expired("file"), now)
-                .expect("credentials")
-                .source,
-            "keychain"
+            preferred(expired("keychain"), expired("file")).as_deref(),
+            Some("keychain")
         );
         // Either alone is used, and neither means neither.
+        assert_eq!(preferred(live(), None).as_deref(), Some("keychain"));
+        assert_eq!(preferred(None, stale()).as_deref(), Some("file"));
+        assert!(preferred(None, None).is_none());
+        // An emptied Keychain entry is always the expiring one, so a file grant with time
+        // left is what this refresh reads — and when neither has time, the reader is told
+        // about the Claude Code that signed itself out rather than about a stale file.
+        let emptied = || Some(Entry::SignedOut("keychain".to_owned()));
+        assert_eq!(preferred(emptied(), stale()).as_deref(), Some("file"));
         assert_eq!(
-            preferred_credentials(live(), None, now)
-                .expect("credentials")
-                .source,
-            "keychain"
+            preferred(emptied(), expired("file")).as_deref(),
+            Some("keychain")
         );
-        assert_eq!(
-            preferred_credentials(None, stale(), now)
-                .expect("credentials")
-                .source,
-            "file"
-        );
-        assert!(preferred_credentials(None, None, now).is_none());
     }
 
     fn isolated_context() -> CollectionContext {
@@ -732,24 +776,40 @@ mod tests {
         assert_eq!(credentials.expires_at, Some(1786406400));
         assert_eq!(credentials.scopes, ["user:profile"]);
         assert_eq!(credentials.subscription_type.as_deref(), Some("pro"));
+    }
+
+    /// The three shapes a Claude Code credential comes in, and what each one is.
+    #[test]
+    fn an_emptied_entry_is_a_signed_out_claude_code_and_mcp_items_are_not_a_sign_in() {
+        // A Keychain item holding only MCP server tokens is not a Claude sign-in at all, and
+        // a device holding one has nothing for this provider.
         assert!(
-            parse_credentials(
-                &serde_json::json!({
-                    "mcpOAuth": {"token": "mcp-only"}
-                }),
+            parse_entry(
+                &serde_json::json!({"mcpOAuth": {"token": "mcp-only"}}),
                 "fixture"
             )
             .is_none()
         );
-        assert!(
-            parse_credentials(
-                &serde_json::json!({
-                    "claudeAiOauth": {"scopes": ["user:profile"]}
-                }),
+        // Claude Code signs itself out by emptying the entry in place. That is a credential
+        // this device holds and cannot use, which is not the same as holding none.
+        for emptied in [
+            serde_json::json!({"claudeAiOauth": {
+                "accessToken": "", "refreshToken": "", "expiresAt": 0
+            }}),
+            serde_json::json!({"claudeAiOauth": {"scopes": ["user:profile"]}}),
+        ] {
+            assert!(matches!(
+                parse_entry(&emptied, "fixture"),
+                Some(Entry::SignedOut(_))
+            ));
+        }
+        assert!(matches!(
+            parse_entry(
+                &serde_json::json!({"claudeAiOauth": {"accessToken": "live"}}),
                 "fixture"
-            )
-            .is_none()
-        );
+            ),
+            Some(Entry::Grant(_))
+        ));
     }
 
     /// A collection failure and an account with nothing to report are different answers, and
