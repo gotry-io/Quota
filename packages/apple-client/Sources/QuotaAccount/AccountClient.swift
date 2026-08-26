@@ -254,7 +254,7 @@ public actor AccountClient {
       throw AccountClientError.notSignedIn
     }
     do {
-      let rotated = try await relay.refreshAccountSession(refreshToken: current.refreshToken)
+      let rotated = try await relay.refreshSession(refreshToken: current.refreshToken)
       guard rotated.accountID == current.accountID else {
         throw AccountClientError.accountMismatch
       }

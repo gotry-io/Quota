@@ -83,7 +83,7 @@ public struct RelayClient: Sendable {
     )
   }
 
-  public func refreshAccountSession(refreshToken: String) async throws
+  public func refreshSession(refreshToken: String) async throws
     -> SessionRefreshResponse
   {
     guard WireValidation.isIOSRefreshToken(refreshToken) else {

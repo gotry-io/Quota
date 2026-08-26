@@ -86,7 +86,7 @@ struct RelayClientTests {
       verifier: String(repeating: "a", count: 43)
     )
     #expect(exchanged.accountID == "account_01")
-    let refreshed = try await client.refreshAccountSession(refreshToken: Fixtures.refreshToken)
+    let refreshed = try await client.refreshSession(refreshToken: Fixtures.refreshToken)
     #expect(refreshed.session.accessToken == Fixtures.rotatedAccess)
     try await client.revokeSession(refreshToken: Fixtures.rotatedRefresh)
     #expect(
