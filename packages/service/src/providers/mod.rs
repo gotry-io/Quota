@@ -85,9 +85,11 @@ pub fn source_display_name(source_id: &str) -> &'static str {
         | grok::SOURCE
         | grok::BILLING_RPC_SOURCE => "OAuth",
         codex::SOURCE_PAT => "Access token",
-        BROWSER_SESSION_SOURCE | claude::WEB_SOURCE | codex::WEB_SOURCE | cursor::SOURCE => {
-            "Browser session"
-        }
+        BROWSER_SESSION_SOURCE
+        | claude::WEB_SOURCE
+        | codex::WEB_SOURCE
+        | grok::WEB_SOURCE
+        | cursor::SOURCE => "Browser session",
         cursor::APP_SOURCE => "Cursor app session",
         kimi::CLI_SOURCE => "Kimi Code token",
         kimi::SOURCE | openrouter::SOURCE | deepseek::SOURCE | litellm::SOURCE => "API key",
@@ -110,6 +112,7 @@ pub fn validate_browser_session(
     match provider {
         ProviderId::Codex => codex::validate_browser_session(&cookie_header, context),
         ProviderId::Claude => claude::validate_browser_session(&cookie_header, context),
+        ProviderId::Grok => grok::validate_browser_session(&cookie_header, context),
         ProviderId::Cursor => cursor::validate_browser_session(&cookie_header, context),
         _ => Err(ProviderError::new(
             common::ErrorCategory::Unsupported,

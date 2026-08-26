@@ -6,7 +6,8 @@ use std::time::Duration;
 
 use super::common::{
     CollectionContext, ErrorCategory, HttpClient, LOCAL_FILE_LIMIT, ProviderError, ProviderSession,
-    QuotaAccount, QuotaSnapshot, QuotaWindow, account_identity, clamp_percent, duration_seconds,
+    QuotaAccount, QuotaSnapshot, QuotaWindow, ValidatedBrowserSession, account_identity,
+    clamp_percent, collect_official_or_browser, discover_official_or_browser, duration_seconds,
     mask_display_name, mask_email, number, obj_get, obj_get_any, parse_date, read_bounded_file,
     slug, string,
 };
@@ -16,6 +17,7 @@ pub mod refresh;
 
 pub const SOURCE: &str = "grok_billing_api";
 pub const BILLING_RPC_SOURCE: &str = billing_rpc::SOURCE;
+pub const WEB_SOURCE: &str = billing_rpc::WEB_SOURCE;
 pub const BILLING_URL: &str = "https://cli-chat-proxy.grok.com/v1/billing?format=credits";
 pub const SETTINGS_URL: &str = "https://cli-chat-proxy.grok.com/v1/settings";
 const SETTINGS_TIMEOUT: Duration = Duration::from_secs(2);
@@ -39,23 +41,37 @@ struct Credentials {
 }
 
 pub fn discover(context: &CollectionContext) -> Vec<ProviderSession> {
-    load_credentials(context)
-        .map(|credentials| ProviderSession {
+    discover_official_or_browser(
+        ProviderId::Grok,
+        load_credentials(context).map(|credentials| ProviderSession {
             provider: ProviderId::Grok,
             credential_source: credentials.source,
-        })
-        .into_iter()
-        .collect()
+        }),
+        context,
+    )
 }
 
+pub fn validate_browser_session(
+    cookie_header: &str,
+    context: &CollectionContext,
+) -> Result<ValidatedBrowserSession, ProviderError> {
+    billing_rpc::validate_browser_session(cookie_header, context)
+}
+
+/// The CLI proxy's billing, then grok.com's own RPC with the same token, then the stored
+/// grok.com session.
 pub fn collect(
-    _session: &ProviderSession,
+    session: &ProviderSession,
     context: &CollectionContext,
 ) -> Result<QuotaSnapshot, ProviderError> {
-    if context.cancelled() {
-        return Err(ProviderError::new(ErrorCategory::Unavailable, SOURCE));
-    }
-    collect_local(context)
+    collect_official_or_browser(
+        session,
+        context,
+        ProviderId::Grok,
+        SOURCE,
+        || collect_local(context),
+        || billing_rpc::collect(context),
+    )
 }
 
 fn collect_local(context: &CollectionContext) -> Result<QuotaSnapshot, ProviderError> {
@@ -345,11 +361,11 @@ fn grok_plan(credentials: &Credentials) -> Option<String> {
 mod tests {
     use super::*;
 
+    /// The Grok CLI owns this token. A Mac without one has only the stored grok.com session
+    /// to try, and without that too there is nothing at all.
     #[test]
-    /// The Grok CLI owns this token, so a Mac without one has nothing for this collector to
-    /// try. There is no second rung to fall to.
-    fn no_local_grant_discovers_nothing() {
-        let context = CollectionContext {
+    fn the_browser_session_is_discovered_only_without_a_local_grant() {
+        let mut context = CollectionContext {
             home_directory: PathBuf::from("/tmp/quota-grok-missing-home"),
             environment: std::collections::HashMap::new(),
             config_path: None,
@@ -362,7 +378,15 @@ mod tests {
             cli_versions: Default::default(),
         };
         assert!(discover(&context).is_empty());
-        assert!(ProviderId::Grok.metadata().browser_session.is_none());
+        context
+            .browser_sessions
+            .insert(ProviderId::Grok, "sso=session-value".to_owned());
+        let sessions = discover(&context);
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(
+            sessions[0].credential_source,
+            super::super::BROWSER_SESSION_SOURCE
+        );
     }
 
     #[test]

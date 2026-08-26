@@ -120,7 +120,15 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
         account_sync: true,
         environment_keys: &["GROK_HOME"],
         credential_config: None,
-        browser_session: None,
+        browser_session: Some(BrowserSessionConfig {
+            login_url: "https://grok.com/",
+            cookie_hosts: &["grok.com", "www.grok.com"],
+            cookie_names: &["sso", "sso-rw"],
+            browser_priority: &[
+                "safari", "chrome", "edge", "brave", "arc", "dia", "chromium", "firefox",
+            ],
+            exclusive: false,
+        }),
         default_base_url: None,
         base_url_environment_key: None,
     },

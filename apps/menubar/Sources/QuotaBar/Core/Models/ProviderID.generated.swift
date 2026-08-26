@@ -125,7 +125,12 @@ extension ProviderID {
       cookieNames: ["sessionKey", "lastActiveOrg"],
       browserPriority: ["safari", "chrome", "edge", "brave", "arc", "dia", "chromium", "firefox"],
       exclusive: false)
-    case .`grok`: nil
+    case .`grok`: BrowserSessionSpec(
+      loginURL: "https://grok.com/",
+      cookieHosts: ["grok.com", "www.grok.com"],
+      cookieNames: ["sso", "sso-rw"],
+      browserPriority: ["safari", "chrome", "edge", "brave", "arc", "dia", "chromium", "firefox"],
+      exclusive: false)
     case .`openrouter`: nil
     case .`deepseek`: nil
     case .`kimi`: nil
