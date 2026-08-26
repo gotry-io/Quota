@@ -35,14 +35,24 @@ struct AccountQuotaPresentation: Equatable, Identifiable {
   /// What the row says about this reading: the source's own report, or aged out by the
   /// service's verdict. Resolved once here so the view never re-derives it.
   let state: QuotaObservationState
-  let sources: [QuotaObservationSource]
-  let selectedSource: QuotaObservationSource
   let selectedSourceDisplayName: String
 
   var id: QuotaSubscriptionIdentity { identity }
-  var sourceSummary: String { selectedSource.isLocal ? "Local" : "Device" }
-  var sourceSymbolName: String { selectedSource.isLocal ? "laptopcomputer" : "desktopcomputer" }
-  var sourceAccessibilityLabel: String { "Source: \(selectedSourceDisplayName)" }
+
+  /// An Overview row spends no line on which source answered or how old the reading is; a
+  /// reading that no longer describes live quota says so in tone. Tone cannot be read aloud,
+  /// so the sentence it replaced is what VoiceOver announces for the row.
+  func accessibilityLabel(accountIndex: Int, now: Date) -> String {
+    let account =
+      PlanDisplay.accountLabel(snapshot.account.label).map { "Account: \($0)" }
+      ?? "Account \(accountIndex + 1)"
+    let freshness = FreshnessCopy.observation(
+      state: state,
+      observedAt: snapshot.observedAt,
+      now: now
+    )
+    return "\(account). \(selectedSourceDisplayName). \(freshness)"
+  }
 }
 
 struct ProviderReportingSourcePresentation: Equatable, Identifiable {
@@ -907,10 +917,9 @@ final class MenuBarViewModel {
     let sourcePairs = item.sources.compactMap { source in
       source.observationSource.map { (source.sourceID, $0) }
     }
-    guard
-      let selectedSource = sourcePairs.first(where: { $0.0 == item.selectedSourceID })?.1,
-      !sourcePairs.isEmpty
-    else { return nil }
+    // A selected source the service did not also describe is not a row this panel can stand
+    // behind, so the whole observation is dropped rather than shown without provenance.
+    guard sourcePairs.contains(where: { $0.0 == item.selectedSourceID }) else { return nil }
 
     let scope: QuotaSubscriptionIdentity.Scope
     switch item.identity.scope {
@@ -933,8 +942,6 @@ final class MenuBarViewModel {
       state: item.snapshot.reportedState == .available && item.isStale
         ? .stale
         : item.snapshot.reportedState,
-      sources: sourcePairs.map(\.1),
-      selectedSource: selectedSource,
       selectedSourceDisplayName: item.selectedSourceDisplayName
     )
   }

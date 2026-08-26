@@ -99,7 +99,17 @@
     }
     #expect(warning == nil)
     #expect(providers.map(\.provider) == [.codex, .claude, .grok])
-    #expect(providers.flatMap(\.accounts).allSatisfy { $0.sourceSummary == "Device" })
+    // Every fixture row is an account device's reading, and the row's spoken label — the only
+    // place the source and its age survive — names that device.
+    #expect(
+      providers.flatMap(\.accounts).map {
+        $0.accessibilityLabel(accountIndex: 0, now: referenceDate)
+      } == [
+        "Account: pe***@example.com. Studio Mac. Updated 1m ago",
+        "Account: Team workspace. Studio Mac. Updated 2m ago",
+        "Account 1. Travel Mac. Updated 3m ago",
+      ]
+    )
 
     let encoded = try QuotaWireCodec.makeEncoder().encode(model.accountSummary)
     let encodedText = String(decoding: encoded, as: UTF8.self).lowercased()

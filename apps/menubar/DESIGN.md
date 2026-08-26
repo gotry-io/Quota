@@ -188,10 +188,15 @@ Each quota observation shows:
 - percent-only windows as `71%`;
 - balance-only windows as `$12.34` (or the unit amount) under a **Balance** title;
 - one meter per quota window when a percent is meaningful;
-- reset time and the selected source display name as quiet metadata, with the shared freshness
-  line opposite the source. Reset copy uses weekday and time within six days, otherwise month and
-  day; it does not imply the window period;
-- **Local** for signed-out local collection or **Device** for an account observation.
+- reset time as quiet metadata. Reset copy uses weekday and time within six days, otherwise month
+  and day; it does not imply the window period.
+
+An Overview row spends no line on which source answered or how old its reading is. A reading that
+no longer describes live quota says so in tone — muted value, meter at reduced opacity — and the
+sentence that tone replaces is what VoiceOver announces for the row: the account, the source
+display name, and the shared freshness line (`Account: pe***@example.com. Studio Mac. Updated 3m
+ago`). Tone alone never carries the state. The provider detail page in Settings keeps the per-source
+freshness lines, because that page is where provenance is the subject.
 
 Cursor's Other Models percentage and its included-usage dollar balance are related provider data but
 not the same meter. Overview shows only the Other Models percentage. Keep the dollar remaining and
@@ -208,8 +213,8 @@ stays quiet once the account covers it, because there is nothing here to recover
 An account device's reading names why it is not current rather than only that it is not, in the
 shared freshness words: **Sign-in needed**, **Unavailable**, **Unsupported**, **Can’t refresh** for
 a state its own device reported, and **Not current** for a reading that merely aged past
-`valid_until`. The numbers stay on screen with their age, because they remain the last known
-reading.
+`valid_until`. Those words are the row's spoken label and the provider detail page; the numbers stay
+on screen either way, because they remain the last known reading.
 
 Empty Overview recovery says to sign in to a provider CLI or enable an agent in Settings. A failed
 current sync keeps last-known content visible and adds one inline warning.

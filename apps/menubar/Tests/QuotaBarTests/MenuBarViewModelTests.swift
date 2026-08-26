@@ -110,7 +110,11 @@ func consumesServiceMergedOverviewWithoutReprocessingObservations() async throws
     return
   }
   #expect(warning == nil)
-  #expect(providers.first?.accounts.first?.sourceSummary == "Local")
+  // Overview no longer prints where the reading came from or how old it is; VoiceOver still says it.
+  #expect(
+    providers.first?.accounts.first?.accessibilityLabel(accountIndex: 0, now: now)
+      == "Account 1. This Mac. Updated just now"
+  )
   #expect(providers.first?.accounts.first?.snapshot == snapshot)
   #expect(model.providerConfigurations[.openrouter]?.maskedAPIKey == "OpenRouter ···test")
   #expect(model.lastCheckedAt == now)
