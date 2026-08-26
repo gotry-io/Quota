@@ -86,8 +86,8 @@ struct RelayClientTests {
       verifier: String(repeating: "a", count: 43)
     )
     #expect(exchanged.accountID == "account_01")
-    let refreshed = try await client.refreshAccountSession(refreshToken: Fixtures.refreshToken)
-    #expect(refreshed.accountSession.accessToken == Fixtures.rotatedAccess)
+    let refreshed = try await client.refreshSession(refreshToken: Fixtures.refreshToken)
+    #expect(refreshed.session.accessToken == Fixtures.rotatedAccess)
     try await client.revokeSession(refreshToken: Fixtures.rotatedRefresh)
     #expect(
       transport.recordedURLs.map(\.path) == [

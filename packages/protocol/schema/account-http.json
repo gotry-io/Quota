@@ -98,7 +98,55 @@
       "additionalProperties": false
     },
     {
-      "$ref": "#/$defs/__schema30"
+      "type": "object",
+      "properties": {
+        "protocol_version": {
+          "type": "number",
+          "const": 2
+        },
+        "grant_type": {
+          "type": "string",
+          "const": "authorization_code"
+        },
+        "client_id": {
+          "$ref": "#/$defs/__schema30"
+        },
+        "code": {
+          "$ref": "#/$defs/__schema31"
+        },
+        "code_verifier": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._~-]{43,128}$"
+        },
+        "redirect_uri": {
+          "type": "string",
+          "maxLength": 2048,
+          "format": "uri"
+        },
+        "installation_id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+        },
+        "device_display_name": {
+          "$ref": "#/$defs/__schema4"
+        },
+        "platform": {
+          "$ref": "#/$defs/__schema5"
+        }
+      },
+      "required": [
+        "protocol_version",
+        "grant_type",
+        "client_id",
+        "code",
+        "code_verifier",
+        "redirect_uri",
+        "installation_id",
+        "device_display_name",
+        "platform"
+      ],
+      "additionalProperties": false
     },
     {
       "type": "object",
@@ -112,10 +160,10 @@
           "const": "authorization_code"
         },
         "client_id": {
-          "$ref": "#/$defs/__schema34"
+          "$ref": "#/$defs/__schema32"
         },
         "code": {
-          "$ref": "#/$defs/__schema32"
+          "$ref": "#/$defs/__schema31"
         },
         "code_verifier": {
           "type": "string",
@@ -150,11 +198,11 @@
         "account_id": {
           "$ref": "#/$defs/__schema1"
         },
-        "account_session": {
-          "$ref": "#/$defs/__schema35"
+        "session": {
+          "$ref": "#/$defs/__schema33"
         }
       },
-      "required": ["protocol_version", "token_type", "account_id", "account_session"],
+      "required": ["protocol_version", "token_type", "account_id", "session"],
       "additionalProperties": false
     },
     {
@@ -169,155 +217,35 @@
           "const": "refresh_token"
         },
         "client_id": {
-          "$ref": "#/$defs/__schema34"
-        },
-        "token_audience": {
-          "type": "string",
-          "const": "account"
+          "$ref": "#/$defs/__schema32"
         },
         "refresh_token": {
-          "$ref": "#/$defs/__schema32"
-        }
-      },
-      "required": [
-        "protocol_version",
-        "grant_type",
-        "client_id",
-        "token_audience",
-        "refresh_token"
-      ],
-      "additionalProperties": false
-    },
-    {
-      "type": "object",
-      "properties": {
-        "protocol_version": {
-          "type": "number",
-          "const": 2
-        },
-        "client_id": {
           "$ref": "#/$defs/__schema31"
+        }
+      },
+      "required": ["protocol_version", "grant_type", "client_id", "refresh_token"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "protocol_version": {
+          "type": "number",
+          "const": 2
         },
-        "installation_id": {
+        "token_type": {
+          "type": "string",
+          "const": "Bearer"
+        },
+        "account_id": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "session": {
           "$ref": "#/$defs/__schema33"
-        },
-        "device_display_name": {
-          "$ref": "#/$defs/__schema4"
-        },
-        "platform": {
-          "$ref": "#/$defs/__schema5"
         }
       },
-      "required": [
-        "protocol_version",
-        "client_id",
-        "installation_id",
-        "device_display_name",
-        "platform"
-      ],
+      "required": ["protocol_version", "token_type", "account_id", "session"],
       "additionalProperties": false
-    },
-    {
-      "type": "object",
-      "properties": {
-        "protocol_version": {
-          "type": "number",
-          "const": 2
-        },
-        "device_code": {
-          "$ref": "#/$defs/__schema32"
-        },
-        "user_code": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 32
-        },
-        "verification_uri": {
-          "type": "string",
-          "maxLength": 2048,
-          "format": "uri"
-        },
-        "verification_uri_complete": {
-          "anyOf": [
-            {
-              "type": "string",
-              "maxLength": 2048,
-              "format": "uri"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "expires_in": {
-          "type": "integer",
-          "maximum": 600,
-          "$ref": "#/$defs/__schema24"
-        },
-        "interval": {
-          "type": "integer",
-          "maximum": 60,
-          "$ref": "#/$defs/__schema24"
-        }
-      },
-      "required": [
-        "protocol_version",
-        "device_code",
-        "user_code",
-        "verification_uri",
-        "verification_uri_complete",
-        "expires_in",
-        "interval"
-      ],
-      "additionalProperties": false
-    },
-    {
-      "type": "object",
-      "properties": {
-        "protocol_version": {
-          "type": "number",
-          "const": 2
-        },
-        "user_code": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 32
-        },
-        "decision": {
-          "type": "string",
-          "enum": ["approve", "deny"]
-        }
-      },
-      "required": ["protocol_version", "user_code", "decision"],
-      "additionalProperties": false
-    },
-    {
-      "oneOf": [
-        {
-          "$ref": "#/$defs/__schema30"
-        },
-        {
-          "type": "object",
-          "properties": {
-            "protocol_version": {
-              "type": "number",
-              "const": 2
-            },
-            "grant_type": {
-              "type": "string",
-              "const": "urn:ietf:params:oauth:grant-type:device_code"
-            },
-            "client_id": {
-              "$ref": "#/$defs/__schema31"
-            },
-            "device_code": {
-              "$ref": "#/$defs/__schema32"
-            }
-          },
-          "required": ["protocol_version", "grant_type", "client_id", "device_code"],
-          "additionalProperties": false
-        }
-      ]
     },
     {
       "type": "object",
@@ -352,11 +280,8 @@
         "usage_sync_revision": {
           "$ref": "#/$defs/__schema9"
         },
-        "account_session": {
-          "$ref": "#/$defs/__schema35"
-        },
-        "device_session": {
-          "$ref": "#/$defs/__schema35"
+        "session": {
+          "$ref": "#/$defs/__schema33"
         }
       },
       "required": [
@@ -367,8 +292,7 @@
         "device_generation",
         "usage_deleted_before",
         "usage_sync_revision",
-        "account_session",
-        "device_session"
+        "session"
       ],
       "additionalProperties": false
     },
@@ -384,98 +308,48 @@
           "const": "refresh_token"
         },
         "client_id": {
-          "$ref": "#/$defs/__schema31"
-        },
-        "token_audience": {
-          "type": "string",
-          "enum": ["account", "device"]
+          "$ref": "#/$defs/__schema30"
         },
         "refresh_token": {
-          "$ref": "#/$defs/__schema32"
+          "$ref": "#/$defs/__schema31"
+        }
+      },
+      "required": ["protocol_version", "grant_type", "client_id", "refresh_token"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "protocol_version": {
+          "type": "number",
+          "const": 2
+        },
+        "token_type": {
+          "type": "string",
+          "const": "Bearer"
+        },
+        "account_id": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "device_id": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "device_generation": {
+          "$ref": "#/$defs/__schema24"
+        },
+        "session": {
+          "$ref": "#/$defs/__schema33"
         }
       },
       "required": [
         "protocol_version",
-        "grant_type",
-        "client_id",
-        "token_audience",
-        "refresh_token"
+        "token_type",
+        "account_id",
+        "device_id",
+        "device_generation",
+        "session"
       ],
       "additionalProperties": false
-    },
-    {
-      "oneOf": [
-        {
-          "type": "object",
-          "properties": {
-            "protocol_version": {
-              "type": "number",
-              "const": 2
-            },
-            "token_type": {
-              "type": "string",
-              "const": "Bearer"
-            },
-            "token_audience": {
-              "type": "string",
-              "const": "account"
-            },
-            "account_id": {
-              "$ref": "#/$defs/__schema1"
-            },
-            "account_session": {
-              "$ref": "#/$defs/__schema35"
-            }
-          },
-          "required": [
-            "protocol_version",
-            "token_type",
-            "token_audience",
-            "account_id",
-            "account_session"
-          ],
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "properties": {
-            "protocol_version": {
-              "type": "number",
-              "const": 2
-            },
-            "token_type": {
-              "type": "string",
-              "const": "Bearer"
-            },
-            "token_audience": {
-              "type": "string",
-              "const": "device"
-            },
-            "account_id": {
-              "$ref": "#/$defs/__schema1"
-            },
-            "device_id": {
-              "$ref": "#/$defs/__schema1"
-            },
-            "device_generation": {
-              "$ref": "#/$defs/__schema24"
-            },
-            "device_session": {
-              "$ref": "#/$defs/__schema35"
-            }
-          },
-          "required": [
-            "protocol_version",
-            "token_type",
-            "token_audience",
-            "account_id",
-            "device_id",
-            "device_generation",
-            "device_session"
-          ],
-          "additionalProperties": false
-        }
-      ]
     },
     {
       "type": "object",
@@ -749,7 +623,7 @@
     },
     "__schema5": {
       "type": "string",
-      "enum": ["macos", "linux", "windows"]
+      "enum": ["macos"]
     },
     "__schema6": {
       "type": "object",
@@ -1195,83 +1069,29 @@
       "additionalProperties": false
     },
     "__schema30": {
-      "type": "object",
-      "properties": {
-        "protocol_version": {
-          "type": "number",
-          "const": 2
-        },
-        "grant_type": {
-          "type": "string",
-          "const": "authorization_code"
-        },
-        "client_id": {
-          "$ref": "#/$defs/__schema31"
-        },
-        "code": {
-          "$ref": "#/$defs/__schema32"
-        },
-        "code_verifier": {
-          "type": "string",
-          "pattern": "^[A-Za-z0-9._~-]{43,128}$"
-        },
-        "redirect_uri": {
-          "type": "string",
-          "maxLength": 2048,
-          "format": "uri"
-        },
-        "installation_id": {
-          "$ref": "#/$defs/__schema33"
-        },
-        "device_display_name": {
-          "$ref": "#/$defs/__schema4"
-        },
-        "platform": {
-          "$ref": "#/$defs/__schema5"
-        }
-      },
-      "required": [
-        "protocol_version",
-        "grant_type",
-        "client_id",
-        "code",
-        "code_verifier",
-        "redirect_uri",
-        "installation_id",
-        "device_display_name",
-        "platform"
-      ],
-      "additionalProperties": false
+      "type": "string",
+      "const": "quotabar"
     },
     "__schema31": {
-      "type": "string",
-      "const": "quotacli"
-    },
-    "__schema32": {
       "type": "string",
       "minLength": 16,
       "maxLength": 2048
     },
-    "__schema33": {
-      "type": "string",
-      "format": "uuid",
-      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-    },
-    "__schema34": {
+    "__schema32": {
       "type": "string",
       "const": "quota-ios"
     },
-    "__schema35": {
+    "__schema33": {
       "type": "object",
       "properties": {
         "access_token": {
-          "$ref": "#/$defs/__schema32"
+          "$ref": "#/$defs/__schema31"
         },
         "access_expires_at": {
           "$ref": "#/$defs/__schema2"
         },
         "refresh_token": {
-          "$ref": "#/$defs/__schema32"
+          "$ref": "#/$defs/__schema31"
         },
         "refresh_expires_at": {
           "$ref": "#/$defs/__schema2"

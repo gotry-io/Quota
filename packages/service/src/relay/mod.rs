@@ -49,28 +49,6 @@ pub enum RelayError {
     RedirectRefused,
 }
 
-/// The non-secret portion of a Device Authorization Grant.  The device code itself never leaves
-/// this module; callers only receive the values that a person needs to complete authorization.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DeviceAuthorizationPrompt {
-    pub user_code: String,
-    pub verification_uri: String,
-    pub verification_uri_complete: Option<String>,
-    pub expires_in: u64,
-    pub interval: u64,
-}
-
-struct DeviceAuthorizationGrant {
-    device_code: String,
-    prompt: DeviceAuthorizationPrompt,
-}
-
-struct DevicePollRejection {
-    code: String,
-    status: u16,
-    retry_after: Option<Duration>,
-}
-
 pub struct RelayClient {
     origin: String,
     client: Client,
@@ -101,86 +79,6 @@ impl RelayClient {
 
     pub fn exchange_browser(&self, body: &Value) -> Result<Value, RelayError> {
         self.post_json("/oauth/v2/token", body, None, 200)
-    }
-
-    fn begin_device_authorization(
-        &self,
-        body: &Value,
-    ) -> Result<DeviceAuthorizationGrant, RelayError> {
-        let response = self.post_json("/oauth/v2/device/code", body, None, 201)?;
-        parse_device_authorization_response(&response)
-    }
-
-    fn poll_device_token(
-        &self,
-        device_code: &str,
-        expires_in: u64,
-        interval: u64,
-        cancel: &AtomicBool,
-    ) -> Result<Value, RelayError> {
-        let mut sleep = |duration| sleep_with_cancel(duration, cancel);
-        self.poll_device_token_with_sleep(device_code, expires_in, interval, cancel, &mut sleep)
-    }
-
-    fn poll_device_token_with_sleep(
-        &self,
-        device_code: &str,
-        expires_in: u64,
-        interval: u64,
-        cancel: &AtomicBool,
-        sleep: &mut dyn FnMut(Duration),
-    ) -> Result<Value, RelayError> {
-        if !is_opaque(device_code) || expires_in == 0 || interval == 0 {
-            return Err(RelayError::InvalidResponse);
-        }
-        if cancel.load(Ordering::Acquire) {
-            return Err(RelayError::Cancelled);
-        }
-        let deadline = Instant::now()
-            .checked_add(Duration::from_secs(expires_in))
-            .ok_or(RelayError::Timeout)?;
-        let mut wait = Duration::from_secs(interval);
-        let mut has_polled = false;
-        loop {
-            if cancel.load(Ordering::Acquire) {
-                return Err(RelayError::Cancelled);
-            }
-            let now = Instant::now();
-            if now >= deadline {
-                return Err(RelayError::Timeout);
-            }
-            if has_polled {
-                sleep(wait.min(deadline.saturating_duration_since(now)));
-                if cancel.load(Ordering::Acquire) {
-                    return Err(RelayError::Cancelled);
-                }
-                if Instant::now() >= deadline {
-                    return Err(RelayError::Timeout);
-                }
-            }
-            match self.poll_device_token_once(device_code)? {
-                Ok(value) => return Ok(value),
-                Err(rejection) => match rejection.code.as_str() {
-                    "authorization_pending" => {
-                        wait = rejection.retry_after.unwrap_or(wait);
-                        has_polled = true;
-                    }
-                    "slow_down" => {
-                        let increased = wait.saturating_add(Duration::from_secs(5));
-                        wait = rejection
-                            .retry_after
-                            .map_or(increased, |retry_after| retry_after.max(increased));
-                        has_polled = true;
-                    }
-                    _ => {
-                        return Err(RelayError::Rejected {
-                            code: rejection.code,
-                            status: rejection.status,
-                        });
-                    }
-                },
-            }
-        }
     }
 
     pub fn refresh_session(&self, body: &Value) -> Result<Value, RelayError> {
@@ -433,140 +331,6 @@ impl RelayClient {
 
     fn url(&self, path: &str) -> String {
         format!("{}{}", self.origin, path)
-    }
-}
-
-fn parse_device_authorization_response(
-    value: &Value,
-) -> Result<DeviceAuthorizationGrant, RelayError> {
-    require_response_fields(
-        value,
-        &[
-            "protocol_version",
-            "device_code",
-            "user_code",
-            "verification_uri",
-            "verification_uri_complete",
-            "expires_in",
-            "interval",
-        ],
-    )?;
-    let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
-    if object.get("protocol_version").and_then(Value::as_i64) != Some(CONTROL_PROTOCOL) {
-        return Err(RelayError::InvalidResponse);
-    }
-    let device_code = object
-        .get("device_code")
-        .and_then(Value::as_str)
-        .filter(|value| is_opaque(value) && (16..=2_048).contains(&value.len()))
-        .ok_or(RelayError::InvalidResponse)?
-        .to_owned();
-    let user_code = object
-        .get("user_code")
-        .and_then(Value::as_str)
-        .filter(|value| valid_user_code(value))
-        .ok_or(RelayError::InvalidResponse)?
-        .to_owned();
-    let verification_uri = object
-        .get("verification_uri")
-        .and_then(Value::as_str)
-        .filter(|value| valid_https_url(value))
-        .ok_or(RelayError::InvalidResponse)?
-        .to_owned();
-    let verification_uri_complete = match object.get("verification_uri_complete") {
-        Some(Value::Null) => None,
-        Some(Value::String(value)) if valid_https_url(value) => Some(value.clone()),
-        _ => return Err(RelayError::InvalidResponse),
-    };
-    let expires_in = object
-        .get("expires_in")
-        .and_then(safe_positive_u64)
-        .filter(|value| *value <= 600)
-        .ok_or(RelayError::InvalidResponse)?;
-    let interval = object
-        .get("interval")
-        .and_then(safe_positive_u64)
-        .filter(|value| *value <= 60)
-        .ok_or(RelayError::InvalidResponse)?;
-    Ok(DeviceAuthorizationGrant {
-        device_code,
-        prompt: DeviceAuthorizationPrompt {
-            user_code,
-            verification_uri,
-            verification_uri_complete,
-            expires_in,
-            interval,
-        },
-    })
-}
-
-fn valid_https_url(value: &str) -> bool {
-    let Ok(url) = Url::parse(value) else {
-        return false;
-    };
-    url.scheme() == "https" && url.host_str().is_some() && value.len() <= 2_048
-}
-
-fn valid_user_code(value: &str) -> bool {
-    valid_display(value, 32)
-        && value
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
-}
-
-impl RelayClient {
-    fn poll_device_token_once(
-        &self,
-        device_code: &str,
-    ) -> Result<Result<Value, DevicePollRejection>, RelayError> {
-        let body = serde_json::json!({
-            "protocol_version": CONTROL_PROTOCOL,
-            "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
-            "client_id": "quotacli",
-            "device_code": device_code,
-        });
-        validate_bounded_json(&body)?;
-        let response = self.request(
-            self.client
-                .post(self.url("/oauth/v2/token"))
-                .header(CONTENT_TYPE, "application/json")
-                .header(ACCEPT, "application/json"),
-            Some(&body),
-            None,
-        )?;
-        let retry_after = parse_retry_after(response.headers());
-        if response.status().as_u16() == 200 {
-            return Ok(Ok(read_json(response)?));
-        }
-        match check_status(response, 200) {
-            Err(RelayError::Rejected { code, status }) => Ok(Err(DevicePollRejection {
-                code,
-                status,
-                retry_after,
-            })),
-            Err(error) => Err(error),
-            Ok(_) => Err(RelayError::InvalidResponse),
-        }
-    }
-}
-
-fn parse_retry_after(headers: &HeaderMap) -> Option<Duration> {
-    headers
-        .get("retry-after")
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.trim().parse::<u64>().ok())
-        .filter(|value| *value > 0 && *value <= 600)
-        .map(Duration::from_secs)
-}
-
-fn sleep_with_cancel(duration: Duration, cancel: &AtomicBool) {
-    let deadline = Instant::now() + duration;
-    while !cancel.load(Ordering::Acquire) {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return;
-        }
-        thread::sleep(remaining.min(Duration::from_millis(100)));
     }
 }
 
@@ -1470,83 +1234,46 @@ fn validate_usage_cost(value: &Value) -> Result<(), RelayError> {
     Ok(())
 }
 
-fn validate_session_refresh_response(
-    value: &Value,
-    session: &Value,
-    audience: &str,
-) -> Result<(), BackendError> {
-    // Refresh responses contain only the rotated token family and its identity.  Sequence and
-    // deletion watermarks are returned by the device sync endpoint, not by this OAuth route.
+/// Checks that a rotation answers for the session it rotated.
+///
+/// A refresh response carries the new token family and the identity it still belongs to. The
+/// deletion watermark and sync revision are the device sync endpoint's answer, not this route's.
+fn validate_session_refresh_response(value: &Value, session: &Value) -> Result<(), BackendError> {
     let object = value.as_object().ok_or_else(BackendError::unavailable)?;
-    if audience == "account" {
-        require_response_fields(
-            value,
-            &[
-                "protocol_version",
-                "token_type",
-                "token_audience",
-                "account_id",
-                "account_session",
-            ],
-        )
-        .map_err(|_| invalid_response_backend())?;
-    } else {
-        require_response_fields(
-            value,
-            &[
-                "protocol_version",
-                "token_type",
-                "token_audience",
-                "account_id",
-                "device_id",
-                "device_generation",
-                "device_session",
-            ],
-        )
-        .map_err(|_| invalid_response_backend())?;
-    }
+    require_response_fields(
+        value,
+        &[
+            "protocol_version",
+            "token_type",
+            "account_id",
+            "device_id",
+            "device_generation",
+            "session",
+        ],
+    )
+    .map_err(|_| invalid_response_backend())?;
     if object.get("protocol_version").and_then(Value::as_i64) != Some(CONTROL_PROTOCOL)
         || object.get("token_type").and_then(Value::as_str) != Some("Bearer")
-        || object.get("token_audience").and_then(Value::as_str) != Some(audience)
         || !object
             .get("account_id")
             .and_then(Value::as_str)
             .is_some_and(is_opaque)
         || object.get("account_id").and_then(Value::as_str)
             != session.get("account_id").and_then(Value::as_str)
-    {
-        return Err(BackendError {
-            error: crate::protocol::IpcError::new(
-                crate::protocol::ErrorCode::InvalidResponse,
-                crate::protocol::RecoveryAction::Retry,
-            ),
-        });
-    }
-    if audience == "device"
-        && (object
+        || object
             .get("device_id")
             .and_then(Value::as_str)
             .is_none_or(|value| {
                 !is_opaque(value) || Some(value) != session.get("device_id").and_then(Value::as_str)
             })
-            || object.get("device_generation").and_then(safe_positive_u64)
-                != session.get("device_generation").and_then(safe_positive_u64))
+        || object.get("device_generation").and_then(safe_positive_u64)
+            != session.get("device_generation").and_then(safe_positive_u64)
     {
-        return Err(BackendError {
-            error: crate::protocol::IpcError::new(
-                crate::protocol::ErrorCode::InvalidResponse,
-                crate::protocol::RecoveryAction::Retry,
-            ),
-        });
+        return Err(invalid_response_backend());
     }
-    let token_key = if audience == "account" {
-        "account_session"
-    } else {
-        "device_session"
-    };
     validate_session_token(
         object
-            .get(token_key)
+            .get("session")
             .ok_or_else(BackendError::unavailable)?,
     )
     .map_err(|_| invalid_response_backend())?;
@@ -1579,61 +1306,18 @@ impl AccountManager {
             .installation_id()
             .map_err(|_| BackendError::unavailable())?;
         let response = self.browser_exchange(&installation_id, cancel)?;
-        self.finalize_login(&response)
+        self.finalize_login_unless_cancelled(&response, cancel)
     }
 
-    /// Runs the Linux/headless OAuth Device Authorization Grant.  The device code is retained only
-    /// for the bounded Relay requests; the callback receives display-safe authorization details.
-    pub fn login_device<F>(
-        &self,
-        cancel: &AtomicBool,
-        mut on_prompt: F,
-    ) -> Result<LoginOutcome, BackendError>
-    where
-        F: FnMut(&DeviceAuthorizationPrompt),
-    {
-        if cancel.load(Ordering::Acquire) {
-            return Err(BackendError::cancelled());
-        }
-        let installation_id = self
-            .state
-            .installation_id()
-            .map_err(|_| BackendError::unavailable())?;
-        let body = serde_json::json!({
-            "protocol_version": CONTROL_PROTOCOL,
-            "client_id": "quotacli",
-            "installation_id": installation_id,
-            "device_display_name": self.device_name,
-            "platform": self.platform,
-        });
-        let grant = self
-            .client
-            .begin_device_authorization(&body)
-            .map_err(|error| BackendError {
-                error: relay_error_for_backend(error),
-            })?;
-        on_prompt(&grant.prompt);
-        let response = self
-            .client
-            .poll_device_token(
-                &grant.device_code,
-                grant.prompt.expires_in,
-                grant.prompt.interval,
-                cancel,
-            )
-            .map_err(|error| BackendError {
-                error: relay_error_for_backend(error),
-            })?;
-        self.finalize_device_login(&response, cancel)
-    }
-
-    fn finalize_device_login(
+    /// Builds the login outcome, unless cancellation won the race against issuance.
+    ///
+    /// Relay has already issued the family by the time this runs, so a cancelled login cannot
+    /// simply drop it: retain a durable revoke record instead of leaving a live token in memory.
+    fn finalize_login_unless_cancelled(
         &self,
         response: &Value,
         cancel: &AtomicBool,
     ) -> Result<LoginOutcome, BackendError> {
-        // Building the outcome validates the issued token families but never persists an active
-        // session. If cancellation won the issuance race, retain only a durable revoke record.
         let outcome = self.finalize_login(response)?;
         if cancel.load(Ordering::Acquire) {
             let pending = pending_session_from_active(&outcome.session)
@@ -1700,28 +1384,20 @@ impl AccountManager {
         Ok(LoginOutcome { session, account })
     }
 
+    /// Ends this device's session: one family, so one revocation.
     pub fn logout(&self, pending: &Value) -> Result<(), BackendError> {
-        let object = pending.as_object().ok_or_else(BackendError::unavailable)?;
-        let account = object
-            .get("account_refresh_token")
+        let refresh_token = pending
+            .as_object()
+            .and_then(|object| object.get("refresh_token"))
             .and_then(Value::as_str)
             .ok_or_else(BackendError::unavailable)?;
-        let device = object
-            .get("device_refresh_token")
-            .and_then(Value::as_str)
-            .ok_or_else(BackendError::unavailable)?;
-        let account_result = self.client.revoke(account);
-        let device_result = self.client.revoke(device);
-        account_result
-            .and(device_result)
+        self.client
+            .revoke(refresh_token)
             .map_err(|error| BackendError {
                 error: relay_error_for_backend(error),
             })
     }
 
-    /// Refreshes both token families before an account read.  The server performs compare-and-swap
-    /// rotation; this process is the sole local writer, so writing the response is atomic at the
-    /// SQLite row boundary.
     /// Reads the whole Account once, in the calendar this device keeps.
     ///
     /// `timezone` is this device's IANA zone, and it decides where the three trailing periods
@@ -1778,12 +1454,9 @@ impl AccountManager {
         if cancel.load(Ordering::Acquire) {
             return Err(BackendError::cancelled());
         }
-        self.ensure_fresh_session(&mut session, &mut session_epoch, "device")?;
-        let account_token =
-            self.ensure_fresh_session(&mut session, &mut session_epoch, "account")?;
+        let access_token = self.ensure_fresh_session(&mut session, &mut session_epoch)?;
         let account_id = session
-            .get("account")
-            .and_then(|account| account.get("account_id"))
+            .get("account_id")
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_owned();
@@ -1800,7 +1473,7 @@ impl AccountManager {
         let (next_etag, body) = self
             .client
             .account_summary(
-                &account_token,
+                &access_token,
                 query,
                 cached.as_ref().map(|(etag, _)| etag.as_str()),
             )
@@ -1846,7 +1519,7 @@ impl AccountManager {
         {
             return Err(session_changed_error());
         }
-        session["account"]["last_refreshed_at"] = Value::String(crate::state::now_rfc3339());
+        session["last_refreshed_at"] = Value::String(crate::state::now_rfc3339());
         if self
             .state
             .write_session_json_if_epoch(&session, session_epoch)
@@ -1867,7 +1540,7 @@ impl AccountManager {
         if !is_active_session(&session) {
             return Err(session_changed_error());
         }
-        let token = self.ensure_fresh_session(&mut session, &mut session_epoch, "device")?;
+        let token = self.ensure_fresh_session(&mut session, &mut session_epoch)?;
         let control = self
             .client
             .sync_control(&token)
@@ -1937,12 +1610,6 @@ impl AccountManager {
                 session[target] = value.clone();
             }
         }
-        let generation = session.get("device_generation").cloned();
-        if let Some(device) = session.get_mut("device").and_then(Value::as_object_mut)
-            && let Some(value) = generation
-        {
-            device.insert("device_generation".to_owned(), value.clone());
-        }
         if self
             .state
             .write_session_json_if_epoch(&session, session_epoch)
@@ -1975,7 +1642,7 @@ impl AccountManager {
         {
             return Err(session_changed_error());
         }
-        let token = session_access_token_from(&session, "device")?;
+        let token = session_access_token_from(&session)?;
         let (_, snapshots) = snapshot_payload_from_quota_report(report, republished)?;
         let expected_device_id = session
             .get("device_id")
@@ -2035,7 +1702,7 @@ impl AccountManager {
             return Err(session_changed_error());
         }
         validate_usage_submission_session(&session, submission)?;
-        let token = session_access_token_from(&session, "device")?;
+        let token = session_access_token_from(&session)?;
         if !self
             .state
             .active_session_at_epoch(epoch)
@@ -2059,14 +1726,14 @@ impl AccountManager {
         Ok(response)
     }
 
+    /// The access token to use now, rotating the one session first if it is about to expire.
     fn ensure_fresh_session(
         &self,
         session: &mut Value,
         session_epoch: &mut u64,
-        audience: &str,
     ) -> Result<String, BackendError> {
         let needs_refresh = session
-            .get(audience)
+            .get("session")
             .and_then(Value::as_object)
             .and_then(|value| value.get("access_expires_at"))
             .and_then(Value::as_str)
@@ -2083,10 +1750,10 @@ impl AccountManager {
             {
                 return Err(session_changed_error());
             }
-            refresh_session_family(&self.client, session, audience)?;
-            // Persist each rotated family before issuing any subsequent network request.  A
-            // compare-and-swap refresh token is single-use on Relay, so a late second failure
-            // must not strand the first newly issued token only in memory.
+            refresh_session_family(&self.client, session)?;
+            // Persist the rotated family before issuing any subsequent network request. A
+            // compare-and-swap refresh token is single-use on Relay, so a later failure must not
+            // strand the newly issued token only in memory.
             *session_epoch = self
                 .state
                 .write_session_json_if_epoch(session, *session_epoch)
@@ -2094,7 +1761,7 @@ impl AccountManager {
                 .ok_or_else(session_changed_error)?;
         }
         session
-            .get(audience)
+            .get("session")
             .and_then(Value::as_object)
             .and_then(|value| value.get("access_token"))
             .and_then(Value::as_str)
@@ -2129,7 +1796,7 @@ impl AccountManager {
             .map_err(|_| BackendError::unavailable())?;
         authorize
             .query_pairs_mut()
-            .append_pair("client_id", "quotacli")
+            .append_pair("client_id", "quotabar")
             .append_pair("response_type", "code")
             .append_pair("redirect_uri", &redirect_uri)
             .append_pair("state", &state)
@@ -2140,7 +1807,7 @@ impl AccountManager {
         let body = serde_json::json!({
             "protocol_version": CONTROL_PROTOCOL,
             "grant_type": "authorization_code",
-            "client_id": "quotacli",
+            "client_id": "quotabar",
             "code": callback,
             "code_verifier": verifier,
             "redirect_uri": redirect_uri,
@@ -2263,9 +1930,9 @@ fn validate_usage_submission_session(
     Ok(())
 }
 
-fn session_access_token_from(session: &Value, audience: &str) -> Result<String, BackendError> {
+fn session_access_token_from(session: &Value) -> Result<String, BackendError> {
     session
-        .get(audience)
+        .get("session")
         .and_then(Value::as_object)
         .and_then(|value| value.get("access_token"))
         .and_then(Value::as_str)
@@ -2277,13 +1944,8 @@ fn pending_session_from_active(session: &Value) -> Option<Value> {
     let object = session.as_object()?;
     let account_id = object.get("account_id").and_then(Value::as_str)?;
     let device_id = object.get("device_id").and_then(Value::as_str)?;
-    let account_refresh_token = object
-        .get("account")
-        .and_then(Value::as_object)
-        .and_then(|value| value.get("refresh_token"))
-        .and_then(Value::as_str)?;
-    let device_refresh_token = object
-        .get("device")
+    let refresh_token = object
+        .get("session")
         .and_then(Value::as_object)
         .and_then(|value| value.get("refresh_token"))
         .and_then(Value::as_str)?;
@@ -2292,18 +1954,13 @@ fn pending_session_from_active(session: &Value) -> Option<Value> {
         "status": "logout_pending",
         "account_id": account_id,
         "device_id": device_id,
-        "account_refresh_token": account_refresh_token,
-        "device_refresh_token": device_refresh_token
+        "refresh_token": refresh_token
     }))
 }
 
-fn refresh_session_family(
-    client: &RelayClient,
-    session: &mut Value,
-    audience: &str,
-) -> Result<(), BackendError> {
+fn refresh_session_family(client: &RelayClient, session: &mut Value) -> Result<(), BackendError> {
     let refresh_token = session
-        .get(audience)
+        .get("session")
         .and_then(Value::as_object)
         .and_then(|value| value.get("refresh_token"))
         .and_then(Value::as_str)
@@ -2312,24 +1969,18 @@ fn refresh_session_family(
         .refresh_session(&serde_json::json!({
             "protocol_version": CONTROL_PROTOCOL,
             "grant_type": "refresh_token",
-            "client_id": "quotacli",
-            "token_audience": audience,
+            "client_id": "quotabar",
             "refresh_token": refresh_token
         }))
         .map_err(|error| BackendError {
             error: relay_error_for_backend(error),
         })?;
-    validate_session_refresh_response(&response, session, audience)?;
-    let token_key = if audience == "account" {
-        "account_session"
-    } else {
-        "device_session"
-    };
+    validate_session_refresh_response(&response, session)?;
     let token = response
-        .get(token_key)
+        .get("session")
         .ok_or_else(BackendError::unavailable)?;
     validate_session_token(token).map_err(|_| BackendError::unavailable())?;
-    session[audience] = token.clone();
+    session["session"] = token.clone();
     Ok(())
 }
 
@@ -2345,8 +1996,7 @@ fn session_from_token_response(response: &Value) -> Result<Value, RelayError> {
             "device_generation",
             "usage_deleted_before",
             "usage_sync_revision",
-            "account_session",
-            "device_session",
+            "session",
         ],
     )?;
     if object.get("protocol_version").and_then(Value::as_i64) != Some(CONTROL_PROTOCOL)
@@ -2377,14 +2027,8 @@ fn session_from_token_response(response: &Value) -> Result<Value, RelayError> {
         .filter(|value| value.is_null() || value.as_str().is_some_and(valid_rfc3339))
         .cloned()
         .ok_or(RelayError::InvalidResponse)?;
-    let account = object
-        .get("account_session")
-        .ok_or(RelayError::InvalidResponse)?;
-    let device = object
-        .get("device_session")
-        .ok_or(RelayError::InvalidResponse)?;
-    validate_session_token(account)?;
-    validate_session_token(device)?;
+    let issued = object.get("session").ok_or(RelayError::InvalidResponse)?;
+    validate_session_token(issued)?;
     Ok(serde_json::json!({
         "schema_version": 1,
         "status": "active",
@@ -2394,8 +2038,12 @@ fn session_from_token_response(response: &Value) -> Result<Value, RelayError> {
         "usage_sync_revision": usage_sync_revision,
         "usage_deleted_before": usage_deleted_before,
         "upload_not_before": "1970-01-01T00:00:00Z",
-        "account": { "account_id": account_id, "access_token": account["access_token"], "access_expires_at": account["access_expires_at"], "refresh_token": account["refresh_token"], "refresh_expires_at": account["refresh_expires_at"] },
-        "device": { "account_id": account_id, "device_id": device_id, "device_generation": generation, "access_token": device["access_token"], "access_expires_at": device["access_expires_at"], "refresh_token": device["refresh_token"], "refresh_expires_at": device["refresh_expires_at"] }
+        "session": {
+            "access_token": issued["access_token"],
+            "access_expires_at": issued["access_expires_at"],
+            "refresh_token": issued["refresh_token"],
+            "refresh_expires_at": issued["refresh_expires_at"]
+        }
     }))
 }
 
@@ -2772,7 +2420,7 @@ mod tests {
             "QuotaBar"
         );
         assert_eq!(
-            resolve_device_display_name([Some("\u{0007}Kitchen Mac".to_owned())], "QuotaCLI"),
+            resolve_device_display_name([Some("\u{0007}Kitchen Mac".to_owned())], "QuotaBar"),
             "Kitchen Mac"
         );
     }
@@ -2971,7 +2619,7 @@ mod tests {
     }
 
     #[test]
-    fn usage_submission_must_match_the_current_device_session() {
+    fn an_upload_must_name_the_generation_the_session_was_opened_at() {
         let session = serde_json::json!({"device_id": "device_1", "device_generation": 2});
         assert!(
             validate_usage_submission_session(&session, &serde_json::json!({"generation": 2}))
@@ -3019,15 +2667,14 @@ mod tests {
             "device_generation": 1,
             "usage_deleted_before": null,
             "usage_sync_revision": 0,
-            "account_session": valid_token(),
-            "device_session": valid_token()
+            "session": valid_token()
         });
         assert!(session_from_token_response(&response).is_ok());
         let mut unsafe_response = response.clone();
         unsafe_response["usage_sync_revision"] = serde_json::json!(9_007_199_254_740_992u64);
         assert!(session_from_token_response(&unsafe_response).is_err());
         let mut invalid_expiry = response;
-        invalid_expiry["account_session"]["access_expires_at"] = serde_json::json!("tomorrow");
+        invalid_expiry["session"]["access_expires_at"] = serde_json::json!("tomorrow");
         assert!(session_from_token_response(&invalid_expiry).is_err());
         assert!(parse_utc_hour_value("2026-08-10T00:00:00Z").is_ok());
         assert!(parse_utc_hour_value("2026-08-10T00:00:00+00:00").is_err());
@@ -3035,14 +2682,14 @@ mod tests {
     }
 
     #[test]
-    fn cancelled_issued_device_login_persists_only_a_revoke_record() {
-        let root = std::env::temp_dir().join(format!("quota-device-cancel-{}", Uuid::new_v4()));
+    fn a_cancelled_login_persists_only_a_revoke_record() {
+        let root = std::env::temp_dir().join(format!("quota-login-cancel-{}", Uuid::new_v4()));
         fs::create_dir_all(&root).expect("root");
         let state = Arc::new(StateStore::open(&root).expect("state"));
         let manager = AccountManager::new(
             Arc::new(RelayClient::for_test("http://127.0.0.1:1").expect("client")),
             state.clone(),
-            "Linux".into(),
+            "Studio Mac".into(),
         );
         let response = serde_json::json!({
             "protocol_version": CONTROL_PROTOCOL,
@@ -3052,12 +2699,11 @@ mod tests {
             "device_generation": 1,
             "usage_deleted_before": null,
             "usage_sync_revision": 0,
-            "account_session": valid_token(),
-            "device_session": valid_token()
+            "session": valid_token()
         });
 
         let error = manager
-            .finalize_device_login(&response, &AtomicBool::new(true))
+            .finalize_login_unless_cancelled(&response, &AtomicBool::new(true))
             .expect_err("cancelled login");
         assert_eq!(error.error.code, crate::protocol::ErrorCode::Cancelled);
         let session = state
@@ -3068,8 +2714,14 @@ mod tests {
             session.get("status").and_then(Value::as_str),
             Some("logout_pending")
         );
-        assert!(session.get("account").is_none());
-        assert!(session.get("device").is_none());
+        // The revoke record carries the one refresh token and nothing that could still be spent.
+        assert!(session.get("session").is_none());
+        assert!(
+            session
+                .get("refresh_token")
+                .and_then(Value::as_str)
+                .is_some()
+        );
 
         drop(manager);
         drop(state);
@@ -3327,36 +2979,6 @@ mod tests {
     }
 
     #[test]
-    fn device_authorization_response_is_strict_and_prompt_does_not_contain_device_code() {
-        let response = serde_json::json!({
-            "protocol_version": CONTROL_PROTOCOL,
-            "device_code": "qdc_secret_value",
-            "user_code": "ABCD-EFGH",
-            "verification_uri": "https://quota.gotry.io/activate",
-            "verification_uri_complete": "https://quota.gotry.io/activate?user_code=ABCD-EFGH",
-            "expires_in": 600,
-            "interval": 5
-        });
-        let grant = parse_device_authorization_response(&response).expect("valid device grant");
-        assert_eq!(grant.device_code, "qdc_secret_value");
-        assert_eq!(grant.prompt.user_code, "ABCD-EFGH");
-        assert!(!format!("{:?}", grant.prompt).contains("qdc_secret_value"));
-
-        let mut invalid = response;
-        invalid["verification_uri"] = serde_json::json!("http://quota.gotry.io/activate");
-        assert!(parse_device_authorization_response(&invalid).is_err());
-        invalid["verification_uri"] = serde_json::json!("https://quota.gotry.io/activate");
-        invalid["verification_uri_complete"] = serde_json::json!(42);
-        assert!(parse_device_authorization_response(&invalid).is_err());
-        invalid["verification_uri_complete"] = serde_json::Value::Null;
-        invalid["expires_in"] = serde_json::json!(601);
-        assert!(parse_device_authorization_response(&invalid).is_err());
-        invalid["expires_in"] = serde_json::json!(600);
-        invalid["interval"] = serde_json::json!(0);
-        assert!(parse_device_authorization_response(&invalid).is_err());
-    }
-
-    #[test]
     fn browser_callback_success_page_closes_without_retaining_the_code() {
         let response = std::str::from_utf8(BROWSER_CALLBACK_SUCCESS_RESPONSE).expect("utf8");
         assert!(response.contains("Content-Type: text/html; charset=utf-8"));
@@ -3365,85 +2987,6 @@ mod tests {
         assert!(!response.contains("code="));
     }
 
-    #[test]
-    fn device_poll_handles_pending_slow_down_retry_after_and_issued() {
-        let issued = serde_json::json!({"device_session": "issued"});
-        let (origin, server) = spawn_mock_server(vec![
-            http_json(
-                400,
-                Some(1),
-                &serde_json::json!({"error": {"code": "authorization_pending"}}),
-            ),
-            http_json(
-                400,
-                Some(1),
-                &serde_json::json!({"error": {"code": "slow_down"}}),
-            ),
-            http_json(200, None, &issued),
-        ]);
-        let client = RelayClient::for_test(&origin).expect("test client");
-        let cancel = AtomicBool::new(false);
-        let mut waits = Vec::new();
-        let value = client
-            .poll_device_token_with_sleep("qdc_test_value", 10, 1, &cancel, &mut |duration| {
-                waits.push(duration)
-            })
-            .expect("device token");
-        server.join().expect("mock server");
-        assert_eq!(value, issued);
-        assert_eq!(waits, vec![Duration::from_secs(1), Duration::from_secs(6)]);
-    }
-
-    #[test]
-    fn device_poll_denied_and_expired_are_fixed_errors_without_secret_echo() {
-        for code in ["access_denied", "expired_token"] {
-            let (origin, server) = spawn_mock_server(vec![http_json(
-                400,
-                Some(1),
-                &serde_json::json!({
-                    "error": {"code": code, "description": "qdc_secret_value must not echo"}
-                }),
-            )]);
-            let client = RelayClient::for_test(&origin).expect("test client");
-            let cancel = AtomicBool::new(false);
-            let error = client
-                .poll_device_token_with_sleep("qdc_secret_value", 5, 1, &cancel, &mut |_| {})
-                .expect_err("device grant should not issue");
-            server.join().expect("mock server");
-            assert!(matches!(
-                error,
-                RelayError::Rejected { code: ref value, .. } if value == code
-            ));
-            assert!(!format!("{error:?}").contains("qdc_secret_value"));
-        }
-    }
-
-    #[test]
-    fn device_poll_honors_cancel_and_timeout() {
-        let cancel = AtomicBool::new(true);
-        let client = RelayClient::for_test("http://127.0.0.1:1").expect("test client");
-        assert!(matches!(
-            client.poll_device_token_with_sleep("qdc_test_value", 5, 1, &cancel, &mut |_| {},),
-            Err(RelayError::Cancelled)
-        ));
-
-        let (origin, server) = spawn_mock_server(vec![http_json(
-            400,
-            Some(1),
-            &serde_json::json!({"error": {"code": "authorization_pending"}}),
-        )]);
-        let client = RelayClient::for_test(&origin).expect("test client");
-        let cancel = AtomicBool::new(false);
-        let result =
-            client.poll_device_token_with_sleep("qdc_test_value", 1, 1, &cancel, &mut |duration| {
-                thread::sleep(duration + Duration::from_millis(20))
-            });
-        server.join().expect("mock server");
-        assert!(matches!(result, Err(RelayError::Timeout)));
-    }
-
-    /// One contract: a 304 is an answer, not a failure. The account component keeps exactly the
-    /// value the previous read produced, and the second request is the one that says so.
     #[test]
     fn an_unchanged_account_read_keeps_the_previous_summary() {
         let mut summary = valid_summary(serde_json::json!([]));
@@ -3463,20 +3006,10 @@ mod tests {
                 "account_id": "account_1",
                 "device_id": "device_1",
                 "device_generation": 1,
-                "account": {
-                    "account_id": "account_1",
-                    "access_token": "qa_access",
+                "session": {
+                    "access_token": "qb_access",
                     "access_expires_at": "2099-01-01T00:00:00Z",
-                    "refresh_token": "qar_refresh",
-                    "refresh_expires_at": "2099-01-01T00:00:00Z"
-                },
-                "device": {
-                    "account_id": "account_1",
-                    "device_id": "device_1",
-                    "device_generation": 1,
-                    "access_token": "qd_access",
-                    "access_expires_at": "2099-01-01T00:00:00Z",
-                    "refresh_token": "qdr_refresh",
+                    "refresh_token": "qbr_refresh",
                     "refresh_expires_at": "2099-01-01T00:00:00Z"
                 }
             }))

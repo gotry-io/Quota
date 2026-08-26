@@ -8,10 +8,8 @@ subscription quota and privacy-preserving Usage together across a user's devices
   snapshot for Home Screen and Lock Screen widgets.
 - **QuotaBar** — native macOS menu-bar UI with a bundled private Rust service for local collection,
   durable state, account sync, and scheduling.
-- **QuotaCLI** — Linux-only native Rust command that reuses the shared local service crate. It is
-  released as a static x86_64 binary; Windows is not currently supported.
 - **QuotaRelay** — managed account/device service on Cloudflare Workers and D1.
-- **Quota Web** — public site, GitHub sign-in, device authorization, and account dashboard.
+- **Quota Web** — public site, GitHub sign-in, and account dashboard.
 
 Quota collection supports Codex, Claude Code, Grok, OpenRouter, DeepSeek, Kimi Code, LiteLLM, and
 Cursor; local Usage analytics supports Codex, Claude Code, Grok, OpenCode, Pi, and Cursor logs.
@@ -19,13 +17,10 @@ Provider credentials, prompts, completions, raw events, local paths, and convers
 never upload. Cursor is the only provider that can be read from a browser session, and QuotaBar asks
 before it opens a cookie store — see [security baseline](docs/security.md).
 
-Both collection clients render one service-owned report: Linux `quotacli doctor [--format
-text|json] [--pretty]` and the QuotaBar Settings **Support** page on macOS. It lists the four
+The QuotaBar Settings **Support** page renders one service-owned report. It lists the four
 user-visible surfaces — Quota Overview, this Mac's Usage, Account Usage, and Account — and the
 sources behind them, each with one sentence naming what happened and what to do about it. The
-service writes that sentence; the clients render it. QuotaCLI exits nonzero when operation is not
-healthy, any surface's data is stale or partial, or attention is required; healthy empty and
-automatic waiting states succeed
+service writes that sentence; QuotaBar renders it
 ([ADR 0022](docs/decisions/0022-minimal-diagnostics.md)).
 
 ## Architecture
@@ -38,8 +33,7 @@ pings unanswered is killed and replaced. The Rust service immediately returns it
 then collects provider quota, incrementally indexes Usage logs, refreshes pricing and report-time
 model aliases, and synchronizes a signed-in account in the background. Its five-minute scheduler
 lives only for the QuotaBar process lifetime, so quitting QuotaBar stops local work and
-synchronization. Linux `quotacli` uses the same service semantics through a native command-line
-entry point.
+synchronization.
 
 Swift owns presentation, UI preferences, accessibility, and Launch at Login; shared remaining-quota,
 plan, count, cost, and compact-age copy lives in `packages/apple-shared`, and wire decoding and Relay
@@ -54,7 +48,6 @@ The canonical documents are [architecture](docs/architecture.md),
 ## Repository layout
 
 ```text
-apps/cli/                  Linux-only native Rust quotacli command
 apps/ios/                 Quota iPhone/iPad SwiftUI account app
 apps/menubar/             QuotaBar Swift 6.2 / SwiftUI app, including its private Rust helper
 apps/relay/               Managed Hono Worker and D1 adapters
@@ -91,16 +84,11 @@ pnpm format:check
 pnpm check
 pnpm test
 pnpm build
-
-# Linux only: build and test the native QuotaCLI
-pnpm build:linux-cli
-pnpm test:linux-cli
 ```
 
 The root `pnpm check`, `pnpm test`, and `pnpm build` commands cover the macOS service and QuotaBar
-only; they intentionally do not compile the Linux-only CLI or the iOS app. Run the Linux commands on
-Ubuntu (or another supported Linux host) and the iOS commands on macOS. `pnpm test` runs every
-Swift package, not only QuotaBar.
+only; they intentionally do not compile the iOS app. Run the iOS commands on macOS. `pnpm test`
+runs every Swift package, not only QuotaBar.
 
 `pnpm install` arms the checked-in hooks in `.githooks` through `core.hooksPath`. Pre-commit
 rejects unformatted sources and a stale generated provider catalog; pre-push runs the tests for the
@@ -126,17 +114,13 @@ remote migrations or deploy manually without explicit authorization.
 
 ## Distribution
 
-QuotaBar and QuotaCLI release on independent tags, coupled only by the repository `latest` alias
-that QuotaBar distribution resolves through (see [architecture](docs/architecture.md)). A
-`menubar-vX.Y.Z` tag builds one signed and notarized Apple Silicon app, a drag-install `.dmg`, a
-Sparkle `appcast.xml` for in-app updates, and updates the Homebrew Cask. The Cask installs only
-`QuotaBar.app`; it does not expose the private service as a command. Install with `brew install
-gotry-io/tap/quotabar` or the website `.dmg`. A `cli-vX.Y.Z` tag publishes a static x86_64 Linux
-binary and checksum to GitHub Releases. QuotaCLI is not published to npm or Homebrew; Windows is not
-built or released.
+QuotaBar is the only released product, and it resolves updates through the repository `latest`
+alias (see [architecture](docs/architecture.md)). A `menubar-vX.Y.Z` tag builds one signed and
+notarized Apple Silicon app, a drag-install `.dmg`, a Sparkle `appcast.xml` for in-app updates, and
+updates the Homebrew Cask. The Cask installs only `QuotaBar.app`; it does not expose the private
+service as a command. Install with `brew install gotry-io/tap/quotabar` or the website `.dmg`.
 
 ```bash
-pnpm version:bump:cli patch      # or minor | major | explicit semver
 pnpm version:bump:menubar patch  # or minor | major | explicit semver
 ```
 
@@ -157,7 +141,9 @@ Managed data is v6. A Usage upload names whole UTC hours carrying the version of
 each one, Relay replaces an hour only for a strictly newer scan and folds the days it touched into a
 rollup every read answers from, and an Account summary resolves subscriptions once so an account
 collected on three Macs reads as one subscription everywhere. Relay owns GitHub sign-in itself
-through a hand-written OAuth round trip and one session table for browser, CLI, and iOS clients.
+through a hand-written OAuth round trip, and every client — browser, QuotaBar, iOS — holds one
+session in one table, scoped by what that client is for
+([ADR 0027](docs/decisions/0027-one-token-per-client.md)).
 Cursor is the only provider with a browser session, behind a consent sheet and an explicit
 access-denied outcome. Quota iOS refreshes its Account and republishes its widget snapshot in the
 background as well as on screen.

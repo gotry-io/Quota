@@ -26,15 +26,14 @@ pnpm --filter @gotry-io/quota-web build
 `pnpm dev:web` is fast HMR and is not a real GitHub login. `pnpm dev:relay` is the composed
 Worker. Browser GitHub login on localhost is not available.
 
-`/my` is the GitHub-backed account dashboard and `/activate` approves or denies a native-client
-device authorization grant. Unsigned `/my` visits are a server redirect home. Every page requires a
-session; Quota Web publishes no account data anonymously. `/app` shipped in 0.0.4, so it remains a
-single bookmark redirect to `/my`; new links and OAuth callbacks use `/my`. Sign-in is a plain
-navigation to Relay's `/api/auth/github/start`, not a fetch: the header button is a link, and a
-signed-out visitor to `/activate` returns to the code they were shown. Sign-out posts to
-`/api/auth/logout` and Delete Account is `DELETE /api/v2/account`. Those routes and Quota's
-authorization decision and Device deletion routes all require an exact same-origin request, and the
-destructive ones a session authenticated within ten minutes.
+`/my` is the GitHub-backed account dashboard. Unsigned `/my` visits are a server redirect home.
+Every page requires a session; Quota Web publishes no account data anonymously. `/app` shipped in
+0.0.4, so it remains a single bookmark redirect to `/my`; new links and OAuth callbacks use `/my`.
+Sign-in is a plain navigation to Relay's `/api/auth/github/start`, not a fetch: the header button is
+a link, and a signed-out visitor returns to the page they asked for. Sign-out posts to
+`/api/auth/logout` and Delete Account is `DELETE /api/v2/account`. Those routes and Device deletion
+all require an exact same-origin request, and the destructive ones a session authenticated within
+ten minutes.
 
 The signed-in dashboard renders what Relay resolved: `subscriptions[]` as one card per
 subscription, whichever of Today, the last 7 days, the last 30 days, or all time is selected, and a

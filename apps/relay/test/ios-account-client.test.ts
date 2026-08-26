@@ -7,7 +7,7 @@ import {
   IosOAuthTokenResponseSchema,
   type OAuthTokenResponse,
   OAuthTokenResponseSchema,
-  SessionRefreshResponseSchema,
+  IosSessionRefreshResponseSchema,
 } from "@gotry-io/quota-protocol";
 import { beforeEach, describe, expect, inject, it } from "vitest";
 import { AccountService } from "../src/account/service.ts";
@@ -87,7 +87,7 @@ describe("quota-ios read-only account client", () => {
     expect(
       (
         await authorize(harness, {
-          client_id: "quotacli",
+          client_id: "quotabar",
           redirect_uri: IOS_OAUTH_REDIRECT_URI,
           state: "client-state-123456789",
           code_challenge: challenge,
@@ -161,29 +161,28 @@ describe("quota-ios read-only account client", () => {
     expect(tokens.account_id).toBe(harness.accountId);
     expect(Object.keys(tokens).sort()).toEqual([
       "account_id",
-      "account_session",
       "protocol_version",
+      "session",
       "token_type",
     ]);
-    expect(tokens.account_session.access_token).toMatch(/^qia_/);
-    expect(tokens.account_session.refresh_token).toMatch(/^qiar_/);
-    expect(tokens.account_session.access_token).not.toMatch(/^qa_/);
-    expect(tokens.account_session.refresh_token).not.toMatch(/^qar_/);
+    expect(tokens.session.access_token).toMatch(/^qia_/);
+    expect(tokens.session.refresh_token).toMatch(/^qiar_/);
+    expect(tokens.session.access_token).not.toMatch(/^qb_/);
+    expect(tokens.session.refresh_token).not.toMatch(/^qbr_/);
     expect(OAuthTokenResponseSchema.safeParse(tokens).success).toBe(false);
     expect(JSON.stringify(tokens)).not.toContain("device_id");
-    expect(JSON.stringify(tokens)).not.toContain("device_session");
     expect(JSON.stringify(tokens)).not.toContain("installation");
 
     expect(await deviceCount(harness.accountId)).toBe(0);
     expect(await deviceSessionCount(harness.accountId)).toBe(0);
     expect(
-      await env.DB.prepare("SELECT device_id FROM account_sessions WHERE account_id = ?1")
+      await env.DB.prepare("SELECT device_id FROM sessions WHERE account_id = ?1")
         .bind(harness.accountId)
         .first("device_id"),
     ).toBeNull();
 
     const summary = await harness.app.request("https://quota.gotry.io/api/v6/account/summary", {
-      headers: { Authorization: `Bearer ${tokens.account_session.access_token}` },
+      headers: { Authorization: `Bearer ${tokens.session.access_token}` },
     });
     expect(summary.status).toBe(200);
     const body = (await summary.json()) as { devices: unknown[] };
@@ -275,24 +274,26 @@ describe("quota-ios read-only account client", () => {
     expect(
       (
         await harness.app.request("https://quota.gotry.io/api/v2/account", {
-          headers: { Authorization: `Bearer ${tokens.account_session.access_token}` },
+          headers: { Authorization: `Bearer ${tokens.session.access_token}` },
         })
       ).status,
     ).toBe(200);
 
-    const deviceRefresh = await harness.app.request("https://quota.gotry.io/oauth/v2/token", {
+    // A refresh request naming a token audience is a request from a build that still thinks
+    // there are two, and there is no field for it to name.
+    const audienced = await harness.app.request("https://quota.gotry.io/oauth/v2/token", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         protocol_version: 2,
         grant_type: "refresh_token",
         client_id: IOS_OAUTH_CLIENT_ID,
-        token_audience: "device",
-        refresh_token: tokens.account_session.refresh_token,
+        token_audience: "account",
+        refresh_token: tokens.session.refresh_token,
       }),
     });
-    expect(deviceRefresh.status).toBe(400);
-    expect(await deviceRefresh.json()).toMatchObject({ error: { code: "invalid_request" } });
+    expect(audienced.status).toBe(400);
+    expect(await audienced.json()).toMatchObject({ error: { code: "invalid_request" } });
 
     const refreshed = await harness.app.request("https://quota.gotry.io/oauth/v2/token", {
       method: "POST",
@@ -301,26 +302,21 @@ describe("quota-ios read-only account client", () => {
         protocol_version: 2,
         grant_type: "refresh_token",
         client_id: IOS_OAUTH_CLIENT_ID,
-        token_audience: "account",
-        refresh_token: tokens.account_session.refresh_token,
+        refresh_token: tokens.session.refresh_token,
       }),
     });
     expect(refreshed.status).toBe(200);
-    const rotated = SessionRefreshResponseSchema.parse(await refreshed.json());
-    expect(rotated.token_audience).toBe("account");
-    if (rotated.token_audience !== "account") {
-      throw new Error("expected account refresh");
-    }
-    expect(rotated.account_session.access_token).not.toBe(tokens.account_session.access_token);
-    expect(rotated.account_session.refresh_token).not.toBe(tokens.account_session.refresh_token);
-    expect(rotated.account_session.access_token).toMatch(/^qia_/);
-    expect(rotated.account_session.refresh_token).toMatch(/^qiar_/);
-    expect("device_session" in rotated).toBe(false);
+    const rotated = IosSessionRefreshResponseSchema.parse(await refreshed.json());
+    expect(rotated.session.access_token).not.toBe(tokens.session.access_token);
+    expect(rotated.session.refresh_token).not.toBe(tokens.session.refresh_token);
+    expect(rotated.session.access_token).toMatch(/^qia_/);
+    expect(rotated.session.refresh_token).toMatch(/^qiar_/);
+    expect("device_id" in rotated).toBe(false);
 
     expect(
       (
         await harness.app.request("https://quota.gotry.io/api/v2/account", {
-          headers: { Authorization: `Bearer ${tokens.account_session.access_token}` },
+          headers: { Authorization: `Bearer ${tokens.session.access_token}` },
         })
       ).status,
     ).toBe(401);
@@ -333,8 +329,7 @@ describe("quota-ios read-only account client", () => {
             protocol_version: 2,
             grant_type: "refresh_token",
             client_id: IOS_OAUTH_CLIENT_ID,
-            token_audience: "account",
-            refresh_token: tokens.account_session.refresh_token,
+            refresh_token: tokens.session.refresh_token,
           }),
         })
       ).status,
@@ -342,7 +337,7 @@ describe("quota-ios read-only account client", () => {
     expect(
       (
         await harness.app.request("https://quota.gotry.io/api/v2/account", {
-          headers: { Authorization: `Bearer ${rotated.account_session.access_token}` },
+          headers: { Authorization: `Bearer ${rotated.session.access_token}` },
         })
       ).status,
     ).toBe(200);
@@ -351,14 +346,14 @@ describe("quota-ios read-only account client", () => {
       (
         await harness.app.request("https://quota.gotry.io/oauth/v2/revoke", {
           method: "POST",
-          headers: { Authorization: `Bearer ${rotated.account_session.refresh_token}` },
+          headers: { Authorization: `Bearer ${rotated.session.refresh_token}` },
         })
       ).status,
     ).toBe(204);
     expect(
       (
         await harness.app.request("https://quota.gotry.io/api/v2/account", {
-          headers: { Authorization: `Bearer ${rotated.account_session.access_token}` },
+          headers: { Authorization: `Bearer ${rotated.session.access_token}` },
         })
       ).status,
     ).toBe(401);
@@ -371,8 +366,7 @@ describe("quota-ios read-only account client", () => {
             protocol_version: 2,
             grant_type: "refresh_token",
             client_id: IOS_OAUTH_CLIENT_ID,
-            token_audience: "account",
-            refresh_token: rotated.account_session.refresh_token,
+            refresh_token: rotated.session.refresh_token,
           }),
         })
       ).status,
@@ -382,67 +376,36 @@ describe("quota-ios read-only account client", () => {
   it("rejects refresh tokens presented to the other public client", async () => {
     const harness = await createHarness();
     const iosTokens = await loginIos(harness);
-    const cliTokens = await loginQuotacli(harness);
+    const barTokens = await loginQuotabar(harness);
+    const refresh = (clientId: string, refreshToken: string) =>
+      harness.app.request("https://quota.gotry.io/oauth/v2/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          protocol_version: 2,
+          grant_type: "refresh_token",
+          client_id: clientId,
+          refresh_token: refreshToken,
+        }),
+      });
 
-    const iosAsCli = await harness.app.request("https://quota.gotry.io/oauth/v2/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        protocol_version: 2,
-        grant_type: "refresh_token",
-        client_id: "quotacli",
-        token_audience: "account",
-        refresh_token: iosTokens.account_session.refresh_token,
-      }),
-    });
-    expect(iosAsCli.status).toBe(400);
-    expect(await iosAsCli.json()).toMatchObject({ error: { code: "invalid_grant" } });
+    // One table holds both, and the token's own shape is what keeps them apart.
+    const iosAsBar = await refresh("quotabar", iosTokens.session.refresh_token);
+    expect(iosAsBar.status).toBe(400);
+    expect(await iosAsBar.json()).toMatchObject({ error: { code: "invalid_grant" } });
+    const barAsIos = await refresh(IOS_OAUTH_CLIENT_ID, barTokens.session.refresh_token);
+    expect(barAsIos.status).toBe(400);
+    expect(await barAsIos.json()).toMatchObject({ error: { code: "invalid_grant" } });
 
-    const cliAsIos = await harness.app.request("https://quota.gotry.io/oauth/v2/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        protocol_version: 2,
-        grant_type: "refresh_token",
-        client_id: IOS_OAUTH_CLIENT_ID,
-        token_audience: "account",
-        refresh_token: cliTokens.account_session.refresh_token,
-      }),
-    });
-    expect(cliAsIos.status).toBe(400);
-    expect(await cliAsIos.json()).toMatchObject({ error: { code: "invalid_grant" } });
-
-    const iosStillValid = await harness.app.request("https://quota.gotry.io/oauth/v2/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        protocol_version: 2,
-        grant_type: "refresh_token",
-        client_id: IOS_OAUTH_CLIENT_ID,
-        token_audience: "account",
-        refresh_token: iosTokens.account_session.refresh_token,
-      }),
-    });
-    expect(iosStillValid.status).toBe(200);
-    const cliStillValid = await harness.app.request("https://quota.gotry.io/oauth/v2/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        protocol_version: 2,
-        grant_type: "refresh_token",
-        client_id: "quotacli",
-        token_audience: "account",
-        refresh_token: cliTokens.account_session.refresh_token,
-      }),
-    });
-    expect(cliStillValid.status).toBe(200);
+    expect((await refresh(IOS_OAUTH_CLIENT_ID, iosTokens.session.refresh_token)).status).toBe(200);
+    expect((await refresh("quotabar", barTokens.session.refresh_token)).status).toBe(200);
   });
 
   it("cannot write snapshots or Usage and cannot call Web-only routes", async () => {
     const harness = await createHarness();
     const tokens = await loginIos(harness);
     const headers = {
-      Authorization: `Bearer ${tokens.account_session.access_token}`,
+      Authorization: `Bearer ${tokens.session.access_token}`,
       "Content-Type": "application/json",
     };
 
@@ -454,7 +417,7 @@ describe("quota-ios read-only account client", () => {
           body: JSON.stringify({}),
         })
       ).status,
-    ).toBe(401);
+    ).toBe(403);
     expect(
       (
         await harness.app.request("https://quota.gotry.io/api/v6/device/usage", {
@@ -463,36 +426,11 @@ describe("quota-ios read-only account client", () => {
           body: JSON.stringify({}),
         })
       ).status,
-    ).toBe(401);
+    ).toBe(403);
     expect(
       (
         await harness.app.request("https://quota.gotry.io/api/v2/device/sync", {
           headers,
-        })
-      ).status,
-    ).toBe(401);
-    expect(
-      (
-        await harness.app.request("https://quota.gotry.io/api/v2/device/logout", {
-          method: "POST",
-          headers,
-        })
-      ).status,
-    ).toBe(401);
-    expect(
-      (
-        await harness.app.request("https://quota.gotry.io/oauth/v2/device/authorize", {
-          method: "POST",
-          headers: {
-            ...headers,
-            Origin: "https://quota.gotry.io",
-            "Sec-Fetch-Site": "same-origin",
-          },
-          body: JSON.stringify({
-            protocol_version: 2,
-            user_code: "ABCD-EFGH",
-            decision: "approve",
-          }),
         })
       ).status,
     ).toBe(403);
@@ -508,30 +446,23 @@ describe("quota-ios read-only account client", () => {
         })
       ).status,
     ).toBe(403);
+    // The viewer's token reads the Account it was issued for and nothing else.
     expect(
       (
-        await harness.app.request("https://quota.gotry.io/oauth/v2/device/code", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            protocol_version: 2,
-            client_id: IOS_OAUTH_CLIENT_ID,
-            installation_id: "dd4e60c6-fd44-4ac4-ad1f-28f2eeb52ca1",
-            device_display_name: "iPhone",
-            platform: "ios",
-          }),
+        await harness.app.request("https://quota.gotry.io/api/v6/account/summary", {
+          headers,
         })
       ).status,
-    ).toBe(400);
+    ).toBe(200);
   });
 
-  it("keeps the released quotacli loopback exchange byte-compatible", async () => {
+  it("keeps the QuotaBar loopback exchange working beside the viewer", async () => {
     const harness = await createHarness();
     const { verifier, challenge } = await pkcePair();
     const authorizeUrl = new URL("https://quota.gotry.io/oauth/v2/authorize");
     authorizeUrl.search = new URLSearchParams({
       response_type: "code",
-      client_id: "quotacli",
+      client_id: "quotabar",
       redirect_uri: "http://127.0.0.1:43210/callback",
       state: "client-state-123456789",
       code_challenge: challenge,
@@ -550,7 +481,7 @@ describe("quota-ios read-only account client", () => {
       body: JSON.stringify({
         protocol_version: 2,
         grant_type: "authorization_code",
-        client_id: "quotacli",
+        client_id: "quotabar",
         code,
         code_verifier: verifier,
         redirect_uri: "http://127.0.0.1:43210/callback",
@@ -563,12 +494,10 @@ describe("quota-ios read-only account client", () => {
     const tokens = (await exchanged.json()) as OAuthTokenResponse;
     expect(OAuthTokenResponseSchema.parse(tokens)).toEqual(tokens);
     expect(tokens.device_generation).toBe(1);
-    expect(tokens.account_session.access_token).toMatch(/^qa_/);
-    expect(tokens.account_session.refresh_token).toMatch(/^qar_/);
-    expect(tokens.device_session.access_token).toMatch(/^qd_/);
-    expect(tokens.device_session.refresh_token).toMatch(/^qdr_/);
-    expect(tokens.account_session.access_token).not.toMatch(/^qia_/);
-    expect(tokens.account_session.refresh_token).not.toMatch(/^qiar_/);
+    expect(tokens.session.access_token).toMatch(/^qb_/);
+    expect(tokens.session.refresh_token).toMatch(/^qbr_/);
+    expect(tokens.session.access_token).not.toMatch(/^qia_/);
+    expect(tokens.session.refresh_token).not.toMatch(/^qiar_/);
     expect(
       await env.DB.prepare("SELECT COUNT(*) AS count FROM devices WHERE id = ?1")
         .bind(tokens.device_id)
@@ -579,7 +508,7 @@ describe("quota-ios read-only account client", () => {
     expect(IosOAuthTokenResponseSchema.parse(iosAfterCli).account_id).toBe(harness.accountId);
     expect(await deviceCount(harness.accountId)).toBe(1);
     const summary = await harness.app.request("https://quota.gotry.io/api/v6/account/summary", {
-      headers: { Authorization: `Bearer ${iosAfterCli.account_session.access_token}` },
+      headers: { Authorization: `Bearer ${iosAfterCli.session.access_token}` },
     });
     const body = (await summary.json()) as { devices: { id: string; platform: string }[] };
     expect(body.devices).toHaveLength(1);
@@ -632,12 +561,12 @@ async function createHarness(): Promise<TestHarness> {
   };
 }
 
-async function loginQuotacli(harness: TestHarness): Promise<OAuthTokenResponse> {
+async function loginQuotabar(harness: TestHarness): Promise<OAuthTokenResponse> {
   const { verifier, challenge } = await pkcePair();
   const authorizeUrl = new URL("https://quota.gotry.io/oauth/v2/authorize");
   authorizeUrl.search = new URLSearchParams({
     response_type: "code",
-    client_id: "quotacli",
+    client_id: "quotabar",
     redirect_uri: "http://127.0.0.1:43210/callback",
     state: "client-state-123456789",
     code_challenge: challenge,
@@ -653,7 +582,7 @@ async function loginQuotacli(harness: TestHarness): Promise<OAuthTokenResponse> 
     body: JSON.stringify({
       protocol_version: 2,
       grant_type: "authorization_code",
-      client_id: "quotacli",
+      client_id: "quotabar",
       code,
       code_verifier: verifier,
       redirect_uri: "http://127.0.0.1:43210/callback",
@@ -731,8 +660,7 @@ async function deviceCount(accountId: string) {
 
 async function deviceSessionCount(accountId: string) {
   return env.DB.prepare(
-    `SELECT COUNT(*) AS count FROM device_sessions
-     WHERE device_id IN (SELECT id FROM devices WHERE account_id = ?1)`,
+    "SELECT COUNT(*) AS count FROM sessions WHERE account_id = ?1 AND device_id IS NOT NULL",
   )
     .bind(accountId)
     .first("count");

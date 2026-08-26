@@ -6,10 +6,10 @@ in [`security.md`](security.md). For an external baseline of CodexBar's quota, u
 behavior across its full provider set, see
 [`codexbar-platform-capabilities.md`](codexbar-platform-capabilities.md).
 
-The shared Rust service owns provider access and emits normalized protocol models for QuotaBar and
-Linux `quotacli`. QuotaRelay never handles the provider-specific inputs described here.
-Provider collection does not initiate account authentication; Linux account login uses the separate
-headless Device Authorization Grant described in [`security.md`](security.md).
+The shared Rust service owns provider access and emits normalized protocol models for QuotaBar.
+QuotaRelay never handles the provider-specific inputs described here. Provider collection does not
+initiate account authentication; account login is the browser flow described in
+[`security.md`](security.md).
 
 ## Registration (monorepo)
 
@@ -245,7 +245,7 @@ transactionally. Paths and file-index metadata never enter a protocol submission
 complete coverage is eligible for authoritative remote replacement; empty complete coverage is valid.
 Discovery always covers every canonical local source. Local reports cover indexed history, while
 remote replacement remains split losslessly into bounded protocol ranges. Record/file skips and
-upload partitions are summarized by the unified `quotacli doctor`/QuotaBar diagnostics report.
+upload partitions are summarized by the QuotaBar diagnostics report.
 
 ## Grok
 
@@ -289,8 +289,8 @@ Local context-token or session totals are not subscription quota.
 Aligned with CodexBar's OpenRouter provider (credits + API-key limit meters).
 
 1. Resolve the API key in order:
-   1. Owner-only config at `$XDG_CONFIG_HOME/quotacli/providers.json` or
-      `~/.config/quotacli/providers.json` (`schema_version: 1`, `providers.openrouter.api_key`),
+   1. Owner-only config at `$XDG_CONFIG_HOME/quota/providers.json` or
+      `~/.config/quota/providers.json` (`schema_version: 1`, `providers.openrouter.api_key`),
       written by QuotaBar Settings through the private service.
    2. Else `OPENROUTER_API_KEY` from the process environment.
    Use the fixed `https://openrouter.ai/api/v1` endpoint. Custom base URLs and URL environment
@@ -328,8 +328,8 @@ import browser localStorage (see [`security.md`](security.md)). Platform detaile
 stays out of scope unless a future allowlisted, user-supplied token channel is added.
 
 1. Resolve the API key in order:
-   1. Owner-only config at `$XDG_CONFIG_HOME/quotacli/providers.json` or
-      `~/.config/quotacli/providers.json` (`providers.deepseek.api_key`), written by QuotaBar
+   1. Owner-only config at `$XDG_CONFIG_HOME/quota/providers.json` or
+      `~/.config/quota/providers.json` (`providers.deepseek.api_key`), written by QuotaBar
       Settings through the private service.
    2. Else `DEEPSEEK_API_KEY`, then `DEEPSEEK_KEY`, from the process environment.
    Use the fixed `https://api.deepseek.com` endpoint. Custom base URLs and URL environment
@@ -413,8 +413,7 @@ managed Account.
    cookie store. The popup names that browser, the permission macOS will ask for, the exact hosts
    and Cookie names, that the accepted session stays in the local service database until
    disconnected, and that nothing is uploaded. Declining reads nothing. On confirmation QuotaBar
-   opens `https://authenticator.cursor.sh/` in that browser and polls only its profiles. Linux
-   QuotaCLI does not acquire browser sessions.
+   opens `https://authenticator.cursor.sh/` in that browser and polls only its profiles.
 3. SweetCookieKit queries the catalog's four exact hosts (`cursor.com`, `www.cursor.com`,
    `cursor.sh`, `authenticator.cursor.sh`) and the three exact WorkOS session Cookie names
    (`WorkosCursorSessionToken`, `wos-session`, `__Secure-wos-session`). Expired/unrelated records

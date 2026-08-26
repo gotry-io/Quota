@@ -1,9 +1,4 @@
-import {
-  type AccountSummaryRead,
-  AccountSummaryReadSchema,
-  DeviceAuthorizationDecisionRequestSchema,
-  PROTOCOL_VERSION,
-} from "@gotry-io/quota-protocol";
+import { type AccountSummaryRead, AccountSummaryReadSchema } from "@gotry-io/quota-protocol";
 import {
   type AccountActivityResult,
   accountActivityPath,
@@ -78,30 +73,5 @@ export async function deleteAccount(): Promise<"ok" | "reauth" | "error"> {
     ...jsonRequest,
   });
   if (response.status === 401 || response.status === 403) return "reauth";
-  return response.ok ? "ok" : "error";
-}
-
-export async function decideActivation(
-  userCode: string,
-  decision: "approve" | "deny",
-): Promise<"ok" | "reauth" | "invalid" | "error"> {
-  const request = DeviceAuthorizationDecisionRequestSchema.safeParse({
-    protocol_version: PROTOCOL_VERSION,
-    user_code: userCode.trim(),
-    decision,
-  });
-  if (!request.success) return "invalid";
-  const returnTo = `/activate?user_code=${encodeURIComponent(request.data.user_code)}`;
-  const response = await fetch("/oauth/v2/device/authorize", {
-    method: "POST",
-    credentials: "same-origin",
-    redirect: "error",
-    headers: { Accept: "application/json", "Content-Type": "application/json" },
-    body: JSON.stringify(request.data),
-  });
-  if (response.status === 401 || response.status === 403) {
-    beginWebLogin(returnTo);
-    return "reauth";
-  }
   return response.ok ? "ok" : "error";
 }

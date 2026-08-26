@@ -5,6 +5,10 @@
 //! A released image's staged uploads do not come across. They were requests in a contract this
 //! build no longer speaks, and an hour is replaced by version now: the first scan after the
 //! import recomputes every retained hour and sends it again.
+//!
+//! Two roots are looked at: the one this service keeps state in now, and the released root beside
+//! it ([`crate::config::legacy_state_root`]). A device that upgrades across the rename would
+//! otherwise become a new installation and a second Device on the same Account.
 
 use std::fs;
 use std::path::Path;
@@ -23,18 +27,57 @@ pub(super) enum LegacyImport {
     Unreadable,
 }
 
-/// Imports a released image if one is present, then removes it.
+/// Imports a released image if either root holds one, then clears what it read from.
+///
+/// The current root wins when both hold an image; the released root is cleared either way, so a
+/// second launch has nothing left to consider.
 pub(super) fn take(root: &Path, identity: &mut Connection) -> LegacyImport {
-    let live = root.join(LEGACY_PREFIX);
-    if !live.is_file() {
-        return LegacyImport::Absent;
+    let released = crate::config::legacy_state_root(root);
+    // The released root's provider configuration crosses even when it kept no image: an API key
+    // a person typed is not something the next refresh can rebuild.
+    if let Some(source) = released.as_deref() {
+        adopt_provider_config(source, root);
     }
-    let outcome = match copy_identity(&live, identity) {
-        Ok(()) => LegacyImport::Imported,
-        Err(_) => LegacyImport::Unreadable,
-    };
-    remove_released_images(root);
+    let mut outcome = LegacyImport::Absent;
+    for source in [Some(root), released.as_deref()].into_iter().flatten() {
+        let live = source.join(LEGACY_PREFIX);
+        if !live.is_file() {
+            continue;
+        }
+        if outcome == LegacyImport::Absent {
+            outcome = match copy_identity(&live, identity) {
+                Ok(()) => LegacyImport::Imported,
+                Err(_) => LegacyImport::Unreadable,
+            };
+        }
+        remove_released_images(source);
+    }
+    // Nothing this build put there is left. The directory itself goes only if nothing else is:
+    // an empty `remove_dir` succeeds, and anything unexpected keeps it and is left alone.
+    if let Some(source) = released.as_deref() {
+        let _ = fs::remove_dir(source);
+    }
     outcome
+}
+
+/// Moves the released provider configuration into the current root.
+///
+/// It is read and rewritten through the same owner-only path any other write takes — `0700`
+/// directory, `0600` file, no symlink, atomic replace — so an adopted file is indistinguishable
+/// from one this build wrote. A device that already has its own is the authority and keeps it.
+fn adopt_provider_config(source: &Path, root: &Path) {
+    let from = source.join(super::PROVIDER_CONFIG_NAME);
+    if !fs::symlink_metadata(&from).is_ok_and(|meta| meta.is_file())
+        || fs::symlink_metadata(root.join(super::PROVIDER_CONFIG_NAME)).is_ok()
+    {
+        return;
+    }
+    let Ok(released) = super::read_provider_file(source) else {
+        return;
+    };
+    if super::write_provider_file(root, &released).is_ok() {
+        let _ = fs::remove_file(&from);
+    }
 }
 
 fn copy_identity(live: &Path, identity: &mut Connection) -> Result<(), StateError> {
@@ -149,6 +192,8 @@ fn remove_released_images(root: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs::Permissions;
+    use std::os::unix::fs::PermissionsExt;
     use uuid::Uuid;
 
     fn seed_released_image(path: &Path, session: bool) -> Connection {
@@ -269,6 +314,54 @@ mod tests {
         );
         assert_eq!(take(&root, &mut identity), LegacyImport::Absent);
         fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    /// A released root beside the current one is what an upgrade across the directory rename
+    /// actually looks like on disk, so it is what this test builds.
+    #[test]
+    fn the_released_root_beside_this_one_hands_over_identity_and_configuration() {
+        let base = temp_root("adopt");
+        let root = base.join("quota");
+        let released = base.join("quotacli");
+        fs::create_dir_all(&root).expect("current root");
+        fs::create_dir_all(&released).expect("released root");
+        drop(seed_released_image(&released.join(LEGACY_PREFIX), true));
+        let configuration = released.join(super::super::PROVIDER_CONFIG_NAME);
+        fs::write(
+            &configuration,
+            br#"{"schema_version":1,"providers":{"openrouter":{"api_key":"sk-or-released"}}}"#,
+        )
+        .expect("released configuration");
+        fs::set_permissions(&configuration, Permissions::from_mode(0o600)).expect("0600");
+        let mut identity = identity_image();
+
+        assert_eq!(take(&root, &mut identity), LegacyImport::Imported);
+
+        assert_eq!(
+            identity
+                .query_row(
+                    "SELECT installation_id FROM installation WHERE id = 1",
+                    [],
+                    |row| row.get::<_, String>(0)
+                )
+                .expect("installation"),
+            "released-installation"
+        );
+        // The API key crosses, owner-only, and stops existing where it was.
+        let adopted = root.join(super::super::PROVIDER_CONFIG_NAME);
+        let metadata = fs::metadata(&adopted).expect("adopted configuration");
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+        assert!(
+            String::from_utf8_lossy(&fs::read(&adopted).expect("adopted bytes"))
+                .contains("sk-or-released")
+        );
+        assert!(!configuration.exists());
+        // Nothing of the released root is left to consider on the next launch.
+        assert!(!released.join(LEGACY_PREFIX).exists());
+        assert!(!released.exists());
+        assert_eq!(take(&root, &mut identity), LegacyImport::Absent);
+
+        fs::remove_dir_all(base).expect("cleanup");
     }
 
     #[test]

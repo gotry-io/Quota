@@ -1,4 +1,4 @@
-import type { AccountPrincipal, AccountState } from "@gotry-io/relay-core";
+import type { AccountState, SessionPrincipal } from "@gotry-io/relay-core";
 import { CANONICAL_ORIGIN } from "../config.ts";
 import {
   constantTimeEqual,
@@ -57,11 +57,11 @@ export type WebSignInResult =
 export interface WebSessionPort {
   beginSignIn(returnTo: string, now: Date): Promise<WebSignInStart>;
   completeSignIn(request: WebCallbackRequest, now: Date): Promise<WebSignInResult>;
-  authorize(headers: Headers, checkedAt: Date): Promise<AccountPrincipal | null>;
+  authorize(headers: Headers, checkedAt: Date): Promise<SessionPrincipal | null>;
 }
 
 export interface WebSessionEnvironment {
-  state: Pick<AccountState, "createWebSession" | "authorizeAccountSession">;
+  state: Pick<AccountState, "createWebSession" | "authorizeSession">;
   hasher: SecretHasher;
   githubClientId: string;
   githubClientSecret: string;
@@ -84,8 +84,8 @@ interface HandoffPayload {
  * keeps both in a signed, short-lived, HttpOnly cookie rather than in a table, and checks the
  * callback against that cookie before spending the authorization code. What comes back from GitHub
  * is read once for a numeric id and a login name; the access token is used for that one request and
- * never stored. The session it opens is an ordinary `account_sessions` row — the same table the
- * native clients use, so there is one place a session can be revoked, expired, or swept.
+ * never stored. The session it opens is an ordinary `sessions` row — the same table QuotaBar and
+ * the iOS viewer use, so there is one place a session can be revoked, expired, or swept.
  */
 export class GitHubWebSessions implements WebSessionPort {
   readonly #origin: string;
@@ -154,15 +154,16 @@ export class GitHubWebSessions implements WebSessionPort {
     };
   }
 
-  async authorize(headers: Headers, checkedAt: Date): Promise<AccountPrincipal | null> {
+  async authorize(headers: Headers, checkedAt: Date): Promise<SessionPrincipal | null> {
     const token = readCookie(headers.get("Cookie"), SESSION_COOKIE);
     // Shape first: a document request carrying no plausible session must not reach D1 at all.
     if (!token || !sessionTokenPattern.test(token)) {
       return null;
     }
-    const principal = await this.environment.state.authorizeAccountSession(
+    const principal = await this.environment.state.authorizeSession(
       await this.#sessionTokenHash(token),
       checkedAt.toISOString(),
+      false,
     );
     return principal?.client_kind === "web" ? principal : null;
   }
@@ -279,7 +280,7 @@ export class GitHubWebSessions implements WebSessionPort {
  * otherwise repeat the first's D1 round trip.
  */
 export function memoizeWebSessionAuthorization(inner: WebSessionPort): WebSessionPort {
-  let principal: Promise<AccountPrincipal | null> | undefined;
+  let principal: Promise<SessionPrincipal | null> | undefined;
   return {
     beginSignIn: (returnTo, now) => inner.beginSignIn(returnTo, now),
     completeSignIn: (request, now) => inner.completeSignIn(request, now),

@@ -31,7 +31,7 @@ export {
  * The private local reports name no version of their own. They only ever travel nested inside an
  * IPC state that carries `ipc_version`, and both ends of that pipe ship in the same build.
  */
-/** OAuth, Device authorization and control, Account metadata, and the catalogs. */
+/** OAuth, Device control, Account metadata, and the catalogs. */
 export const PROTOCOL_VERSION = 2 as const;
 /** Quota, Usage, and Account summary between a Device and Relay. */
 export const MANAGED_DATA_PROTOCOL_VERSION = 6 as const;
@@ -272,21 +272,19 @@ export const QuotaCollectionReportSchema = z
   .strict();
 export type QuotaCollectionReport = z.infer<typeof QuotaCollectionReportSchema>;
 
-export const PlatformSchema = z.enum(["macos", "linux", "windows"]);
+/**
+ * What a Device runs.
+ *
+ * QuotaBar is the only client that registers a Device, so macOS is the only platform one can
+ * report. The registered `quota-ios` client is a viewer and owns no Device
+ * ([ADR 0013](../../docs/decisions/0013-readonly-ios-account-client.md)).
+ */
+export const PlatformSchema = z.enum(["macos"]);
 export type Platform = z.infer<typeof PlatformSchema>;
 
 /** A platform this build has never heard of is named as what it is, not as a raw enum member. */
 export function platformDisplayName(platform: string): string {
-  switch (platform) {
-    case "macos":
-      return "macOS";
-    case "linux":
-      return "Linux";
-    case "windows":
-      return "Windows";
-    default:
-      return "Unknown";
-  }
+  return platform === "macos" ? "macOS" : "Unknown";
 }
 
 export const AccountSchema = z
@@ -324,7 +322,7 @@ export const AccountResponseSchema = z
   .strict();
 export type AccountResponse = z.infer<typeof AccountResponseSchema>;
 
-const NativeClientSchema = z.literal("quotacli");
+const NativeClientSchema = z.literal("quotabar");
 const InstallationIdSchema = z.string().uuid();
 
 export const IOS_OAUTH_CLIENT_ID = "quota-ios" as const;
@@ -359,61 +357,6 @@ export const IosLoginExchangeRequestSchema = z
   .strict();
 export type IosLoginExchangeRequest = z.infer<typeof IosLoginExchangeRequestSchema>;
 
-export const DeviceAuthorizationRequestSchema = z
-  .object({
-    protocol_version: z.literal(PROTOCOL_VERSION),
-    client_id: NativeClientSchema,
-    installation_id: InstallationIdSchema,
-    device_display_name: DisplayNameSchema,
-    platform: PlatformSchema,
-  })
-  .strict();
-export type DeviceAuthorizationRequest = z.infer<typeof DeviceAuthorizationRequestSchema>;
-
-export const DeviceAuthorizationResponseSchema = z
-  .object({
-    protocol_version: z.literal(PROTOCOL_VERSION),
-    device_code: SecretSchema,
-    user_code: z.string().trim().min(1).max(32),
-    verification_uri: z.string().url().max(2_048).refine(isHttpsUrl, "Expected an HTTPS URL."),
-    verification_uri_complete: z
-      .string()
-      .url()
-      .max(2_048)
-      .refine(isHttpsUrl, "Expected an HTTPS URL.")
-      .nullable(),
-    expires_in: SafePositiveIntegerSchema.max(600),
-    interval: SafePositiveIntegerSchema.max(60),
-  })
-  .strict();
-export type DeviceAuthorizationResponse = z.infer<typeof DeviceAuthorizationResponseSchema>;
-
-export const DeviceAuthorizationDecisionRequestSchema = z
-  .object({
-    protocol_version: z.literal(PROTOCOL_VERSION),
-    user_code: z.string().trim().min(1).max(32),
-    decision: z.enum(["approve", "deny"]),
-  })
-  .strict();
-export type DeviceAuthorizationDecisionRequest = z.infer<
-  typeof DeviceAuthorizationDecisionRequestSchema
->;
-
-const DeviceCodeTokenRequestSchema = z
-  .object({
-    protocol_version: z.literal(PROTOCOL_VERSION),
-    grant_type: z.literal("urn:ietf:params:oauth:grant-type:device_code"),
-    client_id: NativeClientSchema,
-    device_code: SecretSchema,
-  })
-  .strict();
-
-export const OAuthTokenRequestSchema = z.discriminatedUnion("grant_type", [
-  BrowserLoginExchangeRequestSchema,
-  DeviceCodeTokenRequestSchema,
-]);
-export type OAuthTokenRequest = z.infer<typeof OAuthTokenRequestSchema>;
-
 export const SessionTokenSchema = z
   .object({
     access_token: SecretSchema,
@@ -424,6 +367,14 @@ export const SessionTokenSchema = z
   .strict();
 export type SessionToken = z.infer<typeof SessionTokenSchema>;
 
+/**
+ * What QuotaBar holds after signing in: one session, and the Device it may write.
+ *
+ * A login used to issue two token families — one to read the Account, one to write the Device —
+ * and every rule about a session was then written twice. One family carries both scopes, so a
+ * client holds one access token, rotates one refresh token, and revoking it revokes everything
+ * that login granted ([ADR 0027](../../docs/decisions/0027-one-token-per-client.md)).
+ */
 export const OAuthTokenResponseSchema = z
   .object({
     protocol_version: z.literal(PROTOCOL_VERSION),
@@ -433,18 +384,18 @@ export const OAuthTokenResponseSchema = z
     device_generation: SafePositiveIntegerSchema,
     usage_deleted_before: Rfc3339InstantSchema.nullable(),
     usage_sync_revision: SafeNonnegativeIntegerSchema,
-    account_session: SessionTokenSchema,
-    device_session: SessionTokenSchema,
+    session: SessionTokenSchema,
   })
   .strict();
 export type OAuthTokenResponse = z.infer<typeof OAuthTokenResponseSchema>;
 
+/** The read-only viewer's session. It names no Device, because it registers none. */
 export const IosOAuthTokenResponseSchema = z
   .object({
     protocol_version: z.literal(PROTOCOL_VERSION),
     token_type: z.literal("Bearer"),
     account_id: OpaqueIdSchema,
-    account_session: SessionTokenSchema,
+    session: SessionTokenSchema,
   })
   .strict();
 export type IosOAuthTokenResponse = z.infer<typeof IosOAuthTokenResponseSchema>;
@@ -454,7 +405,6 @@ export const SessionRefreshRequestSchema = z
     protocol_version: z.literal(PROTOCOL_VERSION),
     grant_type: z.literal("refresh_token"),
     client_id: NativeClientSchema,
-    token_audience: z.enum(["account", "device"]),
     refresh_token: SecretSchema,
   })
   .strict();
@@ -465,39 +415,32 @@ export const IosSessionRefreshRequestSchema = z
     protocol_version: z.literal(PROTOCOL_VERSION),
     grant_type: z.literal("refresh_token"),
     client_id: IosClientSchema,
-    token_audience: z.literal("account"),
     refresh_token: SecretSchema,
   })
   .strict();
 export type IosSessionRefreshRequest = z.infer<typeof IosSessionRefreshRequestSchema>;
 
-const AccountSessionRefreshResponseSchema = z
+export const SessionRefreshResponseSchema = z
   .object({
     protocol_version: z.literal(PROTOCOL_VERSION),
     token_type: z.literal("Bearer"),
-    token_audience: z.literal("account"),
-    account_id: OpaqueIdSchema,
-    account_session: SessionTokenSchema,
-  })
-  .strict();
-
-const DeviceSessionRefreshResponseSchema = z
-  .object({
-    protocol_version: z.literal(PROTOCOL_VERSION),
-    token_type: z.literal("Bearer"),
-    token_audience: z.literal("device"),
     account_id: OpaqueIdSchema,
     device_id: OpaqueIdSchema,
     device_generation: SafePositiveIntegerSchema,
-    device_session: SessionTokenSchema,
+    session: SessionTokenSchema,
   })
   .strict();
-
-export const SessionRefreshResponseSchema = z.discriminatedUnion("token_audience", [
-  AccountSessionRefreshResponseSchema,
-  DeviceSessionRefreshResponseSchema,
-]);
 export type SessionRefreshResponse = z.infer<typeof SessionRefreshResponseSchema>;
+
+export const IosSessionRefreshResponseSchema = z
+  .object({
+    protocol_version: z.literal(PROTOCOL_VERSION),
+    token_type: z.literal("Bearer"),
+    account_id: OpaqueIdSchema,
+    session: SessionTokenSchema,
+  })
+  .strict();
+export type IosSessionRefreshResponse = z.infer<typeof IosSessionRefreshResponseSchema>;
 
 export const DeviceSyncResponseSchema = z
   .object({

@@ -41,26 +41,27 @@ public struct SessionToken: Codable, Equatable, Sendable {
   }
 }
 
+/// What signing in answers with: the Account, and the one session that reads it.
 public struct IosOAuthTokenResponse: Decodable, Equatable, Sendable {
   public let protocolVersion: Int
   public let tokenType: String
   public let accountID: String
-  public let accountSession: SessionToken
+  public let session: SessionToken
 
   public init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     protocolVersion = try container.decode(Int.self, forKey: .protocolVersion)
     tokenType = try container.decode(String.self, forKey: .tokenType)
     accountID = try container.decode(String.self, forKey: .accountID)
-    accountSession = try container.decode(SessionToken.self, forKey: .accountSession)
+    session = try container.decode(SessionToken.self, forKey: .session)
     guard protocolVersion == WireCodec.oauthProtocolVersion,
       tokenType == "Bearer",
       WireValidation.isOpaqueID(accountID),
-      WireValidation.isIOSAccessToken(accountSession.accessToken),
-      WireValidation.isIOSRefreshToken(accountSession.refreshToken)
+      WireValidation.isIOSAccessToken(session.accessToken),
+      WireValidation.isIOSRefreshToken(session.refreshToken)
     else {
       throw DecodingError.dataCorruptedError(
-        forKey: .accountSession,
+        forKey: .session,
         in: container,
         debugDescription: "Invalid iOS account token response."
       )
@@ -71,7 +72,7 @@ public struct IosOAuthTokenResponse: Decodable, Equatable, Sendable {
     case protocolVersion
     case tokenType
     case accountID = "accountId"
-    case accountSession
+    case session
   }
 }
 
@@ -112,7 +113,6 @@ public struct IosSessionRefreshRequest: Encodable, Equatable, Sendable {
   public let protocolVersion = WireCodec.oauthProtocolVersion
   public let grantType = "refresh_token"
   public let clientID = QuotaIOSOAuth.clientID
-  public let tokenAudience = "account"
   public let refreshToken: String
 
   public init(refreshToken: String) {
@@ -124,7 +124,6 @@ public struct IosSessionRefreshRequest: Encodable, Equatable, Sendable {
     try container.encode(protocolVersion, forKey: .protocolVersion)
     try container.encode(grantType, forKey: .grantType)
     try container.encode(clientID, forKey: .clientID)
-    try container.encode(tokenAudience, forKey: .tokenAudience)
     try container.encode(refreshToken, forKey: .refreshToken)
   }
 
@@ -132,34 +131,31 @@ public struct IosSessionRefreshRequest: Encodable, Equatable, Sendable {
     case protocolVersion
     case grantType
     case clientID = "clientId"
-    case tokenAudience
     case refreshToken
   }
 }
 
-public struct AccountSessionRefreshResponse: Decodable, Equatable, Sendable {
+/// A rotated session. There is one, so nothing here says which one it is.
+public struct SessionRefreshResponse: Decodable, Equatable, Sendable {
   public let protocolVersion: Int
   public let tokenType: String
-  public let tokenAudience: String
   public let accountID: String
-  public let accountSession: SessionToken
+  public let session: SessionToken
 
   public init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     protocolVersion = try container.decode(Int.self, forKey: .protocolVersion)
     tokenType = try container.decode(String.self, forKey: .tokenType)
-    tokenAudience = try container.decode(String.self, forKey: .tokenAudience)
     accountID = try container.decode(String.self, forKey: .accountID)
-    accountSession = try container.decode(SessionToken.self, forKey: .accountSession)
+    session = try container.decode(SessionToken.self, forKey: .session)
     guard protocolVersion == WireCodec.oauthProtocolVersion,
       tokenType == "Bearer",
-      tokenAudience == "account",
       WireValidation.isOpaqueID(accountID),
-      WireValidation.isIOSAccessToken(accountSession.accessToken),
-      WireValidation.isIOSRefreshToken(accountSession.refreshToken)
+      WireValidation.isIOSAccessToken(session.accessToken),
+      WireValidation.isIOSRefreshToken(session.refreshToken)
     else {
       throw DecodingError.dataCorruptedError(
-        forKey: .tokenAudience,
+        forKey: .session,
         in: container,
         debugDescription: "Invalid iOS account refresh response."
       )
@@ -169,9 +165,8 @@ public struct AccountSessionRefreshResponse: Decodable, Equatable, Sendable {
   private enum CodingKeys: String, CodingKey {
     case protocolVersion
     case tokenType
-    case tokenAudience
     case accountID = "accountId"
-    case accountSession
+    case session
   }
 }
 
@@ -207,11 +202,11 @@ public struct AccountSession: Codable, Equatable, Sendable {
   }
 
   public init(_ response: IosOAuthTokenResponse) {
-    self.init(accountID: response.accountID, token: response.accountSession)
+    self.init(accountID: response.accountID, token: response.session)
   }
 
-  public init(_ response: AccountSessionRefreshResponse) {
-    self.init(accountID: response.accountID, token: response.accountSession)
+  public init(_ response: SessionRefreshResponse) {
+    self.init(accountID: response.accountID, token: response.session)
   }
 
   public init(from decoder: Decoder) throws {

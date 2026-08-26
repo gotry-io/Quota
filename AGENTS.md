@@ -19,6 +19,7 @@ Read the relevant source before changing that area:
 | Invalid provider/agent input isolation | `docs/decisions/0026-isolate-invalid-input-at-the-smallest-scope.md` |
 | Managed account, device, authentication, and deletion lifecycle | `docs/decisions/0006-managed-account-device-usage.md` |
 | Browser sign-in and the one session table behind every client | `docs/decisions/0025-one-session-system.md` |
+| One token per client, and why there is no CLI or device grant | `docs/decisions/0027-one-token-per-client.md` |
 | Managed-data v6: hour-versioned Usage, daily rollups, resolved subscriptions | `docs/decisions/0024-hour-versioned-usage-and-daily-rollups.md` |
 | Strict writes, tolerant reads, and unknown enum members | `docs/decisions/0023-strict-writes-tolerant-reads.md` |
 | Local identity store, disposable cache, and what a damaged image costs | `docs/decisions/0021-identity-store-and-disposable-cache.md` |
@@ -99,16 +100,17 @@ Do not create a second description of a canonical rule. Update its source and li
 - Use `@gotry-io/*` for TypeScript workspace packages and `workspace:*` for internal dependencies.
 - Keep dependencies pinned consistently. Commit `pnpm-lock.yaml` and the root workspace
   `Cargo.lock`; do not add npm, Yarn, or Bun lockfiles.
-- Rust code targets the stable toolchain. Keep `apps/menubar/helper` private: no command parser,
-  socket listener, daemonization, or public installation surface. `apps/cli` is the Linux-only
-  native `quotacli` command and is built/tested without a Windows target or publication workflow.
+- Rust code targets the stable toolchain. `apps/menubar/helper` is the only entry point over
+  `packages/service`; keep it private: no command parser, socket listener, daemonization, or public
+  installation surface. The shared crate stays platform-neutral in style, but only macOS is built,
+  tested, and released.
 - Swift code targets macOS 14+ or iOS 17+ and Swift 6.2. Keep wire decoding and Relay access separate from views.
 - Web UI follows `apps/web/DESIGN.md` and must remain keyboard-accessible and responsive.
 - QuotaBar UI follows `apps/menubar/DESIGN.md` (system material panel), not the website design file.
 - Wire JSON uses `snake_case`. Primary quota values and meters always represent remaining quota.
-- Product names are Quota, QuotaBar, QuotaCLI, and QuotaRelay. The iOS app's product name is Quota.
-  The bundled Rust service executable is a private QuotaBar implementation detail, not the public
-  `quotacli` command.
+- Product names are Quota, QuotaBar, and QuotaRelay. The iOS app's product name is Quota. The
+  bundled Rust service executable is a private QuotaBar implementation detail, never a public
+  command.
 - Prefer direct implementations over redundant wrappers, retries, fallbacks, and defensive branches.
   Add them only for a concrete boundary, failure mode, or security requirement.
 
@@ -124,11 +126,6 @@ pnpm test
 pnpm build
 pnpm version:bump:menubar patch   # QuotaBar CFBundleShortVersionString only
 # Publish: git tag menubar-vX.Y.Z
-
-# Linux only: native QuotaCLI validation (run on Ubuntu)
-pnpm build:linux-cli
-pnpm check:linux-cli
-pnpm test:linux-cli
 ```
 
 Targeted development entry points are defined by the root `package.json` scripts and each app's
@@ -149,6 +146,10 @@ Do not commit generated state such as `node_modules/`, `dist/`, `target/`, `.bui
   `pnpm generate:provider-catalog` before type check and Swift tests.
 - Managed-data change: managed reads and writes are v6 on `/api/v6`. Exercise the hour-replacement
   and daily-rollup paths and the resolved `subscriptions[]` a summary answers with.
+- Authentication change: a client holds one session, and its scopes are what it may do
+  (`docs/decisions/0027-one-token-per-client.md`). Cover the session that writes a Device, the one
+  that only reads, and the browser cookie, and keep the case proving a token from a Device's earlier
+  generation is refused.
 - Relay change: run Vitest, local D1 migration verification, and the Cloudflare dry-run build.
 - QuotaBar account-path change: on macOS, run affected Swift and Relay tests plus the signed-service
   integration tests available in the app package.

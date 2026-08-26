@@ -4,7 +4,9 @@
 - Date: 2026-08-10
 - Supersedes: [ADR 0002](./0002-relay-device-code-pairing.md),
   [ADR 0004](./0004-anonymous-relay-owners.md), [ADR 0005](./0005-url-only-relay-enrollment.md)
-- Updated 2026-08-26 by [ADR 0025](./0025-one-session-system.md) and [ADR 0024](./0024-hour-versioned-usage-and-daily-rollups.md)
+- Updated 2026-08-26 by [ADR 0025](./0025-one-session-system.md), [ADR 0024](./0024-hour-versioned-usage-and-daily-rollups.md), and [ADR 0027](./0027-one-token-per-client.md)
+
+> Updated 2026-08-26: one session per client, and no CLI or device grant ([ADR 0027](./0027-one-token-per-client.md)).
 
 ## Decision
 
@@ -20,10 +22,10 @@ and Relay stores only an account-scoped HMAC of it, so the same installation res
 inside one Account without becoming a cross-account identifier.
 
 **One writer.** QuotaBar's bundled Rust service is the sole collection OAuth public client and the
-only writer of installation identity, sessions, Usage state, and the Usage outbox. Browser login is
-Authorization Code with PKCE and headless login is the Device Authorization Grant; a successful
-collection-client login issues separate account-read and current-device-write token families, and
-refresh tokens rotate with compare-and-swap semantics. The registered `quota-ios` public client is a
+only writer of installation identity, sessions, Usage state, and the Usage outbox. Login is
+Authorization Code with PKCE over a loopback callback, and issues one session that reads the Account
+and writes this Device ([ADR 0027](./0027-one-token-per-client.md)); its refresh token rotates with
+compare-and-swap semantics. The registered `quota-ios` public client is a
 read-only viewer ([ADR 0013](./0013-readonly-ios-account-client.md)), and Swift renders typed IPC
 state without reading credentials or service files.
 
@@ -41,8 +43,8 @@ only; pending work resumes when re-enabled, and nothing is deleted remotely.
 while retaining the remote Device and its data. Delete Device revokes sessions, advances the
 generation, sets a precise deletion watermark, deletes business rows, and retains only a hidden
 tombstone, so an old token or outbox entry cannot restore deleted data. Delete Account is one Relay
-D1 batch over the rows Relay keeps ([ADR 0025](./0025-one-session-system.md)). Device authorization
-and both deletions require recent authentication and an exact same-origin request.
+D1 batch over the rows Relay keeps ([ADR 0025](./0025-one-session-system.md)). Both deletions
+require recent authentication and an exact same-origin request, which only a browser can make.
 
 OAuth and Device control keep their v2 contracts; quota, Usage, and Account summary follow the single
 managed data contract, which is v6 today

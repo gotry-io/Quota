@@ -220,7 +220,7 @@ impl CollectionContext {
                 .filter(|value| !value.trim().is_empty())
                 .map(PathBuf::from)
                 .unwrap_or_else(|| self.home_directory.join(".config"))
-                .join("quotacli/providers.json")
+                .join("quota/providers.json")
         })
     }
 

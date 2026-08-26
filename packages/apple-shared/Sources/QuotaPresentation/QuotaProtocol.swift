@@ -9,7 +9,7 @@ import Foundation
 /// The private local reports name no version of their own. They only ever travel nested inside an
 /// IPC state that carries `ipc_version`, and both ends of that pipe ship in the same build.
 public enum QuotaProtocol {
-  /// OAuth, Device authorization and control, Account metadata, and the catalogs.
+  /// OAuth, Device control, Account metadata, and the catalogs.
   public static let control = 2
   /// Quota, Usage, and Account summary between a Device and Relay.
   public static let managedData = 6

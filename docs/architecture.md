@@ -12,9 +12,7 @@ links to it rather than restating it.
   snapshot its widgets render. It is not a collection Device.
 - **QuotaBar** is the macOS presentation product. Its bundle contains one private Rust service; Swift
   owns views, UI preferences, accessibility, Launch at Login, and wire decoding only.
-- **QuotaCLI** is a Linux-only native Rust command over the same service library, released as a
-  static x86_64 binary. Windows is not supported.
-- **QuotaRelay** owns GitHub-backed Accounts, Devices, scoped native and browser sessions, normalized
+- **QuotaRelay** owns GitHub-backed Accounts, Devices, one scoped session per client, normalized
   quota/Usage storage, deletion controls, pricing distribution, and account queries. It runs only as
   a Cloudflare Worker backed by D1.
 - **Quota Web** owns the public site and browser account UI, sharing `quota.gotry.io` with the Worker
@@ -22,8 +20,9 @@ links to it rather than restating it.
 
 The bundled Rust executable is not a separate product; QuotaBar is its parent, transport peer,
 scheduler lifetime, and release boundary. `packages/service` holds the shared provider, Usage,
-pricing, persistence, and Relay logic behind both Rust entry points — `apps/menubar/helper` supplies
-the private macOS stdio binary and `apps/cli` the Linux `quotacli` command.
+pricing, persistence, and Relay logic, and `apps/menubar/helper` is its only entry point: the
+private macOS stdio binary. The crate itself stays platform-neutral, and its owner-only
+configuration and state live under `~/.config/quota/`.
 
 GitHub is the only account identity provider and the managed origin is fixed at
 `https://quota.gotry.io`. There is no anonymous owner, pairing group, arbitrary Relay URL, discovery
@@ -66,16 +65,15 @@ uses the same single-flight path. QuotaBar sends `shutdown` as it terminates, wa
 seconds for the answer, and stdin EOF says the same thing to a helper that never gave one, so nothing
 syncs after QuotaBar exits and a second client takes the owner lock only after the first releases it.
 
-The private `diagnose` operation is the single local diagnostic boundary for both products. Its
-`schema_version: 3` report evaluates the fixed Quota Overview, This Device Usage, Account Usage, and
-Account surfaces, then lists the sources behind them, each with one sentence the service writes.
-QuotaBar renders it on the Support page and Linux `quotacli doctor` renders the same result as text
-or JSON; neither reads SQLite or source logs, and neither maps a code to copy of its own. Diagnostics
-never evaluate a refresh in flight: the cache holds one completed report, replaced only after quota,
-Usage, Account, pricing, Overview, and sync state have been applied, so `generated_at` tells a caller
-whether a newer evaluation exists, and Recheck joins the single-flight refresh and waits for a newer
-one. The contract, the attempt journal behind it, and its redaction are canonical in
-[ADR 0022](decisions/0022-minimal-diagnostics.md).
+The private `diagnose` operation is the single local diagnostic boundary. Its `schema_version: 3`
+report evaluates the fixed Quota Overview, This Device Usage, Account Usage, and Account surfaces,
+then lists the sources behind them, each with one sentence the service writes. QuotaBar renders it
+on the Support page; it reads no SQLite or source logs there and maps no code to copy of its own.
+Diagnostics never evaluate a refresh in flight: the cache holds one completed report, replaced only
+after quota, Usage, Account, pricing, Overview, and sync state have been applied, so `generated_at`
+tells a caller whether a newer evaluation exists, and Recheck joins the single-flight refresh and
+waits for a newer one. The contract, the attempt journal behind it, and its redaction are canonical
+in [ADR 0022](decisions/0022-minimal-diagnostics.md).
 
 Two independent facts decide whether an observation still describes current quota, and a reader needs
 both ([ADR 0017](decisions/0017-derived-observation-freshness.md)). A device that fails to collect
@@ -131,8 +129,8 @@ once at startup and is then removed; nothing derived crosses, because the first 
 Catalog browser-session capability contains an HTTPS login URL, exact Cookie hosts and names, a
 browser-priority prefix, and `exclusive` when Settings should omit an official CLI sign-in command.
 Cursor is the only provider that declares it, and still prefers a signed-in Cursor.app session from
-local desktop state first. Swift acquires; Rust validates, persists, and refreshes; Linux QuotaCLI
-implements no acquisition. Consent, redaction, and refusal are canonical in
+local desktop state first. Swift acquires; Rust validates, persists, and refreshes. Consent,
+redaction, and refusal are canonical in
 [`security.md`](security.md) and [ADR 0010](decisions/0010-provider-browser-session-auth.md).
 
 Usage indexing is file-level invalidation. Each refresh runs bounded source discovery, records parser
@@ -186,14 +184,14 @@ provider ids that resolve each channel.
 
 ## Managed account and sync
 
-The shared Rust service is the native collection OAuth public client behind QuotaBar and Linux
-`quotacli`. QuotaBar uses Authorization Code with PKCE and a temporary loopback callback; `quotacli`
-uses the Device Authorization Grant and never opens a browser or loopback listener. Device
-`display_name` is the host computer name (macOS ComputerName, otherwise hostname), reconciled by
-authenticated device sync through the device-scoped profile endpoint, and the local session records
-the successful profile so another write happens only after login, upgrade, or a host rename.
-Collection login returns separate account-read and current-device-write sessions with explicit expiry
-and atomic refresh rotation. The `client_id` value `quotacli` is part of released protocol v2.
+The shared Rust service is the collection OAuth public client behind QuotaBar, and Authorization
+Code with PKCE over a temporary loopback callback is the only grant it uses. Device `display_name`
+is the host computer name (macOS ComputerName, otherwise hostname), reconciled by authenticated
+device sync through the device-scoped profile endpoint, and the local session records the successful
+profile so another write happens only after login, upgrade, or a host rename. Collection login
+returns one session — a single access/refresh family that reads this Account and writes this Device,
+with explicit expiry and compare-and-swap refresh rotation
+([ADR 0027](decisions/0027-one-token-per-client.md)). The `client_id` value is `quotabar`.
 
 QuotaBar updates in place with Sparkle 2: it reads
 `https://github.com/gotry-io/Quota/releases/latest/download/appcast.xml` and verifies EdDSA
@@ -292,8 +290,8 @@ by SvelteKit `Server.respond`. The Worker reads the `__Host-quota_session` cooki
 when unsigned and otherwise a streaming dashboard whose document load starts the existing
 `GET /api/v6/account/summary` handler inside the composed Worker and reuses the request's memoized
 session read, so Account data resolves in parallel with hydration without a second round trip. Every
-page requires a session and Quota Web publishes no account data anonymously; `/activate` approves or
-denies native authorization and `/app` redirects to `/my`. Relay owns GitHub login and browser
+page requires a session and Quota Web publishes no account data anonymously, and `/app` redirects
+to `/my`. Relay owns GitHub login and browser
 sessions ([ADR 0025](decisions/0025-one-session-system.md)); the composition decision is
 [ADR 0011](decisions/0011-sveltekit-document-worker.md).
 

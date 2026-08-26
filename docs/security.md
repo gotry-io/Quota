@@ -39,11 +39,15 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
   provider's own program ([`provider-collection.md`](provider-collection.md)). Cursor.app
   `state.vscdb` is opened read-only for `cursorAuth/accessToken`: the service never writes Cursor
   files, refreshes that JWT, or persists the derived cookie unless a browser session is committed.
-- Optional API-key providers store secrets only in `$XDG_CONFIG_HOME/quotacli/providers.json` or
-  `~/.config/quotacli/providers.json`: mode `0700` directory, `0600` file, no symlinks, shared
+- Optional API-key providers store secrets only in `$XDG_CONFIG_HOME/quota/providers.json` or
+  `~/.config/quota/providers.json`: mode `0700` directory, `0600` file, no symlinks, shared
   owner-only lock, same-directory atomic replace. QuotaBar sends a new key only through the private
   child stdin; Swift never reads the file, persists the secret, puts it on argv, or receives more
   than a masked tip.
+- On first run the service adopts the root it was released under beside its own — the released
+  image's identity, session, upload context, and browser sessions, and its `providers.json` under
+  the same `0700`/`0600` rules — then removes what it read. It looks only beside the root it was
+  given, so an isolated run reads nothing else.
 - Operational local state is two owner-only SQLite files under the released user configuration root,
   outside the app bundle and surviving a reinstall
   ([ADR 0021](decisions/0021-identity-store-and-disposable-cache.md)). A newer `identity.sqlite`
@@ -54,8 +58,6 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
 - The cache holds only the typed attempt fields of
   [ADR 0022](decisions/0022-minimal-diagnostics.md), seven days and 5,000 rows; a failed journal
   write is counted on stderr and blocks nothing.
-- QuotaBar's private service and Linux `quotacli` share one owner-only configuration and state
-  boundary; the Linux command is a foreground binary with no separate credential or storage format.
 - The installation ID is a random UUID; Relay stores only an account-scoped HMAC of it derived with
   `QUOTA_INSTALLATION_KEY`, the raw ID is never logged or used as a global identifier, and switching
   Account sets a new upload lower bound.
@@ -86,10 +88,8 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
 - Native browser login uses Authorization Code with PKCE S256, a random state, and a temporary
   `127.0.0.1` callback on a random port that accepts the exact path, state, and an authorization
   code only, rejects tokens in query data, stops after success, cancellation, or timeout, and
-  answers with a static no-store page that drops the query from history. Linux `quotacli` uses the
-  Device Authorization Grant and opens no browser or listener: codes are high entropy or
-  human-readable as appropriate, single-use, short-lived, hashed at rest, and rate-limited, and
-  polling handles `authorization_pending`, `slow_down`, denial, and expiry without printing codes.
+  answers with a static no-store page that drops the query from history. It is the only grant a
+  collection client has: there is no headless or second-screen flow to authorize.
 - The `quota-ios` client's authority is scoped by
   [ADR 0013](decisions/0013-readonly-ios-account-client.md) and its widget snapshot by
   [ADR 0014](decisions/0014-nonsecret-ios-widget-snapshot.md). `ASWebAuthenticationSession` stays in
@@ -100,8 +100,11 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
   the current Keychain session owns, and is cleared when orphaned, mismatched, or signed out. The
   app target alone performs OAuth, holds the session, and calls Relay; the extension has no network,
   Keychain, Security, or account modules.
-- Access tokens are short-lived, a replayed refresh revokes its whole token family, and only HMACs
-  of server session and grant secrets are stored.
+- A collection or viewer login issues one access/refresh family, and what it may do is the scopes
+  on its own session row ([ADR 0027](decisions/0027-one-token-per-client.md)). Access tokens are
+  short-lived, a replayed refresh revokes its whole token family, and only HMACs of server session
+  and grant secrets are stored. Each client's tokens are hashed under a domain its prefix names, so
+  a token issued to one cannot be presented as another's.
 - A browser session has no refresh token: `__Host-quota_session` is the whole credential, is
   `HttpOnly; Secure; SameSite=Lax; Path=/`, and is stored only as an HMAC under its own label, so it
   cannot be presented as a Bearer token nor a native token as a cookie. JavaScript never reads it,
@@ -110,18 +113,21 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
   never receives `env.DB` or Relay secrets, and every document and load response is `Cache-Control:
   private, no-store`.
 - `POST /api/auth/logout` revokes that row and clears the cookie, and requires an exact same-origin
-  `Origin` with same-origin Fetch Metadata when present. Delete Account, Delete Device, and device
-  authorization decisions require that same check and a session authenticated within ten minutes,
-  which nothing advances except signing in again. Cross-account or unknown user codes return a
-  generic not-found.
+  `Origin` with same-origin Fetch Metadata when present. Delete Account and Delete Device require
+  that same check, `account:manage`, and a session authenticated within ten minutes, which nothing
+  advances except signing in again — so only a browser can make either. `POST /oauth/v2/revoke`
+  needs no scope: presenting the refresh token is the proof, and it ends the whole family and signs
+  out the Device the session spoke for.
 
 ## Upload, Usage, and deletion safety
 
-- Quota and Usage uploads require the device token to match the envelope Device ID and current
-  generation. Account tokens are read or manage only and cannot write device data; device tokens
-  cannot read another Device or the Account aggregate. The device profile endpoint takes only the
-  current Device's token and generation and updates only that Device's bounded display name and
-  platform: it cannot select a Device ID, read Account data, or change authorization.
+- Quota and Usage uploads require `device:write` and a session whose Device ID and generation match
+  the envelope. That scope is only ever granted to a session that names a Device, and such a session
+  stops authorizing the moment its Device moves past the generation it was opened at, so Delete
+  Device ends every token issued before it. A session that names no Device — the browser's, the iOS
+  viewer's — cannot write device data at all. The device profile endpoint writes only the Device its
+  own session names, and only that Device's bounded display name and platform: it cannot select a
+  Device ID, read Account data, or change authorization.
 - An upload carries no sequence: a reading is placed by `(provider, fingerprint)` and ordered by
   when it was observed, an hour is replaced only by a strictly newer `scan_version`, and the
   response names what it accepted and ignored.
@@ -169,8 +175,8 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
 - Error output and logs use allowlisted codes and fixed recovery text, never raw HTTP bodies,
   subprocess stderr, JWTs, authorization codes, secrets, installation IDs, raw GitHub subjects, full
   email addresses, or local source paths.
-- The service owns one bounded diagnostic report, which QuotaBar's Support page and Linux `quotacli
-  doctor` consume without inspecting local state or source logs. It may carry fixed statuses,
+- The service owns one bounded diagnostic report, which QuotaBar's Support page consumes without
+  inspecting local state or source logs. It may carry fixed statuses,
   timestamps, recovery codes, catalog-owned `provider:<id>` or `agent:<id>` subjects with an
   optional `source_id`, the service's fixed names for its non-provider paths, and the safe sentences
   it writes. Display names and IDs never become diagnostic identity; paths, filenames, model names,

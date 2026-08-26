@@ -83,8 +83,8 @@ public struct RelayClient: Sendable {
     )
   }
 
-  public func refreshAccountSession(refreshToken: String) async throws
-    -> AccountSessionRefreshResponse
+  public func refreshSession(refreshToken: String) async throws
+    -> SessionRefreshResponse
   {
     guard WireValidation.isIOSRefreshToken(refreshToken) else {
       throw RelayClientError.invalidGrant
@@ -96,7 +96,7 @@ public struct RelayClient: Sendable {
       body: body,
       bearer: nil,
       expectedStatus: 200,
-      decode: AccountSessionRefreshResponse.self
+      decode: SessionRefreshResponse.self
     )
   }
 

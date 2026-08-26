@@ -1,5 +1,5 @@
 import type {
-  DevicePrincipal,
+  DeviceWriterPrincipal,
   StoredUsageDailyRow,
   UsageBoundaryQuery,
   UsageBoundaryResult,
@@ -56,7 +56,7 @@ export class D1UsageState implements UsageState {
    * is answered by the same comparison instead of by a remembered outcome.
    */
   async recordUsage(
-    principal: DevicePrincipal,
+    principal: DeviceWriterPrincipal,
     upload: UsageUpload,
     receivedAt: string,
   ): Promise<UsageWriteResult> {
@@ -70,8 +70,8 @@ export class D1UsageState implements UsageState {
       .first<DeviceUsageControlRow>();
     if (
       !device ||
-      device.generation !== principal.generation ||
-      upload.generation !== principal.generation
+      device.generation !== principal.device_generation ||
+      upload.generation !== principal.device_generation
     ) {
       return { outcome: "stale_device" };
     }
@@ -230,7 +230,7 @@ export class D1UsageState implements UsageState {
   }
 
   private clearHour(
-    principal: DevicePrincipal,
+    principal: DeviceWriterPrincipal,
     agent: string,
     bucket: string,
   ): D1PreparedStatement {
@@ -240,11 +240,11 @@ export class D1UsageState implements UsageState {
          WHERE device_id = ?1 AND agent = ?2 AND bucket_start_utc = ?3
            AND ${deviceIsCurrent("?4", "?5")}`,
       )
-      .bind(principal.device_id, agent, bucket, principal.account_id, principal.generation);
+      .bind(principal.device_id, agent, bucket, principal.account_id, principal.device_generation);
   }
 
   private insertHour(
-    principal: DevicePrincipal,
+    principal: DeviceWriterPrincipal,
     agent: string,
     hour: UsageUpload["hours"][number],
   ): D1PreparedStatement {
@@ -274,7 +274,7 @@ export class D1UsageState implements UsageState {
         hour.partial ? 1 : 0,
         JSON.stringify(hour.rows),
         principal.account_id,
-        principal.generation,
+        principal.device_generation,
       );
   }
 
@@ -312,7 +312,10 @@ export class D1UsageState implements UsageState {
       .bind(deviceId, date, agent, `${date}T00:00:00Z`, `${nextUtcDate(date)}T00:00:00Z`);
   }
 
-  private markDeviceSeen(principal: DevicePrincipal, receivedAt: string): D1PreparedStatement {
+  private markDeviceSeen(
+    principal: DeviceWriterPrincipal,
+    receivedAt: string,
+  ): D1PreparedStatement {
     return this.database
       .prepare(
         `UPDATE devices
@@ -320,7 +323,7 @@ export class D1UsageState implements UsageState {
          WHERE id = ?1 AND account_id = ?4 AND generation = ?2
            AND signed_out_at IS NULL AND deleted_at IS NULL`,
       )
-      .bind(principal.device_id, principal.generation, receivedAt, principal.account_id);
+      .bind(principal.device_id, principal.device_generation, receivedAt, principal.account_id);
   }
 }
 

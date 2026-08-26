@@ -7,8 +7,6 @@ import {
   AccountSummarySchema,
   AccountUsageActivityResponseSchema,
   BrowserLoginExchangeRequestSchema,
-  DeviceAuthorizationRequestSchema,
-  DeviceAuthorizationResponseSchema,
   DeviceProfileUpdateRequestSchema,
   DeviceProfileUpdateResponseSchema,
   DeviceSyncResponseSchema,
@@ -22,7 +20,6 @@ import {
   LocalUsageReportSchema,
   MANAGED_DATA_PROTOCOL_VERSION,
   MAXIMUM_SNAPSHOTS_PER_ENVELOPE,
-  OAuthTokenRequestSchema,
   OAuthTokenResponseSchema,
   PricingCatalogSchema,
   PROTOCOL_VERSION,
@@ -243,64 +240,31 @@ describe("quota protocol", () => {
     expect(QuotaCollectionReportSchema.safeParse({ ...report, extra: true }).success).toBe(false);
   });
 
-  it("defines strict native browser and device login payloads", () => {
-    const installationID = "6eec1da2-8d8f-4e77-9a9a-3b6d61bf8998";
+  it("takes one login payload, from the one client that registers a Device", () => {
     const browser = {
       protocol_version: 2,
       grant_type: "authorization_code",
-      client_id: "quotacli",
+      client_id: "quotabar",
       code: "synthetic-login-code",
       code_verifier: "a".repeat(43),
       redirect_uri: "http://127.0.0.1:49152/callback",
-      installation_id: installationID,
+      installation_id: "6eec1da2-8d8f-4e77-9a9a-3b6d61bf8998",
       device_display_name: "Kitchen Mac",
       platform: "macos",
     };
     expect(BrowserLoginExchangeRequestSchema.safeParse(browser).success).toBe(true);
-    expect(OAuthTokenRequestSchema.safeParse(browser).success).toBe(true);
     expect(
       BrowserLoginExchangeRequestSchema.safeParse({
         ...browser,
         redirect_uri: "https://example.com/callback",
       }).success,
     ).toBe(false);
+    // Authorization Code with PKCE is the only grant, so a request naming another one is not a
+    // login payload at all.
     expect(
-      OAuthTokenRequestSchema.safeParse({
-        protocol_version: 2,
-        grant_type: "urn:ietf:params:oauth:grant-type:device_code",
-        client_id: "quotacli",
-        device_code: "synthetic-device-code",
-      }).success,
-    ).toBe(true);
-    expect(
-      DeviceAuthorizationRequestSchema.safeParse({
-        protocol_version: 2,
-        client_id: "quotacli",
-        installation_id: installationID,
-        device_display_name: "Kitchen Mac",
-        platform: "macos",
-      }).success,
-    ).toBe(true);
-    expect(
-      DeviceAuthorizationResponseSchema.safeParse({
-        protocol_version: 2,
-        device_code: "synthetic-device-code",
-        user_code: "ABCD-EFGH",
-        verification_uri: "https://quota.gotry.io/activate",
-        verification_uri_complete: null,
-        expires_in: 600,
-        interval: 5,
-      }).success,
-    ).toBe(true);
-    expect(
-      DeviceAuthorizationResponseSchema.safeParse({
-        protocol_version: 2,
-        device_code: "synthetic-device-code",
-        user_code: "ABCD-EFGH",
-        verification_uri: "http://quota.gotry.io/activate",
-        verification_uri_complete: null,
-        expires_in: 600,
-        poll_interval_seconds: 5,
+      BrowserLoginExchangeRequestSchema.safeParse({
+        ...browser,
+        grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
       }).success,
     ).toBe(false);
   });
@@ -315,7 +279,7 @@ describe("quota protocol", () => {
       redirect_uri: IOS_OAUTH_REDIRECT_URI,
     };
     expect(IosLoginExchangeRequestSchema.safeParse(iosExchange).success).toBe(true);
-    expect(OAuthTokenRequestSchema.safeParse(iosExchange).success).toBe(false);
+    expect(BrowserLoginExchangeRequestSchema.safeParse(iosExchange).success).toBe(false);
     expect(
       IosLoginExchangeRequestSchema.safeParse({
         ...iosExchange,
@@ -337,9 +301,12 @@ describe("quota protocol", () => {
       }).success,
     ).toBe(false);
     expect(protocol.PlatformSchema.safeParse("ios").success).toBe(false);
-    expect(protocol.PlatformSchema.options).toEqual(["macos", "linux", "windows"]);
+    // QuotaBar is the only client that registers a Device, and it runs on one platform.
+    expect(protocol.PlatformSchema.options).toEqual(["macos"]);
+    expect(protocol.platformDisplayName("macos")).toBe("macOS");
+    expect(protocol.platformDisplayName("linux")).toBe("Unknown");
 
-    const accountSession = {
+    const session = {
       access_token: "synthetic-access-token",
       access_expires_at: "2026-08-02T12:15:00Z",
       refresh_token: "synthetic-refresh-token",
@@ -349,32 +316,28 @@ describe("quota protocol", () => {
       protocol_version: 2,
       token_type: "Bearer",
       account_id: "account_01",
-      account_session: accountSession,
+      session,
     };
     expect(IosOAuthTokenResponseSchema.safeParse(iosResponse).success).toBe(true);
     expect(OAuthTokenResponseSchema.safeParse(iosResponse).success).toBe(false);
     expect(
-      IosOAuthTokenResponseSchema.safeParse({
-        ...iosResponse,
-        device_id: "device_01",
-        device_session: accountSession,
-      }).success,
+      IosOAuthTokenResponseSchema.safeParse({ ...iosResponse, device_id: "device_01" }).success,
     ).toBe(false);
     expect(
       IosSessionRefreshRequestSchema.safeParse({
         protocol_version: 2,
         grant_type: "refresh_token",
         client_id: IOS_OAUTH_CLIENT_ID,
-        token_audience: "account",
         refresh_token: "synthetic-refresh-token",
       }).success,
     ).toBe(true);
+    // There is one token, so there is nothing for a request to name an audience for.
     expect(
       IosSessionRefreshRequestSchema.safeParse({
         protocol_version: 2,
         grant_type: "refresh_token",
         client_id: IOS_OAUTH_CLIENT_ID,
-        token_audience: "device",
+        token_audience: "account",
         refresh_token: "synthetic-refresh-token",
       }).success,
     ).toBe(false);
@@ -383,13 +346,12 @@ describe("quota protocol", () => {
         protocol_version: 2,
         grant_type: "refresh_token",
         client_id: IOS_OAUTH_CLIENT_ID,
-        token_audience: "account",
         refresh_token: "synthetic-refresh-token",
       }).success,
     ).toBe(false);
   });
 
-  it("returns separate account and device token families with authoritative sync control", () => {
+  it("returns one token family and the Device it may write", () => {
     const token = {
       access_token: "synthetic-access-token",
       access_expires_at: "2026-08-02T12:15:00Z",
@@ -404,10 +366,23 @@ describe("quota protocol", () => {
       device_generation: 3,
       usage_deleted_before: null,
       usage_sync_revision: 9,
-      account_session: token,
-      device_session: token,
+      session: token,
     };
     expect(OAuthTokenResponseSchema.safeParse(response).success).toBe(true);
+    // A second token family is not an extra field to ignore on a write; it is a refusal.
+    expect(OAuthTokenResponseSchema.safeParse({ ...response, write_session: token }).success).toBe(
+      false,
+    );
+    expect(
+      protocol.SessionRefreshResponseSchema.safeParse({
+        protocol_version: 2,
+        token_type: "Bearer",
+        account_id: "account_01",
+        device_id: "device_01",
+        device_generation: 3,
+        session: token,
+      }).success,
+    ).toBe(true);
     expect(
       DeviceSyncResponseSchema.safeParse({
         protocol_version: 2,
@@ -432,24 +407,26 @@ describe("quota protocol", () => {
         device_id: "device_01",
       }).success,
     ).toBe(true);
+    // A rotation answers with the Device it is still bound to, and nothing that would let a
+    // reader think there is a second family behind it.
     expect(
       SessionRefreshResponseSchema.safeParse({
         protocol_version: 2,
         token_type: "Bearer",
-        token_audience: "device",
         account_id: "account_01",
         device_id: "device_01",
         device_generation: 3,
-        device_session: token,
+        session: token,
       }).success,
     ).toBe(true);
     expect(
       SessionRefreshResponseSchema.safeParse({
         protocol_version: 2,
         token_type: "Bearer",
-        token_audience: "account",
         account_id: "account_01",
         device_id: "device_01",
+        device_generation: 3,
+        session: token,
         account_session: token,
       }).success,
     ).toBe(false);

@@ -20,7 +20,10 @@ tell Swift when to reload state.
 The Rust service returns persisted component state immediately, then performs startup collection in
 the background. It owns the five-minute schedule, providers, Usage, pricing, OAuth/account sync,
 its owner-only identity store and disposable cache, the hours it still owes an Account, and the
-two-way merge of a subscription Relay resolved against this Mac's own reading.
+two-way merge of a subscription Relay resolved against this Mac's own reading. Signing in is
+Authorization Code with PKCE over a loopback callback and issues one session, which reads the
+Account and writes this Mac's Device
+([ADR 0027](../../docs/decisions/0027-one-token-per-client.md)).
 When it has to rebuild that cache, `get_state.cache.rebuilding` says so and Overview shows one
 notice until the next complete Usage scan. QuotaBar owns presentation, provider visibility
 and ordering preferences, native provider configuration fields, account actions, accessibility, and
@@ -56,8 +59,8 @@ Packaged builds embed Sparkle 2. Support's **Check for Updates** action, and Spa
 schedule, read the GitHub Releases appcast. Local `swift run` binaries are not packaged and do not
 check for updates.
 
-Settings' **Support** page is backed by the private `diagnose` IPC operation and renders the same
-bounded, redacted report Linux `quotacli doctor` prints. The service evaluates the four Quota/Usage
+Settings' **Support** page is backed by the private `diagnose` IPC operation and renders one
+bounded, redacted report. The service evaluates the four Quota/Usage
 surfaces and the sources behind them and writes one sentence per row; Swift strictly decodes and
 renders it, and never maps a code to copy of its own. **Show in Overview** remains
 presentation-only and never requests local collection. Account provider data remains healthy without
