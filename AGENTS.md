@@ -16,6 +16,7 @@ Read the relevant source before changing that area:
 | Codex, Claude Code, Grok, and OpenRouter collection strategies | `docs/provider-collection.md` |
 | CodexBar external platform capability baseline (quota/usage/fallback) | `docs/codexbar-platform-capabilities.md` |
 | Persistent Relay storage decision and rationale | `docs/decisions/0001-persistent-relay-storage.md` |
+| Invalid provider/agent input isolation | `docs/decisions/0026-isolate-invalid-input-at-the-smallest-scope.md` |
 | Managed account, device, authentication, and deletion lifecycle | `docs/decisions/0006-managed-account-device-usage.md` |
 | Browser sign-in and the one session table behind every client | `docs/decisions/0025-one-session-system.md` |
 | Managed-data v6: hour-versioned Usage, daily rollups, resolved subscriptions | `docs/decisions/0024-hour-versioned-usage-and-daily-rollups.md` |
