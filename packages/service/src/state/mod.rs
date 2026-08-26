@@ -162,8 +162,8 @@ impl ComponentRecord {
     }
 }
 
-/// A process-lifetime service lock.  It intentionally does not use the released `state.lock`
-/// directory name: QuotaCLI still creates that directory for short provider/config mutations.
+/// A process-lifetime service lock.  It intentionally does not use the `state.lock` directory
+/// name, which the provider-config writer below still creates for short mutations.
 /// `flock` makes ownership kernel-backed and is released by the kernel on crash/SIGKILL.
 pub struct OwnerLock {
     file: File,
@@ -202,9 +202,9 @@ impl Drop for OwnerLock {
     }
 }
 
-/// Short critical-section lock shared with the released QuotaCLI providers.json writer.  The
-/// directory/owner shape is retained at this published file boundary; only this tiny config
-/// mutation uses stale-owner recovery, while the service lifetime lock above remains flock-backed.
+/// Short critical-section lock over the owner-only `providers.json`.  The directory/owner shape
+/// is retained at this published file boundary; only this tiny config mutation uses stale-owner
+/// recovery, while the service lifetime lock above remains flock-backed.
 struct ProviderConfigLock {
     path: PathBuf,
 }
@@ -4002,8 +4002,7 @@ mod tests {
                 "status": "logout_pending",
                 "account_id": "account",
                 "device_id": "device",
-                "account_refresh_token": "account-refresh",
-                "device_refresh_token": "device-refresh"
+                "refresh_token": "session-refresh"
             }))
             .expect("pending");
         assert!(

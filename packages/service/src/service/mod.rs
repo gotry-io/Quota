@@ -1453,29 +1453,23 @@ fn account_value_json(value: &AccountComponentValue) -> Value {
     serde_json::to_value(value).unwrap_or(Value::Null)
 }
 
+/// The revoke record for a session being signed out, from an active one or from itself.
 fn make_logout_pending(session: &Value) -> Option<Value> {
     let object = session.as_object()?;
     let account_id = object.get("account_id")?.as_str()?;
     let device_id = object.get("device_id")?.as_str()?;
-    let account_refresh_token = object
-        .get("account")
+    let refresh_token = object
+        .get("session")
         .and_then(Value::as_object)
-        .and_then(|v| v.get("refresh_token"))
+        .and_then(|value| value.get("refresh_token"))
         .and_then(Value::as_str)
-        .or_else(|| object.get("account_refresh_token").and_then(Value::as_str))?;
-    let device_refresh_token = object
-        .get("device")
-        .and_then(Value::as_object)
-        .and_then(|v| v.get("refresh_token"))
-        .and_then(Value::as_str)
-        .or_else(|| object.get("device_refresh_token").and_then(Value::as_str))?;
+        .or_else(|| object.get("refresh_token").and_then(Value::as_str))?;
     Some(serde_json::json!({
         "schema_version": 1,
         "status": "logout_pending",
         "account_id": account_id,
         "device_id": device_id,
-        "account_refresh_token": account_refresh_token,
-        "device_refresh_token": device_refresh_token
+        "refresh_token": refresh_token
     }))
 }
 
@@ -2230,8 +2224,7 @@ mod tests {
                 "status": "active",
                 "account_id": "account_test",
                 "device_id": "device_test",
-                "account": {"refresh_token": "account_refresh"},
-                "device": {"refresh_token": "device_refresh"}
+                "session": {"refresh_token": "session_refresh"}
             }))
             .expect("session");
         let service = LocalService::new(
