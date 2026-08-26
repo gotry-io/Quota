@@ -450,7 +450,7 @@ pub struct AccountComponentValue {
     pub account_summary: Option<Value>,
 }
 
-/// OAuth, Device authorization and control, Account metadata, and the catalogs.
+/// OAuth, Device control, Account metadata, and the catalogs.
 pub const CONTROL_PROTOCOL: i64 = 2;
 
 /// The managed-data protocol this build uploads to and reads from Relay.

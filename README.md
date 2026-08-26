@@ -9,7 +9,7 @@ subscription quota and privacy-preserving Usage together across a user's devices
 - **QuotaBar** — native macOS menu-bar UI with a bundled private Rust service for local collection,
   durable state, account sync, and scheduling.
 - **QuotaRelay** — managed account/device service on Cloudflare Workers and D1.
-- **Quota Web** — public site, GitHub sign-in, device authorization, and account dashboard.
+- **Quota Web** — public site, GitHub sign-in, and account dashboard.
 
 Quota collection supports Codex, Claude Code, Grok, OpenRouter, DeepSeek, Kimi Code, LiteLLM, and
 Cursor; local Usage analytics supports Codex, Claude Code, Grok, OpenCode, Pi, and Cursor logs.

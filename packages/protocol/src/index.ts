@@ -31,7 +31,7 @@ export {
  * The private local reports name no version of their own. They only ever travel nested inside an
  * IPC state that carries `ipc_version`, and both ends of that pipe ship in the same build.
  */
-/** OAuth, Device authorization and control, Account metadata, and the catalogs. */
+/** OAuth, Device control, Account metadata, and the catalogs. */
 export const PROTOCOL_VERSION = 2 as const;
 /** Quota, Usage, and Account summary between a Device and Relay. */
 export const MANAGED_DATA_PROTOCOL_VERSION = 6 as const;
