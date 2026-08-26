@@ -2,18 +2,29 @@ import { MAXIMUM_USAGE_PERIOD_LEAVES, MODEL_CATALOG } from "@gotry-io/quota-prot
 import type { StoredUsageDailyRow } from "@gotry-io/relay-core";
 import { describe, expect, it } from "vitest";
 import { PRICING_CATALOG } from "../src/pricing-catalog.ts";
-import { buildAccountUsage, buildActivityDays } from "../src/usage-summary.ts";
+import {
+  type AccountUsageBoundary,
+  buildAccountUsage,
+  buildActivityDays,
+} from "../src/usage-summary.ts";
 
 const today = "2026-08-10";
 
-function accountUsage(rows: readonly StoredUsageDailyRow[], modelCatalog = MODEL_CATALOG) {
+function accountUsage(
+  rows: readonly StoredUsageDailyRow[],
+  modelCatalog = MODEL_CATALOG,
+  boundaries: AccountUsageBoundary[] = [],
+) {
   return buildAccountUsage({
-    rows,
+    daily: rows,
+    boundaries,
+    days: {
+      today: { from: today, to: today },
+      last_7_days: { from: "2026-08-04", to: today },
+      last_30_days: { from: "2026-07-12", to: today },
+    },
     catalog: PRICING_CATALOG,
     modelCatalog,
-    today: { from: today, to: today },
-    last7Days: { from: "2026-08-04", to: today },
-    last30Days: { from: "2026-07-12", to: today },
   });
 }
 
@@ -54,6 +65,24 @@ describe("Account Usage periods", () => {
         period.totals.messages,
       );
     }
+  });
+
+  it("folds a boundary's hours into the periods that name it and nothing else", () => {
+    // The hours between local midnight and the UTC day it cuts belong to `today` alone: every
+    // wider period already covers that UTC day through the rollup row beside them.
+    const usage = accountUsage([{ ...usageRow(null, 0), date: today }], MODEL_CATALOG, [
+      { periods: ["today"], rows: [{ ...usageRow(null, 1), date: "2026-08-09", requests: 4 }] },
+      {
+        periods: ["today", "last_7_days", "last_30_days"],
+        rows: [{ ...usageRow(null, 0), date: "2026-08-11", requests: 2 }],
+      },
+    ]);
+
+    expect(usage.today.totals.messages).toBe(7);
+    expect(usage.last_7_days.totals.messages).toBe(3);
+    expect(usage.last_30_days.totals.messages).toBe(3);
+    // `all` is the rollup entire, so a boundary row never reaches it twice.
+    expect(usage.all.totals.messages).toBe(1);
   });
 
   it("marks a period partial when any hour behind it was scanned incompletely", () => {

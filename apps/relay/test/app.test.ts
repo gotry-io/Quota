@@ -290,8 +290,8 @@ describe("managed Relay on real Workers and D1", () => {
     expect(unchanged.headers.get("ETag")).toBe(etag);
     expect(await unchanged.text()).toBe("");
 
-    // Two routes answer with different bodies, and a different calendar names different days,
-    // so neither may reuse the other's validator.
+    // Two routes answer with different bodies, and a different calendar puts a period around
+    // different instants, so neither may reuse the other's validator.
     const activity = await app.request(
       "https://quota.gotry.io/api/v6/account/usage/activity?from=2026-08-01&to=2026-08-10",
     );
@@ -422,6 +422,9 @@ describe("managed Relay on real Workers and D1", () => {
         deviceID: "device_history",
         date: "2026-08-10",
       }),
+      // The hours behind the two recent days, which is what a caller off UTC reads them from.
+      usageHourInsert("codex", "openai_direct", "gpt-5.6-luna", "2026-08-09T12:00:00Z"),
+      usageHourInsert("codex", "openai_direct", "gpt-5.6-sol", "2026-08-10T12:00:00Z"),
     ]);
     const app = appFor("account_history");
 
@@ -460,7 +463,8 @@ describe("managed Relay on real Workers and D1", () => {
       );
     expect(models(summary.usage.today)).toEqual(["gpt-5.6-sol"]);
 
-    // A calendar behind UTC moves which day `today` names without moving a stored day.
+    // A calendar behind UTC moves where today begins without moving a stored day: seven hours
+    // of 9 August UTC are still yesterday in Los Angeles, and the rest of today is 10 August.
     const behind = (await (
       await app.request("https://quota.gotry.io/api/v6/account/summary?tz=America/Los_Angeles")
     ).json()) as {
@@ -1100,6 +1104,30 @@ async function dailyMismatch(): Promise<unknown[]> {
     ...expected.filter((row) => !actual.includes(row)),
     ...actual.filter((row) => !expected.includes(row)),
   ];
+}
+
+/** One hour of the same fact `usageDailyInsert` rolls into a day, on the same device. */
+function usageHourInsert(
+  agent: string,
+  channel: string,
+  model: string,
+  bucket: string,
+): D1PreparedStatement {
+  return env.DB.prepare(
+    `INSERT INTO usage_hourly (
+         device_id, agent, bucket_start_utc, scan_version, partial,
+         billing_channel, channel_source, model, context_bucket,
+         service_tier, speed, inference_geo, input_tokens, cache_read_tokens,
+         cache_write_5m_tokens, cache_write_1h_tokens, cache_write_inferred_tokens,
+         output_tokens, reasoning_tokens, requests, web_search_requests, web_fetch_requests,
+         source_cost_microusd, source_cost_covered_requests
+       ) VALUES (
+         'device_history', ?1, ?4, 1, 0,
+         ?2, 'agent_default', ?3, 'le_128k',
+         'unknown', 'unknown', 'unknown', 10, 0,
+         0, 0, 0, 2, 0, 1, 0, 0, NULL, 0
+       )`,
+  ).bind(agent, channel, model, bucket);
 }
 
 function usageDailyInsert(

@@ -23,10 +23,10 @@ export type UsageWriteResult =
   | { outcome: "written"; accepted: string[]; ignored: string[] };
 
 /**
- * One identity's Usage rolled up to a UTC day, which is the only grain a managed read folds.
+ * One identity's Usage over a UTC day, or over the part of one a local period's edge cuts out.
  *
  * `partial_hours` counts the hours behind this row whose scan came up short, so a period reports
- * `partial` without the read reaching back into `usage_hourly`.
+ * `partial` from the rows it folded rather than from a second read.
  */
 export interface StoredUsageDailyRow extends UsageRow {
   device_id: string;
@@ -46,6 +46,32 @@ export interface UsageDailyResult {
   truncated: boolean;
 }
 
+/** A half-open range of whole UTC hours, named the way `usage_hourly` keys them. */
+export interface UsageHourRange {
+  /** Inclusive `bucket_start_utc`. */
+  from: string;
+  /** Exclusive `bucket_start_utc`. */
+  to: string;
+}
+
+/**
+ * The hours a local period's edge cuts out of a UTC day.
+ *
+ * A local day begins at local midnight, which lands inside a UTC day for most of the world, so
+ * the day at each edge of a period cannot be read from the rollup. Every whole UTC day between
+ * the edges still can, which is what keeps this read off the hourly history.
+ */
+export interface UsageBoundaryQuery {
+  ranges: readonly UsageHourRange[];
+  limit: number;
+}
+
+export interface UsageBoundaryResult {
+  /** The rows of each requested range, rolled up to a UTC day, in the order they were asked for. */
+  ranges: StoredUsageDailyRow[][];
+  truncated: boolean;
+}
+
 export interface UsageState {
   recordUsage(
     principal: DevicePrincipal,
@@ -53,4 +79,5 @@ export interface UsageState {
     receivedAt: string,
   ): Promise<UsageWriteResult>;
   queryDailyUsage(accountId: string, query: UsageDailyQuery): Promise<UsageDailyResult>;
+  queryBoundaryHours(accountId: string, query: UsageBoundaryQuery): Promise<UsageBoundaryResult>;
 }

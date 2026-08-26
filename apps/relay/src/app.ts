@@ -70,12 +70,8 @@ import {
 import { managedServiceInfo } from "./config.ts";
 import { PRICING_CATALOG, PRICING_CATALOG_ETAG } from "./pricing-catalog.ts";
 import { bearerToken, canonicalRequestDigest, type SecretHasher } from "./security.ts";
-import {
-  buildAccountUsage,
-  buildActivityDays,
-  type UsageDateWindow,
-  UsageSummaryLimitError,
-} from "./usage-summary.ts";
+import { planLocalPeriods } from "./local-periods.ts";
+import { buildAccountUsage, buildActivityDays, UsageSummaryLimitError } from "./usage-summary.ts";
 
 const maximumCredentialBodyBytes = 64 * 1024;
 const maximumSnapshotBodyBytes = 256 * 1024;
@@ -609,27 +605,33 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     if (!hasOnlyQueryKeys(context, ["tz"])) return invalidRequest(context);
     const timezone = requestedTimezone(context);
     if (timezone === null) return invalidRequest(context);
-    // The calendar the caller keeps decides which days `today` and the trailing windows name,
-    // so it decides when this answer stops being the one they already hold.
-    const localDate = localDateIn(timezone, checkedAt);
+    // A local day begins at local midnight, so the caller's calendar decides where the three
+    // trailing periods start and end — and, one local midnight at a time, when this answer stops
+    // being the one they already hold.
+    const plan = planLocalPeriods(timezone, checkedAt);
     const conditional = await answerConditionally(context, principal, options, {
       catalogRevision: catalog.revision,
       modelCatalogRevision: modelCatalog.revision,
       checkedAt,
-      rolloverKey: localDate,
+      rolloverKey: plan.localDate,
     });
     if (conditional) return conditional;
-    const [account, devices, stored, daily] = await Promise.all([
+    const [account, devices, stored, daily, boundary] = await Promise.all([
       options.state.getAccount(principal.account_id),
       options.state.listAccountDevices(principal.account_id),
       options.state.listLatestSnapshots(principal.account_id),
       options.usageState.queryDailyUsage(principal.account_id, { limit: maximumAccountDailyRows }),
+      options.usageState.queryBoundaryHours(principal.account_id, {
+        ranges: plan.boundaries.map((edge) => edge.range),
+        limit: maximumAccountDailyRows,
+      }),
     ]);
     if (!account) return unauthorized(context);
     if (
       devices.length > maximumAccountDevices ||
       stored.length > maximumAccountSnapshots ||
-      daily.truncated
+      daily.truncated ||
+      boundary.truncated
     ) {
       return resultLimit(context);
     }
@@ -642,12 +644,14 @@ export function createRelayApp(options: RelayAppOptions): Hono {
           devices: devices.map((device) => publicDevice(device, lastObserved)),
           subscriptions: resolvedSubscriptions(stored, checkedAt),
           usage: buildAccountUsage({
-            rows: daily.rows,
+            daily: daily.rows,
+            boundaries: plan.boundaries.map((edge, index) => ({
+              periods: edge.periods,
+              rows: boundary.ranges[index] ?? [],
+            })),
+            days: plan.days,
             catalog,
             modelCatalog,
-            today: trailingDays(localDate, 1),
-            last7Days: trailingDays(localDate, 7),
-            last30Days: trailingDays(localDate, 30),
           }),
           pricing_revision: catalog.revision,
           model_catalog_revision: modelCatalog.revision,
@@ -1005,21 +1009,6 @@ function requestedTimezone(context: Context): string | null {
   if (requested === undefined) return "UTC";
   const parsed = IanaTimezoneSchema.safeParse(requested);
   return parsed.success ? parsed.data : null;
-}
-
-function localDateIn(timezone: string, instant: Date): string {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: timezone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(instant);
-}
-
-/** The window of `days` UTC dates ending on `lastDate`, inclusive at both ends. */
-function trailingDays(lastDate: string, days: number): UsageDateWindow {
-  const from = new Date(Date.parse(`${lastDate}T00:00:00Z`) - (days - 1) * 86_400_000);
-  return { from: from.toISOString().slice(0, 10), to: lastDate };
 }
 
 /**

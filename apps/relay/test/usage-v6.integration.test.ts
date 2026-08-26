@@ -18,6 +18,19 @@ declare global {
   }
 }
 
+interface Period {
+  totals: {
+    total_tokens: number;
+    input_tokens: number;
+    output_tokens: number;
+    cache_read_input_tokens: number;
+    cache_write_input_tokens: number;
+    reasoning_tokens: number;
+    messages: number;
+  };
+  agents: Array<{ providers: Array<{ models: Array<{ model: string }> }> }>;
+}
+
 declare module "vitest" {
   export interface ProvidedContext {
     TEST_MIGRATIONS: D1Migration[];
@@ -25,6 +38,8 @@ declare module "vitest" {
 }
 
 const now = new Date("2026-08-10T12:00:00.000Z");
+/** 10:00 on 26 August in Singapore, 19:00 on the 25th in Los Angeles. */
+const checkedAt = new Date("2026-08-26T02:00:00.000Z");
 const secret = "test-secret-that-is-long-enough-for-hmac-and-aes";
 const accountId = "account_v6";
 
@@ -104,6 +119,88 @@ describe("managed data v6 end to end", () => {
     );
 
     expect(await dailyDisagreements()).toEqual([]);
+  });
+
+  it("puts an hour in the local day the caller's calendar reads it in", async () => {
+    await addDevice("alpha");
+    const usage = new D1UsageState(env.DB);
+    // 22:00 UTC is 06:00 on 26 August in Singapore; 15:00 UTC is 23:00 on the 25th.
+    await usage.recordUsage(
+      principal("alpha"),
+      upload([
+        hourOf("2026-08-25T22:00:00Z", 1, ["gpt-5.6-sol"]),
+        hourOf("2026-08-25T15:00:00Z", 1, ["claude-opus-5"]),
+      ]),
+      checkedAt.toISOString(),
+    );
+
+    const app = signedInApp(checkedAt);
+    const local = await periods(app, "tz=Asia/Singapore");
+    expect(models(local.today)).toEqual(["gpt-5.6-sol"]);
+    expect(local.today.totals.messages).toBe(1);
+    // Both hours are inside the wider windows either way, which is what makes `today` the test.
+    expect(local.last_7_days.totals.messages).toBe(2);
+    expect(local.last_30_days.totals.messages).toBe(2);
+
+    // The same request read against UTC files both hours under the 25th, so today holds neither.
+    const utc = await periods(app, "tz=UTC");
+    expect(models(utc.today)).toEqual([]);
+    expect(utc.today.totals.messages).toBe(0);
+    expect(utc.last_7_days.totals.messages).toBe(2);
+
+    // A calendar behind UTC begins the 25th while 15:00 UTC is still to come.
+    const behind = await periods(app, "tz=America/Los_Angeles");
+    expect(models(behind.today)).toEqual(["claude-opus-5", "gpt-5.6-sol"]);
+  });
+
+  it("totals a local period exactly, and only from the hours its edges cut", async () => {
+    await addDevice("alpha");
+    await addDevice("beta");
+    const usage = new D1UsageState(env.DB);
+    // Every third hour of the 31 days behind the read, on two devices.
+    const hours: string[] = [];
+    for (let hour = 0; hour < 31 * 24; hour += 3) {
+      hours.push(
+        new Date(checkedAt.getTime() - hour * 3_600_000).toISOString().replace(".000", ""),
+      );
+    }
+    for (const name of ["alpha", "beta"]) {
+      for (let index = 0; index < hours.length; index += 64) {
+        await usage.recordUsage(
+          principal(name),
+          upload(
+            hours
+              .slice(index, index + 64)
+              .map((bucket) => hourOf(bucket, 1, ["gpt-5.6-sol", "claude-opus-5"])),
+          ),
+          checkedAt.toISOString(),
+        );
+      }
+    }
+
+    const app = signedInApp(checkedAt);
+    const summary = await periods(app, "tz=Asia/Singapore");
+    // 30 local days back from 26 August in Singapore begins at 16:00 UTC on 27 July.
+    expect(summary.last_30_days.totals).toEqual(
+      await aggregate("2026-07-27T16:00:00Z", "2026-08-26T16:00:00Z"),
+    );
+    expect(summary.today.totals).toEqual(
+      await aggregate("2026-08-25T16:00:00Z", "2026-08-26T16:00:00Z"),
+    );
+    expect(summary.last_7_days.totals).toEqual(
+      await aggregate("2026-08-19T16:00:00Z", "2026-08-26T16:00:00Z"),
+    );
+
+    // With every hour outside the four days the edges cut deleted, the answer does not move:
+    // the rest of the period came from the rollup, and nothing reached past the edges for it.
+    const edges = ["2026-07-27", "2026-08-19", "2026-08-25", "2026-08-26"];
+    const removed = await env.DB.prepare(
+      `DELETE FROM usage_hourly WHERE substr(bucket_start_utc, 1, 10) NOT IN (?1, ?2, ?3, ?4)`,
+    )
+      .bind(...edges)
+      .run();
+    expect(removed.meta.changes).toBeGreaterThan(0);
+    expect(await periods(app, "tz=Asia/Singapore")).toEqual(summary);
   });
 
   it("answers a summary from the daily rollup alone", async () => {
@@ -326,17 +423,53 @@ function upload(hours: ReturnType<typeof hourOf>[]): UsageUpload {
   return { protocol_version: 6, generation: 1, agent: "codex", hours };
 }
 
-function signedInApp() {
+function signedInApp(readAt: Date = now) {
   const state = new D1AccountState(env.DB);
   const hasher = new SecretHasher(secret);
   return createRelayApp({
     state,
     usageState: new D1UsageState(env.DB),
     accountService: new AccountService(state, hasher, secret),
-    webSessions: new SignedInWebSessionStub(accountId, now),
+    webSessions: new SignedInWebSessionStub(accountId, readAt),
     hasher,
-    now: () => now,
+    now: () => readAt,
   });
+}
+
+/** The four periods of one summary read. */
+async function periods(
+  app: ReturnType<typeof signedInApp>,
+  query: string,
+): Promise<Record<string, Period>> {
+  const response = await app.request(`https://quota.gotry.io/api/v6/account/summary?${query}`);
+  expect(response.status).toBe(200);
+  return ((await response.json()) as { usage: Record<string, Period> }).usage;
+}
+
+function models(period: Period): string[] {
+  return period.agents
+    .flatMap((agent) => agent.providers.flatMap((provider) => provider.models))
+    .map((model) => model.model)
+    .sort();
+}
+
+/** The same totals, summed straight from `usage_hourly` over an exact instant range. */
+async function aggregate(from: string, to: string): Promise<Period["totals"]> {
+  const row = await env.DB.prepare(
+    `SELECT COALESCE(SUM(input_tokens), 0) AS input_tokens,
+            COALESCE(SUM(output_tokens), 0) AS output_tokens,
+            COALESCE(SUM(cache_read_tokens), 0) AS cache_read_input_tokens,
+            COALESCE(SUM(cache_write_5m_tokens + cache_write_1h_tokens
+                         + cache_write_inferred_tokens), 0) AS cache_write_input_tokens,
+            COALESCE(SUM(reasoning_tokens), 0) AS reasoning_tokens,
+            COALESCE(SUM(requests), 0) AS messages
+     FROM usage_hourly
+     WHERE bucket_start_utc >= ?1 AND bucket_start_utc < ?2`,
+  )
+    .bind(from, to)
+    .first<Omit<Period["totals"], "total_tokens">>();
+  if (!row) throw new Error("no rows");
+  return { ...row, total_tokens: row.input_tokens + row.output_tokens };
 }
 
 /** A live device session for one seeded device, and the bearer token that reaches it. */

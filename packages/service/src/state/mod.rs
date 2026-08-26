@@ -1906,18 +1906,23 @@ impl StateStore {
 
     /// Folds the stored hours into the rows one period is computed from.
     ///
-    /// A day is a UTC day, because that is the grain an hour rolls into. `range` names the
-    /// calendar days this device's clock is asking about; `None` is everything retained.
+    /// `range` is the half-open instant span the period covers — a local day begins at local
+    /// midnight, not at a UTC one — and `None` is everything retained. An hour is the finest
+    /// fact stored, so comparing its start against the span rounds an edge that falls inside an
+    /// hour up to the next one, which keeps two periods from claiming the same hour.
+    ///
+    /// The date each row carries is still the UTC date of the hours behind it, because that is
+    /// what prices a row and resolves a model alias, not what the period names.
     pub fn usage_period_rows(
         &self,
         range: Option<(&str, &str)>,
     ) -> Result<(Vec<DatedUsageRow>, bool), StateError> {
         self.with_cache(|conn| {
             let (clause, from, to) = match range {
-                Some((from, to)) => (
-                    "WHERE substr(bucket_start_utc, 1, 10) BETWEEN ?1 AND ?2",
-                    from.to_owned(),
-                    to.to_owned(),
+                Some((start, end)) => (
+                    "WHERE bucket_start_utc >= ?1 AND bucket_start_utc < ?2",
+                    start.to_owned(),
+                    end.to_owned(),
                 ),
                 None => ("WHERE ?1 = ?1 AND ?2 = ?2", String::new(), String::new()),
             };
@@ -4573,9 +4578,13 @@ mod tests {
         fs::remove_dir_all(root).expect("cleanup");
     }
 
-    /// A period folds the stored hours, and the calendar days it names are the caller's.
+    /// Today begins at local midnight, so the hours it folds depend on where this Mac is.
+    ///
+    /// The three events are 23:30 and 00:30 by a Singapore clock on either side of its own
+    /// midnight, and midday after it. A device keeping that calendar leaves the first out of
+    /// Today and takes the other two; a device keeping UTC does the opposite with the first.
     #[test]
-    fn a_period_folds_the_hours_of_the_days_it_names() {
+    fn today_folds_the_hours_its_local_day_covers() {
         let root = std::env::temp_dir().join(format!("quota-usage-period-{}", Uuid::new_v4()));
         fs::create_dir_all(&root).expect("root");
         let store = StateStore::open(&root).expect("state");
@@ -4584,25 +4593,42 @@ mod tests {
                 UsageAgent::Codex,
                 &usage_scan(
                     vec![
-                        usage_event("2026-08-09T23:15:00Z", 1),
-                        usage_event("2026-08-10T00:15:00Z", 2),
-                        usage_event("2026-08-10T12:15:00Z", 4),
+                        usage_event("2026-08-09T15:30:00Z", 1),
+                        usage_event("2026-08-09T16:30:00Z", 2),
+                        usage_event("2026-08-10T04:15:00Z", 4),
                     ],
                     1,
                 ),
                 1,
             )
             .expect("scan");
-        let (rows, partial) = store
-            .usage_period_rows(Some(("2026-08-10", "2026-08-10")))
-            .expect("day");
+        let now = DateTime::parse_from_rfc3339("2026-08-10T06:00:00Z")
+            .expect("instant")
+            .with_timezone(&chrono::Utc);
+        let today = |timezone: &str| {
+            let span = crate::service::backend::usage_period_window(
+                crate::protocol::UsagePeriod::Today,
+                timezone,
+                now,
+            )
+            .expect("window")
+            .1
+            .expect("span");
+            store
+                .usage_period_rows(Some((&span.start, &span.end)))
+                .expect("today")
+                .0
+        };
+
+        let local = today("Asia/Singapore");
+        assert_eq!(local.iter().map(|row| row.input_tokens).sum::<u64>(), 6);
+        assert_eq!(local.iter().map(|row| row.requests).sum::<u64>(), 2);
+        let utc = today("UTC");
+        assert_eq!(utc.iter().map(|row| row.input_tokens).sum::<u64>(), 4);
+        assert_eq!(utc.iter().map(|row| row.requests).sum::<u64>(), 1);
+
+        let (all, partial) = store.usage_period_rows(None).expect("all");
         assert!(!partial);
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].date, "2026-08-10");
-        assert_eq!(rows[0].input_tokens, 6);
-        assert_eq!(rows[0].requests, 2);
-        let (all, _) = store.usage_period_rows(None).expect("all");
-        assert_eq!(all.len(), 2);
         assert_eq!(all.iter().map(|row| row.input_tokens).sum::<u64>(), 7);
         drop(store);
         fs::remove_dir_all(root).expect("cleanup");

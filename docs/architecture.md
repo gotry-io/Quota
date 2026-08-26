@@ -164,8 +164,9 @@ billing channel — agent and model text never choose that provider. QuotaBar re
 on the Usage detail page; Overview stays quota-only.
 
 Local periods fold from the hourly facts with SQL at refresh time, so no read loads the record
-history. A day is a UTC day and this device's own calendar decides which days Today, 7 Days, and 30
-Days name — the rule the managed read follows, so both sides of the panel agree. Signed-in Account
+history. A local day begins at local midnight, so Today, 7 Days, and 30 Days are bounded by the
+instants this device's own calendar puts around them — the rule the managed read follows, so both
+sides of the panel agree. Signed-in Account
 periods arrive in the one Account read and commit only as a complete set; QuotaBar reads them from
 `get_state`, so changing the period performs no collection or network request. Collection and report
 generation continue when Usage upload is disabled: the service neither stages nor drains the outbox,
@@ -277,7 +278,8 @@ data contract at `/api/v6`, browser sign-in and sign-out at `/api/auth`, and the
 authenticates each route with the minimum account, device, or browser scope and performs
 Device/Account deletion, rotation/revocation, and hour replacement with its daily rollup in storage
 transactions. An Account read carries every stored agent and channel with no opt-in query: the only
-thing it asks for is the caller's `tz`, because that decides which UTC days the four periods name.
+thing it asks for is the caller's `tz`, because a local day begins at local midnight and that
+decides where the three trailing periods start and end.
 Every other route takes no query at all, and an unnamed key is a 400. The managed data contract is
 canonical in [ADR 0024](decisions/0024-hour-versioned-usage-and-daily-rollups.md).
 

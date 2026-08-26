@@ -1724,8 +1724,8 @@ impl AccountManager {
     /// SQLite row boundary.
     /// Reads the whole Account once, in the calendar this device keeps.
     ///
-    /// `timezone` decides which UTC days the four periods name; a day itself is a UTC day,
-    /// because that is the grain the rollup behind them keeps.
+    /// `timezone` is this device's IANA zone, and it decides where the three trailing periods
+    /// begin and end: a local day starts at local midnight. `all` is every retained day.
     pub fn refresh_account_state(
         &self,
         timezone: &str,

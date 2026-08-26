@@ -72,8 +72,8 @@ let modelRows = $derived(
 $effect(() => {
   const streamed = data.streamed.summary;
   // The document render has no clock, so it asks for UTC. A browser that keeps another calendar
-  // asks again for its own, because that is what decides which days `today` and the trailing
-  // windows name.
+  // asks again for its own, because a local day begins at local midnight and that is what decides
+  // where `today` and the trailing windows start and end.
   if (streamed && browserTimezone() === "UTC") void streamed.then(applySummaryResult);
   else void loadSummary();
   void loadActivity();

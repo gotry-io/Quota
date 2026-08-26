@@ -38,8 +38,9 @@ destructive ones a session authenticated within ten minutes.
 
 The signed-in dashboard renders what Relay resolved: `subscriptions[]` as one card per
 subscription, whichever of Today, the last 7 days, the last 30 days, or all time is selected, and a
-year of daily totals from `GET /api/v6/account/usage/activity`. It sends the browser's IANA
-timezone as `tz`, which decides which calendar days those trailing windows name. Each Device shows
+year of daily totals from `GET /api/v6/account/usage/activity`, on UTC dates. It sends the browser's
+IANA timezone as `tz`, because a local day begins at local midnight and that is what decides where
+the trailing windows start and end. Each Device shows
 its platform, when it was last seen, and when its newest reading was taken, labelled Active, Idle,
 or Not reporting from the newer of the two. It is read-only, and a quiet Device is asleep or closed
 rather than broken.
