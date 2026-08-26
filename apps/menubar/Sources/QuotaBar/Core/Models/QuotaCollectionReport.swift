@@ -62,7 +62,8 @@ extension QuotaCollectionSource {
   /// provider rather than as nothing.
   var displayName: String {
     switch sourceID {
-    case "anthropic_oauth_usage_api", "chatgpt_usage_api", "grok_billing_api", "grok_billing_rpc":
+    case "anthropic_oauth_usage_api", "anthropic_oauth_signed_out", "chatgpt_usage_api",
+      "grok_billing_api", "grok_billing_rpc":
       "OAuth"
     case "codex_pat_usage_api": "Access token"
     case "browser_session", "cursor_dashboard_api": "Browser session"
