@@ -34,7 +34,7 @@ pub use json::{
 };
 pub use renewal::{
     RENEWAL_FLOOR_SECONDS, RENEWAL_OUTPUT_LIMIT, RenewalAttempt, RenewalAttempts, RenewalOutcome,
-    within_renewal_floor,
+    RenewalPlan, json_rpc_reply, renew_sign_in, within_renewal_floor,
 };
 pub use types::{
     BROWSER_COOKIE_HEADER_LIMIT, BROWSER_SESSION_SOURCE, CollectionContext, ErrorCategory,

@@ -5,29 +5,31 @@
 //! therefore reports an expired sign-in for the rest of the day, which is a true statement
 //! about a file and a useless one about the account.
 //!
-//! So an expired grant — and nothing else — earns one bounded `grok agent stdio`, and
-//! collection re-reads the file the CLI wrote. It runs on the refresh worker before
-//! collection, beside the `--version` probe and for the same reason: no collector may start a
-//! process. Every bound on it exists to keep it off the five-minute timer — it runs only when
-//! the token on disk is already dead, at most once an hour whatever the last attempt produced,
-//! and for at most the deadline a spawn gets.
+//! So an expired grant — and nothing else — earns one bounded `grok agent stdio`, run by the
+//! shared renewal in [`crate::providers::common`], which owns every bound this has: the
+//! private working directory, the minimal environment, the one spawn, the hourly floor, and
+//! the verdict read back off `auth.json`. What is here is the part only Grok has — which
+//! request renews.
 //!
 //! What it does not do: submit the refresh token itself, write `auth.json`, or ask for any
 //! authentication method other than `cached_token`. The CLI's other method, `grok.com`, prints
 //! a device code and waits for a person; a scheduled refresh must never start that.
 
 use serde_json::{Value, json};
-use std::path::Path;
-use std::process::Command;
 
 use crate::providers::common::{
-    BoundedExchange, CollectionContext, ProbeEnvironment, RENEWAL_OUTPUT_LIMIT, RenewalAttempt,
-    RenewalOutcome, binary_fingerprint, resolve_binary, within_renewal_floor,
+    BoundedExchange, CollectionContext, ProbeEnvironment, RenewalAttempt, RenewalPlan,
+    json_rpc_reply, renew_sign_in,
 };
 
 /// The program asked, and the arguments that put it on stdio instead of on a terminal.
 const GROK_BINARY: &str = "grok";
 const AGENT_STDIO: [&str; 2] = ["agent", "stdio"];
+
+/// The variable the CLI finds `auth.json` through, and so does the collector that reads it
+/// back. A renewal that dropped it would renew a different sign-in than the one this refresh
+/// found expired.
+const GROK_HOME: [&str; 1] = ["GROK_HOME"];
 
 /// The one authentication method this build ever asks for. It renews from the refresh token
 /// the CLI already holds, with no browser and no device code.
@@ -39,93 +41,45 @@ const AUTHENTICATE_ID: u64 = 2;
 /// Renews an expired Grok sign-in through the CLI that owns it, at most once an hour.
 ///
 /// Returns the attempt to persist, and `None` when no attempt was made — an unexpired token,
-/// no Grok CLI on this Mac, a cancelled refresh, or an attempt already made this hour. Those
-/// are not failures to record: nothing was started, so nothing needs rate-limiting.
-///
-/// Runs on the refresh worker before collection, so the collector that reads `auth.json`
-/// afterwards neither knows nor waits for any of this.
+/// no Grok CLI on this Mac, a cancelled refresh, or an attempt already made this hour.
 pub fn renew_expired_sign_in(
-    context: &CollectionContext,
+    context: &mut CollectionContext,
     environment: &ProbeEnvironment,
     attempted: Option<&RenewalAttempt>,
     now: i64,
 ) -> Option<RenewalAttempt> {
-    if context.cancelled() || !super::sign_in_expiring(context) {
-        return None;
-    }
-    // A Mac without the CLI has nothing to ask, and reports the sign-in it has.
-    let binary = resolve_binary(GROK_BINARY, environment)?;
-    let fingerprint = binary_fingerprint(&binary)?;
-    if within_renewal_floor(attempted, now) {
-        return None;
-    }
-    renew(&binary, context, environment);
-    // The CLI's exit status is not the answer; the file is. A build that leaves non-zero
-    // after rewriting the token has still renewed it, one that leaves cleanly without
-    // touching it has not, and one that left no readable file at all has certainly not.
-    Some(RenewalAttempt {
-        fingerprint,
-        attempted_at: now,
-        // The Grok CLI leaves `auth.json` alone when it cannot renew, so the shared record's
-        // `SignedOut` — a CLI that emptied its own credential — has nothing to describe here.
-        outcome: if super::sign_in_usable(context) {
-            RenewalOutcome::Renewed
-        } else {
-            RenewalOutcome::Failed
-        },
-    })
+    let plan = RenewalPlan {
+        binary: GROK_BINARY,
+        args: &AGENT_STDIO,
+        inherited: &GROK_HOME,
+        fixed: &[],
+        expiring: &super::sign_in_expiring,
+        // Not the negation: the Grok CLI leaves `auth.json` alone when it cannot renew, so a
+        // file that is gone or unreadable afterwards is a sign-out rather than a refusal.
+        usable: &super::sign_in_usable,
+        drive: &drive,
+    };
+    renew_sign_in(&plan, context, environment, attempted, now)
 }
 
-/// Runs `grok agent stdio` once and asks it to renew from the token already on disk.
+/// Asks the CLI to renew from the token already on disk.
 ///
-/// One of the three functions in `src/providers` allowed to start a program a variable names,
-/// and [`renew_expired_sign_in`] is its only caller. The child gets a bounded stdout, no
-/// stderr, the one deadline the whole exchange shares, and an `env -i`-style environment
-/// holding `HOME`, `PATH`, and `GROK_HOME` where this device sets one.
-fn renew(binary: &Path, context: &CollectionContext, environment: &ProbeEnvironment) {
-    let mut command = Command::new(binary);
-    command.args(AGENT_STDIO).env_clear();
-    command.env("HOME", &environment.home);
-    if let Some(path) = environment.path.as_deref() {
-        command.env("PATH", path);
-    }
-    // The CLI finds `auth.json` through this, and so does the collector that reads it back.
-    // A renewal that dropped it would renew a different sign-in than the one this refresh
-    // found expired.
-    if let Some(home) = context
-        .env("GROK_HOME")
-        .filter(|value| !value.trim().is_empty())
-    {
-        command.env("GROK_HOME", home);
-    }
-    // A CLI reads the directory it is started in, and the refresh worker's own is not one
-    // this build chose for it.
-    if environment.home.is_dir() {
-        command.current_dir(&environment.home);
-    }
-    let Some(mut exchange) = BoundedExchange::start(
-        command,
-        environment.timeout,
-        context.cancel.as_ref(),
-        RENEWAL_OUTPUT_LIMIT,
-    ) else {
-        return;
-    };
+/// Waits for the answer before letting the exchange go. Closing stdin is how a stdio agent is
+/// told to shut down, and a renewal is a network round trip: the deleted version of this rung
+/// stopped at the reply that named the method, which is how it managed to look like it had
+/// asked for something. The exchange holds the pipe until it is dropped — through the wait
+/// after stdin closes — so the CLI is never answering into a closed one.
+fn drive(exchange: &mut BoundedExchange) {
     if !exchange.send(&initialize_request()) {
         return;
     }
-    let Some(reply) = read_reply(&mut exchange, INITIALIZE_ID) else {
+    let Some(reply) = json_rpc_reply(exchange, INITIALIZE_ID) else {
         return;
     };
     if !exchange.send(&authenticate_request(cached_token_method(&reply))) {
         return;
     }
-    // Wait for the answer before letting the exchange go. Closing stdin is how a stdio agent
-    // is told to shut down, and a renewal is a network round trip: the deleted version of
-    // this rung stopped at the reply that named the method, which is how it managed to look
-    // like it had asked for something. The exchange holds the pipe until it is dropped —
-    // through the wait after stdin closes — so the CLI is never answering into a closed one.
-    let _ = read_reply(&mut exchange, AUTHENTICATE_ID);
+    let _ = json_rpc_reply(exchange, AUTHENTICATE_ID);
 }
 
 /// The method to ask for: the `cached_token` entry `initialize` advertised, or the name this
@@ -145,20 +99,6 @@ fn cached_token_method(reply: &Value) -> &str {
         .filter_map(|method| method.get("id").and_then(Value::as_str))
         .find(|id| *id == CACHED_TOKEN_METHOD)
         .unwrap_or(CACHED_TOKEN_METHOD)
-}
-
-/// The reply to one request, or `None` once the exchange ends or the CLI answers with an
-/// error. Notifications and startup text the CLI prints before it speaks JSON-RPC are not
-/// the answer to the request in flight, and are read past.
-fn read_reply(exchange: &mut BoundedExchange, id: u64) -> Option<Value> {
-    loop {
-        let line = exchange.receive()?;
-        if let Ok(value) = serde_json::from_slice::<Value>(&line)
-            && value.get("id").and_then(Value::as_u64) == Some(id)
-        {
-            return value.get("error").is_none().then_some(value);
-        }
-    }
 }
 
 fn initialize_request() -> String {
@@ -193,10 +133,10 @@ fn authenticate_request(method: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::providers::common::RENEWAL_FLOOR_SECONDS;
+    use crate::providers::common::{RENEWAL_FLOOR_SECONDS, RenewalOutcome};
     use std::collections::HashMap;
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::time::Duration;
 
     fn temp_directory(name: &str) -> PathBuf {
@@ -288,7 +228,7 @@ mod tests {
     fn an_expired_sign_in_is_renewed_once_and_billing_gets_the_new_token() {
         #[cfg(unix)]
         {
-            let (directory, context, environment) = fixture("renewed", "2026-08-26T11:00:00Z");
+            let (directory, mut context, environment) = fixture("renewed", "2026-08-26T11:00:00Z");
             let log = directory.join("spawns.log");
             let auth = directory.join("grok-home/auth.json");
             install(
@@ -297,7 +237,7 @@ mod tests {
             );
 
             assert!(super::super::sign_in_expiring(&context));
-            let attempt = renew_expired_sign_in(&context, &environment, None, 10_000)
+            let attempt = renew_expired_sign_in(&mut context, &environment, None, 10_000)
                 .expect("an expired sign-in earns an attempt");
             assert_eq!(attempt.outcome, RenewalOutcome::Renewed);
             assert_eq!(attempt.attempted_at, 10_000);
@@ -316,7 +256,7 @@ mod tests {
             // A successful renewal resets no clock of its own: the next attempt is gated by
             // the token's own expiry, which is now hours away.
             assert!(
-                renew_expired_sign_in(&context, &environment, Some(&attempt), 10_001).is_none()
+                renew_expired_sign_in(&mut context, &environment, Some(&attempt), 10_001).is_none()
             );
             assert_eq!(spawns(&log), 1);
 
@@ -330,14 +270,15 @@ mod tests {
     fn an_unexpired_sign_in_starts_nothing() {
         #[cfg(unix)]
         {
-            let (directory, context, environment) = fixture("unexpired", "2026-08-26T18:00:00Z");
+            let (directory, mut context, environment) =
+                fixture("unexpired", "2026-08-26T18:00:00Z");
             let log = directory.join("spawns.log");
             let auth = directory.join("grok-home/auth.json");
             install(
                 &directory,
                 &renewing_script(&log, &auth, &auth_json("2026-08-27T00:00:00Z", "fresh")),
             );
-            assert!(renew_expired_sign_in(&context, &environment, None, 10_000).is_none());
+            assert!(renew_expired_sign_in(&mut context, &environment, None, 10_000).is_none());
             assert_eq!(spawns(&log), 0);
             let _ = fs::remove_dir_all(&directory);
         }
@@ -349,7 +290,7 @@ mod tests {
     fn a_cli_that_cannot_renew_is_asked_once_an_hour() {
         #[cfg(unix)]
         {
-            let (directory, context, environment) = fixture("floor", "2026-08-26T11:00:00Z");
+            let (directory, mut context, environment) = fixture("floor", "2026-08-26T11:00:00Z");
             let log = directory.join("spawns.log");
             // Answers the handshake and leaves the credential file exactly as it was.
             install(
@@ -357,19 +298,21 @@ mod tests {
                 &renewing_script(&log, &directory.join("ignored.json"), "{}"),
             );
 
-            let first = renew_expired_sign_in(&context, &environment, None, 10_000).expect("first");
+            let first =
+                renew_expired_sign_in(&mut context, &environment, None, 10_000).expect("first");
             assert_eq!(first.outcome, RenewalOutcome::Failed);
             assert_eq!(spawns(&log), 1);
 
             for later in [10_001, 10_000 + RENEWAL_FLOOR_SECONDS - 1] {
                 assert!(
-                    renew_expired_sign_in(&context, &environment, Some(&first), later).is_none()
+                    renew_expired_sign_in(&mut context, &environment, Some(&first), later)
+                        .is_none()
                 );
             }
             assert_eq!(spawns(&log), 1);
 
             let after = renew_expired_sign_in(
-                &context,
+                &mut context,
                 &environment,
                 Some(&first),
                 10_000 + RENEWAL_FLOOR_SECONDS,
@@ -389,7 +332,8 @@ mod tests {
     fn a_cli_that_hangs_or_fails_is_bounded_and_records_a_failure() {
         #[cfg(unix)]
         {
-            let (directory, context, mut environment) = fixture("hangs", "2026-08-26T11:00:00Z");
+            let (directory, mut context, mut environment) =
+                fixture("hangs", "2026-08-26T11:00:00Z");
             // Well under the thirty seconds the child would otherwise take, and well over
             // the time macOS spends checking a freshly written executable the first time —
             // which on a loaded machine running the rest of this suite is over a second.
@@ -401,7 +345,7 @@ mod tests {
             );
             let started = std::time::Instant::now();
             let attempt =
-                renew_expired_sign_in(&context, &environment, None, 10_000).expect("attempt");
+                renew_expired_sign_in(&mut context, &environment, None, 10_000).expect("attempt");
             assert_eq!(attempt.outcome, RenewalOutcome::Failed);
             assert!(started.elapsed() < Duration::from_secs(10));
             assert_eq!(spawns(&log), 1);
@@ -413,7 +357,7 @@ mod tests {
                 &format!("#!/bin/sh\necho ran >> {}\nexit 3\n", log.display()),
             );
             let attempt =
-                renew_expired_sign_in(&context, &environment, None, 20_000).expect("attempt");
+                renew_expired_sign_in(&mut context, &environment, None, 20_000).expect("attempt");
             assert_eq!(attempt.outcome, RenewalOutcome::Failed);
             assert_eq!(spawns(&log), 2);
 
@@ -427,8 +371,8 @@ mod tests {
     fn a_mac_without_the_grok_cli_starts_nothing_and_records_nothing() {
         #[cfg(unix)]
         {
-            let (directory, context, environment) = fixture("absent", "2026-08-26T11:00:00Z");
-            assert!(renew_expired_sign_in(&context, &environment, None, 10_000).is_none());
+            let (directory, mut context, environment) = fixture("absent", "2026-08-26T11:00:00Z");
+            assert!(renew_expired_sign_in(&mut context, &environment, None, 10_000).is_none());
             let _ = fs::remove_dir_all(&directory);
         }
     }

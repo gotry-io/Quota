@@ -7,12 +7,12 @@
 //! sign-in for the rest of the day, which is a true statement about a credential and a useless
 //! one about the account.
 //!
-//! So an expired grant — and nothing else — earns one bounded `claude mcp list`, and collection
-//! re-reads the credential the CLI wrote. It runs on the refresh worker before collection,
-//! beside the `--version` probe and for the same reason: no collector may start a process.
-//! Every bound on it exists to keep it off the five-minute timer — it runs only when the token
-//! on disk is already dead, at most once an hour whatever the last attempt produced, and for at
-//! most the deadline a spawn gets.
+//! So an expired grant — and nothing else — earns one bounded `claude mcp list`, run by the
+//! shared renewal in [`crate::providers::common`], which owns every bound this has: the empty
+//! private working directory, the minimal environment, the one spawn, the hourly floor, the
+//! Keychain memo this refresh has to forget because Claude Code rewrites that entry in place,
+//! and the verdict read back off the credential. What is here is the part only Claude Code has
+//! — which invocation renews.
 //!
 //! Why that command. Claude Code refreshes on its own startup path rather than on request, so
 //! the question is which invocation reaches that path without doing anything else. `auth status
@@ -31,20 +31,25 @@
 //! Keychain item. Only Claude Code may spend that token, and only Claude Code writes what it
 //! gets back.
 
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::Duration;
 
 use crate::providers::common::{
-    CollectionContext, ProbeEnvironment, RENEWAL_OUTPUT_LIMIT, RenewalAttempt, binary_fingerprint,
-    resolve_binary, run_bounded_command, within_renewal_floor,
+    BoundedExchange, CollectionContext, ProbeEnvironment, RenewalAttempt, RenewalPlan,
+    renew_sign_in,
 };
 
 /// The program asked, and the arguments that reach its renewal path without asking it to do
 /// anything else.
 const CLAUDE_BINARY: &str = "claude";
 const MCP_LIST: [&str; 2] = ["mcp", "list"];
+
+/// The variable Claude Code finds the credential through, and so does the collector that reads
+/// it back. A renewal that dropped it would renew a different sign-in than the one this
+/// refresh found expired.
+const CLAUDE_CONFIG_DIR: [&str; 1] = ["CLAUDE_CONFIG_DIR"];
+
+/// A CLI that believes it has a terminal draws one. Nothing reads this output.
+const DUMB_TERMINAL: [(&str, &str); 1] = [("TERM", "dumb")];
 
 /// How long the whole renewal may take.
 ///
@@ -60,98 +65,31 @@ pub const RENEWAL_TIMEOUT: Duration = Duration::from_secs(10);
 ///
 /// Returns the attempt to persist, and `None` when no attempt was made — an unexpired token, a
 /// credential with no refresh token in it, no Claude Code on this Mac, a cancelled refresh, or
-/// an attempt already made this hour. Those are not failures to record: nothing was started, so
-/// nothing needs rate-limiting.
-///
-/// Takes the context by `&mut` to forget this refresh's one Keychain read: Claude Code rewrites
-/// that entry in place, so the memo taken before the CLI ran describes the grant it replaced.
-///
-/// Runs on the refresh worker before collection, so the collector that reads the credential
-/// afterwards neither knows nor waits for any of this.
+/// an attempt already made this hour.
 pub fn renew_expired_sign_in(
     context: &mut CollectionContext,
     environment: &ProbeEnvironment,
     attempted: Option<&RenewalAttempt>,
     now: i64,
 ) -> Option<RenewalAttempt> {
-    if context.cancelled() || !super::sign_in_renewable(context) {
-        return None;
-    }
-    // A Mac without the CLI has nothing to ask, and reports the sign-in it has.
-    let binary = resolve_binary(CLAUDE_BINARY, environment)?;
-    let fingerprint = binary_fingerprint(&binary)?;
-    if within_renewal_floor(attempted, now) {
-        return None;
-    }
-    renew(&binary, context, environment);
-    context.forget_keychain();
-    // The CLI's exit status is not the answer; the credential is. `mcp list` leaves zero for
-    // reasons that have nothing to do with the sign-in — it is reporting on MCP servers — and
-    // a build that fails after renewing has still renewed.
-    Some(RenewalAttempt {
-        fingerprint,
-        attempted_at: now,
-        outcome: super::sign_in_after_renewal(context),
-    })
-}
-
-/// Runs `claude mcp list` once.
-///
-/// One of the three functions in `src/providers` allowed to start a program a variable names,
-/// and [`renew_expired_sign_in`] is its only caller. The child gets no stdin, no stderr, a
-/// bounded stdout that is read only to bound it, one deadline, an empty directory of its own,
-/// and an `env -i`-style environment holding `HOME`, `PATH`, `TERM`, and `CLAUDE_CONFIG_DIR`
-/// where this device sets one.
-fn renew(binary: &Path, context: &CollectionContext, environment: &ProbeEnvironment) {
-    // Without a directory of this build's own there is nowhere safe to start the CLI, and
-    // starting it in the refresh worker's own directory is not the fallback.
-    let Some(directory) = private_directory() else {
-        return;
+    let plan = RenewalPlan {
+        binary: CLAUDE_BINARY,
+        args: &MCP_LIST,
+        inherited: &CLAUDE_CONFIG_DIR,
+        fixed: &DUMB_TERMINAL,
+        expiring: &super::sign_in_expiring,
+        // Not the negation: an emptied entry is neither, which is how a Claude Code that
+        // signed itself out is told apart from one that could not renew.
+        usable: &super::sign_in_usable,
+        drive: &drive,
     };
-    let mut command = Command::new(binary);
-    command.args(MCP_LIST).env_clear();
-    command.env("HOME", &environment.home);
-    if let Some(path) = environment.path.as_deref() {
-        command.env("PATH", path);
-    }
-    // Claude Code finds the credential through this, and so does the collector that reads it
-    // back. A renewal that dropped it would renew a different sign-in than the one this
-    // refresh found expired.
-    if let Some(root) = context
-        .env("CLAUDE_CONFIG_DIR")
-        .filter(|value| !value.trim().is_empty())
-    {
-        command.env("CLAUDE_CONFIG_DIR", root);
-    }
-    // A CLI that believes it has a terminal draws one. Nothing reads this output.
-    command.env("TERM", "dumb");
-    command.current_dir(&directory);
-    let _ = run_bounded_command(
-        command,
-        environment.timeout,
-        context.cancel.as_ref(),
-        RENEWAL_OUTPUT_LIMIT,
-    );
-    let _ = fs::remove_dir_all(&directory);
+    renew_sign_in(&plan, context, environment, attempted, now)
 }
 
-/// An empty directory of this device's own, owner-only, for the CLI to run in.
-///
-/// `claude` reads the directory it is started in: a project's `.mcp.json` and settings are
-/// found that way, and a renewal must not adopt whichever project the refresh worker happens
-/// to be sitting in — nor start the MCP servers some directory approved. Created rather than
-/// reused, and created with [`fs::create_dir`] so that a path already there is an error rather
-/// than something else's directory.
-fn private_directory() -> Option<PathBuf> {
-    let path = std::env::temp_dir().join(format!("quota-claude-renewal-{}", uuid::Uuid::new_v4()));
-    fs::create_dir(&path).ok()?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).ok()?;
-    }
-    Some(path)
-}
+/// Nothing to say. `claude mcp list` renews on its own startup path and then reports on MCP
+/// servers, so the whole conversation is letting it run and reading the credential afterwards;
+/// its stdout is read only to bound it.
+fn drive(_exchange: &mut BoundedExchange) {}
 
 #[cfg(test)]
 mod tests {
@@ -159,6 +97,8 @@ mod tests {
     use super::*;
     use crate::providers::common::{RENEWAL_FLOOR_SECONDS, RenewalOutcome};
     use std::collections::HashMap;
+    use std::fs;
+    use std::path::{Path, PathBuf};
 
     /// The grant the collector would build its usage request from, once both stores have been
     /// read the way discovery reads them.
@@ -278,7 +218,7 @@ mod tests {
                 ),
             );
 
-            assert!(super::super::sign_in_renewable(&context));
+            assert!(super::super::sign_in_expiring(&context));
             let attempt = renew_expired_sign_in(&mut context, &environment, None, 10_000)
                 .expect("an expired sign-in earns an attempt");
             assert_eq!(attempt.outcome, RenewalOutcome::Renewed);
@@ -307,7 +247,7 @@ mod tests {
             // request goes out with.
             let credentials = grant(&context).expect("credentials");
             assert_eq!(credentials.access_token, "fresh");
-            assert!(!super::super::sign_in_renewable(&context));
+            assert!(!super::super::sign_in_expiring(&context));
 
             // A successful renewal resets no clock of its own: the next attempt is gated by
             // the token's own expiry, which is now hours away.
@@ -479,7 +419,7 @@ mod tests {
             assert!(started.elapsed() < Duration::from_secs(10));
             assert_eq!(spawns(&log), 1);
             // The sign-in is what it was, so collection reports it as the sign-in it is.
-            assert!(super::super::sign_in_renewable(&context));
+            assert!(super::super::sign_in_expiring(&context));
 
             install(
                 &directory,
@@ -506,24 +446,6 @@ mod tests {
             );
             assert!(renew_expired_sign_in(&mut context, &environment, None, 10_000).is_none());
             let _ = fs::remove_dir_all(&directory);
-        }
-    }
-
-    /// Each renewal gets a directory of its own and leaves none behind.
-    #[test]
-    fn the_directory_the_cli_runs_in_is_private_and_temporary() {
-        let first = private_directory().expect("directory");
-        let second = private_directory().expect("directory");
-        assert_ne!(first, second);
-        assert!(fs::read_dir(&first).expect("readable").next().is_none());
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mode = fs::metadata(&first).expect("metadata").permissions().mode();
-            assert_eq!(mode & 0o777, 0o700);
-        }
-        for path in [first, second] {
-            fs::remove_dir_all(&path).expect("cleanup");
         }
     }
 }

@@ -10,7 +10,15 @@ use super::common::{
     slug, string,
 };
 
+pub mod refresh;
+
 pub const SOURCE_API: &str = "chatgpt_usage_api";
+
+/// How close to its own expiry an access token has to be before this build asks Codex to
+/// renew it. The same minute Claude Code and Grok get, and well inside the five minutes the
+/// Codex CLI itself treats as expired, so every renewal this build asks for is one the CLI
+/// agrees is due.
+const AUTH_REFRESH_SKEW: i64 = 60;
 pub const SOURCE_PAT: &str = "codex_pat_usage_api";
 pub const USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
 pub const WHOAMI_URL: &str = "https://auth.openai.com/api/accounts/v1/user-auth-credential/whoami";
@@ -20,6 +28,14 @@ pub(super) struct Credentials {
     access_token: String,
     id_token: Option<String>,
     account_id: Option<String>,
+    /// When the access token says it stops being accepted, from its own payload. Codex signs
+    /// these; nothing here verifies that signature, because the only claim read is a
+    /// timestamp and a forged one would buy a spawn rather than a reading.
+    expires_at: Option<i64>,
+    /// When Codex last rewrote this file, as it stamps it. Not a freshness rule — the CLI
+    /// ignores it entirely — but it is the one field that moves when a renewal lands even if
+    /// the new token's payload cannot be read.
+    last_refresh: Option<i64>,
 }
 
 #[derive(Clone, Debug)]
@@ -69,6 +85,16 @@ fn collect_local(context: &CollectionContext) -> Result<QuotaSnapshot, ProviderE
     let credentials = auth
         .oauth
         .ok_or_else(|| ProviderError::new(ErrorCategory::AuthRequired, SOURCE_API))?;
+    // Codex owns token renewal. The refresh worker already gave it its one chance to renew an
+    // expired grant ([`refresh`]); one still out of time here is a sign-in only the reader can
+    // restore, and saying so beats spending a token the endpoint has already stopped taking.
+    // A token whose own expiry could not be read is not that, and is still tried.
+    if credentials
+        .expires_at
+        .is_some_and(|expires_at| expires_at <= context.observed_unix() + AUTH_REFRESH_SKEW)
+    {
+        return Err(ProviderError::new(ErrorCategory::AuthRequired, SOURCE_API));
+    }
     let identity = extract_identity(&credentials);
     collect_api(&credentials, &identity, context, SOURCE_API)?
         .ok_or_else(|| ProviderError::new(ErrorCategory::Unavailable, SOURCE_API))
@@ -115,6 +141,8 @@ fn parse_auth(value: &Value, source: &str) -> Option<AuthMaterial> {
 }
 
 fn parse_oauth_credentials(value: &Value) -> Option<Credentials> {
+    let last_refresh =
+        obj_get_any(value, &["last_refresh", "lastRefresh"]).and_then(|v| parse_date(Some(v)));
     let tokens = value.get("tokens")?.as_object()?;
     let access_token = obj_get_any(
         &Value::Object(tokens.clone()),
@@ -125,11 +153,72 @@ fn parse_oauth_credentials(value: &Value) -> Option<Credentials> {
         .and_then(|v| string(Some(v)));
     let account_id = obj_get_any(&Value::Object(tokens.clone()), &["account_id", "accountId"])
         .and_then(|v| string(Some(v)));
+    let expires_at = decode_jwt_payload(&access_token)
+        .as_ref()
+        .and_then(|payload| obj_get(payload, "exp"))
+        .and_then(|value| parse_date(Some(value)));
     Some(Credentials {
         access_token,
         id_token,
         account_id,
+        expires_at,
+        last_refresh,
     })
+}
+
+/// Whether this device's Codex sign-in is the thing standing between the refresh and a
+/// reading.
+///
+/// The access token's own `exp` decides it. An unreadable one counts as expiring: a token this
+/// build cannot date is one it cannot spend with any confidence, and the CLI is the thing that
+/// can tell. `last_refresh` deliberately does not: measured against codex-cli 0.149.0, the CLI
+/// renews only when that `exp` is within five minutes, and a file thirty days stale with a
+/// live token is left exactly as it was — so asking on its age would spawn for nothing.
+///
+/// A personal access token is not this: nothing renews one, and an `auth.json` holding only
+/// that has no OAuth grant to speak of.
+fn sign_in_expiring(context: &CollectionContext) -> bool {
+    load_auth(context)
+        .and_then(|auth| auth.oauth)
+        .is_some_and(|credentials| {
+            credentials
+                .expires_at
+                .is_none_or(|expires_at| expires_at <= context.observed_unix() + AUTH_REFRESH_SKEW)
+        })
+}
+
+/// Whether `auth.json` now holds a token this refresh can use.
+///
+/// Deliberately not `!sign_in_expiring`: an `auth.json` the CLI removed or emptied of its
+/// tokens is neither, and that third answer is a Codex that signed itself out rather than one
+/// that could not renew.
+fn sign_in_usable(context: &CollectionContext) -> bool {
+    load_auth(context)
+        .and_then(|auth| auth.oauth)
+        .is_some_and(|credentials| {
+            credentials
+                .expires_at
+                .is_some_and(|expires_at| expires_at > context.observed_unix() + AUTH_REFRESH_SKEW)
+        })
+}
+
+/// When Codex last rewrote `auth.json`, as it stamps it there.
+fn last_refresh(context: &CollectionContext) -> Option<i64> {
+    load_auth(context)
+        .and_then(|auth| auth.oauth)
+        .and_then(|credentials| credentials.last_refresh)
+}
+
+/// Whether Codex has rewritten `auth.json` since it carried `stamped`.
+///
+/// The second half of the renewal verdict, for the token whose own expiry cannot be read: the
+/// stamp moving is the CLI saying it wrote this file, and that is the whole claim.
+fn rewritten_since(context: &CollectionContext, stamped: Option<i64>) -> bool {
+    match (last_refresh(context), stamped) {
+        (Some(written), Some(before)) => written > before,
+        (Some(_), None) => true,
+        (None, _) => false,
+    }
 }
 
 fn collect_pat(token: &str, context: &CollectionContext) -> Result<QuotaSnapshot, ProviderError> {
@@ -976,6 +1065,8 @@ mod tests {
             access_token: "opaque-access".to_owned(),
             id_token: Some(format!("header.{payload}.signature")),
             account_id: None,
+            expires_at: None,
+            last_refresh: None,
         };
         let identity = extract_identity(&credentials);
         assert_eq!(identity.plan.as_deref(), Some("pro"));

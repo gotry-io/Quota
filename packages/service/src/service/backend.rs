@@ -27,6 +27,7 @@ use crate::protocol::{
     UsageSource,
 };
 use crate::providers::claude;
+use crate::providers::codex;
 use crate::providers::common::{
     CliTool, ErrorCategory, ProbeCache, ProbeEnvironment, ProviderError, ProviderSession,
     RenewalAttempts, resolve_cli_versions,
@@ -1231,11 +1232,12 @@ impl NativeBackend {
     /// Asks the CLI that owns a provider's sign-in to renew it, when that sign-in is the only
     /// thing standing between the refresh and a reading.
     ///
-    /// Two providers hold a token only their own program can renew. Grok's lives about six
-    /// hours and Claude Code's about eight, so a Mac that has not opened either since
-    /// breakfast would otherwise report an expired sign-in all day. An expired grant — and
-    /// nothing else — earns one bounded run of that CLI, at most once an hour whatever it
-    /// produced; [`grok::refresh`] and [`claude::refresh`] hold the rules and the bounds.
+    /// Three providers hold a token only their own program can renew. Grok's lives about six
+    /// hours, Claude Code's about eight, Codex's about ten days, so a Mac that has not opened
+    /// one of them lately would otherwise report an expired sign-in until someone does. An
+    /// expired grant — and nothing else — earns one bounded run of that CLI, at most once an
+    /// hour whatever it produced. Each provider states which program and which conversation;
+    /// [`crate::providers::common`] owns every bound the three share.
     ///
     /// Runs here, beside the version probe and before collection, so no collector gains the
     /// ability to start a process. Collection reads the credential afterwards and neither
@@ -1250,7 +1252,7 @@ impl NativeBackend {
                 .iter()
                 .any(|(provider, sessions)| *provider == wanted && !sessions.is_empty())
         };
-        let wanted = [ProviderId::Claude, ProviderId::Grok]
+        let wanted = [ProviderId::Claude, ProviderId::Codex, ProviderId::Grok]
             .into_iter()
             .filter(|provider| signed_in(*provider))
             .collect::<Vec<_>>();
@@ -1273,19 +1275,27 @@ impl NativeBackend {
         for provider in wanted {
             let attempted = attempts.get(provider.as_str()).cloned();
             let mut environment = ProbeEnvironment::new(home.clone(), path.clone());
-            if provider == ProviderId::Claude {
-                // A renewal waits on the provider's own network round trip, so it is not
-                // bounded like a `--version` read. `claude mcp list` also health-checks the
-                // MCP servers this device approved, and ten seconds bounds that too.
-                environment.timeout = claude::refresh::RENEWAL_TIMEOUT;
-            }
+            // A renewal waits on the provider's own network round trip, so it is not bounded
+            // like a `--version` read; each CLI states how long its own takes.
             let attempt = match provider {
-                ProviderId::Claude => claude::refresh::renew_expired_sign_in(
-                    context,
-                    &environment,
-                    attempted.as_ref(),
-                    now,
-                ),
+                ProviderId::Claude => {
+                    environment.timeout = claude::refresh::RENEWAL_TIMEOUT;
+                    claude::refresh::renew_expired_sign_in(
+                        context,
+                        &environment,
+                        attempted.as_ref(),
+                        now,
+                    )
+                }
+                ProviderId::Codex => {
+                    environment.timeout = codex::refresh::RENEWAL_TIMEOUT;
+                    codex::refresh::renew_expired_sign_in(
+                        context,
+                        &environment,
+                        attempted.as_ref(),
+                        now,
+                    )
+                }
                 _ => grok::refresh::renew_expired_sign_in(
                     context,
                     &environment,

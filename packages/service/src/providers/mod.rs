@@ -123,21 +123,19 @@ mod tests {
     const SPAWN: &str = concat!("Command", "::new(");
 
     /// The only functions allowed to start a program a variable names, each with the rule
-    /// that keeps it off the five-minute timer. All three run on the refresh worker before
+    /// that keeps it off the five-minute timer. Both run on the refresh worker before
     /// collection; no collector starts anything.
     const NAMED_SPAWNS: &[(&str, &str)] = &[
-        // `claude mcp list`, to have Claude Code renew the sign-in it owns. Runs only when the
-        // credential on disk is already expired or within a minute of it and holds a refresh
-        // token to renew from, and at most once an hour whatever the last attempt produced.
-        ("claude/refresh.rs", "renew"),
         // `<binary> --version`, to fill in the header this build sends as the provider's own
         // CLI. Runs when the installed binary's fingerprint is absent or has changed, at most
         // once per installed binary and never more than once an hour.
         ("common/cli_version.rs", "probe"),
-        // `grok agent stdio`, to have the CLI that owns Grok's token renew it. Runs only when
-        // the token on disk is already expired or within a minute of it, and at most once an
-        // hour whatever the last attempt produced.
-        ("grok/refresh.rs", "renew"),
+        // The one renewal: `claude mcp list`, `codex app-server`, or `grok agent stdio`, to
+        // have the CLI that owns a sign-in renew it. Runs only when the credential on disk is
+        // already out of time, and at most once an hour per provider whatever the last attempt
+        // produced. Which program and which conversation is the provider's to state; this is
+        // the only place any of them is started.
+        ("common/renewal.rs", "renew"),
     ];
 
     fn visit(directory: &Path, found: &mut BTreeSet<String>, spawns: &mut Vec<(String, String)>) {
@@ -195,7 +193,7 @@ mod tests {
 
     /// Collection reads files and speaks HTTP.  The processes a refresh starts are the macOS
     /// Keychain lookup that finds Claude's grant, the one `--version` a newly installed
-    /// provider CLI earns, and the two renewals an already-expired Claude Code or Grok
+    /// provider CLI earns, and the one renewal an already-expired Claude Code, Codex, or Grok
     /// credential earns; everything else was a provider CLI driven on a five-minute timer,
     /// and this counts the call sites so a new one cannot arrive quietly.
     #[test]

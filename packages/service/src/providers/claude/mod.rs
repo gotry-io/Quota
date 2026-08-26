@@ -7,9 +7,9 @@ use std::time::Duration;
 
 use super::common::{
     CliTool, CollectionContext, ErrorCategory, HttpClient, KeychainSecret, LOCAL_FILE_LIMIT,
-    ProviderError, ProviderSession, QuotaAccount, QuotaSnapshot, QuotaWindow, RenewalOutcome,
-    account_identity, clamp_percent, mask_email, number, obj_get, obj_get_any, parse_date,
-    read_bounded_file, run_bounded_command, slug, string,
+    ProviderError, ProviderSession, QuotaAccount, QuotaSnapshot, QuotaWindow, account_identity,
+    clamp_percent, mask_email, number, obj_get, obj_get_any, parse_date, read_bounded_file,
+    run_bounded_command, slug, string,
 };
 
 pub mod refresh;
@@ -195,7 +195,7 @@ fn preferred_entry(keychain: Option<Entry>, file: Option<Entry>, now: i64) -> Op
 ///
 /// The refresh token is that: 2.1.x can leave a Keychain item holding only `mcpOAuth`, and an
 /// entry carrying no refresh token cannot be renewed by anything, so neither earns a spawn.
-fn sign_in_renewable(context: &CollectionContext) -> bool {
+fn sign_in_expiring(context: &CollectionContext) -> bool {
     matches!(
         look_up_credentials(context).entry,
         Some(Entry::Grant(credentials))
@@ -204,20 +204,17 @@ fn sign_in_renewable(context: &CollectionContext) -> bool {
     )
 }
 
-/// What the credential says once the CLI has run, under the preference discovery uses.
+/// Whether the credential holds a grant this refresh can spend, under the preference
+/// discovery uses.
 ///
-/// The CLI rewrites whichever store it owns, so this reads both again and answers about the
-/// one the collector is about to read.  A grant with time left is the renewal; an emptied
-/// entry is a Claude Code that signed itself out; anything else is an attempt that changed
-/// nothing, and only the hour it costs distinguishes those.
-fn sign_in_after_renewal(context: &CollectionContext) -> RenewalOutcome {
-    match look_up_credentials(context).entry {
-        Some(Entry::Grant(credentials)) if !is_expiring(&credentials, context.observed_unix()) => {
-            RenewalOutcome::Renewed
-        }
-        Some(Entry::SignedOut(_)) => RenewalOutcome::SignedOut,
-        _ => RenewalOutcome::Failed,
-    }
+/// Deliberately not `!sign_in_expiring`: an emptied entry, or a store the CLI removed, is
+/// neither expiring nor usable, and that third answer is what tells a Claude Code that signed
+/// itself out — which no number of attempts would restore — from one that could not renew.
+fn sign_in_usable(context: &CollectionContext) -> bool {
+    matches!(
+        look_up_credentials(context).entry,
+        Some(Entry::Grant(credentials)) if !is_expiring(&credentials, context.observed_unix())
+    )
 }
 
 fn read_credentials_file(path: &Path) -> Option<Entry> {
