@@ -208,8 +208,9 @@ pub struct NativeBackend {
 
 /// A latch a test closes in front of provider collection.
 ///
-/// It waits to be opened and remembers whether it timed out instead, so ordering is proven by
-/// what actually released it rather than by how long a test slept.
+/// It reports when collection arrived, waits to be opened, and remembers whether it timed out
+/// rather than blocking forever — so ordering is proven by what actually released it rather than
+/// by how long a test slept.
 #[cfg(test)]
 #[derive(Default)]
 pub(crate) struct CollectionGate {
@@ -220,6 +221,7 @@ pub(crate) struct CollectionGate {
 #[cfg(test)]
 #[derive(Default)]
 struct CollectionGateState {
+    arrived: bool,
     open: bool,
     timed_out: bool,
 }
@@ -228,6 +230,8 @@ struct CollectionGateState {
 impl CollectionGate {
     fn hold(&self) {
         let mut state = self.state.lock().expect("collection gate");
+        state.arrived = true;
+        self.changed.notify_all();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while !state.open {
             let remaining = deadline.saturating_duration_since(std::time::Instant::now());
@@ -235,6 +239,20 @@ impl CollectionGate {
                 state.timed_out = true;
                 return;
             }
+            let (guard, _) = self
+                .changed
+                .wait_timeout(state, remaining)
+                .expect("collection gate wait");
+            state = guard;
+        }
+    }
+
+    pub(crate) fn wait_arrived(&self) {
+        let mut state = self.state.lock().expect("collection gate");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !state.arrived {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            assert!(!remaining.is_zero(), "provider collection never started");
             let (guard, _) = self
                 .changed
                 .wait_timeout(state, remaining)
@@ -2433,17 +2451,14 @@ impl LocalBackend for NativeBackend {
                     .and_then(|component| component.value)
             })
             .flatten();
-        // What the Account read already answered, unless there was no session to read with.
-        let mut account_value: Result<Value, BackendError> = read_account.unwrap_or(Err({
-            BackendError {
-                error: IpcError::new(ErrorCode::AuthenticationRequired, RecoveryAction::Login),
-            }
-        }));
+        // What the Account read already answered, or nothing when there was no session to read
+        // with at the time.
+        let mut account_value: Option<Result<Value, BackendError>> = read_account;
         let mut overview = None;
         match self.state.session_json() {
             _ if cancel.load(Ordering::Acquire) => {
-                if account_value.is_err() {
-                    account_value = Err(BackendError::cancelled());
+                if !matches!(account_value, Some(Ok(_))) {
+                    account_value = Some(Err(BackendError::cancelled()));
                 }
             }
             Ok(Some(session))
@@ -2454,7 +2469,11 @@ impl LocalBackend for NativeBackend {
                 // Account: an upload this refresh could not deliver is not news about who is
                 // signed in.
                 match self.account.sync_control_and_update() {
-                    Ok(_) if cancel.load(Ordering::Acquire) => {}
+                    Ok(_) if cancel.load(Ordering::Acquire) => {
+                        if !matches!(account_value, Some(Ok(_))) {
+                            account_value = Some(Err(BackendError::cancelled()));
+                        }
+                    }
                     Ok(_) => {
                         let current_session =
                             self.state.session_json().ok().flatten().unwrap_or(session);
@@ -2551,13 +2570,13 @@ impl LocalBackend for NativeBackend {
                             account_sync_error.filter(|error| error.error.code.requires_login())
                         {
                             self.clear_active_session();
-                            account_value = Err(error);
+                            account_value = Some(Err(error));
                         }
                     }
                     Err(error) => {
                         if error.error.code.requires_login() {
                             self.clear_active_session();
-                            account_value = Err(error);
+                            account_value = Some(Err(error));
                         }
                     }
                 }
@@ -2568,24 +2587,35 @@ impl LocalBackend for NativeBackend {
                 match self.account.logout(&session) {
                     Ok(()) => {
                         self.clear_pending_session();
-                        account_value = Err(BackendError {
+                        account_value = Some(Err(BackendError {
                             error: IpcError::new(
                                 ErrorCode::AuthenticationRequired,
                                 RecoveryAction::Login,
                             ),
-                        });
+                        }));
                     }
-                    Err(error) => account_value = Err(error),
+                    Err(error) => account_value = Some(Err(error)),
                 }
             }
             Ok(None) => {}
             Ok(Some(_)) => {
-                account_value = Err(BackendError {
+                account_value = Some(Err(BackendError {
                     error: IpcError::new(ErrorCode::InvalidState, RecoveryAction::Reinstall),
-                });
+                }));
             }
-            Err(_) => account_value = Err(BackendError::unavailable()),
+            Err(_) => account_value = Some(Err(BackendError::unavailable())),
         }
+        // A sign-in that landed after this refresh began leaves it holding no Account read at
+        // all. Reading one now is what keeps a device that has just signed in from being
+        // reported as signed out until the next refresh.
+        if account_value.is_none() {
+            account_value = self.read_account(cancel.as_ref(), updates);
+        }
+        let account_value = account_value.unwrap_or_else(|| {
+            Err(BackendError {
+                error: IpcError::new(ErrorCode::AuthenticationRequired, RecoveryAction::Login),
+            })
+        });
         if let Ok(ref quota_payload) = quota_value {
             let account_for_overview = account_value.as_ref().ok().cloned().or(stored_account);
             overview = Some(self.build_overview(quota_payload, account_for_overview.as_ref()));
@@ -3245,6 +3275,89 @@ mod tests {
             sent[0].starts_with("GET /api/v6/account/summary"),
             "{}",
             sent[0]
+        );
+        drop(backend);
+        drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    /// Signing in during a refresh is a race the refresh has to lose gracefully: it began with
+    /// no session to read, and it must not report the device signed out because of that.
+    #[test]
+    fn a_sign_in_that_lands_mid_refresh_is_still_read_before_the_refresh_ends() {
+        let summary = account_summary("octocat");
+        // Pricing, the model catalog and the control call are all answered by a closed
+        // connection — a network failure, not a session ending. The read that follows is the
+        // one under test.
+        let (origin, server) = spawn_relay(vec![
+            String::new(),
+            String::new(),
+            String::new(),
+            relay_json(&summary),
+        ]);
+        let root =
+            std::env::temp_dir().join(format!("quota-account-late-{}", uuid::Uuid::new_v4()));
+        let home = root.join("home");
+        fs::create_dir_all(&home).expect("home");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        let gate = Arc::new(CollectionGate::default());
+        let relay = Arc::new(crate::relay::RelayClient::for_test(&origin).expect("relay"));
+        let mut backend = NativeBackend::new(state.clone(), relay, "QuotaTest", "test");
+        backend.home = home;
+        backend.environment.clear();
+        backend.collection_gate = Some(gate.clone());
+        let updates = GateOpeningUpdates {
+            gate: Arc::new(CollectionGate::default()),
+            account: std::sync::Mutex::new(None),
+        };
+
+        let outcome = std::thread::scope(|scope| {
+            let refreshing =
+                scope.spawn(|| backend.refresh(Arc::new(AtomicBool::new(false)), &updates));
+            // The refresh is provably past its own Account read — it found no session — and is
+            // waiting on collection. The sign-in lands now.
+            gate.wait_arrived();
+            state
+                .write_session_json(&json!({
+                    "schema_version": 1,
+                    "status": "active",
+                    "account_id": "account_1",
+                    "display_label": "octocat",
+                    "device_id": "device_1",
+                    "device_generation": 1,
+                    "session": {
+                        "access_token": "qb_access_token_synthetic",
+                        "access_expires_at": "2099-01-01T00:00:00Z",
+                        "refresh_token": "qbr_refresh_token_synthetic",
+                        "refresh_expires_at": "2099-01-01T00:00:00Z"
+                    }
+                }))
+                .expect("session");
+            gate.open();
+            refreshing.join().expect("refresh")
+        });
+
+        let account = outcome
+            .account
+            .expect("the account this refresh signed in to");
+        assert_eq!(account["auth_status"], "signed_in");
+        assert_eq!(account["account_summary"], summary);
+        assert_eq!(
+            updates
+                .account
+                .lock()
+                .expect("published account")
+                .clone()
+                .expect("the account was published"),
+            account
+        );
+
+        let sent = server.join().expect("relay server");
+        assert_eq!(sent.len(), 4, "{sent:?}");
+        assert!(
+            sent[3].starts_with("GET /api/v6/account/summary"),
+            "{}",
+            sent[3]
         );
         drop(backend);
         drop(state);
