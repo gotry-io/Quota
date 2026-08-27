@@ -902,8 +902,6 @@ impl NativeBackend {
             });
         }
 
-        sources.truncate(MAXIMUM_DIAGNOSTIC_SOURCES);
-
         // Surfaces.
         let quota_status = if configured_quota_source_failed {
             DiagnosticStatus::Degraded
@@ -1070,6 +1068,9 @@ impl NativeBackend {
             .fold(DiagnosticAttention::None, |worst, recovery| {
                 worst_attention(worst, attention_for(recovery))
             });
+        // Folded before the cap, so a report never says everything is fine because the row
+        // that needed acting on fell off the end of a long list.
+        sources.truncate(MAXIMUM_DIAGNOSTIC_SOURCES);
 
         Ok(DiagnosticReport {
             schema_version: DIAGNOSTIC_SCHEMA_VERSION,
@@ -1716,8 +1717,11 @@ impl NativeBackend {
             .map_err(|_| BackendError::unavailable())?;
         match self.relay.pricing_catalog(etag.as_deref()) {
             Ok((next_etag, Some(value))) if pricing::validate_pricing_catalog(&value).valid => {
+                // A new body under the validator that described the old one would answer the
+                // next conditional request with a 304 for a document this device no longer
+                // holds. A response with no ETag is stored with none.
                 self.state
-                    .commit_pricing_catalog(&value, next_etag.as_deref().or(etag.as_deref()))
+                    .commit_pricing_catalog(&value, next_etag.as_deref())
                     .map_err(|_| BackendError::unavailable())?;
                 Ok(value)
             }
@@ -1756,8 +1760,10 @@ impl NativeBackend {
             Ok((next_etag, Some(value)))
                 if crate::model_catalog::validate_model_catalog_value(&value).valid =>
             {
+                // As above: a body this device just received is not described by the validator
+                // for the one it replaced.
                 self.state
-                    .commit_model_catalog(&value, next_etag.as_deref().or(etag.as_deref()))
+                    .commit_model_catalog(&value, next_etag.as_deref())
                     .map_err(|_| BackendError::unavailable())?;
                 Ok(value)
             }
@@ -4390,6 +4396,63 @@ mod tests {
         fs::remove_dir_all(root).expect("cleanup");
     }
 
+    /// A body is only described by the validator that came with it. Keeping the old ETag over
+    /// a new document made the next conditional request ask about a document this device no
+    /// longer held, and a 304 would have confirmed the wrong one.
+    #[test]
+    fn a_body_with_no_validator_is_stored_without_one() {
+        let root = std::env::temp_dir().join(format!("quota-etag-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        let catalog = |revision: &str| {
+            json!({
+                "schema_version": 2,
+                "revision": revision,
+                "models": [{
+                    "canonical_id": "gpt-5.5",
+                    "aliases": [{"reported_model": "gpt-5.5-alias", "provider": "openai"}]
+                }]
+            })
+        };
+        state
+            .commit_model_catalog(&catalog("model-1"), Some("\"model-1\""))
+            .expect("first catalog");
+
+        let body = serde_json::to_string(&catalog("model-2")).expect("body");
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("listener");
+        let address = listener.local_addr().expect("address");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("request");
+            let mut request = [0_u8; 8_192];
+            let _ = std::io::Read::read(&mut stream, &mut request);
+            // A newer document, and no ETag with it.
+            std::io::Write::write_all(
+                &mut stream,
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: \
+                     {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .expect("response");
+        });
+        let relay =
+            Arc::new(RelayClient::for_test(&format!("http://{address}")).expect("test relay"));
+        let backend = NativeBackend::new(state.clone(), relay, "QuotaTest", "test");
+
+        backend.refresh_model_catalog().expect("refresh");
+
+        assert_eq!(
+            state.model_catalog().expect("catalog"),
+            Some(catalog("model-2"))
+        );
+        assert_eq!(state.model_catalog_etag().expect("etag"), None);
+        server.join().expect("server");
+        drop(backend);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
     #[test]
     fn model_catalog_refresh_failure_keeps_last_known_good_for_reports() {
         let root = std::env::temp_dir().join(format!("quota-model-lkg-{}", uuid::Uuid::new_v4()));
@@ -5434,6 +5497,64 @@ mod tests {
                 .map(|surface| surface.data),
             Some(DiagnosticDataState::Partial)
         );
+        drop(backend);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    /// The cap on how many rows a report carries is a cap on what it prints, not on what it
+    /// noticed: folding after the cut let a long list of healthy sources hide the one row that
+    /// said sign in again.
+    #[test]
+    fn a_capped_source_list_still_reports_the_attention_it_dropped() {
+        let root = std::env::temp_dir().join(format!("quota-capped-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        drop(state);
+        // A device that could not read who it is: the one row a refresh cannot retire, and the
+        // last one pushed.
+        fs::write(root.join("identity.sqlite"), b"not a database").expect("garbage");
+        let state = Arc::new(StateStore::open(&root).expect("reopen"));
+
+        let results = (0..MAXIMUM_DIAGNOSTIC_SOURCES + 4)
+            .map(|index| {
+                json!({
+                    "provider": format!("provider_{index}"),
+                    "outcome": "success",
+                    "snapshots": [{"provider": "codex"}],
+                    "sources": [{"source_id": "s", "outcome": "success", "category": "success"}]
+                })
+            })
+            .collect::<Vec<_>>();
+        state
+            .set_component(
+                crate::protocol::ComponentName::Quota,
+                crate::protocol::ComponentStatus::Ready,
+                Some(json!({"results": results})),
+                None,
+                None,
+                false,
+            )
+            .expect("quota");
+        let backend = NativeBackend::new(
+            state.clone(),
+            Arc::new(RelayClient::new().expect("relay")),
+            "QuotaTest",
+            "test",
+        );
+
+        let report = backend
+            .evaluate_diagnostic_report(true)
+            .expect("diagnostics");
+
+        assert_eq!(report.sources.len(), MAXIMUM_DIAGNOSTIC_SOURCES);
+        assert!(
+            !report
+                .sources
+                .iter()
+                .any(|source| source.subject == "local_state"),
+            "the row that needed acting on is past the cap"
+        );
+        assert_eq!(report.summary.attention, DiagnosticAttention::Required);
         drop(backend);
         fs::remove_dir_all(root).expect("cleanup");
     }
