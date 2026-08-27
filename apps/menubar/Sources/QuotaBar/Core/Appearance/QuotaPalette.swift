@@ -32,16 +32,7 @@ enum QuotaPalette {
   static let rowPressedFill = Color(nsColor: adaptiveRowPressedFill)
   /// Editable/selectable control surface, one level above groups.
   static let fieldFill = Color(nsColor: adaptiveFieldFill)
-  /// Focus is an accent tint layered over `fieldFill`, never a hard outline.
-  static let fieldFillFocused = Color(nsColor: adaptiveFieldFocusTint)
   static let progressTrack = Color(nsColor: adaptiveProgressTrack)
-
-  // MARK: Brand
-
-  /// Primary Quota green used on light surfaces and in the full-color mark.
-  static let brandEmerald = Color(nsColor: brandEmeraldNSColor)
-  /// Lighter capacity-boundary green used on dark surfaces and in the full-color mark.
-  static let brandMint = Color(nsColor: brandMintNSColor)
 
   // MARK: Semantic (accent / warning / critical)
 
@@ -151,13 +142,6 @@ enum QuotaPalette {
     dark: NSColor.white.withAlphaComponent(0.12)
   )
 
-  private static let adaptiveFieldFocusTint = NSColor(
-    name: nil,
-    dynamicProvider: { appearance in
-      resolvedAccent(for: appearance).withAlphaComponent(isDark(appearance) ? 0.16 : 0.11)
-    }
-  )
-
   private static let adaptiveProgressTrack = adaptiveColor(
     light: NSColor.black.withAlphaComponent(0.10),
     dark: NSColor.white.withAlphaComponent(0.12)
@@ -165,10 +149,6 @@ enum QuotaPalette {
 
   static func resolvedAccent(for appearance: NSAppearance) -> NSColor {
     isDark(appearance) ? brandMintNSColor : brandEmeraldNSColor
-  }
-
-  static func resolvedCriticalAction(for appearance: NSAppearance) -> NSColor {
-    resolvedColor(adaptiveCriticalAction, for: appearance)
   }
 
   private static func adaptiveColor(light: NSColor, dark: NSColor) -> NSColor {

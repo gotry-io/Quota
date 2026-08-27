@@ -80,7 +80,7 @@ Production inherits the menu extra's system material. Add only adaptive semantic
 
 - Panel: transparent material plus `panelWash`.
 - Group: `settingsGroupFill` with a continuous 10pt silhouette.
-- Control: `fieldFill`, with `fieldFillFocused` and the accent focus ring.
+- Control: `fieldFill` plus the accent focus ring.
 - Transient: regular material plus `floatingMenuFill`, a 0.5pt adaptive edge, and restrained shadow.
 - Hover/press: `rowHoverFill` and `rowPressedFill` nested inside the group.
 

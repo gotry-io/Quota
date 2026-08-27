@@ -3,16 +3,6 @@ import QuotaPresentation
 import QuotaWire
 
 extension QuotaWindow {
-  /// Absolute remaining when `value_unit`/`remaining_value` are present.
-  /// Balance-only rows without a unit (e.g. DeepSeek CNY) still show the number.
-  var absoluteRemainingLabel: String? {
-    RemainingQuotaFormat.absolute(
-      remainingValue: remainingValue,
-      hasLimit: limitValue != nil,
-      unit: valueUnit.flatMap(\.remainingUnit)
-    )
-  }
-
   /// Overview remaining copy. No "left" suffix; the value is remaining by product rule.
   /// Budget windows with an amount show `71% · $3.75`.
   var remainingDisplayLabel: String {

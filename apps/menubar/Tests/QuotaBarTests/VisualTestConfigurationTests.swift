@@ -247,7 +247,6 @@
       return
     }
     #expect(warning.contains("Showing the last report"))
-    #expect(stale.canCopy)
 
     let unavailable = try configuration(fixture: .unavailable, referenceDate: referenceDate)
       .makeSupportModel()

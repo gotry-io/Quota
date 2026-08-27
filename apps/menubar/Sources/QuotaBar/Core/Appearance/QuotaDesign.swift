@@ -12,9 +12,6 @@ enum QuotaDesign {
 
     /// Single horizontal gutter for header, page body, and footer.
     static let panelHorizontalPadding: CGFloat = 16
-    /// Usable width inside the page gutter.
-    static var panelContentWidth: CGFloat { panelWidth - (panelHorizontalPadding * 2) }
-
     static let pageVerticalPadding: CGFloat = 16
     static let emptyStateHorizontalPadding: CGFloat = 24
     static let emptyStateVerticalPadding: CGFloat = 24
@@ -83,8 +80,6 @@ enum QuotaDesign {
 
     static let section: CGFloat = lg
     static let sectionBody: CGFloat = md
-    /// Dense stacks inside a settings/task section (About rows, device metadata).
-    static let sectionRows: CGFloat = sm
     static let meta: CGFloat = xxs
     static let inline: CGFloat = sm
     static let iconLabel: CGFloat = xs
@@ -197,11 +192,6 @@ extension View {
       .foregroundStyle(QuotaPalette.body)
   }
 
-  func quotaMonoMetaStyle() -> some View {
-    quotaFont(.monoMeta)
-      .foregroundStyle(QuotaPalette.mute)
-  }
-
   /// Compact technical value inside a Settings row (for example the app version).
   func quotaMonoListValueStyle() -> some View {
     quotaFont(.monoMeta)
@@ -211,11 +201,6 @@ extension View {
   func quotaEmptyTitleStyle() -> some View {
     quotaFont(.emptyTitle)
       .foregroundStyle(QuotaPalette.ink)
-  }
-
-  func quotaEmptyIconStyle() -> some View {
-    font(QuotaDesign.Typography.emptyIcon)
-      .foregroundStyle(QuotaPalette.body)
   }
 
   func quotaChevronStyle() -> some View {

@@ -176,7 +176,6 @@ final class SupportPageModel {
   }
 
   var showsHeaderActions: Bool { report != nil }
-  var canCopy: Bool { report != nil }
   var canRecheck: Bool { report != nil && !isLoading }
 
   func prepareForEntry() {

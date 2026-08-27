@@ -60,10 +60,6 @@ public actor AccountClient {
     try sessionStore.load() != nil
   }
 
-  public func currentSession() throws -> AccountSession? {
-    try sessionStore.load()
-  }
-
   public func loadCachedSummary() throws -> CachedAccountSummary? {
     try loadBoundCachedSummary()
   }
@@ -152,22 +148,6 @@ public actor AccountClient {
     if let refreshToken {
       try? await relay.revokeSession(refreshToken: refreshToken)
     }
-  }
-
-  public func todayDate() -> String {
-    Self.calendarDate(now(), calendar: calendar)
-  }
-
-  public static func calendarDate(_ date: Date, calendar: Calendar) -> String {
-    var calendar = calendar
-    calendar.locale = Locale(identifier: "en_US_POSIX")
-    let components = calendar.dateComponents([.year, .month, .day], from: date)
-    return String(
-      format: "%04d-%02d-%02d",
-      components.year ?? 0,
-      components.month ?? 0,
-      components.day ?? 0
-    )
   }
 
   /// The summary this read leaves current, and the validator it is current at.

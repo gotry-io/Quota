@@ -9,7 +9,6 @@ enum QuotaTheme {
     }
   )
 
-  static let cardFill = Color(uiColor: .secondarySystemGroupedBackground)
   static let groupedFill = Color(uiColor: .systemGroupedBackground)
   static let hairline = Color(uiColor: .separator)
   static let meterTrack = Color(uiColor: .tertiarySystemFill)

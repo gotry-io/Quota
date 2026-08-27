@@ -26,7 +26,6 @@ struct QuotaWindowRemainingLabelTests {
       valueUnit: .usd
     )
     #expect(window.remainingDisplayLabel == "$60.00")
-    #expect(window.absoluteRemainingLabel == "$60.00")
     #expect(window.displayTitle == "Balance")
   }
 

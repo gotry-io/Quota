@@ -32,13 +32,6 @@ public enum RelayRoute: String, CaseIterable, Sendable {
     case .accountSummary: "/api/v6/account/summary"
     }
   }
-
-  public var usesBearer: Bool {
-    switch self {
-    case .token: false
-    case .revoke, .accountSummary: true
-    }
-  }
 }
 
 /// The outcome of a conditional Account summary read.
@@ -52,7 +45,6 @@ public enum AccountSummaryRead: Sendable {
 
 public struct RelayClient: Sendable {
   public static let origin = URL(string: "https://quota.gotry.io")!
-  public static let requestTimeout = Duration.seconds(20)
   public static let maximumResponseBytes = WireCodec.maximumResponseBytes
 
   private let transport: any HTTPTransport

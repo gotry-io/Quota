@@ -12,7 +12,6 @@ struct SupportPageModelTests {
     await model.runCheck { report }
 
     #expect(model.report == report)
-    #expect(model.canCopy)
     #expect(!model.isLoading)
     let text = report.textReport
     #expect(text.contains("Status: healthy"))
@@ -31,7 +30,6 @@ struct SupportPageModelTests {
 
     #expect(model.report == original)
     #expect(model.errorMessage != nil)
-    #expect(model.canCopy)
   }
 
   @Test func resetDropsAbandonedResult() async {
