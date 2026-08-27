@@ -6,8 +6,10 @@ import Foundation
 /// A provider the managed Account accepts, or one this build has never heard of.
 ///
 /// A reader may be older than the Relay answering it, so an id outside the catalog is kept as the
-/// text it arrived as and shown that way, rather than discarding the reading it came with. See
-/// [ADR 0023](../../../../docs/decisions/0023-strict-writes-tolerant-reads.md).
+/// text it arrived as, rather than discarding the reading it came with. See
+/// [ADR 0023](../../../../docs/decisions/0023-strict-writes-tolerant-reads.md). That text is a wire
+/// id and never a name: `displayName` comes from the catalog, and a provider the catalog does not
+/// name says so.
 public enum ProviderID: RawRepresentable, Codable, CaseIterable, Hashable, Identifiable, Sendable {
   case `codex`
   case `claude`
@@ -62,6 +64,8 @@ public enum ProviderID: RawRepresentable, Codable, CaseIterable, Hashable, Ident
 
   public var id: String { rawValue }
 
+  /// What a person calls this provider. The catalog is the only place a provider is named, so
+  /// one it does not list has no name to give and is not introduced by its id.
   public var displayName: String {
     switch self {
     case .`codex`: "Codex"
@@ -72,7 +76,7 @@ public enum ProviderID: RawRepresentable, Codable, CaseIterable, Hashable, Ident
     case .`kimi`: "Kimi Code"
     case .`litellm`: "LiteLLM"
     case .`cursor`: "Cursor"
-    case .unknown(let rawValue): rawValue
+    case .unknown: "Unknown provider"
     }
   }
 
