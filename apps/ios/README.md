@@ -43,12 +43,14 @@ may run with signing disabled for verification scripts.
 ## Background refresh
 
 The app registers `io.gotry.quota.refresh` as a `BGAppRefreshTask` and asks for it no sooner than
-thirty minutes out, at launch and after every refresh. When the system grants a window, the app
-process runs the same refresh a pull-to-refresh runs — Keychain session, last-good cache, one Relay
-read — republishes the App Group snapshot, reloads widget timelines, asks for the next window, and
-reports the outcome to the scheduler. A refresh that does not reach Relay leaves the published
+thirty minutes out after every refresh that found a session. When the system grants a window, the
+app process runs the same refresh a pull-to-refresh runs — Keychain session, last-good cache, one
+Relay read — republishes the App Group snapshot, reloads widget timelines, asks for the next window,
+and reports the outcome to the scheduler. A refresh that does not reach Relay leaves the published
 snapshot in place and says nothing; Overview states the failed refresh the next time the app is
-opened. The extension is unchanged: it still only reads the snapshot.
+opened. Signing out, an expired session, and a launch with no session withdraw the pending request
+instead: there is nothing to read, so there is nothing to be woken for. The extension is unchanged:
+it still only reads the snapshot.
 
 ## Development
 

@@ -29,7 +29,9 @@ enum BackgroundRefresh {
 
   /// Run one background refresh and report its outcome to the system. A refresh that does not
   /// reach Relay completes the task unsuccessfully and says nothing: the on-screen app already
-  /// states a failed refresh when the user opens it.
+  /// states a failed refresh when the user opens it. A signed-out app reads nothing at all —
+  /// `refresh()` answers from the absent session before it reaches Relay, and withdraws the
+  /// standing ask on its way out.
   @MainActor
   static func run(_ task: BGTask, model: AppModel) {
     let work = Task { @MainActor in
@@ -41,14 +43,17 @@ enum BackgroundRefresh {
   }
 }
 
-/// Asking the system for the next background refresh window. `AppModel` schedules through this
-/// so the refresh both entry points share stays testable without `BGTaskScheduler`.
+/// Asking the system for the next background refresh window, and withdrawing the ask. `AppModel`
+/// schedules through this so the refresh both entry points share stays testable without
+/// `BGTaskScheduler`.
 protocol BackgroundRefreshScheduling: Sendable {
   func scheduleNextRefresh()
+  func cancelPendingRefresh()
 }
 
 struct NoOpBackgroundRefreshScheduler: BackgroundRefreshScheduling {
   func scheduleNextRefresh() {}
+  func cancelPendingRefresh() {}
 }
 
 struct SystemBackgroundRefreshScheduler: BackgroundRefreshScheduling {
@@ -60,5 +65,11 @@ struct SystemBackgroundRefreshScheduler: BackgroundRefreshScheduling {
     // refuse the submission; there is nothing to tell the user, and foreground refresh is
     // unaffected.
     try? BGTaskScheduler.shared.submit(request)
+  }
+
+  /// Withdraws the pending ask. A signed-out app has nothing to read, so a window granted to it
+  /// would wake the process to discover that and go straight back to sleep.
+  func cancelPendingRefresh() {
+    BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: BackgroundRefresh.taskIdentifier)
   }
 }
