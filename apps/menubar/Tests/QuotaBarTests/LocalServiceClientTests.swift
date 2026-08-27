@@ -395,6 +395,106 @@ struct LocalServiceClientTests {
     await client.shutdown()
   }
 
+  /// A cancelled caller does not leave a waiter behind, and the answer the helper was already
+  /// holding for it is expected on arrival: an unknown request id is otherwise a protocol
+  /// violation, and would close a connection that is working.
+  @Test
+  func aCancelledRequestLetsGoOfItsWaiterAndItsLateAnswerIsDropped() async throws {
+    let service = try TemporaryService(
+      python: #"""
+        import json
+        import sys
+        import threading
+
+        lock = threading.Lock()
+
+        def emit(message):
+            with lock:
+                print(json.dumps(message), flush=True)
+
+        def answer_slowly(request_id):
+            threading.Event().wait(0.4)
+            emit({"type": "response", "request_id": request_id, "result": state(1)})
+
+        for line in sys.stdin:
+            request = json.loads(line)
+            if request["operation"] == "ping":
+                emit({
+                    "type": "response",
+                    "request_id": request["request_id"],
+                    "result": {"ok": True},
+                })
+                continue
+            if request["operation"] == "shutdown":
+                emit({"type": "response", "request_id": request["request_id"], "result": {}})
+                break
+            threading.Thread(
+                target=answer_slowly, args=(request["request_id"],), daemon=True
+            ).start()
+        """#
+    )
+    defer { service.remove() }
+    let client = try client(for: service)
+
+    // One completed request first, so the cancellation below lands on a written request rather
+    // than on the launch it would otherwise still be waiting for.
+    _ = try await client.state()
+
+    let abandoned = Task { try await client.state() }
+    try await Task.sleep(for: .milliseconds(100))
+    abandoned.cancel()
+    await #expect(throws: CancellationError.self) {
+      _ = try await abandoned.value
+    }
+
+    // The helper answers it anyway. The connection has to survive that.
+    try await Task.sleep(for: .milliseconds(500))
+    let state = try await client.state()
+    #expect(state.revision == 1)
+    #expect(try service.launchCount() == 1, "the late answer did not cost the helper its life")
+    await client.shutdown()
+  }
+
+  /// The same for a caller waiting on the helper to finish opening: it stops waiting when it is
+  /// cancelled rather than when the helper gets around to announcing itself.
+  @Test
+  func aCancelledCallerStopsWaitingForReady() async throws {
+    let service = try TemporaryService(
+      announcesReady: false,
+      python: #"""
+        import json
+        import sys
+        import time
+
+        time.sleep(0.6)
+        ready()
+
+        for line in sys.stdin:
+            request = json.loads(line)
+            print(json.dumps({
+                "type": "response",
+                "request_id": request["request_id"],
+                "result": state(1),
+            }), flush=True)
+        """#
+    )
+    defer { service.remove() }
+    let client = try client(for: service)
+
+    let abandoned = Task { try await client.state() }
+    try await Task.sleep(for: .milliseconds(100))
+    abandoned.cancel()
+    await #expect(throws: CancellationError.self) {
+      _ = try await abandoned.value
+    }
+
+    // The helper opens as it was always going to, and the next request is served by it.
+    let state = try await client.state()
+    #expect(state.revision == 1)
+    #expect(try service.launchCount() == 1)
+    await client.shutdown()
+  }
+
   @Test
   func reportsAHelperThatNeverAnnouncesItselfAsUnavailableAfterOneRetry() async throws {
     // A helper that records the start it is and then answers nothing: no `ready`, no response,

@@ -114,7 +114,12 @@ actor LocalServiceClient: LocalServiceServing {
   private var receiveBuffer = Data()
   private var connectionGeneration = 0
   private var pending: [String: CheckedContinuation<Data, any Error>] = [:]
-  private var readyWaiters: [CheckedContinuation<Void, any Error>] = []
+  private var readyWaiters: [UUID: CheckedContinuation<Void, any Error>] = [:]
+  /// Requests whose caller went away while the helper still held them. The helper answers every
+  /// request it was handed, so the id outlives the waiter just long enough for that answer to be
+  /// dropped rather than read as a reply to a request nobody made — which is a protocol
+  /// violation, and would close a connection that is working perfectly well.
+  private var cancelledRequests: Set<String> = []
   private var isReady = false
   private var isRetriedStart = false
   private var readyTask: Task<Void, Never>?
@@ -300,12 +305,21 @@ actor LocalServiceClient: LocalServiceServing {
     let requestID = UUID().uuidString.lowercased()
     let data = try frame(requestID: requestID, operation: operation, payload: payload)
     try write(data)
-    let resultData = try await withCheckedThrowingContinuation {
-      (continuation: CheckedContinuation<Data, any Error>) in
-      // This actor cannot deliver the helper's response until the waiter is registered here, so
-      // the write above never leaves a continuation behind when it fails.
-      pending[requestID] = continuation
-      startLivenessMonitor()
+    let resultData = try await withTaskCancellationHandler {
+      try await withCheckedThrowingContinuation {
+        (continuation: CheckedContinuation<Data, any Error>) in
+        // This actor cannot deliver the helper's response until the waiter is registered here, so
+        // the write above never leaves a continuation behind when it fails.
+        guard !Task.isCancelled else {
+          cancelledRequests.insert(requestID)
+          continuation.resume(throwing: CancellationError())
+          return
+        }
+        pending[requestID] = continuation
+        startLivenessMonitor()
+      }
+    } onCancel: {
+      Task { await self.cancelRequest(requestID) }
     }
 
     do {
@@ -313,6 +327,14 @@ actor LocalServiceClient: LocalServiceServing {
     } catch {
       throw LocalServiceClientError.invalidMessage
     }
+  }
+
+  /// Lets go of a request whose caller was cancelled. The request itself cannot be recalled —
+  /// the helper has it — so the waiter is what goes, and the answer is expected and discarded.
+  private func cancelRequest(_ requestID: String) {
+    guard let continuation = pending.removeValue(forKey: requestID) else { return }
+    cancelledRequests.insert(requestID)
+    continuation.resume(throwing: CancellationError())
   }
 
   private func frame<Payload: Encodable>(
@@ -352,10 +374,25 @@ actor LocalServiceClient: LocalServiceServing {
   private func connect() async throws {
     try await startIfNeeded()
     if isReady { return }
-    try await withCheckedThrowingContinuation {
-      (continuation: CheckedContinuation<Void, any Error>) in
-      readyWaiters.append(continuation)
+    let waiterID = UUID()
+    try await withTaskCancellationHandler {
+      try await withCheckedThrowingContinuation {
+        (continuation: CheckedContinuation<Void, any Error>) in
+        guard !Task.isCancelled else {
+          continuation.resume(throwing: CancellationError())
+          return
+        }
+        readyWaiters[waiterID] = continuation
+      }
+    } onCancel: {
+      Task { await self.cancelReadyWaiter(waiterID) }
     }
+  }
+
+  /// A caller that stopped waiting for the helper to open. Nothing was written on its behalf, so
+  /// the waiter is all there is to remove.
+  private func cancelReadyWaiter(_ waiterID: UUID) {
+    readyWaiters.removeValue(forKey: waiterID)?.resume(throwing: CancellationError())
   }
 
   private func startIfNeeded() async throws {
@@ -458,7 +495,7 @@ actor LocalServiceClient: LocalServiceServing {
   }
 
   private func resumeReadyWaiters(throwing error: (any Error)?) {
-    let waiters = readyWaiters
+    let waiters = Array(readyWaiters.values)
     readyWaiters.removeAll()
     for continuation in waiters {
       if let error {
@@ -569,6 +606,9 @@ actor LocalServiceClient: LocalServiceServing {
         missedPings = 0
         return
       }
+      // A request whose caller was cancelled is still answered, because the helper was already
+      // holding it. That answer is expected and has nowhere to go.
+      if cancelledRequests.remove(requestID) != nil { return }
       guard pending[requestID] != nil else {
         throw LocalServiceClientError.invalidMessage
       }
@@ -661,6 +701,8 @@ actor LocalServiceClient: LocalServiceServing {
     livenessTask?.cancel()
     livenessTask = nil
     outstandingPings.removeAll()
+    // Nothing this connection was still expected to answer can arrive over the next one.
+    cancelledRequests.removeAll()
     missedPings = 0
     receiveBuffer.removeAll(keepingCapacity: false)
     try? standardInput?.close()
@@ -669,7 +711,7 @@ actor LocalServiceClient: LocalServiceServing {
       process: process,
       reader: readerTask,
       pending: Array(pending.values),
-      readyWaiters: keepingReadyWaiters ? [] : readyWaiters
+      readyWaiters: keepingReadyWaiters ? [] : Array(readyWaiters.values)
     )
     process = nil
     readerTask = nil
