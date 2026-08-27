@@ -237,7 +237,7 @@ fn read_frame<R: BufRead>(input: &mut R) -> io::Result<Option<Result<Vec<u8>, Fr
 mod tests {
     use super::*;
     use crate::protocol::DiagnosticReport;
-    use crate::service::{BackendError, LocalBackend, LoginOutcome, RefreshOutcome};
+    use crate::service::{BackendError, LocalBackend, LoginOutcome, RefreshOutcome, RefreshSink};
     use crate::state::StateStore;
     use std::io::Cursor;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -277,7 +277,7 @@ mod tests {
     }
 
     impl LocalBackend for BlockingDiagnoseBackend {
-        fn refresh(&self, _: Arc<AtomicBool>) -> RefreshOutcome {
+        fn refresh(&self, _: Arc<AtomicBool>, _: &dyn RefreshSink) -> RefreshOutcome {
             RefreshOutcome {
                 quota: Err(BackendError::unavailable()),
                 usage: Err(BackendError::unavailable()),

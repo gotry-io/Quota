@@ -35,7 +35,7 @@ use crate::providers::common::{
 use crate::providers::grok;
 use crate::providers::{self, CollectionContext};
 use crate::relay::{AccountManager, RelayClient};
-use crate::service::{BackendError, LocalBackend, LoginOutcome, RefreshOutcome};
+use crate::service::{BackendError, LocalBackend, LoginOutcome, RefreshOutcome, RefreshSink};
 use crate::state::{
     DiagnosticAttemptCompletion, DiagnosticAttemptHandle, StateStore, UsageOutboxEntry, now_rfc3339,
 };
@@ -200,6 +200,57 @@ pub struct NativeBackend {
     environment: HashMap<String, String>,
     client_name: String,
     client_version: String,
+    /// Held closed by a test in front of provider collection, so a refresh can be observed
+    /// while collection is provably still running.
+    #[cfg(test)]
+    collection_gate: Option<Arc<CollectionGate>>,
+}
+
+/// A latch a test closes in front of provider collection.
+///
+/// It waits to be opened and remembers whether it timed out instead, so ordering is proven by
+/// what actually released it rather than by how long a test slept.
+#[cfg(test)]
+#[derive(Default)]
+pub(crate) struct CollectionGate {
+    state: std::sync::Mutex<CollectionGateState>,
+    changed: std::sync::Condvar,
+}
+
+#[cfg(test)]
+#[derive(Default)]
+struct CollectionGateState {
+    open: bool,
+    timed_out: bool,
+}
+
+#[cfg(test)]
+impl CollectionGate {
+    fn hold(&self) {
+        let mut state = self.state.lock().expect("collection gate");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !state.open {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                state.timed_out = true;
+                return;
+            }
+            let (guard, _) = self
+                .changed
+                .wait_timeout(state, remaining)
+                .expect("collection gate wait");
+            state = guard;
+        }
+    }
+
+    pub(crate) fn open(&self) {
+        self.state.lock().expect("collection gate").open = true;
+        self.changed.notify_all();
+    }
+
+    pub(crate) fn timed_out(&self) -> bool {
+        self.state.lock().expect("collection gate").timed_out
+    }
 }
 
 impl NativeBackend {
@@ -222,6 +273,8 @@ impl NativeBackend {
             environment: std::env::vars().collect(),
             client_name: client_name.to_owned(),
             client_version: client_version.to_owned(),
+            #[cfg(test)]
+            collection_gate: None,
         }
     }
 
@@ -1035,6 +1088,10 @@ impl NativeBackend {
         provider_ids: &[ProviderId],
         cancel: Arc<AtomicBool>,
     ) -> Result<Value, BackendError> {
+        #[cfg(test)]
+        if let Some(gate) = &self.collection_gate {
+            gate.hold();
+        }
         let mut context = self.collection_context(cancel.clone())?;
         let captured_at = context.observed_at();
         let diagnostic_snapshot = self
@@ -1908,6 +1965,46 @@ impl NativeBackend {
         Ok(())
     }
 
+    /// Reads the whole Account, and publishes it before the rest of the refresh is done.
+    ///
+    /// `None` means there was no active session to read with, and the refresh's own session
+    /// handling decides what the Account is then — a signed-out or signed-out-pending device is
+    /// never given an Account read taken with a session it no longer has.
+    fn read_account(
+        &self,
+        cancel: &AtomicBool,
+        updates: &dyn RefreshSink,
+    ) -> Option<Result<Value, BackendError>> {
+        if cancel.load(Ordering::Acquire) {
+            return None;
+        }
+        let session = self.state.session_json().ok().flatten()?;
+        if session.get("status").and_then(Value::as_str) != Some("active") {
+            return None;
+        }
+        let attempt = self.begin_attempt(DiagnosticAttemptKind::AccountSync, None);
+        let mut value = self.account.refresh_account_state(&self.timezone(), cancel);
+        // Account periods are this account's Usage as Relay folded it, so they are kept only by
+        // a device that contributes to it.
+        if self.state.usage_upload_enabled().unwrap_or(false)
+            && let Ok(summary) = &value
+            && let Err(error) = self.refresh_account_usage_periods(summary)
+            && error.error.code.requires_login()
+        {
+            value = Err(error);
+        }
+        if value
+            .as_ref()
+            .err()
+            .is_some_and(|error| error.error.code.requires_login())
+        {
+            self.clear_active_session();
+        }
+        self.finish_backend_result_attempt(attempt, &value);
+        updates.account(value.clone());
+        Some(value)
+    }
+
     /// Two readings of one subscription: this device's, and the one Relay resolved.
     ///
     /// Relay resolves the account's observations once, on the read, so there is no N-way merge
@@ -2253,19 +2350,25 @@ impl LocalBackend for NativeBackend {
         })
     }
 
-    fn refresh(&self, cancel: Arc<AtomicBool>) -> RefreshOutcome {
+    fn refresh(&self, cancel: Arc<AtomicBool>, updates: &dyn RefreshSink) -> RefreshOutcome {
         let quota_cancel = cancel.clone();
         let usage_cancel = cancel.clone();
-        let (quota, usage) = thread::scope(|scope| {
+        // Reading the Account needs the session and nothing else, so it does not queue behind a
+        // provider that answers in twenty seconds or a scan of every Usage file. It is published
+        // the moment it lands, which is what names the account and fills its totals while the
+        // rest of this refresh is still running.
+        let (quota, usage, read_account) = thread::scope(|scope| {
             let quota_job = scope.spawn(|| self.collect_quota(quota_cancel));
             let usage_job = scope.spawn(|| self.collect_usage(usage_cancel));
+            let account_job = scope.spawn(|| self.read_account(cancel.as_ref(), updates));
             let quota_result = quota_job
                 .join()
                 .unwrap_or_else(|_| Err(BackendError::unavailable()));
             let usage_result = usage_job
                 .join()
                 .unwrap_or_else(|_| Err(BackendError::unavailable()));
-            (quota_result, usage_result)
+            let account_result = account_job.join().unwrap_or(None);
+            (quota_result, usage_result, account_result)
         });
         let cached_catalog = self
             .state
@@ -2330,22 +2433,28 @@ impl LocalBackend for NativeBackend {
                     .and_then(|component| component.value)
             })
             .flatten();
-        let mut account_value: Result<Value, BackendError> = Err(BackendError {
-            error: IpcError::new(ErrorCode::AuthenticationRequired, RecoveryAction::Login),
-        });
+        // What the Account read already answered, unless there was no session to read with.
+        let mut account_value: Result<Value, BackendError> = read_account.unwrap_or(Err({
+            BackendError {
+                error: IpcError::new(ErrorCode::AuthenticationRequired, RecoveryAction::Login),
+            }
+        }));
         let mut overview = None;
         match self.state.session_json() {
             _ if cancel.load(Ordering::Acquire) => {
-                account_value = Err(BackendError::cancelled());
+                if account_value.is_err() {
+                    account_value = Err(BackendError::cancelled());
+                }
             }
             Ok(Some(session))
                 if session.get("status").and_then(Value::as_str) == Some("active") =>
             {
-                let account_attempt = self.begin_attempt(DiagnosticAttemptKind::AccountSync, None);
+                // The Account has answered for itself already. What is left here is the writing
+                // half of a sync, and only a failure that ends the session speaks for the
+                // Account: an upload this refresh could not deliver is not news about who is
+                // signed in.
                 match self.account.sync_control_and_update() {
-                    Ok(_) if cancel.load(Ordering::Acquire) => {
-                        account_value = Err(BackendError::cancelled());
-                    }
+                    Ok(_) if cancel.load(Ordering::Acquire) => {}
                     Ok(_) => {
                         let current_session =
                             self.state.session_json().ok().flatten().unwrap_or(session);
@@ -2438,37 +2547,18 @@ impl LocalBackend for NativeBackend {
                                 }
                             }
                         }
-                        account_value = account_read_after_sync(
-                            account_sync_error,
-                            cancel.load(Ordering::Acquire),
-                            || {
-                                self.account
-                                    .refresh_account_state(&self.timezone(), cancel.as_ref())
-                            },
-                        );
-                        if usage_upload_enabled
-                            && let Ok(value) = &account_value
-                            && let Err(error) = self.refresh_account_usage_periods(value)
-                            && error.error.code.requires_login()
+                        if let Some(error) =
+                            account_sync_error.filter(|error| error.error.code.requires_login())
                         {
+                            self.clear_active_session();
                             account_value = Err(error);
                         }
-                        if account_value
-                            .as_ref()
-                            .err()
-                            .is_some_and(|error| error.error.code.requires_login())
-                        {
-                            self.clear_active_session();
-                        }
-                        self.finish_backend_result_attempt(account_attempt, &account_value);
                     }
                     Err(error) => {
-                        let (outcome, code) = backend_attempt_error(&error.error);
-                        self.finish_attempt(account_attempt, outcome, Some(code));
                         if error.error.code.requires_login() {
                             self.clear_active_session();
+                            account_value = Err(error);
                         }
-                        account_value = Err(error);
                     }
                 }
             }
@@ -2795,29 +2885,6 @@ fn record_account_sync_error(slot: &mut Option<BackendError>, error: BackendErro
     *slot = Some(error);
 }
 
-/// After successful control sync, run the read-only account summary when allowed.
-///
-/// Non-authentication upload/staging/outbox failures stay in the sync diagnostic and must not
-/// block the account summary. Session-authority failures and cancellation skip the account read.
-fn account_read_after_sync<F>(
-    sync_error: Option<BackendError>,
-    cancelled: bool,
-    read: F,
-) -> Result<Value, BackendError>
-where
-    F: FnOnce() -> Result<Value, BackendError>,
-{
-    if cancelled {
-        return Err(BackendError::cancelled());
-    }
-    if let Some(error) = sync_error
-        && error.error.code.requires_login()
-    {
-        return Err(error);
-    }
-    read()
-}
-
 /// One agent's rescanned hours, in the shape Relay accepts.
 fn usage_upload(agent: UsageAgent, generation: u64, hours: &[UsageOutboxEntry]) -> Option<Value> {
     let mut values = Vec::with_capacity(hours.len());
@@ -2992,64 +3059,196 @@ mod tests {
     use super::*;
     use std::fs;
 
-    #[test]
-    fn non_auth_sync_error_still_reads_account_summary() {
-        let mut reads = 0;
-        let result = account_read_after_sync(Some(BackendError::unavailable()), false, || {
-            reads += 1;
-            Ok(json!({"status": "active"}))
+    /// A Relay that answers the given responses in order and then stops listening.
+    ///
+    /// Everything a refresh asks for after those is refused at connect, which is what a test
+    /// wants: only the calls it named are interesting, and the rest fail immediately instead of
+    /// waiting out a timeout.
+    fn spawn_relay(responses: Vec<String>) -> (String, std::thread::JoinHandle<Vec<String>>) {
+        use std::io::{Read as _, Write as _};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("relay listener");
+        let address = listener.local_addr().expect("relay address");
+        let server = std::thread::spawn(move || {
+            let mut recorded = Vec::new();
+            for response in responses {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    break;
+                };
+                stream
+                    .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                    .expect("relay timeout");
+                let mut request = [0_u8; 8_192];
+                let read = stream.read(&mut request).unwrap_or(0);
+                recorded.push(String::from_utf8_lossy(&request[..read]).into_owned());
+                let _ = stream.write_all(response.as_bytes());
+            }
+            recorded
         });
-        assert_eq!(reads, 1);
-        assert_eq!(result.expect("account read"), json!({"status": "active"}));
+        (format!("http://{address}"), server)
     }
 
-    #[test]
-    fn requires_login_sync_error_skips_account_summary() {
-        for code in [
-            ErrorCode::AuthenticationRequired,
-            ErrorCode::DeviceDeleted,
-            ErrorCode::StaleGeneration,
-        ] {
-            let result = account_read_after_sync(
-                Some(BackendError {
-                    error: IpcError::new(code, RecoveryAction::Login),
-                }),
-                false,
-                || panic!("account read must not run for requires-login sync error"),
-            );
-            let error = result.expect_err("expected skip");
-            assert_eq!(error.error.code, code);
-            assert!(error.error.code.requires_login());
+    fn relay_json(value: &Value) -> String {
+        let body = serde_json::to_vec(value).expect("json");
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            String::from_utf8(body).expect("utf8")
+        )
+    }
+
+    fn account_summary(label: &str) -> Value {
+        let totals = json!({
+            "total_tokens": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_write_input_tokens": 0,
+            "reasoning_tokens": 0,
+            "messages": 0
+        });
+        let period = json!({
+            "totals": totals,
+            "cost": {
+                "mode": "calculate",
+                "basis": "none",
+                "status": "complete",
+                "amount_microusd": null,
+                "catalog_revision": null,
+                "calculated_rows": 0,
+                "reported_rows": 0,
+                "unpriced_rows": 0,
+                "assumptions": [],
+                "unpriced": []
+            },
+            "partial": false,
+            "agents": []
+        });
+        json!({
+            "protocol_version": MANAGED_DATA_PROTOCOL,
+            "account": {
+                "account_id": "account_1",
+                "display_label": label,
+                "created_at": "2026-08-09T00:00:00Z"
+            },
+            "devices": [],
+            "subscriptions": [],
+            "usage": {
+                "today": period.clone(),
+                "last_7_days": period.clone(),
+                "last_30_days": period.clone(),
+                "all": period
+            },
+            "pricing_revision": "2026-08-01",
+            "model_catalog_revision": "2026-08-01"
+        })
+    }
+
+    /// Records what a refresh publishes, and lets provider collection go the moment the Account
+    /// arrives — so the ordering is proven by what released collection, not by a clock.
+    struct GateOpeningUpdates {
+        gate: Arc<CollectionGate>,
+        account: std::sync::Mutex<Option<Value>>,
+    }
+
+    impl RefreshSink for GateOpeningUpdates {
+        fn account(&self, result: Result<Value, BackendError>) {
+            *self.account.lock().expect("published account") = result.ok();
+            self.gate.open();
         }
     }
 
+    /// The Account read waits on nothing but the session, so it lands and is published while
+    /// provider collection is still blocked.
     #[test]
-    fn cancellation_skips_account_summary_even_with_non_auth_sync_error() {
-        let result = account_read_after_sync(Some(BackendError::unavailable()), true, || {
-            panic!("account read must not run when cancelled")
-        });
-        assert_eq!(
-            result.expect_err("expected skip").error.code,
-            ErrorCode::Cancelled
-        );
-        let result = account_read_after_sync(None, true, || {
-            panic!("account read must not run when cancelled")
-        });
-        assert_eq!(
-            result.expect_err("expected skip").error.code,
-            ErrorCode::Cancelled
-        );
-    }
+    fn the_account_read_does_not_queue_behind_provider_collection() {
+        let summary = account_summary("octocat");
+        let (origin, server) = spawn_relay(vec![relay_json(&summary)]);
+        let root =
+            std::env::temp_dir().join(format!("quota-account-first-{}", uuid::Uuid::new_v4()));
+        let home = root.join("home");
+        fs::create_dir_all(&home).expect("home");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        state
+            .write_session_json(&json!({
+                "schema_version": 1,
+                "status": "active",
+                "account_id": "account_1",
+                "display_label": "octocat",
+                "device_id": "device_1",
+                "device_generation": 1,
+                "session": {
+                    "access_token": "qb_access_token_synthetic",
+                    "access_expires_at": "2099-01-01T00:00:00Z",
+                    "refresh_token": "qbr_refresh_token_synthetic",
+                    "refresh_expires_at": "2099-01-01T00:00:00Z"
+                }
+            }))
+            .expect("session");
+        // A signed-in device, as the refresh before this one left it.
+        state
+            .set_component(
+                crate::protocol::ComponentName::Account,
+                crate::protocol::ComponentStatus::Ready,
+                Some(json!({
+                    "auth_status": "signed_in",
+                    "account_id": "account_1",
+                    "display_label": "octocat",
+                    "device_id": "device_1",
+                    "device_generation": 1,
+                    "account_summary": null
+                })),
+                Some(now_rfc3339()),
+                None,
+                false,
+            )
+            .expect("account component");
+        let gate = Arc::new(CollectionGate::default());
+        let relay = Arc::new(crate::relay::RelayClient::for_test(&origin).expect("relay"));
+        let mut backend = NativeBackend::new(state.clone(), relay, "QuotaTest", "test");
+        backend.home = home;
+        backend.environment.clear();
+        backend.collection_gate = Some(gate.clone());
+        let updates = GateOpeningUpdates {
+            gate: gate.clone(),
+            account: std::sync::Mutex::new(None),
+        };
 
-    #[test]
-    fn successful_sync_reads_account_summary() {
-        let mut reads = 0;
-        let result = account_read_after_sync(None, false, || {
-            reads += 1;
-            Ok(json!({"plan": "pro"}))
-        });
-        assert_eq!(reads, 1);
-        assert_eq!(result.expect("account read"), json!({"plan": "pro"}));
+        let outcome = backend.refresh(Arc::new(AtomicBool::new(false)), &updates);
+
+        // Collection was still waiting when the Account was published: opening the gate is what
+        // let it run at all.
+        assert!(!gate.timed_out(), "the account read waited for collection");
+        let published = updates
+            .account
+            .lock()
+            .expect("published account")
+            .clone()
+            .expect("the account was published during the refresh");
+        assert_eq!(published["auth_status"], "signed_in");
+        assert_eq!(published["account_summary"], summary);
+        assert_eq!(outcome.account.expect("account outcome"), published);
+        // The Account periods Relay folded are stored with it, not after the whole refresh.
+        assert!(
+            state
+                .snapshot()
+                .expect("state snapshot")
+                .usage_periods
+                .account
+                .today
+                .is_some()
+        );
+
+        let sent = server.join().expect("relay server");
+        assert_eq!(sent.len(), 1, "{sent:?}");
+        assert!(
+            sent[0].starts_with("GET /api/v6/account/summary"),
+            "{}",
+            sent[0]
+        );
+        drop(backend);
+        drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
     }
 
     #[test]

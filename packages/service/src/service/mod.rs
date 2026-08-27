@@ -53,6 +53,24 @@ pub struct RefreshOutcome {
     pub overview: Option<Vec<QuotaOverviewItem>>,
 }
 
+/// Where a refresh hands over a component the moment it has it, rather than at its end.
+///
+/// The Account read needs nothing but the session, so it lands in well under a second while
+/// provider collection can take twenty seconds per provider. Publishing it here is what lets the
+/// panel name the account and show its totals while the rest of the refresh is still running.
+/// Whatever is published this way is also carried in the `RefreshOutcome`, so a caller that only
+/// wants the end of the refresh discards these and loses nothing.
+pub trait RefreshSink: Sync {
+    fn account(&self, result: Result<Value, BackendError>);
+}
+
+/// A sink for a caller that wants only the finished `RefreshOutcome`.
+pub struct DiscardedRefreshUpdates;
+
+impl RefreshSink for DiscardedRefreshUpdates {
+    fn account(&self, _: Result<Value, BackendError>) {}
+}
+
 /// Catalog is generated from the language-neutral provider JSON.  Keeping this policy at the
 /// service boundary prevents arbitrary providers, ambient credentials, and private URLs from
 /// being created through IPC.
@@ -110,9 +128,10 @@ fn bounded_browser_name(value: &str) -> Result<String, IpcError> {
 /// Adapter boundary for the provider, usage, pricing, and Relay implementations.  It lives here
 /// so those modules can be developed independently without making the IPC layer know their types.
 pub trait LocalBackend: Send + Sync {
-    /// One refresh transaction.  Implementations may collect quota/Usage in parallel, but must
-    /// order pricing/control, upload/outbox, account summary, and overview merging explicitly.
-    fn refresh(&self, cancel: Arc<AtomicBool>) -> RefreshOutcome;
+    /// One refresh transaction.  Implementations may collect quota/Usage and read the Account in
+    /// parallel, but must order pricing/control, upload/outbox, and overview merging explicitly.
+    /// Anything handed to `updates` before this returns is still named in the outcome.
+    fn refresh(&self, cancel: Arc<AtomicBool>, updates: &dyn RefreshSink) -> RefreshOutcome;
     fn diagnose(&self) -> Result<DiagnosticReport, BackendError>;
     fn complete_diagnostics(&self) -> Result<DiagnosticReport, BackendError> {
         self.diagnose()
@@ -135,7 +154,7 @@ struct UnavailableBackend;
 
 #[cfg(test)]
 impl LocalBackend for UnavailableBackend {
-    fn refresh(&self, _: Arc<AtomicBool>) -> RefreshOutcome {
+    fn refresh(&self, _: Arc<AtomicBool>, _: &dyn RefreshSink) -> RefreshOutcome {
         let unavailable = || Err(BackendError::unavailable());
         RefreshOutcome {
             quota: unavailable(),
@@ -905,6 +924,10 @@ impl LocalService {
     }
 
     fn run_refresh(&self, cancel: Arc<AtomicBool>, attempt: Option<DiagnosticAttemptHandle>) {
+        let updates = RefreshUpdates {
+            service: self.clone(),
+            account: Mutex::new(None),
+        };
         let outcome = if cancel.load(Ordering::Acquire) || self.is_shutdown() {
             let cancelled = || Err(BackendError::cancelled());
             RefreshOutcome {
@@ -915,7 +938,7 @@ impl LocalService {
                 overview: None,
             }
         } else {
-            self.inner.backend.refresh(cancel.clone())
+            self.inner.backend.refresh(cancel.clone(), &updates)
         };
         let session_required = self
             .inner
@@ -927,17 +950,13 @@ impl LocalService {
         let completion = refresh_attempt_completion(&outcome, session_required, cancel.as_ref());
         self.apply_component_result(ComponentName::Quota, outcome.quota);
         self.apply_component_result(ComponentName::Usage, outcome.usage);
-        let account_result = match self.inner.state.session_json().ok().flatten() {
-            Some(session)
-                if session.get("status").and_then(Value::as_str) == Some("logout_pending") =>
-            {
-                Err(BackendError {
-                    error: IpcError::new(ErrorCode::AuthenticationRequired, RecoveryAction::Retry),
-                })
-            }
-            _ => outcome.account,
-        };
-        self.apply_component_result(ComponentName::Account, account_result);
+        // The Account is usually already applied, from the read that finished long before this
+        // refresh did. Writing the identical value again would only restate it, so the end of a
+        // refresh applies the Account exactly when it differs from what was published.
+        let account_result = self.account_result_for_session(outcome.account);
+        if !updates.already_applied_account(&account_result) {
+            self.apply_component_result(ComponentName::Account, account_result);
+        }
         self.apply_component_result(ComponentName::Pricing, outcome.pricing);
         if let Some(overview) = outcome.overview {
             let _ = self.inner.state.set_overview(&overview);
@@ -945,6 +964,23 @@ impl LocalService {
         self.inner
             .state
             .finish_diagnostic_attempt_with_interrupted_children(attempt, &completion);
+    }
+
+    /// A session being signed out never has its Account overwritten by a read taken before it.
+    fn account_result_for_session(
+        &self,
+        result: Result<Value, BackendError>,
+    ) -> Result<Value, BackendError> {
+        match self.inner.state.session_json().ok().flatten() {
+            Some(session)
+                if session.get("status").and_then(Value::as_str) == Some("logout_pending") =>
+            {
+                Err(BackendError {
+                    error: IpcError::new(ErrorCode::AuthenticationRequired, RecoveryAction::Retry),
+                })
+            }
+            _ => result,
+        }
     }
 
     fn apply_component_result(
@@ -1341,6 +1377,50 @@ impl LocalService {
     }
 }
 
+/// The running refresh's half of [`RefreshSink`]: it applies and announces what it is handed,
+/// and remembers it so the end of the refresh does not restate the same value.
+struct RefreshUpdates {
+    service: LocalService,
+    account: Mutex<Option<Result<Value, BackendError>>>,
+}
+
+impl RefreshUpdates {
+    fn already_applied_account(&self, result: &Result<Value, BackendError>) -> bool {
+        self.account
+            .lock()
+            .ok()
+            .and_then(|applied| {
+                applied
+                    .as_ref()
+                    .map(|previous| same_component_result(previous, result))
+            })
+            .unwrap_or(false)
+    }
+}
+
+impl RefreshSink for RefreshUpdates {
+    fn account(&self, result: Result<Value, BackendError>) {
+        let result = self.service.account_result_for_session(result);
+        if let Ok(mut applied) = self.account.lock() {
+            *applied = Some(result.clone());
+        }
+        self.service
+            .apply_component_result(ComponentName::Account, result);
+        self.service.emit(vec![ComponentName::Account]);
+    }
+}
+
+fn same_component_result(
+    left: &Result<Value, BackendError>,
+    right: &Result<Value, BackendError>,
+) -> bool {
+    match (left, right) {
+        (Ok(left), Ok(right)) => left == right,
+        (Err(left), Err(right)) => left.error == right.error,
+        _ => false,
+    }
+}
+
 fn refresh_attempt_completion(
     outcome: &RefreshOutcome,
     account_required: bool,
@@ -1594,7 +1674,7 @@ mod tests {
     }
 
     impl LocalBackend for BrowserSessionBackend {
-        fn refresh(&self, _: Arc<AtomicBool>) -> RefreshOutcome {
+        fn refresh(&self, _: Arc<AtomicBool>, _: &dyn RefreshSink) -> RefreshOutcome {
             let unavailable = || Err(BackendError::unavailable());
             RefreshOutcome {
                 quota: unavailable(),
@@ -1644,7 +1724,7 @@ mod tests {
     }
 
     impl LocalBackend for ChildLeakBackend {
-        fn refresh(&self, _: Arc<AtomicBool>) -> RefreshOutcome {
+        fn refresh(&self, _: Arc<AtomicBool>, _: &dyn RefreshSink) -> RefreshOutcome {
             let (parent, _) = self
                 .state
                 .running_refresh_attempt()
@@ -2211,6 +2291,353 @@ mod tests {
         fs::remove_dir_all(root).expect("cleanup");
     }
 
+    /// A gate a test closes in front of a backend, so it can read the state a person would see
+    /// while that backend is provably still working.
+    struct Latch {
+        state: Mutex<(bool, bool)>,
+        changed: std::sync::Condvar,
+    }
+
+    impl Latch {
+        fn new() -> Self {
+            Self {
+                state: Mutex::new((false, false)),
+                changed: std::sync::Condvar::new(),
+            }
+        }
+
+        /// Reports arrival and waits to be released; answers whether it was, rather than timing
+        /// out silently.
+        fn hold(&self) -> bool {
+            let mut state = self.state.lock().expect("latch");
+            state.0 = true;
+            self.changed.notify_all();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !state.1 {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    return false;
+                }
+                let (guard, _) = self
+                    .changed
+                    .wait_timeout(state, remaining)
+                    .expect("latch wait");
+                state = guard;
+            }
+            true
+        }
+
+        fn wait_arrived(&self) {
+            let mut state = self.state.lock().expect("latch");
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !state.0 {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                assert!(!remaining.is_zero(), "the latch was never reached");
+                let (guard, _) = self
+                    .changed
+                    .wait_timeout(state, remaining)
+                    .expect("latch wait");
+                state = guard;
+            }
+        }
+
+        fn release(&self) {
+            self.state.lock().expect("latch").1 = true;
+            self.changed.notify_all();
+        }
+    }
+
+    fn named_session() -> Value {
+        serde_json::json!({
+            "schema_version": 1,
+            "status": "active",
+            "account_id": "account_1",
+            "display_label": "octocat",
+            "device_id": "device_1",
+            "device_generation": 1,
+            "session": {
+                "access_token": "qb_access_token_synthetic",
+                "access_expires_at": "2099-01-01T00:00:00Z",
+                "refresh_token": "qbr_refresh_token_synthetic",
+                "refresh_expires_at": "2099-01-01T00:00:00Z"
+            }
+        })
+    }
+
+    fn named_account(summary: Option<Value>) -> AccountComponentValue {
+        AccountComponentValue {
+            auth_status: AuthStatus::SignedIn,
+            account_id: Some("account_1".into()),
+            display_label: Some("octocat".into()),
+            device_id: Some("device_1".into()),
+            device_generation: Some(1),
+            account_summary: summary,
+        }
+    }
+
+    /// Signs in with an Account that has a name, and holds the refresh that follows.
+    struct NamedLoginBackend {
+        refreshing: Arc<Latch>,
+    }
+
+    impl LocalBackend for NamedLoginBackend {
+        fn refresh(&self, _: Arc<AtomicBool>, _: &dyn RefreshSink) -> RefreshOutcome {
+            self.refreshing.hold();
+            let unavailable = || Err(BackendError::unavailable());
+            RefreshOutcome {
+                quota: unavailable(),
+                usage: unavailable(),
+                account: unavailable(),
+                pricing: unavailable(),
+                overview: None,
+            }
+        }
+
+        fn diagnose(&self) -> Result<DiagnosticReport, BackendError> {
+            Err(BackendError::unavailable())
+        }
+
+        fn login(&self, _: &str, _: Arc<AtomicBool>) -> Result<LoginOutcome, BackendError> {
+            Ok(LoginOutcome {
+                session: named_session(),
+                account: named_account(None),
+            })
+        }
+
+        fn logout(&self, _: &Value) -> Result<(), BackendError> {
+            Err(BackendError::unavailable())
+        }
+
+        fn validate_provider_browser_session(
+            &self,
+            _: crate::catalog::ProviderId,
+            _: &str,
+        ) -> Result<crate::providers::ValidatedBrowserSession, BackendError> {
+            Err(BackendError::unavailable())
+        }
+    }
+
+    /// Hands the Account over the moment it has one, then keeps working.
+    struct EarlyAccountBackend {
+        collecting: Arc<Latch>,
+    }
+
+    impl EarlyAccountBackend {
+        fn account(&self) -> Value {
+            serde_json::to_value(named_account(Some(serde_json::json!({"devices": []}))))
+                .expect("account value")
+        }
+    }
+
+    impl LocalBackend for EarlyAccountBackend {
+        fn refresh(&self, _: Arc<AtomicBool>, updates: &dyn RefreshSink) -> RefreshOutcome {
+            updates.account(Ok(self.account()));
+            self.collecting.hold();
+            RefreshOutcome {
+                quota: Ok(serde_json::json!({"results": []})),
+                usage: Err(BackendError::unavailable()),
+                account: Ok(self.account()),
+                pricing: Err(BackendError::unavailable()),
+                overview: None,
+            }
+        }
+
+        fn diagnose(&self) -> Result<DiagnosticReport, BackendError> {
+            Err(BackendError::unavailable())
+        }
+
+        fn login(&self, _: &str, _: Arc<AtomicBool>) -> Result<LoginOutcome, BackendError> {
+            Err(BackendError::unavailable())
+        }
+
+        fn logout(&self, _: &Value) -> Result<(), BackendError> {
+            Err(BackendError::unavailable())
+        }
+
+        fn validate_provider_browser_session(
+            &self,
+            _: crate::catalog::ProviderId,
+            _: &str,
+        ) -> Result<crate::providers::ValidatedBrowserSession, BackendError> {
+            Err(BackendError::unavailable())
+        }
+    }
+
+    fn account_component(service: &LocalService) -> Value {
+        let request: IpcRequest = serde_json::from_value(serde_json::json!({
+            "type": "request",
+            "request_id": "state",
+            "operation": "get_state",
+            "payload": {}
+        }))
+        .expect("request");
+        let response = service.handle(request);
+        assert!(response.error.is_none());
+        response
+            .result
+            .and_then(|state| state.get("account").cloned())
+            .expect("account component")
+    }
+
+    fn wait_for_account_event(sink: &RecordingSink, after: usize) -> usize {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let seen = sink.0.lock().expect("events").len();
+            if sink
+                .0
+                .lock()
+                .expect("events")
+                .iter()
+                .skip(after)
+                .any(|event| event.changed_components == [ComponentName::Account])
+            {
+                return seen;
+            }
+            assert!(Instant::now() < deadline, "no account event was emitted");
+            thread::yield_now();
+        }
+    }
+
+    /// The panel names the account as soon as the sign-in answers, which is long before the
+    /// refresh it triggers can read one.
+    #[test]
+    fn signing_in_names_the_account_before_the_refresh_it_triggers() {
+        let root = std::env::temp_dir().join(format!("quota-login-name-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        let sink = Arc::new(RecordingSink::default());
+        let refreshing = Arc::new(Latch::new());
+        let service = LocalService::new(
+            state.clone(),
+            sink.clone(),
+            Arc::new(NamedLoginBackend {
+                refreshing: refreshing.clone(),
+            }),
+        );
+
+        let request: IpcRequest = serde_json::from_value(serde_json::json!({
+            "type": "request",
+            "request_id": "login",
+            "operation": "login",
+            "payload": {}
+        }))
+        .expect("request");
+        assert!(service.handle(request).error.is_none());
+        wait_for_account_event(&sink, 0);
+
+        // The next read a person's window makes already carries the name, with no Account
+        // summary yet: the sign-in named the account, it did not invent a read of it.
+        let account = account_component(&service);
+        assert_eq!(account["status"], "ready");
+        assert_eq!(account["value"]["auth_status"], "signed_in");
+        assert_eq!(account["value"]["display_label"], "octocat");
+        assert!(account["value"]["account_summary"].is_null());
+
+        // The account was announced on its own, before the refresh announced anything.
+        let events = sink.0.lock().expect("events").clone();
+        let account_first = events
+            .iter()
+            .position(|event| event.changed_components == [ComponentName::Account])
+            .expect("account event");
+        let refresh_first = events
+            .iter()
+            .position(|event| event.changed_components.len() == 4)
+            .expect("refresh event");
+        assert!(account_first < refresh_first, "{events:?}");
+
+        refreshing.release();
+        service.shutdown();
+        wait_refresh_idle(&service);
+        drop(service);
+        drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    /// A refresh applies the Account when it has it, not when it is finished, and the end of the
+    /// refresh restates nothing.
+    #[test]
+    fn the_account_is_applied_while_the_rest_of_the_refresh_is_still_running() {
+        let root = std::env::temp_dir().join(format!("quota-early-account-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        state.write_session_json(&named_session()).expect("session");
+        let sink = Arc::new(RecordingSink::default());
+        let collecting = Arc::new(Latch::new());
+        let backend = Arc::new(EarlyAccountBackend {
+            collecting: collecting.clone(),
+        });
+        let service = LocalService::new(state.clone(), sink.clone(), backend.clone());
+
+        assert!(
+            service
+                .request_refresh_with_trigger(DiagnosticAttemptTrigger::Manual)
+                .accepted
+        );
+        // The refresh is provably still inside the backend here, and the Account is already
+        // applied and announced.
+        collecting.wait_arrived();
+        wait_for_account_event(&sink, 1);
+        let mid_refresh = account_component(&service);
+        assert_eq!(mid_refresh["status"], "ready");
+        assert_eq!(mid_refresh["value"], backend.account());
+        assert!(mid_refresh["last_error"].is_null());
+
+        collecting.release();
+        wait_refresh_idle(&service);
+
+        // Ending the refresh neither restated the Account nor took it back.
+        let settled = account_component(&service);
+        assert_eq!(settled["value"], backend.account());
+        assert_eq!(settled["status"], "ready");
+        assert_eq!(settled["updated_at"], mid_refresh["updated_at"]);
+        assert!(settled["last_error"].is_null());
+        assert_eq!(settled["refreshing"], false);
+
+        service.shutdown();
+        drop(service);
+        drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    /// A sign-out that started while a read was in flight is not undone by that read.
+    #[test]
+    fn an_account_read_never_overwrites_a_session_that_is_signing_out() {
+        let root = std::env::temp_dir().join(format!("quota-account-guard-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        state
+            .write_session_json(&serde_json::json!({
+                "schema_version": 1,
+                "status": "logout_pending",
+                "account_id": "account_1",
+                "device_id": "device_1",
+                "refresh_token": "qbr_refresh_token_synthetic"
+            }))
+            .expect("session");
+        let service = LocalService::new(
+            state.clone(),
+            Arc::new(RecordingSink::default()),
+            Arc::new(UnavailableBackend),
+        );
+
+        let guarded = service.account_result_for_session(Ok(serde_json::json!({
+            "auth_status": "signed_in",
+            "display_label": "octocat"
+        })));
+
+        assert_eq!(
+            guarded
+                .expect_err("a signing-out session refuses the read")
+                .error,
+            IpcError::new(ErrorCode::AuthenticationRequired, RecoveryAction::Retry)
+        );
+
+        service.shutdown();
+        drop(service);
+        drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
     #[test]
     fn failed_background_login_emits_account_state() {
         let root = std::env::temp_dir().join(format!("quota-login-event-{}", Uuid::new_v4()));
@@ -2408,7 +2835,7 @@ mod tests {
     }
 
     impl LocalBackend for GatedBackend {
-        fn refresh(&self, _: Arc<AtomicBool>) -> RefreshOutcome {
+        fn refresh(&self, _: Arc<AtomicBool>, _: &dyn RefreshSink) -> RefreshOutcome {
             *self.started.0.lock().expect("started") = true;
             self.started.1.notify_all();
             let (lock, cond) = &*self.gate;
