@@ -167,6 +167,26 @@ describe("browser sign-in through GitHub", () => {
     expect(await relay.document.getViewer(new Headers({ Cookie: sessionCookie }))).toBeNull();
   });
 
+  it("accepts the issuer GitHub now names in its redirect, and only that one", async () => {
+    // RFC 9207: GitHub appends `iss=https://github.com` to the authorization-code redirect.
+    // A callback naming any other issuer is not GitHub's.
+    for (const [issuer, status] of [
+      ["https://github.com", 302],
+      ["https://github.example", 400],
+    ] as const) {
+      const relay = harness(fakeGitHub());
+      const started = await relay.app.request(`${origin}/api/auth/github/start`);
+      const authorize = new URL(started.headers.get("location") ?? "");
+      const state = authorize.searchParams.get("state") ?? "";
+      const handoff = setCookies(started).get("__Host-quota_oauth");
+      const callback = await relay.app.request(
+        `${origin}/api/auth/github/callback?code=first-code&iss=${encodeURIComponent(issuer)}&state=${encodeURIComponent(state)}`,
+        { headers: { Cookie: `${handoff?.name}=${handoff?.value}` } },
+      );
+      expect(callback.status, issuer).toBe(status);
+    }
+  });
+
   it("refuses a callback whose state or handoff cookie does not match", async () => {
     const github = fakeGitHub();
     const relay = harness(github);

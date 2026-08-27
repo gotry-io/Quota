@@ -72,6 +72,9 @@ import { bearerToken, canonicalRequestDigest, type SecretHasher } from "./securi
 import { planLocalPeriods } from "./local-periods.ts";
 import { buildAccountUsage, buildActivityDays, UsageSummaryLimitError } from "./usage-summary.ts";
 
+/** The issuer GitHub states in its authorization-code redirect (RFC 9207). */
+const GITHUB_ISSUER = "https://github.com";
+
 const maximumCredentialBodyBytes = 64 * 1024;
 const maximumSnapshotBodyBytes = 256 * 1024;
 const maximumAccountDevices = 256;
@@ -227,7 +230,11 @@ export function createRelayApp(options: RelayAppOptions): Hono {
   });
 
   app.get("/api/auth/github/callback", async (context) => {
-    if (!hasOnlyQueryKeys(context, ["code", "state"])) return invalidRequest(context);
+    // GitHub names itself in the redirect (`iss`, RFC 9207). A callback that names any other
+    // issuer is not GitHub's; one that names none is an older GitHub and still is.
+    if (!hasOnlyQueryKeys(context, ["code", "state", "iss"])) return invalidRequest(context);
+    const issuer = context.req.query("iss");
+    if (issuer !== undefined && issuer !== GITHUB_ISSUER) return invalidRequest(context);
     const limited = await enforceRateLimit(
       context,
       options.state,
