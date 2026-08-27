@@ -235,14 +235,16 @@ func repeatedCancelTapsSendOneCancelLogin() async throws {
   model.cancelLogin()
   model.cancelLogin()
 
-  try await Task.sleep(for: .milliseconds(200))
-  var cancels = await record.count
-  #expect(cancels == 1, "three presses of one Cancel are one cancel_login")
+  // Three presses coalesce into one in-flight cancel_login. Wait for that one to land rather
+  // than for a fixed window a loaded runner can miss, then confirm no second slipped through.
+  try await record.waitForCount(1)
+  try await Task.sleep(for: .milliseconds(100))
+  #expect(await record.count == 1, "three presses of one Cancel are one cancel_login")
 
+  // The first request has finished and cleared the in-flight task, so this press is its own.
   model.cancelLogin()
-  try await Task.sleep(for: .milliseconds(200))
-  cancels = await record.count
-  #expect(cancels == 2, "a press after the first request finished is a request of its own")
+  try await record.waitForCount(2)
+  #expect(await record.count == 2, "a press after the first request finished is a request of its own")
 }
 
 @Test @MainActor
@@ -614,6 +616,18 @@ private actor CallRecord {
 
   func record() {
     count += 1
+  }
+
+  /// Waits for the recorded count to reach `target` so the test paces off the work, not the clock.
+  func waitForCount(_ target: Int, within seconds: Double = 5) async throws {
+    let deadline = ContinuousClock.now + .seconds(seconds)
+    while count < target {
+      if ContinuousClock.now >= deadline {
+        Issue.record("cancel_login count reached \(count), expected \(target)")
+        return
+      }
+      try await Task.sleep(for: .milliseconds(10))
+    }
   }
 }
 
