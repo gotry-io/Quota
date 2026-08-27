@@ -9,6 +9,7 @@ const zones = [
   "UTC",
   "Asia/Singapore",
   "America/Los_Angeles",
+  "America/New_York",
   "Europe/London",
   "Asia/Kolkata",
   "Asia/Kathmandu",
@@ -103,6 +104,82 @@ describe("local periods", () => {
         periods: ["last_30_days"],
       },
     ]);
+  });
+
+  it("keeps a period whole across a daylight change, a skipped midnight, and a half hour", () => {
+    // A local day is not always twenty-four hours long, and its midnight does not always exist.
+    // Each case names the zone's own event, the local date the read lands on, and how many whole
+    // UTC hours each period covers because of it.
+    const cases = [
+      {
+        // Chile springs forward at midnight, so 6 September has no 00:00 at all: the day begins
+        // at the first hour the zone reads as that date.
+        zone: "America/Santiago",
+        checkedAt: "2026-09-06T05:00:00Z",
+        localDate: "2026-09-06",
+        todayStartsAt: "2026-09-06T04:00:00Z",
+        hours: { today: 23, last_7_days: 167, last_30_days: 719 },
+      },
+      {
+        // The clock falls back at 02:00, so 1 November is twenty-five hours long and one wall
+        // clock hour happens twice. Neither copy may be counted twice or dropped.
+        zone: "America/New_York",
+        checkedAt: "2026-11-01T12:00:00Z",
+        localDate: "2026-11-01",
+        todayStartsAt: "2026-11-01T04:00:00Z",
+        hours: { today: 25, last_7_days: 169, last_30_days: 721 },
+      },
+      {
+        // Lord Howe moves by half an hour, on 4 October. An hour is the finest fact stored, so
+        // that day is twenty-three whole hours rather than twenty-three and a half.
+        zone: "Australia/Lord_Howe",
+        checkedAt: "2026-10-04T15:00:00Z",
+        localDate: "2026-10-05",
+        todayStartsAt: "2026-10-04T13:00:00Z",
+        hours: { today: 24, last_7_days: 167, last_30_days: 719 },
+      },
+      {
+        // Chatham reads 12:45 ahead and moved an hour on 27 September, which is inside thirty
+        // local days of this read and outside seven.
+        zone: "Pacific/Chatham",
+        checkedAt: "2026-10-04T15:00:00Z",
+        localDate: "2026-10-05",
+        todayStartsAt: "2026-10-04T11:00:00Z",
+        hours: { today: 24, last_7_days: 168, last_30_days: 719 },
+      },
+      {
+        // Kathmandu reads 5:45 ahead and never moves, so only the rounding is in play.
+        zone: "Asia/Kathmandu",
+        checkedAt: "2026-08-26T02:00:00Z",
+        localDate: "2026-08-26",
+        todayStartsAt: "2026-08-25T19:00:00Z",
+        hours: { today: 24, last_7_days: 168, last_30_days: 720 },
+      },
+    ] as const;
+
+    for (const item of cases) {
+      const plan = planLocalPeriods(item.zone, new Date(item.checkedAt));
+      expect(plan.localDate, item.zone).toBe(item.localDate);
+      for (const key of LOCAL_PERIOD_KEYS) {
+        // `folded` fails on its own if a period counts one hour twice; matching what the zone's
+        // calendar puts in the period is what says no hour is missing either.
+        const hours = folded(plan, key);
+        expect(hours, `${item.zone} ${key}`).toEqual(expected(item.zone, plan, key));
+        expect(hours.length, `${item.zone} ${key} hour count`).toBe(item.hours[key]);
+      }
+      expect(folded(plan, "today")[0], item.zone).toBe(item.todayStartsAt);
+      // Each period contains the one inside it, whole.
+      const seven = new Set(folded(plan, "last_7_days"));
+      const thirty = new Set(folded(plan, "last_30_days"));
+      expect(
+        folded(plan, "today").every((hour) => seven.has(hour)),
+        item.zone,
+      ).toBe(true);
+      expect(
+        [...seven].every((hour) => thirty.has(hour)),
+        item.zone,
+      ).toBe(true);
+    }
   });
 
   it("rounds a sub-hour offset up, so no hour lands in two periods", () => {

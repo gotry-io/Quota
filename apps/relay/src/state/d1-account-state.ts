@@ -105,6 +105,33 @@ export class D1AccountState implements AccountState {
            )`,
         )
         .bind(input.snapshot_observed_before, input.limit),
+      // Usage is the only thing here an account accumulates without limit, so it is the only
+      // thing that can make a read of it impossible. The hours go first and their versions with
+      // them: a version outliving its hour would refuse an upload of an hour that is gone.
+      this.database
+        .prepare(
+          `DELETE FROM usage_hourly WHERE rowid IN (
+             SELECT rowid FROM usage_hourly WHERE bucket_start_utc < ?1
+             ORDER BY bucket_start_utc ASC, rowid ASC LIMIT ?2
+           )`,
+        )
+        .bind(input.usage_hour_before, input.limit),
+      this.database
+        .prepare(
+          `DELETE FROM usage_hour_scans WHERE rowid IN (
+             SELECT rowid FROM usage_hour_scans WHERE bucket_start_utc < ?1
+             ORDER BY bucket_start_utc ASC, rowid ASC LIMIT ?2
+           )`,
+        )
+        .bind(input.usage_hour_before, input.limit),
+      this.database
+        .prepare(
+          `DELETE FROM usage_daily WHERE rowid IN (
+             SELECT rowid FROM usage_daily WHERE utc_date < ?1
+             ORDER BY utc_date ASC, rowid ASC LIMIT ?2
+           )`,
+        )
+        .bind(input.usage_day_before, input.limit),
     ]);
   }
 
@@ -686,16 +713,6 @@ export class D1AccountState implements AccountState {
     return rows.results;
   }
 
-  async accountOwnsVisibleDevice(accountId: string, deviceId: string): Promise<boolean> {
-    const row = await this.database
-      .prepare(
-        "SELECT 1 AS found FROM devices WHERE account_id = ?1 AND id = ?2 AND deleted_at IS NULL",
-      )
-      .bind(accountId, deviceId)
-      .first<{ found: number }>();
-    return row?.found === 1;
-  }
-
   async getDeviceSyncControl(
     deviceId: string,
     generation: number,
@@ -733,13 +750,15 @@ export class D1AccountState implements AccountState {
   }
 
   /**
-   * Three aggregates over the tables an Account read projects. They are the whole basis for the
+   * Aggregates over the tables an Account read projects. They are the whole basis for the
    * conditional answer, so each one has to move whenever the response would: counts catch
    * deletion and retention, the newest instant catches replacement, and the summed per-device
-   * usage revision catches an upload from any device rather than only the leading one.
+   * usage revision catches an upload from any device rather than only the leading one. The
+   * Account's own `updated_at` is here because the response carries its display label, which a
+   * later GitHub sign-in rewrites without touching a device or an observation.
    */
   async accountVersionStamp(accountId: string, activeSince: string): Promise<AccountVersionStamp> {
-    const [devices, snapshots] = await this.database.batch<Record<string, unknown>>([
+    const [devices, snapshots, account] = await this.database.batch<Record<string, unknown>>([
       this.database
         .prepare(
           `SELECT COUNT(*) AS devices,
@@ -763,12 +782,17 @@ export class D1AccountState implements AccountState {
            WHERE devices.account_id = ?1 AND devices.deleted_at IS NULL`,
         )
         .bind(accountId),
+      this.database
+        .prepare("SELECT updated_at AS account_updated_at FROM accounts WHERE id = ?1")
+        .bind(accountId),
     ]);
     const merged = {
       ...(devices?.results[0] ?? {}),
       ...(snapshots?.results[0] ?? {}),
+      ...(account?.results[0] ?? {}),
     };
     return {
+      account_updated_at: stampInstant(merged.account_updated_at),
       devices: stampCount(merged.devices),
       active_devices: stampCount(merged.active_devices),
       usage_revision: stampCount(merged.usage_revision),
@@ -819,6 +843,13 @@ export class D1AccountState implements AccountState {
         .bind(accountId, deviceId),
       this.database
         .prepare(
+          `DELETE FROM usage_hour_scans WHERE device_id = ?2 AND EXISTS (
+             SELECT 1 FROM devices WHERE id = ?2 AND account_id = ?1
+           )`,
+        )
+        .bind(accountId, deviceId),
+      this.database
+        .prepare(
           `DELETE FROM usage_daily WHERE device_id = ?2 AND EXISTS (
              SELECT 1 FROM devices WHERE id = ?2 AND account_id = ?1
            )`,
@@ -847,6 +878,9 @@ export class D1AccountState implements AccountState {
         .bind(accountId),
       this.database
         .prepare(`DELETE FROM usage_hourly WHERE device_id IN (${ownedDevices})`)
+        .bind(accountId),
+      this.database
+        .prepare(`DELETE FROM usage_hour_scans WHERE device_id IN (${ownedDevices})`)
         .bind(accountId),
       this.database
         .prepare(`DELETE FROM quota_snapshots WHERE device_id IN (${ownedDevices})`)

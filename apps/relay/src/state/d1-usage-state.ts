@@ -101,10 +101,11 @@ export class D1UsageState implements UsageState {
 
     const statements: D1PreparedStatement[] = [];
     for (const hour of accepted) {
-      statements.push(this.clearHour(principal, upload.agent, hour.bucket_start_utc));
+      statements.push(this.clearHour(principal, upload.agent, hour));
       if (hour.rows.length > 0) {
         statements.push(this.insertHour(principal, upload.agent, hour));
       }
+      statements.push(this.recordHourScan(principal, upload.agent, hour));
     }
     for (const date of [...new Set(accepted.map((hour) => hour.bucket_start_utc.slice(0, 10)))]) {
       statements.push(
@@ -121,6 +122,14 @@ export class D1UsageState implements UsageState {
     };
   }
 
+  /**
+   * The rollup an Account read folds, newest day first.
+   *
+   * The order decides which days a capped read keeps, and the caller has no use for the far end
+   * of a history it cannot carry: a trailing period is made of the newest days, and `all` is a
+   * window ending today. Nothing downstream depends on the order itself — every reader groups or
+   * sorts these rows for itself.
+   */
   async queryDailyUsage(accountId: string, query: UsageDailyQuery): Promise<UsageDailyResult> {
     const parameters: (string | number)[] = [accountId];
     const conditions = ["devices.account_id = ?1", "devices.deleted_at IS NULL"];
@@ -143,7 +152,7 @@ export class D1UsageState implements UsageState {
          FROM usage_daily AS daily
          INNER JOIN devices ON devices.id = daily.device_id
          WHERE ${conditions.join(" AND ")}
-         ORDER BY daily.utc_date ASC, daily.device_id ASC, daily.agent ASC,
+         ORDER BY daily.utc_date DESC, daily.device_id ASC, daily.agent ASC,
                   ${identityColumns.map((column) => `daily.${column} ASC`).join(", ")}
          LIMIT ?${parameters.length}`,
       )
@@ -206,9 +215,10 @@ export class D1UsageState implements UsageState {
   /**
    * The newest scan already stored for each named hour.
    *
-   * The wanted hours travel as one JSON array rather than as a bound list, because an upload may
-   * name more hours than D1 allows bound parameters, and as a range they would drag in every
-   * hour between the first and the last.
+   * It is read from `usage_hour_scans` rather than from the facts, because an hour a scan found
+   * empty has a version and no rows. The wanted hours travel as one JSON array rather than as a
+   * bound list, because an upload may name more hours than D1 allows bound parameters, and as a
+   * range they would drag in every hour between the first and the last.
    */
   private async storedScanVersions(
     deviceId: string,
@@ -218,11 +228,10 @@ export class D1UsageState implements UsageState {
     if (buckets.length === 0) return new Map();
     const rows = await this.database
       .prepare(
-        `SELECT facts.bucket_start_utc AS bucket, MAX(facts.scan_version) AS scan_version
-         FROM usage_hourly AS facts
-         INNER JOIN json_each(?3) AS wanted ON wanted.value = facts.bucket_start_utc
-         WHERE facts.device_id = ?1 AND facts.agent = ?2
-         GROUP BY facts.bucket_start_utc`,
+        `SELECT scans.bucket_start_utc AS bucket, scans.scan_version AS scan_version
+         FROM usage_hour_scans AS scans
+         INNER JOIN json_each(?3) AS wanted ON wanted.value = scans.bucket_start_utc
+         WHERE scans.device_id = ?1 AND scans.agent = ?2`,
       )
       .bind(deviceId, agent, JSON.stringify(buckets))
       .all<{ bucket: string; scan_version: number }>();
@@ -232,15 +241,23 @@ export class D1UsageState implements UsageState {
   private clearHour(
     principal: DeviceWriterPrincipal,
     agent: string,
-    bucket: string,
+    hour: UsageUpload["hours"][number],
   ): D1PreparedStatement {
     return this.database
       .prepare(
         `DELETE FROM usage_hourly
          WHERE device_id = ?1 AND agent = ?2 AND bucket_start_utc = ?3
-           AND ${deviceIsCurrent("?4", "?5")}`,
+           AND ${deviceIsCurrent("?5", "?6")}
+           AND ${noNewerScan("?4")}`,
       )
-      .bind(principal.device_id, agent, bucket, principal.account_id, principal.device_generation);
+      .bind(
+        principal.device_id,
+        agent,
+        hour.bucket_start_utc,
+        hour.scan_version,
+        principal.account_id,
+        principal.device_generation,
+      );
   }
 
   private insertHour(
@@ -264,7 +281,8 @@ export class D1UsageState implements UsageState {
                 json_extract(item.value, '$.source_cost_microusd'),
                 json_extract(item.value, '$.source_cost_covered_requests')
          FROM json_each(?6) AS item
-         WHERE ${deviceIsCurrent("?7", "?8")}`,
+         WHERE ${deviceIsCurrent("?7", "?8")}
+           AND ${noNewerScan("?4")}`,
       )
       .bind(
         principal.device_id,
@@ -273,6 +291,38 @@ export class D1UsageState implements UsageState {
         hour.scan_version,
         hour.partial ? 1 : 0,
         JSON.stringify(hour.rows),
+        principal.account_id,
+        principal.device_generation,
+      );
+  }
+
+  /**
+   * Record which scan this hour now holds, after the rows it holds have been written.
+   *
+   * The comparison that admitted this hour was made before the batch opened, so a second upload
+   * of the same hour could have committed in between. This upsert only ever moves a version
+   * forward, and the two statements above refuse to touch an hour a newer scan already claimed,
+   * so the loser of that race changes nothing rather than landing out of order.
+   */
+  private recordHourScan(
+    principal: DeviceWriterPrincipal,
+    agent: string,
+    hour: UsageUpload["hours"][number],
+  ): D1PreparedStatement {
+    return this.database
+      .prepare(
+        `INSERT INTO usage_hour_scans (device_id, agent, bucket_start_utc, scan_version)
+         SELECT ?1, ?2, ?3, ?4
+         WHERE ${deviceIsCurrent("?5", "?6")}
+         ON CONFLICT(device_id, agent, bucket_start_utc) DO UPDATE SET
+           scan_version = excluded.scan_version
+         WHERE excluded.scan_version > usage_hour_scans.scan_version`,
+      )
+      .bind(
+        principal.device_id,
+        agent,
+        hour.bucket_start_utc,
+        hour.scan_version,
         principal.account_id,
         principal.device_generation,
       );
@@ -336,6 +386,21 @@ function deviceIsCurrent(account: string, generation: string): string {
              SELECT 1 FROM devices
              WHERE id = ?1 AND account_id = ${account} AND generation = ${generation}
                AND signed_out_at IS NULL AND deleted_at IS NULL
+           )`;
+}
+
+/**
+ * An hour a scan at least this new already claimed must not be rewritten by this one.
+ *
+ * The versions this upload compared itself against were read before the batch opened. Inside it
+ * the same comparison is made again, against whatever is stored at that moment, so two uploads
+ * of one hour land in version order however their batches interleave.
+ */
+function noNewerScan(version: string): string {
+  return `NOT EXISTS (
+             SELECT 1 FROM usage_hour_scans
+             WHERE device_id = ?1 AND agent = ?2 AND bucket_start_utc = ?3
+               AND scan_version >= ${version}
            )`;
 }
 

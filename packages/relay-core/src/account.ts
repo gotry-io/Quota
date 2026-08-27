@@ -206,6 +206,8 @@ export interface RateLimitResult {
  * read instant, not from a stored column, so it changes with no write at all.
  */
 export interface AccountVersionStamp {
+  /** When the Account row last changed. The response carries its display label. */
+  account_updated_at: string | null;
   devices: number;
   active_devices: number;
   usage_revision: number;
@@ -228,6 +230,19 @@ export interface AccountMaintenanceInput {
    * this; this is when Relay stops keeping it at all.
    */
   snapshot_observed_before: string;
+  /**
+   * The `bucket_start_utc` before which stored hours are deleted.
+   *
+   * Hours exist to answer the UTC day a local period's edge cuts, which is never more than a
+   * day or two back. They are kept far longer than that so a device returning from a long
+   * absence can still be told its old hours are already stored, and no longer.
+   */
+  usage_hour_before: string;
+  /**
+   * The `utc_date` before which stored days are deleted. The daily rollup is what a long read
+   * folds, so it outlives both the hours behind it and the widest window `all` covers.
+   */
+  usage_day_before: string;
   limit: number;
 }
 
@@ -299,7 +314,6 @@ export interface AccountState {
   ): Promise<void>;
   getAccount(accountId: string): Promise<AccountRecord | null>;
   listAccountDevices(accountId: string): Promise<DeviceRecord[]>;
-  accountOwnsVisibleDevice(accountId: string, deviceId: string): Promise<boolean>;
   getDeviceSyncControl(deviceId: string, generation: number): Promise<DeviceSyncControl | null>;
   updateDeviceProfile(
     deviceId: string,

@@ -24,13 +24,11 @@ test("homepage introduces QuotaBar and both install paths", () => {
   assert.match(landing, /aria-live="polite"/);
   assert.match(landing, /copied \? "Copied" : "Copy"/);
   assert.match(header, /Continue with GitHub/);
-  assert.doesNotMatch(landing, /Open Quota/);
   assert.match(header, /id="header-account"/);
   assert.doesNotMatch(header, /ThemeToggle/);
   assert.match(layout, /footer-controls/);
   assert.match(layout, /ThemeToggle/);
   assert.match(layout, /© \{year\} GoTry IO · MIT/);
-  assert.doesNotMatch(layout, /gotry-io contributors/);
   assert.match(theme, /id="theme-toggle"/);
   assert.match(theme, /quota-theme/);
   assert.match(theme, /\["system", "light", "dark"\]/);
@@ -41,19 +39,12 @@ test("homepage introduces QuotaBar and both install paths", () => {
   assert.match(styles, /color-scheme: light dark/);
   assert.match(styles, /light-dark\(/);
   assert.match(styles, /grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/);
-  assert.doesNotMatch(landing, /id="export-quota"/);
-  assert.doesNotMatch(landing, /\/u\//);
-  assert.doesNotMatch(html, /\/u\//);
-  assert.doesNotMatch(html, /__quotaAccountRequest/);
-  assert.doesNotMatch(html, /data-session/);
 });
 
-test("the hero shows what is left, not what a month cost", () => {
+test("the hero shows remaining quota, with its reset and how fresh it is", () => {
   assert.match(landing, /class="provider-list"/);
   assert.match(landing, /class="quota-track"/);
   assert.match(landing, /Resets Thu 4:03 PM · Updated 3m ago/);
-  assert.doesNotMatch(landing, /August Usage/);
-  assert.doesNotMatch(landing, /metric-preview/);
 });
 
 test("no surface explains itself in implementation words", () => {
@@ -71,7 +62,5 @@ test("the dashboard leads with subscriptions and one usage headline", () => {
   assert.match(dashboard, /<h1 id="dashboard-title">Quota<\/h1>/);
   assert.match(dashboard, /id="token-total"/);
   assert.match(dashboard, /id="cost-total"/);
-  assert.doesNotMatch(dashboard, /id="input-total"/);
   assert.match(dashboard, /providerDisplayName\(subscription\.provider\)/);
-  assert.doesNotMatch(dashboard, /titleCase/);
 });

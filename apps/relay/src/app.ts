@@ -91,7 +91,27 @@ const expiredSessionRetentionMilliseconds = 7 * 24 * 60 * 60 * 1000;
  * and still bounds what an account accumulates from a provider it no longer collects.
  */
 const quotaSnapshotRetentionMilliseconds = 7 * 24 * 60 * 60 * 1000;
+/**
+ * How long Relay keeps stored Usage.
+ *
+ * `usage_hourly` answers only the UTC day at a local period's edge, so it is kept for a device
+ * that has been away rather than for a read. `usage_daily` is what every long read folds, so it
+ * outlives both the hours behind it and the widest window `all` covers, and an account cannot
+ * accumulate rows until its own summary stops being answerable.
+ */
+const usageHourRetentionDays = 400;
+const usageDayRetentionDays = 800;
+/**
+ * How far back `all` reaches: at most this many UTC days, ending today.
+ *
+ * It is a window rather than everything, because "everything" is unbounded and a read that grows
+ * with an account's whole history eventually cannot be answered at all. Retention keeps the
+ * rollup longer than this, so the window is what the answer states rather than what happens to
+ * be stored.
+ */
+const accountUsageAllDays = 730;
 const maintenanceBatchLimit = 100;
+const dayMilliseconds = 24 * 60 * 60 * 1000;
 
 function requireValidPricingCatalog(value: PricingCatalog): PricingCatalog {
   const validation = validatePricingCatalog(value);
@@ -143,8 +163,19 @@ export function accountMaintenanceInput(checkedAt: Date): AccountMaintenanceInpu
     snapshot_observed_before: new Date(
       checkedAt.getTime() - quotaSnapshotRetentionMilliseconds,
     ).toISOString(),
+    // A stored hour carries no milliseconds, and these are compared as text.
+    usage_hour_before: `${daysBefore(checkedAt, usageHourRetentionDays).toISOString().slice(0, 19)}Z`,
+    usage_day_before: utcDate(daysBefore(checkedAt, usageDayRetentionDays)),
     limit: maintenanceBatchLimit,
   };
+}
+
+function daysBefore(instant: Date, days: number): Date {
+  return new Date(instant.getTime() - days * dayMilliseconds);
+}
+
+function utcDate(instant: Date): string {
+  return instant.toISOString().slice(0, 10);
 }
 
 export function createRelayApp(options: RelayAppOptions): Hono {
@@ -278,7 +309,10 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     }
     context.header("Set-Cookie", completed.session, { append: true });
     context.header("Set-Cookie", completed.handoff, { append: true });
-    return context.redirect(completed.return_to, 302);
+    // Checked here as well as where it was accepted. This value has been out of Relay's hands
+    // and back — through a signed cookie, but a cookie all the same — and it is about to become
+    // a `Location` on an authenticated response, which is the exact shape of an open redirect.
+    return context.redirect(safeReturnPath(completed.return_to) ?? DEFAULT_RETURN_PATH, 302);
   });
 
   app.post("/api/auth/logout", async (context) => {
@@ -338,7 +372,12 @@ export function createRelayApp(options: RelayAppOptions): Hono {
         },
         now(),
       );
-      const callback = `/oauth/v2/complete?login_token=${encodeURIComponent(login.login_token)}`;
+      // Both places a sign-in names where to come back to go through the one validator, so a
+      // path that would not be accepted from a caller is not accepted from us either.
+      const callback = safeReturnPath(
+        `/oauth/v2/complete?login_token=${encodeURIComponent(login.login_token)}`,
+      );
+      if (callback === null) return invalidRequest(context);
       return await beginGitHubSignIn(context, options, callback, now());
     } catch (error) {
       return accountFlowError(context, error);
@@ -347,6 +386,19 @@ export function createRelayApp(options: RelayAppOptions): Hono {
 
   app.get("/oauth/v2/complete", async (context) => {
     if (!hasOnlyQueryKeys(context, ["login_token"])) return invalidRequest(context);
+    // The other end of the same browser round trip as the GitHub callback, and the only route
+    // that turns a login token into an authorization code, so it is guessable at exactly the
+    // rate that one is.
+    const limited = await enforceRateLimit(
+      context,
+      options.state,
+      options.hasher,
+      "web-signin",
+      anonymousClientSubject(context),
+      rateLimits.webSignIn,
+      now(),
+    );
+    if (limited) return limited;
     const loginToken = context.req.query("login_token");
     const principal = await options.webSessions.authorize(context.req.raw.headers, now());
     if (!loginToken || loginToken.length > 4_096 || !principal) return unauthorized(context);
@@ -520,24 +572,30 @@ export function createRelayApp(options: RelayAppOptions): Hono {
       catalogRevision: catalog.revision,
       modelCatalogRevision: modelCatalog.revision,
       checkedAt,
-      rolloverKey: plan.localDate,
+      rolloverKey: summaryRolloverKey(plan.localDate, checkedAt),
     });
     if (conditional) return conditional;
     const [account, devices, stored, daily, boundary] = await Promise.all([
       options.state.getAccount(principal.account_id),
       options.state.listAccountDevices(principal.account_id),
       options.state.listLatestSnapshots(principal.account_id),
-      options.usageState.queryDailyUsage(principal.account_id, { limit: maximumAccountDailyRows }),
+      options.usageState.queryDailyUsage(principal.account_id, {
+        from: utcDate(daysBefore(checkedAt, accountUsageAllDays - 1)),
+        limit: maximumAccountDailyRows,
+      }),
       options.usageState.queryBoundaryHours(principal.account_id, {
         ranges: plan.boundaries.map((edge) => edge.range),
         limit: maximumAccountDailyRows,
       }),
     ]);
     if (!account) return unauthorized(context);
+    // `daily.truncated` is not a failure here. The rollup is read newest first, so what a
+    // truncated read drops is the far end of `all` — which is a window this route defines — and
+    // never a day the three trailing periods fold. An account that has outgrown one response
+    // gets a shorter history, not a permanently unanswerable summary.
     if (
       devices.length > maximumAccountDevices ||
       stored.length > maximumAccountSnapshots ||
-      daily.truncated ||
       boundary.truncated
     ) {
       return resultLimit(context);
@@ -885,6 +943,20 @@ async function beginGitHubSignIn(
   const started = await options.webSessions.beginSignIn(returnTo, now);
   context.header("Set-Cookie", started.handoff, { append: true });
   return context.redirect(started.location, 302);
+}
+
+/**
+ * The two things that turn a summary over with no write behind it.
+ *
+ * The caller's local date decides where the three trailing periods start and end. The clock
+ * decides which reading speaks for a subscription: a reading stops describing current quota at
+ * its own validity boundary, and when it does, a fresher one from another device takes its place
+ * and the freshness a reader is shown flips. Bucketing that to the hour is what keeps the
+ * boundary rule in one place — `packages/quota-model` derives it from the reading — while still
+ * bounding how long a held answer can outlive a flip.
+ */
+function summaryRolloverKey(localDate: string, checkedAt: Date): string {
+  return `${localDate}|${checkedAt.toISOString().slice(0, 13)}`;
 }
 
 /** The `tz` a read was asked for, `UTC` when it named none, or null when it named nonsense. */

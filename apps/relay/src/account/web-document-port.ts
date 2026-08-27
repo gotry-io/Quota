@@ -1,6 +1,5 @@
 import type { AccountState } from "@gotry-io/relay-core";
 import type {
-  AccountSummaryDocumentResult,
   WebDocumentPort,
   WebDocumentViewer,
 } from "../../../web/src/lib/server/document-port.ts";
@@ -10,9 +9,7 @@ export function createWebDocumentPort(input: {
   webSessions: WebSessionPort;
   state: Pick<AccountState, "getAccount">;
   now?: () => Date;
-  getAccountSummary?: (headers: Headers) => Promise<AccountSummaryDocumentResult>;
 }): WebDocumentPort {
-  const getAccountSummary = input.getAccountSummary;
   const now = input.now ?? (() => new Date());
   return {
     async getViewer(headers: Headers): Promise<WebDocumentViewer | null> {
@@ -22,12 +19,5 @@ export function createWebDocumentPort(input: {
       if (!account) return null;
       return { displayLabel: account.display_label?.trim() || "Account" };
     },
-    ...(getAccountSummary
-      ? {
-          getAccountSummary(headers: Headers) {
-            return getAccountSummary(headers);
-          },
-        }
-      : {}),
   };
 }

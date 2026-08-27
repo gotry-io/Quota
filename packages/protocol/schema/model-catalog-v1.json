@@ -10,17 +10,14 @@
       "const": 2
     },
     "revision": {
-      "type": "string",
-      "minLength": 1,
-      "maxLength": 128,
-      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+      "$ref": "#/$defs/__schema0"
     },
     "models": {
       "minItems": 1,
       "maxItems": 512,
       "type": "array",
       "items": {
-        "$ref": "#/$defs/__schema0"
+        "$ref": "#/$defs/__schema1"
       }
     }
   },
@@ -28,54 +25,57 @@
   "additionalProperties": false,
   "$defs": {
     "__schema0": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "__schema1": {
       "type": "object",
       "properties": {
         "canonical_id": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128,
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          "$ref": "#/$defs/__schema0"
         },
         "aliases": {
           "minItems": 1,
           "maxItems": 32,
           "type": "array",
           "items": {
-            "$ref": "#/$defs/__schema1"
+            "$ref": "#/$defs/__schema2"
           }
         }
       },
       "required": ["canonical_id", "aliases"],
       "additionalProperties": false
     },
-    "__schema1": {
+    "__schema2": {
       "type": "object",
       "properties": {
         "reported_model": {
-          "$ref": "#/$defs/__schema2"
-        },
-        "provider": {
           "$ref": "#/$defs/__schema3"
         },
-        "agent": {
+        "provider": {
           "$ref": "#/$defs/__schema4"
         },
-        "effective_from": {
+        "agent": {
           "$ref": "#/$defs/__schema5"
         },
+        "effective_from": {
+          "$ref": "#/$defs/__schema6"
+        },
         "effective_to": {
-          "$ref": "#/$defs/__schema7"
+          "$ref": "#/$defs/__schema8"
         }
       },
       "required": ["reported_model", "provider"],
       "additionalProperties": false
     },
-    "__schema2": {
+    "__schema3": {
       "type": "string",
       "minLength": 1,
       "pattern": "^(?=[\\s\\S]{1,128}$)(?![\\s\\S]*\\p{Cc})[\\s\\S]+$"
     },
-    "__schema3": {
+    "__schema4": {
       "type": "string",
       "enum": [
         "openai",
@@ -90,19 +90,19 @@
         "unknown"
       ]
     },
-    "__schema4": {
+    "__schema5": {
       "type": "string",
       "enum": ["codex", "claude_code", "grok", "opencode", "pi", "cursor"]
     },
-    "__schema5": {
-      "$ref": "#/$defs/__schema6"
-    },
     "__schema6": {
+      "$ref": "#/$defs/__schema7"
+    },
+    "__schema7": {
       "type": "string",
       "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
     },
-    "__schema7": {
-      "$ref": "#/$defs/__schema6"
+    "__schema8": {
+      "$ref": "#/$defs/__schema7"
     }
   }
 }

@@ -28,18 +28,23 @@ Worker. Browser GitHub login on localhost is not available.
 
 `/my` is the GitHub-backed account dashboard. Unsigned `/my` visits are a server redirect home.
 Every page requires a session; Quota Web publishes no account data anonymously. `/app` shipped in
-0.0.4, so it remains a single bookmark redirect to `/my`; new links and OAuth callbacks use `/my`.
+0.0.4, so it and anything under it stay a redirect to `/my`; new links and OAuth callbacks name
+`/my` directly.
 Sign-in is a plain navigation to Relay's `/api/auth/github/start`, not a fetch: the header button is
 a link, and a signed-out visitor returns to the page they asked for. Sign-out posts to
 `/api/auth/logout` and Delete Account is `DELETE /api/v2/account`. Those routes and Device deletion
 all require an exact same-origin request, and the destructive ones a session authenticated within
 ten minutes.
 
-The signed-in dashboard renders what Relay resolved: `subscriptions[]` as one card per
-subscription, whichever of Today, the last 7 days, the last 30 days, or all time is selected, and a
-year of daily totals from `GET /api/v6/account/usage/activity`, on UTC dates. It sends the browser's
-IANA timezone as `tz`, because a local day begins at local midnight and that is what decides where
-the trailing windows start and end. Each Device shows
+The document for `/my` is a signed-in shell and carries no Account data. The read that fills it is
+bounded by the caller's calendar — a local day begins at local midnight, which is what decides where
+the trailing windows start and end — and a document request has no clock, so rendering one on the
+server would answer in UTC and be thrown away by every browser keeping another calendar. The client
+makes it once, sending its own IANA timezone as `tz`.
+
+It then renders what Relay resolved: `subscriptions[]` as one card per subscription, whichever of
+Today, the last 7 days, the last 30 days, or all time is selected, and a year of daily totals from
+`GET /api/v6/account/usage/activity`, on UTC dates. All time is the last 730 days. Each Device shows
 its platform, when it was last seen, and when its newest reading was taken, labelled Active, Idle,
 or Not reporting from the newer of the two. It is read-only, and a quiet Device is asleep or closed
 rather than broken.

@@ -7,8 +7,13 @@ public catalog APIs alongside the managed-data v6 quota/Usage data APIs. It rend
 There is no self-hosted or SQLite runtime.
 
 QuotaBar and Quota Web speak managed-data v6, the only data contract this Worker serves. A client
-that speaks an older shape is refused rather than translated; see
-[ADR 0018](../../docs/decisions/0018-single-managed-data-contract.md).
+that speaks an older version is refused rather than translated; see
+[ADR 0018](../../docs/decisions/0018-single-managed-data-contract.md). Within a version the two
+directions differ: Relay checks a request body against exactly the contract and refuses one that
+names a key the contract does not, while a client reads a response through a schema that accepts
+fields and enum members its build cannot name, at any depth. Adding either to a response is
+therefore not a breaking change. See
+[ADR 0023](../../docs/decisions/0023-strict-writes-tolerant-reads.md).
 
 The v6 data contract is four routes
 ([ADR 0024](../../docs/decisions/0024-hour-versioned-usage-and-daily-rollups.md)):
@@ -23,7 +28,10 @@ The v6 data contract is four routes
 - `GET /api/v6/account/summary?tz=` answers the account, its devices, `subscriptions[]` resolved
   once here rather than by every client, `usage` as Today / last 7 days / last 30 days / all time,
   and the pricing and model-catalog revisions. A local day begins at local midnight, so `tz` decides
-  where the three trailing periods start and end.
+  where the three trailing periods start and end. `all` is the last 730 UTC days, not every day
+  ever stored: an answer that grows with an account's whole history eventually cannot be given.
+  The rollup is read newest day first, so an account with more retained rows than one response can
+  carry gets a shorter `all` rather than no summary at all.
 - `GET /api/v6/account/usage/activity?from&to` answers up to 400 daily totals, on UTC dates.
 
 `all` and the activity read are `usage_daily` alone. A trailing period folds its whole UTC days
@@ -77,6 +85,15 @@ routes return `Cache-Control: no-store`; only the versioned pricing and model ca
 cacheable. `GET /api/v6/account/summary` and `GET /api/v6/account/usage/activity` are
 `private, no-cache` with a strong `ETag`, and answer a matching `If-None-Match` with 304 before
 running any Usage query.
+
+Every document response carries `X-Content-Type-Options: nosniff`, `Referrer-Policy: same-origin`,
+`X-Frame-Options: DENY`, and a Content Security Policy that allows scripts, styles, images, fonts,
+and connections from this origin only, frames nowhere, and no `<base>` or plugin content. A
+rendered page states the policy itself: `apps/web/svelte.config.js` declares the directives and
+SvelteKit stamps each response with the nonce its bootstrap script and the theme script in
+`app.html` claim, so nothing is hashed ahead of time. Responses SvelteKit does not render carry the
+same policy without a nonce.
+
 Production migration and deployment remain workflow-owned and must not be run manually without
 explicit authorization.
 
@@ -88,5 +105,8 @@ unpriced; wildcard dimension matches and the inferred-cache approximation remain
 calculation assumptions.
 
 Readiness probes and the hourly Worker schedule run the bounded credential and quota-observation
-cleanup defined in [`docs/security.md`](../../docs/security.md). An unhandled request failure writes
-one `relay_request_failed` line carrying only the path, the status, and the error's class name.
+cleanup defined in [`docs/security.md`](../../docs/security.md), and the same batch retires Usage:
+`usage_hourly` and the hour versions beside it after 400 days, `usage_daily` after 800. Each is at
+most a hundred rows per run, so a sweep never competes with the uploads it runs alongside. An
+unhandled request failure writes one `relay_request_failed` line carrying only the path, the status,
+and the error's class name.

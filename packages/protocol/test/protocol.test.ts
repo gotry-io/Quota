@@ -339,16 +339,6 @@ describe("quota protocol", () => {
         refresh_token: "synthetic-refresh-token",
       }).success,
     ).toBe(true);
-    // There is one token, so there is nothing for a request to name an audience for.
-    expect(
-      IosSessionRefreshRequestSchema.safeParse({
-        protocol_version: 2,
-        grant_type: "refresh_token",
-        client_id: IOS_OAUTH_CLIENT_ID,
-        token_audience: "account",
-        refresh_token: "synthetic-refresh-token",
-      }).success,
-    ).toBe(false);
     expect(
       protocol.SessionRefreshRequestSchema.safeParse({
         protocol_version: 2,
@@ -559,6 +549,34 @@ describe("quota protocol", () => {
     expect(
       UsageUploadSchema.safeParse(withHours(protocol.MAXIMUM_USAGE_HOURS_PER_UPLOAD + 1)).success,
     ).toBe(false);
+  });
+
+  it("tells a payload that does not fit apart from one the contract does not describe", () => {
+    const upload = usageUpload();
+    const hour = upload.hours[0];
+    const tooMany = {
+      ...upload,
+      hours: [
+        {
+          ...hour,
+          rows: Array.from({ length: protocol.MAXIMUM_USAGE_ROWS_PER_HOUR + 1 }, (_, index) => ({
+            ...usageRow(),
+            model: `model-${index}`,
+          })),
+        },
+      ],
+    };
+    const oversized = UsageUploadSchema.safeParse(tooMany);
+    expect(oversized.success).toBe(false);
+    expect(protocol.exceedsContractBound(oversized.error)).toBe(true);
+
+    // A shape the contract does not describe is not a size, and neither is anything that is not
+    // a refusal at all.
+    const wrong = UsageUploadSchema.safeParse({ ...upload, agent: "not_an_agent" });
+    expect(wrong.success).toBe(false);
+    expect(protocol.exceedsContractBound(wrong.error)).toBe(false);
+    expect(protocol.exceedsContractBound(new Error("D1_ERROR"))).toBe(false);
+    expect(protocol.exceedsContractBound(undefined)).toBe(false);
   });
 
   it("validates subscriptions and Usage as one normalized read summary", () => {

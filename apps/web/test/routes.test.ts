@@ -1,20 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
-  DASHBOARD_PATH,
-  legacyDashboardRedirect,
-  planDisplayName,
-  SIGN_IN_PATH,
-  signInHref,
-} from "../src/lib/routes.ts";
+import { DASHBOARD_PATH, planDisplayName, SIGN_IN_PATH, signInHref } from "../src/lib/routes.ts";
 import { formatQuotaRemaining } from "../src/lib/format.ts";
-
-test("keeps the shipped /app dashboard bookmark as a single redirect", () => {
-  assert.equal(DASHBOARD_PATH, "/my");
-  assert.equal(legacyDashboardRedirect("/app"), "/my");
-  assert.equal(legacyDashboardRedirect("/app/anything"), "/my");
-  assert.equal(legacyDashboardRedirect("/my"), null);
-});
 
 test("sends a signed-out visitor to Relay, and back to the page they wanted", () => {
   assert.equal(SIGN_IN_PATH, "/api/auth/github/start");

@@ -1,4 +1,3 @@
-import { AccountSummarySchema } from "@gotry-io/quota-protocol";
 import { AccountService } from "./account/service.ts";
 import { createWebDocumentPort } from "./account/web-document-port.ts";
 import { GitHubWebSessions, memoizeWebSessionAuthorization } from "./account/web-session.ts";
@@ -49,28 +48,7 @@ export default {
     }
 
     return respondWithWebDocument(request, environment, context, {
-      document: createWebDocumentPort({
-        webSessions,
-        state,
-        async getAccountSummary(headers) {
-          try {
-            const url = new URL("/api/v6/account/summary", request.url);
-            // The document request's headers carry the session, and nothing else here should
-            // travel with them: a conditional header meant for a page the browser holds would
-            // make this internal read answer 304, which is not a summary.
-            const forwarded = new Headers(headers);
-            forwarded.delete("If-None-Match");
-            forwarded.delete("If-Modified-Since");
-            const response = await relay.fetch(new Request(url, { headers: forwarded }));
-            if (response.status === 401) return { status: "unauthorized" };
-            if (!response.ok) return { status: "error" };
-            const parsed = AccountSummarySchema.safeParse(await response.json());
-            return parsed.success ? { status: "ok", summary: parsed.data } : { status: "error" };
-          } catch {
-            return { status: "error" };
-          }
-        },
-      }),
+      document: createWebDocumentPort({ webSessions, state }),
     });
   },
   async scheduled(_controller, environment): Promise<void> {
