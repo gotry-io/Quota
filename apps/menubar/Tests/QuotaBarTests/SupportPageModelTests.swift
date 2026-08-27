@@ -49,6 +49,26 @@ struct SupportPageModelTests {
     #expect(!model.isResetConfirmationPresented)
   }
 
+  /// Reset Local Data confirms through the panel's own popup, like Sign Out and Disconnect: a
+  /// MenuBarExtra panel is not a window a system alert can sit over. Leaving the page takes the
+  /// question with it, because the answer belonged to a page that is no longer on screen.
+  @Test @MainActor func resetLocalDataRaisesThePanelsOwnConfirmation() async {
+    let model = SupportPageModel(report: sampleReport())
+    #expect(!model.isResetConfirmationPresented)
+
+    model.isResetConfirmationPresented = true
+    #expect(model.isResetConfirmationPresented)
+
+    model.prepareForEntry()
+    #expect(!model.isResetConfirmationPresented)
+
+    // The words the popup says, so the row and the confirmation cannot drift apart.
+    #expect(ResetLocalDataCopy.title == "Reset Local Data?")
+    #expect(ResetLocalDataCopy.confirmTitle == "Reset Local Data")
+    #expect(ResetLocalDataCopy.message.contains("deleted and rebuilt"))
+    #expect(ResetLocalDataCopy.message.contains("You stay signed in."))
+  }
+
   /// The service owns every sentence; the page only names the thing the sentence is about.
   @Test func sourceTitlesNameTheProviderAndTheRungThatAnswered() {
     #expect(

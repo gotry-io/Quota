@@ -304,7 +304,8 @@ orange warning, red blocked mark).
 human-readable text report, including the recent work the page does not list, and its row title
 becomes **Report Copied** for about two seconds. Reset Local Data always confirms first and says
 plainly that collected quota and Usage history are deleted and rebuilt and that the person stays
-signed in. **About** stays last with Website, version, and **Check for Updates**, which opens
+signed in. That confirmation is `QuotaConfirmationPopup` at the panel root, like Sign Out and
+Disconnect, and leaving Support takes the question with it. **About** stays last with Website, version, and **Check for Updates**, which opens
 Sparkle's standard updater; Sparkle also checks on a daily schedule after launch.
 
 Recheck lives only in the page header; opening Support resets and requests a real refresh so

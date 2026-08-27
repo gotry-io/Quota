@@ -94,6 +94,16 @@ enum SupportPresentation {
   }
 }
 
+/// The confirmation Reset Local Data raises. It is an app-owned popup at the panel root, like
+/// Sign Out and Disconnect: a MenuBarExtra panel is not a window a system alert can sit over.
+enum ResetLocalDataCopy {
+  static let title = "Reset Local Data?"
+  static let confirmTitle = "Reset Local Data"
+  static let message =
+    "This Mac's collected quota and Usage history are deleted and rebuilt on the next refresh. "
+    + "You stay signed in."
+}
+
 /// Owns Support page state so MenuBarContentView can drive header actions.
 enum SupportPageState: Equatable {
   case loading
@@ -188,23 +198,10 @@ struct SettingsSupportView: View {
   let state: SupportPageState
   @Bindable var model: SupportPageModel
   let onRetry: () -> Void
-  let onResetLocalData: () -> Void
 
   var body: some View {
     QuotaNavigationStableContent(state: state) { presentedState in
       content(presentedState)
-    }
-    .confirmationDialog(
-      "Reset local data?",
-      isPresented: $model.isResetConfirmationPresented
-    ) {
-      Button("Reset Local Data", role: .destructive, action: onResetLocalData)
-      Button("Cancel", role: .cancel) {}
-    } message: {
-      Text(
-        "This Mac's collected quota and Usage history are deleted and rebuilt on the next "
-          + "refresh. You stay signed in."
-      )
     }
   }
 
