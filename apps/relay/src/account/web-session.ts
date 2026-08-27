@@ -52,7 +52,10 @@ export interface WebCallbackRequest {
 export type WebSignInResult =
   | { outcome: "signed_in"; session: string; handoff: string; return_to: string }
   /** Nothing about this callback proves it belongs to a sign-in this browser started. */
-  | { outcome: "rejected" };
+  | { outcome: "rejected"; reason: WebSignInRejection };
+
+/** Why a callback was refused — a category for the log line, never a secret or a value. */
+export type WebSignInRejection = "handoff" | "state" | "code" | "exchange" | "profile";
 
 export interface WebSessionPort {
   beginSignIn(returnTo: string, now: Date): Promise<WebSignInStart>;
@@ -119,24 +122,21 @@ export class GitHubWebSessions implements WebSessionPort {
 
   async completeSignIn(request: WebCallbackRequest, now: Date): Promise<WebSignInResult> {
     const handoff = await this.#openHandoff(readCookie(request.cookie, HANDOFF_COOKIE), now);
+    if (!handoff) return { outcome: "rejected", reason: "handoff" };
+    if (!request.state || !constantTimeEqual(request.state, handoff.state)) {
+      return { outcome: "rejected", reason: "state" };
+    }
     if (
-      !handoff ||
-      !request.state ||
-      !constantTimeEqual(request.state, handoff.state) ||
       !request.code ||
       request.code.length > maximumAuthorizationCodeLength ||
       !authorizationCodePattern.test(request.code)
     ) {
-      return { outcome: "rejected" };
+      return { outcome: "rejected", reason: "code" };
     }
     const accessToken = await this.#exchangeCode(request.code, handoff.verifier);
-    if (!accessToken) {
-      return { outcome: "rejected" };
-    }
+    if (!accessToken) return { outcome: "rejected", reason: "exchange" };
     const profile = await this.#readGitHubProfile(accessToken);
-    if (!profile) {
-      return { outcome: "rejected" };
-    }
+    if (!profile) return { outcome: "rejected", reason: "profile" };
     const token = randomOpaqueSecret("qw_");
     await this.environment.state.createWebSession({
       session_id: `session_${crypto.randomUUID()}`,

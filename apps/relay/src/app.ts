@@ -252,6 +252,9 @@ export function createRelayApp(options: RelayAppOptions): Hono {
       return relayError(context, 502, "internal_error", "Identity verification is unavailable.");
     }
     if (completed.outcome !== "signed_in") {
+      // The reason is a category, never a value: enough to tell a lost cookie from a refused
+      // code when a sign-in fails in production, and nothing a log reader could replay.
+      console.warn("web_signin_rejected", { reason: completed.reason });
       context.header("Set-Cookie", clearedHandoffCookie(), { append: true });
       return relayError(
         context,
