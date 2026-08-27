@@ -11,11 +11,9 @@ import {
   platformDisplayName,
   providerDisplayName,
 } from "@gotry-io/quota-protocol";
-import type { AccountSummaryDocumentResult } from "$lib/server/document-port";
 import {
   accountActivityRange,
   beginWebLogin,
-  browserTimezone,
   deleteAccount,
   deleteDevice,
   fetchAccountActivity,
@@ -33,9 +31,6 @@ import {
 import { deviceActivity } from "$lib/device-activity";
 import { observedSnapshotStatus } from "@gotry-io/quota-model";
 import { DASHBOARD_PATH, planDisplayName } from "$lib/routes";
-import type { PageProps } from "./$types";
-
-let { data }: PageProps = $props();
 
 const periodNames = [
   { key: "today", label: "Today" },
@@ -70,12 +65,7 @@ let modelRows = $derived(
 );
 
 $effect(() => {
-  const streamed = data.streamed.summary;
-  // The document render has no clock, so it asks for UTC. A browser that keeps another calendar
-  // asks again for its own, because a local day begins at local midnight and that is what decides
-  // where `today` and the trailing windows start and end.
-  if (streamed && browserTimezone() === "UTC") void streamed.then(applySummaryResult);
-  else void loadSummary();
+  void loadSummary();
   void loadActivity();
 });
 
@@ -92,7 +82,7 @@ async function loadActivity(): Promise<void> {
   activityMessage = "Usage activity is unavailable.";
 }
 
-function applySummaryResult(result: AccountSummaryDocumentResult): void {
+function applySummaryResult(result: Awaited<ReturnType<typeof fetchAccountSummary>>): void {
   if (result.status === "unauthorized") {
     window.location.replace("/");
     return;

@@ -51,20 +51,12 @@ export function memoizeWebDocumentPort(inner: WebDocumentPort): {
   hasViewer(): Promise<boolean>;
 } {
   let viewer: Promise<WebDocumentViewer | null> | undefined;
-  const getAccountSummary = inner.getAccountSummary;
   return {
     port: {
       getViewer(headers) {
         viewer ??= inner.getViewer(headers);
         return viewer;
       },
-      ...(getAccountSummary
-        ? {
-            getAccountSummary(headers: Headers) {
-              return getAccountSummary(headers);
-            },
-          }
-        : {}),
     },
     async hasViewer() {
       if (!viewer) return false;
