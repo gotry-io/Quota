@@ -2778,6 +2778,12 @@ fn read_usage_periods(conn: &Connection) -> Result<UsagePeriodCache, StateError>
     Ok(cache)
 }
 
+/// The Overview rows the last refresh wrote, or none.
+///
+/// A row this build cannot read is answered the way [`read_component`] answers one: as a
+/// statement about the image rather than about this query, so the cache is thrown away and
+/// rebuilt. Returning the decode error instead left `get_state` failing on every call with
+/// nothing able to clear it.
 fn read_overview(conn: &Connection) -> Result<Vec<QuotaOverviewItem>, StateError> {
     let raw: Option<String> = conn
         .query_row(
@@ -2786,8 +2792,16 @@ fn read_overview(conn: &Connection) -> Result<Vec<QuotaOverviewItem>, StateError
             |row| row.get(0),
         )
         .optional()?;
-    raw.map(|value| serde_json::from_str(&value).map_err(StateError::from))
-        .unwrap_or_else(|| Ok(Vec::new()))
+    let Some(raw) = raw else {
+        return Ok(Vec::new());
+    };
+    serde_json::from_str(&raw).map_err(|_| {
+        StateError::Sql(rusqlite::Error::InvalidColumnType(
+            0,
+            "overview_json".to_owned(),
+            rusqlite::types::Type::Text,
+        ))
+    })
 }
 
 fn read_provider_views(root: &Path) -> Result<Vec<ProviderConfigView>, StateError> {
@@ -4872,6 +4886,37 @@ mod tests {
         assert!(matches!(store.snapshot(), Err(StateError::Unavailable)));
 
         let snapshot = store.snapshot().expect("rebuilt");
+        assert!(snapshot.cache.rebuilding);
+        assert!(store.session_json().expect("session").is_some());
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    /// An Overview row this build cannot read is a cache row: thrown away, not carried as an
+    /// error every `get_state` call answers with.
+    #[test]
+    fn an_unreadable_overview_row_rebuilds_the_cache_rather_than_wedging_state() {
+        let root = temp_root("overview-garbage");
+        let store = StateStore::open(&root).expect("state");
+        store
+            .write_session_json(&active_session())
+            .expect("session");
+        store.snapshot().expect("snapshot");
+        store
+            .with_cache_mut(|conn| {
+                conn.execute(
+                    "INSERT INTO metadata(key, value) VALUES ('overview_json', ?1)
+                     ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    params!["not json"],
+                )?;
+                Ok(())
+            })
+            .expect("garbage row");
+
+        assert!(matches!(store.snapshot(), Err(StateError::Unavailable)));
+
+        let snapshot = store.snapshot().expect("rebuilt");
+        assert!(snapshot.overview.is_empty());
         assert!(snapshot.cache.rebuilding);
         assert!(store.session_json().expect("session").is_some());
         drop(store);
