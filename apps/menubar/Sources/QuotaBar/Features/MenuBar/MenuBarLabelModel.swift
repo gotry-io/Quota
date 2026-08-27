@@ -144,6 +144,16 @@ struct MenuBarLabelModel: Equatable, Sendable {
     return tightest
   }
 
+  /// Which Overview readings still describe live quota, in Overview's order.
+  ///
+  /// Time enters the item's content in exactly one place — this verdict — because a percent
+  /// does not move on its own and only the freshness rule can retire it. A caller that has to
+  /// re-evaluate the item on a clock compares this instead of the label, so a minute in which
+  /// nothing aged out costs nothing.
+  static func currency(of overview: [LocalServiceOverviewItem], now: Date) -> [Bool] {
+    overview.map { isCurrent($0, now: now) }
+  }
+
   /// A reading that still describes live quota: the source reported it could read, and the
   /// shared freshness rule has not aged it out.
   private static func isCurrent(_ item: LocalServiceOverviewItem, now: Date) -> Bool {

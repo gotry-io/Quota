@@ -117,7 +117,10 @@ It is a template mark plus the remaining percent of one current subscription. By
 most constrained one — the smallest remaining percent across every window of every Overview reading
 that still describes live quota. A reading the source reported as failed, or one the shared
 freshness rule has aged out, answers for nothing. Balance-only windows have no budget to be a
-percent of and never set it.
+percent of and never set it. Ageing out is a fact about the clock rather than about anything the
+service says, so the item re-asks the question once a minute — the freshness rule's smallest
+unit — and a Mac that stopped collecting loses its number without waiting for an event that is
+never coming. The item is only rebuilt when that answer changed.
 
 The mark and the number are composed into **one template image**, which is what the menu bar is
 given. A status item is one image to AppKit, and AppKit places it exactly as it places every other

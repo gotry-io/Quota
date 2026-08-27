@@ -160,6 +160,14 @@ final class MenuBarViewModel {
   private var revision = 0
   private(set) var cache: LocalServiceCacheState = .settled
 
+  /// The instant the menu-bar item is drawn for.
+  ///
+  /// The item's content is a function of time — the shared freshness rule retires a reading —
+  /// but observation only re-reads it when something it read changed. Without a clock of its
+  /// own the item would keep a percent that stopped describing live quota until the next
+  /// service event, which for a Mac that has stopped collecting is never.
+  private(set) var menuBarClock = Date()
+
   var accountState: AccountViewState {
     switch authStatus {
     case .signedIn: .signedIn
@@ -210,6 +218,13 @@ final class MenuBarViewModel {
   private var browserSessionTask: Task<Void, Never>?
 
   @ObservationIgnored
+  private var menuBarClockTask: Task<Void, Never>?
+
+  /// Which readings were current the last time the clock was published.
+  @ObservationIgnored
+  private var menuBarCurrency: [Bool] = []
+
+  @ObservationIgnored
   private let browserSessionImporter: any BrowserSessionImporting
 
   @ObservationIgnored
@@ -220,6 +235,11 @@ final class MenuBarViewModel {
 
   /// How long a quit waits for the service's goodbye before going ahead without it.
   nonisolated static let shutdownDeadline: Duration = .seconds(2)
+
+  /// How often the menu-bar item is re-evaluated against the clock. The shared freshness rule's
+  /// smallest unit is a minute — under one everything reads "just now" — so a minute is as fine
+  /// as the item's answer can change.
+  nonisolated static let menuBarClockInterval: Duration = .seconds(60)
 
   @ObservationIgnored
   private let shutdownDeadline: Duration
@@ -317,6 +337,7 @@ final class MenuBarViewModel {
     eventTask?.cancel()
     loginTask?.cancel()
     browserSessionTask?.cancel()
+    menuBarClockTask?.cancel()
   }
 
   func start() {
@@ -333,6 +354,31 @@ final class MenuBarViewModel {
         await reloadState()
       }
     }
+    let interval = Self.menuBarClockInterval
+    menuBarClockTask = Task { @MainActor [weak self] in
+      while !Task.isCancelled {
+        do {
+          try await Task.sleep(for: interval)
+        } catch {
+          return
+        }
+        self?.advanceMenuBarClock(to: Date())
+      }
+    }
+  }
+
+  /// Publishes the instant the menu-bar item is drawn for.
+  ///
+  /// The item depends on time only through which readings still describe live quota, so a
+  /// minute in which that set did not change is a minute in which the item cannot have changed
+  /// either, and publishing would rebuild the status item for the same answer. New readings are
+  /// the exception: the label is re-read for them anyway, and they have to be judged against the
+  /// present rather than against whenever the clock last had reason to move.
+  func advanceMenuBarClock(to now: Date, forNewReadings: Bool = false) {
+    let currency = MenuBarLabelModel.currency(of: overview, now: now)
+    guard forNewReadings || currency != menuBarCurrency else { return }
+    menuBarCurrency = currency
+    menuBarClock = now
   }
 
   /// QuotaBar's last word to its local service, and the last thing that can hold up a quit. The
@@ -432,10 +478,12 @@ final class MenuBarViewModel {
     )
   }
 
+  /// The menu-bar item, drawn for `now` — which in the app is ``menuBarClock``, so reading the
+  /// label subscribes the item to the clock as well as to the readings.
   func menuBarLabel(
     style: MenuBarStylePreference,
     provider: MenuBarProviderPreference = .automatic,
-    now: Date = Date()
+    now: Date
   ) -> MenuBarLabelModel {
     MenuBarLabelModel.make(overview: overview, style: style, provider: provider, now: now)
   }
@@ -895,6 +943,7 @@ final class MenuBarViewModel {
         nil
       }
     overview = state.overview
+    advanceMenuBarClock(to: Date(), forNewReadings: true)
     providerConfigurations = Dictionary(
       uniqueKeysWithValues: state.providers.map { ($0.provider, $0) }
     )

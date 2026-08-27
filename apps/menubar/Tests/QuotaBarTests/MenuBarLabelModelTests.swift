@@ -209,6 +209,34 @@ struct MenuBarLabelModelTests {
     )
   }
 
+  /// The item's answer is a function of time — the shared freshness rule retires a reading —
+  /// but observation only re-reads it when something it read changed, so the model carries a
+  /// clock. It moves exactly when the answer can have moved with it, and not once more.
+  @Test @MainActor
+  func agingOutMovesTheMenuBarClockAndAnUneventfulMinuteDoesNot() {
+    #expect(MenuBarViewModel.menuBarClockInterval == .seconds(60))
+    let model = viewModel(
+      overview: [item(fingerprint: "codex", windows: [window(id: "weekly", usedPercent: 40)])]
+    )
+
+    // What a state update does: new readings are judged against the present.
+    model.advanceMenuBarClock(to: now, forNewReadings: true)
+    #expect(model.menuBarClock == now)
+    #expect(model.menuBarLabel(style: .iconAndPercent, now: model.menuBarClock).text == "60%")
+
+    // A minute in which nothing aged out is a minute the item cannot have changed in, so the
+    // status item is not rebuilt for the same answer.
+    model.advanceMenuBarClock(to: now.addingTimeInterval(60))
+    #expect(model.menuBarClock == now)
+
+    // A day on, the reading no longer describes live quota and the number has to go, with no
+    // service event to announce it.
+    let agedOut = now.addingTimeInterval(90_000)
+    model.advanceMenuBarClock(to: agedOut)
+    #expect(model.menuBarClock == agedOut)
+    #expect(model.menuBarLabel(style: .iconAndPercent, now: model.menuBarClock).text == nil)
+  }
+
   @Test
   func theStoredStyleKeepsItsWireSpellingAndItsKey() {
     #expect(MenuBarStylePreference.iconAndPercent.rawValue == "icon_and_percent")
@@ -240,6 +268,27 @@ struct MenuBarLabelModelTests {
         isStale: true
       ),
     ]
+  }
+
+  @MainActor
+  private func viewModel(overview: [LocalServiceOverviewItem]) -> MenuBarViewModel {
+    MenuBarViewModel(
+      visualTestState: MenuBarVisualState(
+        report: QuotaCollectionReport(capturedAt: now, results: []),
+        localUsage: LocalUsageReport(
+          generatedAt: now,
+          aggregationTimezone: nil,
+          range: UsageDateRange(from: "2026-08-01", to: "2026-08-10"),
+          status: .unavailable,
+          coverage: []
+        ),
+        accountSummary: nil,
+        authStatus: .signedOut,
+        overview: overview
+      ),
+      errorMessage: nil,
+      lastCheckedAt: nil
+    )
   }
 
   private func window(id: String, usedPercent: Double) -> QuotaWindow {

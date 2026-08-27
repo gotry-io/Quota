@@ -70,8 +70,15 @@ struct QuotaBarApp: App {
       MenuBarExtra {
         MenuBarContentView(model: model)
       } label: {
+        // The item is drawn for the model's coarse clock rather than for `Date()`: reading it
+        // here is what makes the item re-evaluate when a reading ages out with nothing else
+        // happening. The clock only moves when that verdict does.
         QuotaMenuBarLabel(
-          label: model.menuBarLabel(style: menuBarStyle, provider: menuBarProvider)
+          label: model.menuBarLabel(
+            style: menuBarStyle,
+            provider: menuBarProvider,
+            now: model.menuBarClock
+          )
         )
       }
       .menuBarExtraStyle(.window)
