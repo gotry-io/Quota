@@ -171,8 +171,8 @@ describe("browser sign-in through GitHub", () => {
     // RFC 9207: GitHub appends `iss=https://github.com` to the authorization-code redirect.
     // A callback naming any other issuer is not GitHub's.
     for (const [issuer, status] of [
-      ["https://github.com", 302],
-      ["https://github.example", 400],
+      ["https://github.com/login/oauth", 302],
+      ["https://github.com", 400],
     ] as const) {
       const relay = harness(fakeGitHub());
       const started = await relay.app.request(`${origin}/api/auth/github/start`);

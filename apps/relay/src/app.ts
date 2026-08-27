@@ -73,7 +73,7 @@ import { planLocalPeriods } from "./local-periods.ts";
 import { buildAccountUsage, buildActivityDays, UsageSummaryLimitError } from "./usage-summary.ts";
 
 /** The issuer GitHub states in its authorization-code redirect (RFC 9207). */
-const GITHUB_ISSUER = "https://github.com";
+const GITHUB_ISSUER = "https://github.com/login/oauth";
 
 const maximumCredentialBodyBytes = 64 * 1024;
 const maximumSnapshotBodyBytes = 256 * 1024;
