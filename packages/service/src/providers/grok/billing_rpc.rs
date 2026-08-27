@@ -16,7 +16,7 @@ use super::super::common::{
     clamp_percent, cookie_named_value,
 };
 
-pub const SOURCE: &str = "grok_billing_rpc";
+pub const RPC_SOURCE: &str = "grok_billing_rpc";
 /// The same RPC, reached with the browser's cookie rather than the CLI's token.
 pub const WEB_SOURCE: &str = "grok_web_billing_api";
 const BILLING_RPC_URL: &str = "https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig";
@@ -40,7 +40,7 @@ impl Auth<'_> {
 
     fn source(&self) -> &'static str {
         match self {
-            Self::Bearer(_) => SOURCE,
+            Self::Bearer(_) => RPC_SOURCE,
             Self::Cookie(_) => WEB_SOURCE,
         }
     }
@@ -541,13 +541,14 @@ mod tests {
 
     #[test]
     fn parses_grpc_web_percent_and_auth_trailer() {
-        let billing = parse_grpc_web_billing(&percent_frame(25.0), 1_786_320_000, SOURCE).unwrap();
+        let billing =
+            parse_grpc_web_billing(&percent_frame(25.0), 1_786_320_000, RPC_SOURCE).unwrap();
         assert_eq!(billing.used_percent, 25.0);
 
         let error = parse_grpc_web_billing(
             &trailer_frame("grpc-status: 16\r\ngrpc-message: no-credentials\r\n"),
             1_786_320_000,
-            SOURCE,
+            RPC_SOURCE,
         )
         .unwrap_err();
         assert_eq!(error.category, ErrorCategory::AuthRequired);

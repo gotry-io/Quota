@@ -16,7 +16,6 @@ mod billing_rpc;
 pub mod refresh;
 
 pub const SOURCE: &str = "grok_billing_api";
-pub const BILLING_RPC_SOURCE: &str = billing_rpc::SOURCE;
 pub const WEB_SOURCE: &str = billing_rpc::WEB_SOURCE;
 pub const BILLING_URL: &str = "https://cli-chat-proxy.grok.com/v1/billing?format=credits";
 pub const SETTINGS_URL: &str = "https://cli-chat-proxy.grok.com/v1/settings";

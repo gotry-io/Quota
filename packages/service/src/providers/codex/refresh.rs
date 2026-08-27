@@ -453,7 +453,7 @@ mod tests {
                 error.category,
                 crate::providers::common::ErrorCategory::AuthRequired
             );
-            assert_eq!(error.source_id, super::super::SOURCE_API);
+            assert_eq!(error.source_id, super::super::SOURCE);
 
             let _ = fs::remove_dir_all(&directory);
         }
