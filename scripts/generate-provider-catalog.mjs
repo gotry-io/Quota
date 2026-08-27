@@ -64,9 +64,9 @@ export const PROVIDER_DISPLAY_NAMES: Readonly<Record<LocalProviderId, string>> =
 ${displayNamesLiteral}
 };
 
-/** A provider this build has never heard of names itself rather than disappearing. */
+/** A provider this build has never heard of gets a neutral name, never its wire id (ADR 0023). */
 export function providerDisplayName(provider: string): string {
-  return PROVIDER_DISPLAY_NAMES[provider as LocalProviderId] ?? provider;
+  return PROVIDER_DISPLAY_NAMES[provider as LocalProviderId] ?? "Unknown provider";
 }
 `;
 writeGenerated("packages/protocol/src/provider-ids.generated.ts", protocolTs);
