@@ -2120,6 +2120,11 @@ fn wait_for_callback(
 const BROWSER_CALLBACK_SUCCESS_RESPONSE: &[u8] = b"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nCache-Control: no-store\r\nReferrer-Policy: no-referrer\r\nContent-Security-Policy: default-src 'none'; script-src 'unsafe-inline'\r\nConnection: close\r\n\r\n<!doctype html><meta charset=utf-8><title>Quota</title><p>Quota login complete. You can close this window.</p><script>history.replaceState(null,'','/callback');window.close()</script>";
 
 fn parse_callback(stream: &mut TcpStream, expected_state: &str) -> Option<String> {
+    // The listener polls without blocking, and on macOS a connection it accepts inherits that
+    // flag (Linux clears it in `accept4`). Read timeouts do nothing on a non-blocking socket, so
+    // a browser whose request lands a moment after the handshake would be answered 400 before it
+    // had said anything. The one request this socket carries is read blocking, under a deadline.
+    stream.set_nonblocking(false).ok()?;
     stream.set_read_timeout(Some(Duration::from_secs(2))).ok()?;
     let mut buffer = Vec::with_capacity(1_024);
     let mut chunk = [0_u8; 1_024];
@@ -2976,6 +2981,49 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The listener is non-blocking so the login loop can watch for cancellation, and macOS
+    /// hands an accepted connection that same flag. The request usually arrives with the
+    /// handshake, but a browser that sends it a beat later must still be read, not refused.
+    #[test]
+    fn a_callback_that_arrives_after_accept_is_still_read() {
+        use std::io::Read as _;
+        use std::net::{TcpListener, TcpStream};
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking listener");
+        let address = listener.local_addr().expect("address");
+        let browser = std::thread::spawn(move || {
+            let mut socket = TcpStream::connect(address).expect("connect");
+            std::thread::sleep(Duration::from_millis(300));
+            socket
+                .write_all(
+                    b"GET /callback?code=abc123&state=expected HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n",
+                )
+                .expect("request");
+            let mut reply = String::new();
+            let _ = socket.read_to_string(&mut reply);
+            reply
+        });
+        let (mut stream, _) = loop {
+            match listener.accept() {
+                Ok(accepted) => break accepted,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("accept: {error}"),
+            }
+        };
+        let code = parse_callback(&mut stream, "expected");
+        assert_eq!(code.as_deref(), Some("abc123"));
+        stream
+            .write_all(BROWSER_CALLBACK_SUCCESS_RESPONSE)
+            .expect("reply");
+        drop(stream);
+        let reply = browser.join().expect("browser thread");
+        assert!(reply.starts_with("HTTP/1.1 200 OK"), "{reply}");
     }
 
     #[test]
