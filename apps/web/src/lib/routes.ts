@@ -9,11 +9,6 @@ export function signInHref(returnTo: string = DASHBOARD_PATH): string {
     : `${SIGN_IN_PATH}?return_to=${encodeURIComponent(returnTo)}`;
 }
 
-/** `/app` shipped in 0.0.4; keep one bookmark redirect while `/my` is canonical. */
-export function legacyDashboardRedirect(pathname: string): string | null {
-  return pathname === "/app" || pathname.startsWith("/app/") ? DASHBOARD_PATH : null;
-}
-
 const KNOWN_PLANS: Readonly<Record<string, string>> = {
   free: "Free",
   plus: "Plus",

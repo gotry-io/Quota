@@ -11,7 +11,7 @@ export type ActivityRange = {
   to: string;
 };
 
-export type ActivityDay = {
+type ActivityDay = {
   date: string;
   outside: boolean;
   today: boolean;
@@ -25,44 +25,41 @@ export type ActivityDay = {
   tooltip: string;
 };
 
-export type ActivityMonthLabel = {
+type ActivityMonthLabel = {
   weekIndex: number;
   label: string;
   span: number;
 };
 
-export type ActivityTooltipBox = {
+type ActivityTooltipBox = {
   left: number;
   top: number;
   right: number;
   bottom: number;
 };
 
-export type ActivityTooltipPlacement = {
+type ActivityTooltipPlacement = {
   left: number;
   top: number;
   placement: "above" | "below";
 };
 
-export type UsageActivityModel = {
+type UsageActivityModel = {
   days: ActivityDay[];
   weeks: ActivityDay[][];
   monthLabels: ActivityMonthLabel[];
 };
 
-export type ActivityCostView = Pick<
-  UsageActivityDayRead["cost"],
-  "status" | "amount_microusd" | "basis"
->;
+type ActivityCostView = Pick<UsageActivityDayRead["cost"], "status" | "amount_microusd" | "basis">;
 
-export function formatActivityDate(value: string): string {
+function formatActivityDate(value: string): string {
   return new Intl.DateTimeFormat(WEB_LOCALE, {
     dateStyle: "long",
     timeZone: "UTC",
   }).format(utcDate(value));
 }
 
-export function formatActivityMonth(value: string): string {
+function formatActivityMonth(value: string): string {
   return new Intl.DateTimeFormat(WEB_LOCALE, {
     month: "short",
     timeZone: "UTC",

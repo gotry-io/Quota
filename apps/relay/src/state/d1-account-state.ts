@@ -713,16 +713,6 @@ export class D1AccountState implements AccountState {
     return rows.results;
   }
 
-  async accountOwnsVisibleDevice(accountId: string, deviceId: string): Promise<boolean> {
-    const row = await this.database
-      .prepare(
-        "SELECT 1 AS found FROM devices WHERE account_id = ?1 AND id = ?2 AND deleted_at IS NULL",
-      )
-      .bind(accountId, deviceId)
-      .first<{ found: number }>();
-    return row?.found === 1;
-  }
-
   async getDeviceSyncControl(
     deviceId: string,
     generation: number,

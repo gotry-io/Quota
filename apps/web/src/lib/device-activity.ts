@@ -1,6 +1,6 @@
 import type { AccountDeviceRead } from "@gotry-io/quota-protocol";
 
-export type DeviceActivityPresentation = {
+type DeviceActivityPresentation = {
   label: string;
   tone: "available" | "offline" | "unavailable";
   /** The instant the label is derived from, so the row states one age rather than a list. */

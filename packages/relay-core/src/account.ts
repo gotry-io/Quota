@@ -314,7 +314,6 @@ export interface AccountState {
   ): Promise<void>;
   getAccount(accountId: string): Promise<AccountRecord | null>;
   listAccountDevices(accountId: string): Promise<DeviceRecord[]>;
-  accountOwnsVisibleDevice(accountId: string, deviceId: string): Promise<boolean>;
   getDeviceSyncControl(deviceId: string, generation: number): Promise<DeviceSyncControl | null>;
   updateDeviceProfile(
     deviceId: string,

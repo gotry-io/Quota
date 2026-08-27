@@ -1,15 +1,11 @@
 import type {
-  BillingAgent,
-  UsageCostMode as ProtocolUsageCostMode,
   UsageRow as ProtocolUsageRow,
   UsageUpload as ProtocolUsageUpload,
 } from "@gotry-io/quota-protocol";
 import type { DeviceWriterPrincipal } from "./account.ts";
 
-export type UsageAgent = BillingAgent;
 export type UsageRow = ProtocolUsageRow;
 export type UsageUpload = ProtocolUsageUpload;
-export type UsageCostMode = ProtocolUsageCostMode;
 
 /**
  * What one upload did to the hours it named.

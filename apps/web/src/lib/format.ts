@@ -49,7 +49,7 @@ export const NOT_CHECKED_COPY = "Not checked";
 export const NO_READINGS_COPY = "no readings yet";
 
 /** The bare compact duration: the largest whole unit that fits, with no words around it. */
-export function compactAge(instant: string | number | Date, now: Date = new Date()): string {
+function compactAge(instant: string | number | Date, now: Date = new Date()): string {
   const seconds = Math.max(0, Math.floor((now.getTime() - new Date(instant).getTime()) / 1000));
   if (seconds < 60) return `${seconds}s`;
   if (seconds < 3_600) return `${Math.floor(seconds / 60)}m`;
@@ -76,11 +76,7 @@ export function updatedCopy(instant: string | number | Date | null, now?: Date):
 }
 
 /** The whole line for a reading that no longer does, naming why rather than only that it does not. */
-export function notCurrentCopy(
-  reason: string,
-  instant: string | number | Date,
-  now?: Date,
-): string {
+function notCurrentCopy(reason: string, instant: string | number | Date, now?: Date): string {
   return `${reason} — last reading ${relativeAge(instant, now)}`;
 }
 
@@ -96,15 +92,7 @@ export function lastReadingCopy(instant: string | null, now?: Date): string {
   return `last reading ${relativeAge(instant, now)}`;
 }
 
-export function formatShortDate(value: string): string {
-  return new Intl.DateTimeFormat(WEB_LOCALE, {
-    month: "short",
-    day: "numeric",
-    timeZone: "UTC",
-  }).format(new Date(`${value}T00:00:00Z`));
-}
-
-export function formatPercent(value: number): string {
+function formatPercent(value: number): string {
   return `${new Intl.NumberFormat(WEB_LOCALE, { maximumFractionDigits: 0 }).format(value)}%`;
 }
 
@@ -127,7 +115,7 @@ export function formatQuotaRemaining(
   return `${percent} · ${absolute}`;
 }
 
-export function formatAbsoluteRemaining(window: {
+function formatAbsoluteRemaining(window: {
   remaining_value?: number | undefined;
   value_unit?: string | undefined;
 }): string | undefined {
@@ -153,7 +141,7 @@ export function activityLevel(value: number, maximum: number): number {
  * A source that cannot read is the same problem wherever it runs, so these match what the
  * Apple clients say about a failure on the machine in front of you.
  */
-export function observedSnapshotStatusLabel(status: string): string {
+function observedSnapshotStatusLabel(status: string): string {
   switch (status) {
     case "available":
       return "Available";

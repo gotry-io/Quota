@@ -491,11 +491,6 @@ h1 {
   font-weight: 500;
 }
 
-.provider-icon {
-  width: 14px;
-  height: 14px;
-}
-
 .quota-window {
   padding-top: 12px;
 }
@@ -657,28 +652,6 @@ h3 {
   color: var(--on-inverted);
 }
 
-.flow-node-split {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0;
-  padding: 0;
-}
-
-.flow-node-split > div {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 24px;
-}
-
-.flow-node-split > div + div {
-  border-left: 1px solid var(--hairline);
-}
-
-.flow-node-split .diagram-tag {
-  align-self: flex-start;
-}
-
 .flow-arrow {
   align-self: center;
   color: var(--mute);
@@ -758,11 +731,6 @@ footer {
 
 .count-pill {
   padding: 4px 9px;
-}
-
-.route-loading {
-  padding-block: 48px;
-  color: var(--body);
 }
 
 .dashboard {
@@ -1318,10 +1286,6 @@ tbody tr:last-child td {
 
 .notice {
   margin-bottom: 24px;
-}
-
-.notice-action {
-  margin-left: 16px;
 }
 
 .empty-state {
