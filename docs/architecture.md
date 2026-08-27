@@ -61,7 +61,10 @@ including precomputed Today, 7 Days, 30 Days, and All Usage periods, immediately
 independent status, last-good value, update time, error/recovery code, and refreshing flag for quota,
 Usage, account, and pricing. The service begins a background startup refresh once IPC is available,
 emits revisioned `state_changed` events, and schedules refreshes every five minutes; manual refresh
-uses the same single-flight path. QuotaBar sends `shutdown` as it terminates, waits at most two
+uses the same single-flight path. A refresh applies a component as soon as it has one rather than
+only at its end — the account read finishes in well under a second while provider collection can
+take twenty seconds per provider — and the end of a refresh applies a component exactly when it
+differs from what was already published. QuotaBar sends `shutdown` as it terminates, waits at most two
 seconds for the answer, and stdin EOF says the same thing to a helper that never gave one, so nothing
 syncs after QuotaBar exits and a second client takes the owner lock only after the first releases it.
 
@@ -221,6 +224,14 @@ observation rows the response projects, so a matching `If-None-Match` returns 30
 query runs. The Rust service and the iOS client both read conditionally, storing each response with
 its ETag in one transaction keyed by Account and treating a 304 as that stored response rather than a
 failure; signing out drops the stored reads with the session.
+
+The Account read is not sequenced behind local collection. It needs only the session, so a refresh
+runs it beside provider collection and the Usage scan and applies the account component — and the
+Account periods derived from it — the moment it lands, rather than when the whole refresh ends;
+QuotaBar is told about it then too. What still runs after collection is the writing half of a sync:
+the device control check, the quota upload, and the Usage outbox drain, in that order. Only a failure
+there that ends the session speaks for the account, so an upload a refresh could not deliver never
+takes back a summary it already read.
 
 An Account-summary Device carries `last_seen_at` and `last_observed_at` and nothing it asserted about
 itself. Clients derive how recently it spoke from the newer of the two — Active under thirty minutes,
