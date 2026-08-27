@@ -309,7 +309,10 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     }
     context.header("Set-Cookie", completed.session, { append: true });
     context.header("Set-Cookie", completed.handoff, { append: true });
-    return context.redirect(completed.return_to, 302);
+    // Checked here as well as where it was accepted. This value has been out of Relay's hands
+    // and back — through a signed cookie, but a cookie all the same — and it is about to become
+    // a `Location` on an authenticated response, which is the exact shape of an open redirect.
+    return context.redirect(safeReturnPath(completed.return_to) ?? DEFAULT_RETURN_PATH, 302);
   });
 
   app.post("/api/auth/logout", async (context) => {
@@ -369,7 +372,12 @@ export function createRelayApp(options: RelayAppOptions): Hono {
         },
         now(),
       );
-      const callback = `/oauth/v2/complete?login_token=${encodeURIComponent(login.login_token)}`;
+      // Both places a sign-in names where to come back to go through the one validator, so a
+      // path that would not be accepted from a caller is not accepted from us either.
+      const callback = safeReturnPath(
+        `/oauth/v2/complete?login_token=${encodeURIComponent(login.login_token)}`,
+      );
+      if (callback === null) return invalidRequest(context);
       return await beginGitHubSignIn(context, options, callback, now());
     } catch (error) {
       return accountFlowError(context, error);
@@ -378,6 +386,19 @@ export function createRelayApp(options: RelayAppOptions): Hono {
 
   app.get("/oauth/v2/complete", async (context) => {
     if (!hasOnlyQueryKeys(context, ["login_token"])) return invalidRequest(context);
+    // The other end of the same browser round trip as the GitHub callback, and the only route
+    // that turns a login token into an authorization code, so it is guessable at exactly the
+    // rate that one is.
+    const limited = await enforceRateLimit(
+      context,
+      options.state,
+      options.hasher,
+      "web-signin",
+      anonymousClientSubject(context),
+      rateLimits.webSignIn,
+      now(),
+    );
+    if (limited) return limited;
     const loginToken = context.req.query("login_token");
     const principal = await options.webSessions.authorize(context.req.raw.headers, now());
     if (!loginToken || loginToken.length > 4_096 || !principal) return unauthorized(context);

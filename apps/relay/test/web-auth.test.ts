@@ -34,6 +34,7 @@ beforeEach(async () => {
   await env.DB.batch([
     env.DB.prepare("DELETE FROM usage_daily"),
     env.DB.prepare("DELETE FROM usage_hourly"),
+    env.DB.prepare("DELETE FROM usage_hour_scans"),
     env.DB.prepare("DELETE FROM quota_snapshots"),
     env.DB.prepare("DELETE FROM sessions"),
     env.DB.prepare("DELETE FROM login_grants"),
@@ -330,6 +331,45 @@ describe("browser sign-in through GitHub", () => {
     expect(deepLink.status).toBe(302);
   });
 
+  it("checks the return path again at the redirect that spends it", async () => {
+    const relay = harness(fakeGitHub());
+    const started = await relay.app.request(`${origin}/api/auth/github/start`);
+    const state = new URL(started.headers.get("location") ?? "").searchParams.get("state") ?? "";
+    const handoff = onlyCookie(started);
+    // A handoff sealed with a target the start route would have refused. Relay signs this cookie,
+    // so nothing outside can forge one — and the callback still refuses to send the browser there,
+    // because the value has left this Worker and come back before becoming a `Location`.
+    const forged = await sealedHandoff({
+      state,
+      verifier: "x".repeat(43),
+      return_to: "https://attacker.invalid/",
+      expires_at: new Date(now.getTime() + 60_000).toISOString(),
+    });
+    const callback = await relay.app.request(
+      `${origin}/api/auth/github/callback?code=forged-return&state=${encodeURIComponent(state)}`,
+      { headers: { Cookie: `${handoff.name}=${forged}` } },
+    );
+    expect(callback.status).toBe(302);
+    expect(callback.headers.get("location")).toBe("/my");
+  });
+
+  it("rate-limits the browser round trip at both ends", async () => {
+    const relay = harness(fakeGitHub());
+    const request = (path: string) =>
+      relay.app.request(`${origin}${path}`, { headers: { "CF-Connecting-IP": "203.0.113.7" } });
+
+    // The two ends share one class and one subject, so exhausting either exhausts both: the
+    // completion route is the only thing that turns a login token into an authorization code.
+    let limited: Response | null = null;
+    for (let attempt = 0; attempt < 31 && limited === null; attempt += 1) {
+      const response = await request("/oauth/v2/complete?login_token=guess");
+      if (response.status === 429) limited = response;
+    }
+    expect(limited?.status).toBe(429);
+    expect(limited?.headers.get("Retry-After")).toMatch(/^\d+$/);
+    expect((await request("/api/auth/github/start")).status).toBe(429);
+  });
+
   it("requires a same-origin request to sign out or delete the Account", async () => {
     const github = fakeGitHub();
     const relay = harness(github);
@@ -422,6 +462,7 @@ describe("browser sign-in through GitHub", () => {
       "devices",
       "quota_snapshots",
       "usage_hourly",
+      "usage_hour_scans",
       "usage_daily",
       "login_grants",
     ]) {
@@ -507,6 +548,17 @@ function harness(github: GitHubStub, clock: () => Date = () => now) {
   };
 }
 
+/** A handoff cookie value Relay itself would accept, whatever it carries. */
+async function sealedHandoff(payload: {
+  state: string;
+  verifier: string;
+  return_to: string;
+  expires_at: string;
+}): Promise<string> {
+  const encoded = encodeBase64UrlJSON(payload);
+  return `${encoded}.${await new SecretHasher(secret).hash("oauth-handoff", encoded)}`;
+}
+
 async function signIn(relay: ReturnType<typeof harness>, code: string): Promise<Response> {
   const started = await relay.app.request(`${origin}/api/auth/github/start`);
   const state = new URL(started.headers.get("location") ?? "").searchParams.get("state") ?? "";
@@ -546,6 +598,10 @@ async function seedDeviceData(accountId: string): Promise<void> {
          source_cost_microusd, source_cost_covered_requests
        ) VALUES ('device_delete', 'codex', '2026-08-10T00:00:00Z', 1, 0, 'openai_direct', 'explicit',
          'gpt-5', 'standard', 'default', 'default', 'global', 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, NULL, 0)`,
+    ),
+    env.DB.prepare(
+      `INSERT INTO usage_hour_scans (device_id, agent, bucket_start_utc, scan_version)
+       VALUES ('device_delete', 'codex', '2026-08-10T00:00:00Z', 1)`,
     ),
     env.DB.prepare(
       `INSERT INTO usage_daily (
