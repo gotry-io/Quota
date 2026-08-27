@@ -59,6 +59,30 @@ struct SupportPageModelTests {
       SupportPresentation.sourceTitle(subject: "usage_upload", sourceID: nil) == "Usage Upload")
   }
 
+  /// Support is the one page that states a clock time. A person presses Recheck to find out
+  /// whether what they are looking at came from that run, and every run is "just now".
+  @Test func theStatusLineStatesWhenTheCheckRanRatherThanHowLongAgo() {
+    let label = SupportPresentation.checkedLabel(
+      Date(timeIntervalSince1970: 1_786_300_000),
+      locale: Locale(identifier: "en_US"),
+      timeZone: TimeZone(identifier: "America/Los_Angeles")!
+    )
+
+    #expect(label.hasPrefix("Checked "))
+    #expect(label.contains("11:26"))
+    #expect(label.contains("AM"))
+    #expect(!label.contains("ago"))
+
+    // Locale-shortened, so the same instant reads as the clock the reader keeps.
+    #expect(
+      SupportPresentation.checkedLabel(
+        Date(timeIntervalSince1970: 1_786_300_000),
+        locale: Locale(identifier: "en_GB"),
+        timeZone: TimeZone(identifier: "Europe/London")!
+      ) == "Checked 19:26"
+    )
+  }
+
   @Test func summaryLabelFollowsOperationThenAttention() {
     #expect(
       SupportPresentation.summaryLabel(

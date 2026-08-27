@@ -1,5 +1,4 @@
 import AppKit
-import QuotaPresentation
 import QuotaWire
 import SwiftUI
 
@@ -39,6 +38,23 @@ enum SupportPresentation {
       ?? identity.replacingOccurrences(of: "_", with: " ").capitalized
     guard let sourceID else { return name }
     return "\(name) · \(sourceID.replacingOccurrences(of: "_", with: " ").capitalized)"
+  }
+
+  /// When the report on screen was evaluated, as a clock time rather than an age.
+  ///
+  /// Every other past instant in the product is a relative age, because a quota number that
+  /// moves while it is being read is noise. A check is the opposite: a person presses Recheck
+  /// and needs to see that what is on screen came from the run they just asked for, and "just
+  /// now" says that about every run. The time is fixed — it does not depend on when it is
+  /// read — and locale-shortened, so it reads the way the menu bar clock beside it does.
+  static func checkedLabel(
+    _ generatedAt: Date,
+    locale: Locale = .current,
+    timeZone: TimeZone = .current
+  ) -> String {
+    var style = Date.FormatStyle(date: .omitted, time: .shortened)
+    style.timeZone = timeZone
+    return "Checked \(generatedAt.formatted(style.locale(locale)))"
   }
 
   static func statusLabel(_ status: LocalServiceDiagnosticStatus) -> String {
@@ -228,7 +244,7 @@ struct SettingsSupportView: View {
   }
 
   private func statusView(_ report: LocalServiceDiagnosticReport) -> some View {
-    let checked = FreshnessCopy.updated(since: report.generatedAt)
+    let checked = SupportPresentation.checkedLabel(report.generatedAt)
     let label = SupportPresentation.summaryLabel(report.summary)
     return HStack(spacing: QuotaDesign.Spacing.sm) {
       Image(systemName: summarySymbol(report.summary))
