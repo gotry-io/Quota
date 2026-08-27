@@ -18,10 +18,7 @@ mod json;
 mod renewal;
 mod types;
 
-pub use cli_version::{
-    CliTool, CliVersionResolution, ProbeCache, ProbeEnvironment, ProbeRecord,
-    fingerprint as binary_fingerprint, resolve as resolve_cli_versions, resolve_binary,
-};
+pub use cli_version::{CliTool, ProbeCache, ProbeEnvironment, resolve as resolve_cli_versions};
 pub use config::{ApiKeyCredentials, resolve_api_key};
 pub use http::{HTTP_BODY_LIMIT, HTTP_TIMEOUT, HttpClient, VALIDATION_TIMEOUT};
 pub use identity::{
@@ -33,8 +30,8 @@ pub use json::{
     provider_source, slug, string, unix_now, unix_seconds_to_iso, url_encode,
 };
 pub use renewal::{
-    RENEWAL_FLOOR_SECONDS, RENEWAL_OUTPUT_LIMIT, RenewalAttempt, RenewalAttempts, RenewalOutcome,
-    RenewalPlan, json_rpc_reply, renew_sign_in, within_renewal_floor,
+    RENEWAL_FLOOR_SECONDS, RenewalAttempt, RenewalAttempts, RenewalOutcome, RenewalPlan,
+    json_rpc_reply, renew_sign_in,
 };
 pub use types::{
     BROWSER_COOKIE_HEADER_LIMIT, BROWSER_SESSION_SOURCE, CollectionContext, ErrorCategory,

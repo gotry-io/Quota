@@ -361,7 +361,6 @@ mod tests {
             .expect("the floor expires");
             assert_eq!(after.outcome, RenewalOutcome::Failed);
             assert_eq!(spawns(&log), 2);
-            assert_eq!(after.fingerprint, first.fingerprint);
 
             let _ = fs::remove_dir_all(&directory);
         }

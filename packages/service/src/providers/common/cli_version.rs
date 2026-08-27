@@ -16,7 +16,7 @@ use std::process::Command;
 use std::sync::{Arc, atomic::AtomicBool};
 use std::time::Duration;
 
-use super::io::run_bounded_command;
+use super::io::{private_directory, run_bounded_command};
 
 /// How long a provider CLI this build starts may run by default, and how much a `--version`
 /// read may print. Every spawn shares one deadline, and this is it unless the caller states a
@@ -191,13 +191,14 @@ pub fn probe(
     if let Some(path) = environment.path.as_deref() {
         command.env("PATH", path);
     }
-    // A CLI reads the directory it is started in. `--version` has no business seeing a
-    // project, and the refresh worker's own directory is not one this build chose.
-    if environment.home.is_dir() {
-        command.current_dir(&environment.home);
-    }
-    let output = run_bounded_command(command, environment.timeout, cancel, VERSION_OUTPUT_LIMIT)?;
-    parse_version(&String::from_utf8_lossy(&output))
+    // A CLI reads the directory it is started in, and `$HOME` is a directory with this
+    // person's own configuration in it. `--version` gets the same empty directory of this
+    // build's own making that a renewal does, and it is removed afterwards.
+    let directory = private_directory()?;
+    command.current_dir(&directory);
+    let output = run_bounded_command(command, environment.timeout, cancel, VERSION_OUTPUT_LIMIT);
+    let _ = std::fs::remove_dir_all(&directory);
+    parse_version(&String::from_utf8_lossy(&output?))
 }
 
 /// The real file behind `<name>` in the first of [`ProbeEnvironment::directories`] that holds
@@ -424,6 +425,57 @@ mod tests {
             assert!(third.changed);
             assert_eq!(spawn_count(&log), 2);
 
+            let _ = fs::remove_dir_all(&directory);
+        }
+    }
+
+    /// A CLI reads the directory it is started in, and `$HOME` is a directory with this
+    /// person's own configuration in it. A `--version` read gets the same empty directory of
+    /// this build's own making that a renewal does.
+    #[test]
+    fn the_version_read_starts_in_an_empty_directory_of_its_own() {
+        #[cfg(unix)]
+        {
+            let directory = temp_directory("cwd");
+            let log = directory.join("spawns.log");
+            install_fake(
+                &directory,
+                "claude",
+                // Only shell builtins: the child's `PATH` holds the fake binary and nothing
+                // else, which is the point of the minimal environment.
+                &format!(
+                    "#!/bin/sh\n\
+                     echo \"cwd=$(pwd)\" >> {log}\n\
+                     for entry in claude spawns.log; do\n\
+                       [ -e \"$entry\" ] && echo \"saw=$entry\" >> {log}\n\
+                     done\n\
+                     printf '2.1.0\\n'\n",
+                    log = log.display()
+                ),
+            );
+            let environment = environment(&directory);
+
+            let resolution = resolve(
+                &[CliTool::Claude],
+                &ProbeCache::new(),
+                &environment,
+                1_000,
+                None,
+            );
+
+            assert_eq!(
+                resolution
+                    .versions
+                    .get(&CliTool::Claude)
+                    .map(String::as_str),
+                Some("2.1.0")
+            );
+            let recorded = fs::read_to_string(&log).expect("log");
+            assert!(!recorded.contains("saw="), "{recorded}");
+            assert!(
+                !recorded.contains(&format!("cwd={}", directory.display())),
+                "{recorded}"
+            );
             let _ = fs::remove_dir_all(&directory);
         }
     }

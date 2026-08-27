@@ -22,11 +22,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
-use super::cli_version::{ProbeEnvironment, fingerprint, resolve_binary};
-use super::io::BoundedExchange;
+use super::cli_version::{ProbeEnvironment, resolve_binary};
+use super::io::{BoundedExchange, private_directory};
 use super::types::CollectionContext;
 
 /// The floor between two renewal attempts for the same provider, whatever the last one
@@ -34,7 +34,6 @@ use super::types::CollectionContext;
 ///
 /// On time alone, not on the binary: an install that rewrites itself must not be able to buy
 /// an earlier spawn, for the same reason `cli_version` puts a floor under a churning binary.
-/// The fingerprint is recorded because it says *which* program ran, not to shorten this.
 pub const RENEWAL_FLOOR_SECONDS: i64 = 3_600;
 
 /// Everything a CLI may print across one renewal.
@@ -60,11 +59,9 @@ pub enum RenewalOutcome {
     Failed,
 }
 
-/// The last time this device asked one provider's CLI to renew, against which binary, and how
-/// it went.
+/// The last time this device asked one provider's CLI to renew, and how it went.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RenewalAttempt {
-    pub fingerprint: String,
     pub attempted_at: i64,
     pub outcome: RenewalOutcome,
 }
@@ -139,7 +136,6 @@ pub fn renew_sign_in(
     }
     // A Mac without the CLI has nothing to ask, and reports the sign-in it has.
     let binary = resolve_binary(plan.binary, environment)?;
-    let fingerprint = fingerprint(&binary)?;
     if within_renewal_floor(attempted, now) {
         return None;
     }
@@ -151,7 +147,6 @@ pub fn renew_sign_in(
     // after rewriting the token has still renewed it, and one that leaves cleanly without
     // touching it has not.
     Some(RenewalAttempt {
-        fingerprint,
         attempted_at: now,
         outcome: if (plan.usable)(context) {
             RenewalOutcome::Renewed
@@ -225,47 +220,6 @@ pub fn json_rpc_reply(exchange: &mut BoundedExchange, id: u64) -> Option<Value> 
             && value.get("id").and_then(Value::as_u64) == Some(id)
         {
             return value.get("error").is_none().then_some(value);
-        }
-    }
-}
-
-/// An empty directory of this device's own, owner-only, for the CLI to run in.
-///
-/// A CLI reads the directory it is started in: a project's `.mcp.json` and settings are found
-/// that way, and a renewal must not adopt whichever project the refresh worker happens to be
-/// sitting in — nor start the MCP servers some directory approved. Created rather than reused,
-/// and created with [`fs::create_dir`] so that a path already there is an error rather than
-/// something else's directory.
-fn private_directory() -> Option<PathBuf> {
-    let path = std::env::temp_dir().join(format!("quota-cli-renewal-{}", uuid::Uuid::new_v4()));
-    fs::create_dir(&path).ok()?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).ok()?;
-    }
-    Some(path)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Each renewal gets a directory of its own and leaves none behind.
-    #[test]
-    fn the_directory_the_cli_runs_in_is_private_and_temporary() {
-        let first = private_directory().expect("directory");
-        let second = private_directory().expect("directory");
-        assert_ne!(first, second);
-        assert!(fs::read_dir(&first).expect("readable").next().is_none());
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mode = fs::metadata(&first).expect("metadata").permissions().mode();
-            assert_eq!(mode & 0o777, 0o700);
-        }
-        for path in [first, second] {
-            fs::remove_dir_all(&path).expect("cleanup");
         }
     }
 }

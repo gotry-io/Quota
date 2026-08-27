@@ -1,6 +1,6 @@
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::{Arc, atomic::AtomicBool, mpsc};
 use std::thread;
@@ -239,6 +239,26 @@ pub(super) fn read_bounded_file_inner(
     (bytes.len() <= limit).then_some(bytes)
 }
 
+/// An empty directory of this device's own, owner-only, for a provider CLI to run in.
+///
+/// A CLI reads the directory it is started in: a project's `.mcp.json` and settings are found
+/// that way, and nothing this build starts may adopt whichever project the refresh worker
+/// happens to be sitting in — nor start the MCP servers some directory approved. That applies
+/// to `--version` as much as to a renewal: `$HOME` is a directory with a user's own
+/// configuration in it, not a neutral one. Created rather than reused, and created with
+/// [`fs::create_dir`] so that a path already there is an error rather than something else's
+/// directory.
+pub fn private_directory() -> Option<PathBuf> {
+    let path = std::env::temp_dir().join(format!("quota-cli-{}", uuid::Uuid::new_v4()));
+    fs::create_dir(&path).ok()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).ok()?;
+    }
+    Some(path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -342,6 +362,23 @@ mod tests {
             let _ = fs::remove_file(target);
             let _ = fs::remove_file(link);
             let _ = fs::remove_file(oversized);
+        }
+    }
+    /// Each spawn gets a directory of its own and leaves none behind.
+    #[test]
+    fn the_directory_a_cli_runs_in_is_private_and_temporary() {
+        let first = private_directory().expect("directory");
+        let second = private_directory().expect("directory");
+        assert_ne!(first, second);
+        assert!(fs::read_dir(&first).expect("readable").next().is_none());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&first).expect("metadata").permissions().mode();
+            assert_eq!(mode & 0o777, 0o700);
+        }
+        for path in [first, second] {
+            fs::remove_dir_all(&path).expect("cleanup");
         }
     }
 }
