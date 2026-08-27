@@ -13,7 +13,7 @@ use crate::catalog::ProviderId;
 use super::super::common::{
     CollectionContext, ErrorCategory, HTTP_TIMEOUT, HttpClient, ProviderError, QuotaAccount,
     QuotaSnapshot, QuotaWindow, VALIDATION_TIMEOUT, ValidatedBrowserSession, account_identity,
-    clamp_percent, cookie_named_value,
+    clamp_percent, cookie_named_value, jwt_subject,
 };
 
 pub const RPC_SOURCE: &str = "grok_billing_rpc";
@@ -86,7 +86,7 @@ fn validate_at(
         url,
         VALIDATION_TIMEOUT,
     )?;
-    let (account_fingerprint, _) = account_identity("grok", "user_id", None);
+    let (account_fingerprint, _) = web_account_identity(cookie_header);
     Ok(ValidatedBrowserSession {
         cookie_header: cookie_header.to_owned(),
         account_fingerprint,
@@ -108,7 +108,7 @@ fn collect_at(
 ) -> Result<QuotaSnapshot, ProviderError> {
     sso_token(cookie_header).ok_or_else(|| ProviderError::new(ErrorCategory::Error, WEB_SOURCE))?;
     let billing = fetch_billing(&Auth::Cookie(cookie_header), context, url, HTTP_TIMEOUT)?;
-    let (fingerprint, scope) = account_identity("grok", "user_id", None);
+    let (fingerprint, scope) = web_account_identity(cookie_header);
     Ok(QuotaSnapshot {
         provider: ProviderId::Grok,
         account: QuotaAccount {
@@ -121,6 +121,16 @@ fn collect_at(
         status: "available",
         observed_at: context.observed_at(),
     })
+}
+
+/// Whose grok.com account a stored session speaks for.
+///
+/// The RPC names nobody, so the sign-in cookie has to: it is a JWT, and the subject it carries
+/// is what tells two signed-in accounts apart. A cookie that names no one keeps the
+/// source-wide fingerprint, which says exactly that.
+fn web_account_identity(cookie_header: &str) -> (String, &'static str) {
+    let owner = sso_token(cookie_header).and_then(jwt_subject);
+    account_identity("grok", "user_id", owner.as_deref())
 }
 
 /// The one cookie that is a whole grok.com sign-in. `sso-rw` is the same session's
@@ -567,6 +577,8 @@ mod tests {
         )
         .expect("validated");
         assert_eq!(validated.account_label.as_deref(), Some("Grok"));
+        // A cookie that names no one keeps the source-wide fingerprint, which says exactly
+        // that.
         assert_eq!(
             validated.account_fingerprint,
             account_identity("grok", "user_id", None).0
@@ -574,6 +586,29 @@ mod tests {
         let head = server.join().expect("server");
         assert!(head.contains("cookie: sso=session-value"));
         assert!(!head.contains("authorization:"));
+
+        // Two signed-in accounts are two accounts. The RPC names nobody, so the sign-in cookie
+        // is what tells them apart; without it every cookie on a Mac hashed to one fingerprint
+        // and the second account overwrote the first.
+        let owned = |subject: &str, encoded: &str| {
+            let (address, server) = serve(percent_frame(25.0));
+            let validated = validate_at(
+                &format!("sso=header.{encoded}.signature"),
+                &context(),
+                &format!("http://{address}"),
+            )
+            .expect("validated");
+            let _ = server.join();
+            assert_eq!(
+                validated.account_fingerprint,
+                account_identity("grok", "user_id", Some(subject)).0
+            );
+            validated.account_fingerprint
+        };
+        assert_ne!(
+            owned("user-1", "eyJzdWIiOiJ1c2VyLTEifQ"),
+            owned("user-2", "eyJzdWIiOiJ1c2VyLTIifQ")
+        );
 
         let (address, server) = serve(trailer_frame(
             "grpc-status: 16\r\ngrpc-message: no-credentials\r\n",

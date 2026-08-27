@@ -93,6 +93,23 @@ pub fn decode_jwt_payload(token: &str) -> Option<Value> {
     serde_json::from_slice(&bytes).ok()
 }
 
+/// Who a locally held bearer token says it belongs to, when it is a JWT that says.
+///
+/// A stored browser session is the one credential whose provider response names nobody, so
+/// without this every cookie on a machine hashes to one fingerprint and two accounts read as
+/// one. The signature is not checked — the bearer already proves possession, and a forged
+/// subject would only give this device a second fingerprint for an account it cannot read.
+pub fn jwt_subject(token: &str) -> Option<String> {
+    let payload = decode_jwt_payload(token)?;
+    ["sub", "user_id", "userId", "uid"]
+        .into_iter()
+        .find_map(|claim| string(obj_get(&payload, claim)))
+        .map(|value| value.trim().to_owned())
+        .filter(|value| {
+            !value.is_empty() && value.len() <= 256 && !value.chars().any(char::is_control)
+        })
+}
+
 pub fn parse_date(value: Option<&Value>) -> Option<i64> {
     match value {
         Some(Value::Number(number)) => number.as_f64().and_then(parse_numeric_date),
