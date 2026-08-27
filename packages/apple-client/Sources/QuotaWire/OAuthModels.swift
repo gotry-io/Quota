@@ -41,11 +41,15 @@ public struct SessionToken: Codable, Equatable, Sendable {
   }
 }
 
-/// What signing in answers with: the Account, and the one session that reads it.
+/// What signing in answers with: the Account, its name, and the one session that reads it.
+///
+/// `displayLabel` is what the Account is called, the same value an Account read carries. It is
+/// read tolerantly — an absent or null label is an Account with no name, not a refused sign-in.
 public struct IosOAuthTokenResponse: Decodable, Equatable, Sendable {
   public let protocolVersion: Int
   public let tokenType: String
   public let accountID: String
+  public let displayLabel: String?
   public let session: SessionToken
 
   public init(from decoder: Decoder) throws {
@@ -53,10 +57,12 @@ public struct IosOAuthTokenResponse: Decodable, Equatable, Sendable {
     protocolVersion = try container.decode(Int.self, forKey: .protocolVersion)
     tokenType = try container.decode(String.self, forKey: .tokenType)
     accountID = try container.decode(String.self, forKey: .accountID)
+    displayLabel = try container.decodeIfPresent(String.self, forKey: .displayLabel)
     session = try container.decode(SessionToken.self, forKey: .session)
     guard protocolVersion == WireCodec.oauthProtocolVersion,
       tokenType == "Bearer",
       WireValidation.isOpaqueID(accountID),
+      displayLabel.map({ WireValidation.isTrimmedText($0, maximum: 128) }) ?? true,
       WireValidation.isIOSAccessToken(session.accessToken),
       WireValidation.isIOSRefreshToken(session.refreshToken)
     else {
@@ -72,6 +78,7 @@ public struct IosOAuthTokenResponse: Decodable, Equatable, Sendable {
     case protocolVersion
     case tokenType
     case accountID = "accountId"
+    case displayLabel
     case session
   }
 }

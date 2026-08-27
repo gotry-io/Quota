@@ -130,6 +130,8 @@ final class MenuBarViewModel {
   private(set) var report: QuotaCollectionReport?
   private(set) var localUsage: LocalUsageReport?
   private(set) var accountSummary: AccountSummary?
+  /// The name the sign-in gave, held until an account read carries one of its own.
+  private(set) var signInDisplayLabel: String?
   private(set) var usagePeriods: LocalServiceUsagePeriodCache?
   private(set) var errorMessage: String?
   private(set) var accountErrorMessage: String?
@@ -167,8 +169,15 @@ final class MenuBarViewModel {
     }
   }
 
+  /// What to call the account.
+  ///
+  /// The account read is the fuller answer, but it is not the first one: signing in already said
+  /// what the account is called, so the name stands from that moment rather than from whenever
+  /// the first read finishes.
   var accountDisplayLabel: String {
-    PlanDisplay.accountLabel(accountSummary?.account.displayLabel) ?? "Quota account"
+    PlanDisplay.accountLabel(accountSummary?.account.displayLabel)
+      ?? PlanDisplay.accountLabel(signInDisplayLabel)
+      ?? "Quota account"
   }
 
   var accountDeviceSummary: String {
@@ -871,6 +880,7 @@ final class MenuBarViewModel {
     report = state.quota.value
     localUsage = state.usage.value
     accountSummary = state.account.value?.accountSummary
+    signInDisplayLabel = state.account.value?.displayLabel
     authStatus =
       state.account.value?.authStatus
       ?? (state.account.status == .signedOut ? .signedOut : nil)

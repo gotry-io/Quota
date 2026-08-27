@@ -56,6 +56,7 @@ func consumesServiceMergedOverviewWithoutReprocessingObservations() async throws
       value: LocalServiceAccountState(
         authStatus: .signedOut,
         accountID: nil,
+        displayLabel: nil,
         deviceID: nil,
         deviceGeneration: nil,
         accountSummary: nil
@@ -144,6 +145,7 @@ func emptyUsageCacheWhileRefreshingIsPreparingNotMissing() async throws {
       value: LocalServiceAccountState(
         authStatus: .signedOut,
         accountID: nil,
+        displayLabel: nil,
         deviceID: nil,
         deviceGeneration: nil,
         accountSummary: nil
@@ -229,6 +231,60 @@ func accountActionErrorSurvivesAStateWithoutAServiceError() async throws {
   await settle { model.accountErrorMessage != nil }
 
   #expect(model.accountErrorMessage == "QuotaBar's local service is unavailable.")
+}
+
+/// Signing in says what the account is called. The window says it too, from that moment, rather
+/// than calling it "Quota account" until a whole account read has finished.
+@Test @MainActor
+func namesTheAccountFromTheSignInBeforeAnyAccountReadArrives() async throws {
+  let model = MenuBarViewModel(client: StubLocalService(state: justSignedInState(label: "octocat")))
+
+  await model.refreshIfNeeded()
+
+  #expect(model.accountSummary == nil)
+  #expect(model.accountDisplayLabel == "octocat")
+  #expect(model.accountState == .signedIn)
+}
+
+/// With neither a read nor a name, the window says what it honestly knows.
+@Test @MainActor
+func fallsBackToTheGenericAccountNameWhenTheSignInNamedNothing() async throws {
+  let model = MenuBarViewModel(client: StubLocalService(state: justSignedInState(label: nil)))
+
+  await model.refreshIfNeeded()
+
+  #expect(model.accountDisplayLabel == "Quota account")
+}
+
+/// A device signed in, with the first account read still running.
+private func justSignedInState(label: String?) -> LocalServiceState {
+  LocalServiceState(
+    ipcVersion: 1,
+    revision: 2,
+    usageUploadEnabled: true,
+    usagePeriods: emptyUsagePeriods(),
+    quota: emptyComponent(),
+    usage: emptyComponent(),
+    account: LocalServiceComponent(
+      status: .ready,
+      value: LocalServiceAccountState(
+        authStatus: .signedIn,
+        accountID: "account_1",
+        displayLabel: label,
+        deviceID: "device_1",
+        deviceGeneration: 1,
+        accountSummary: nil
+      ),
+      updatedAt: Date(timeIntervalSince1970: 1_786_300_000),
+      lastError: nil,
+      refreshing: true
+    ),
+    pricing: emptyComponent(),
+    providers: [],
+    providerBrowserSessions: [],
+    overview: [],
+    cache: .settled
+  )
 }
 
 /// Waits for something the model reaches on its own. A fixed sleep asserts how fast the machine
@@ -461,6 +517,7 @@ private func loggingInState() -> LocalServiceState {
       value: LocalServiceAccountState(
         authStatus: .loggingIn,
         accountID: nil,
+        displayLabel: nil,
         deviceID: nil,
         deviceGeneration: nil,
         accountSummary: nil

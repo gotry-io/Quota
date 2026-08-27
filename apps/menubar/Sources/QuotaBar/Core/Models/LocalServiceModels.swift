@@ -145,9 +145,15 @@ extension LocalServiceComponent {
   }
 }
 
+/// What this Mac knows about the account it is signed in to.
+///
+/// `displayLabel` is what the sign-in itself said the account is called. It arrives with the
+/// session, long before `accountSummary` — a whole account read — can, so it is what names the
+/// account in the window while the first read is still running.
 struct LocalServiceAccountState: Decodable, Sendable {
   let authStatus: LocalServiceAuthStatus
   let accountID: String?
+  let displayLabel: String?
   let deviceID: String?
   let deviceGeneration: Int?
   let accountSummary: AccountSummary?
@@ -155,6 +161,7 @@ struct LocalServiceAccountState: Decodable, Sendable {
   private enum CodingKeys: String, CodingKey {
     case authStatus
     case accountID = "accountId"
+    case displayLabel
     case deviceID = "deviceId"
     case deviceGeneration
     case accountSummary
@@ -165,11 +172,12 @@ struct LocalServiceAccountState: Decodable, Sendable {
 extension LocalServiceAccountState {
   init(from decoder: Decoder) throws {
     try decoder.rejectUnknownWireKeys([
-      "authStatus", "accountId", "deviceId", "deviceGeneration", "accountSummary",
+      "authStatus", "accountId", "displayLabel", "deviceId", "deviceGeneration", "accountSummary",
     ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     authStatus = try container.decode(LocalServiceAuthStatus.self, forKey: .authStatus)
     accountID = try container.decodeIfPresent(String.self, forKey: .accountID)
+    displayLabel = try container.decodeIfPresent(String.self, forKey: .displayLabel)
     deviceID = try container.decodeIfPresent(String.self, forKey: .deviceID)
     deviceGeneration = try container.decodeIfPresent(Int.self, forKey: .deviceGeneration)
     accountSummary = try container.decodeIfPresent(AccountSummary.self, forKey: .accountSummary)

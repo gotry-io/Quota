@@ -144,6 +144,19 @@ struct DecodingTests {
     )
     #expect(validTokens.session.accessToken.hasPrefix("qia_"))
     #expect(validTokens.session.refreshToken.hasPrefix("qiar_"))
+    // Signing in names the Account. A build talking to a Relay that does not say so yet, or to
+    // an Account that kept no name, reads a session without one rather than refusing it.
+    #expect(validTokens.displayLabel == nil)
+    #expect(
+      try WireCodec.decode(
+        IosOAuthTokenResponse.self,
+        from: try Fixtures.tokenResponse(extra: ["display_label": "octocat"])
+      ).displayLabel == "octocat")
+    #expect(
+      try WireCodec.decode(
+        IosOAuthTokenResponse.self,
+        from: try Fixtures.tokenResponse(extra: ["display_label": NSNull()])
+      ).displayLabel == nil)
   }
 
   @Test
