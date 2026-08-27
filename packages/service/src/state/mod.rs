@@ -1804,7 +1804,7 @@ impl StateStore {
         self.with_cache(|conn| {
             let mut statement = conn.prepare(
                 "SELECT source_file_id, identity, size, modified_ns, parser_revision,
-                        parsed_offset, tail_hash
+                        parsed_offset, prefix_hash
              FROM usage_file_index WHERE agent = ?1",
             )?;
             let rows = statement.query_map(params![agent.as_str()], |row| {
@@ -1826,7 +1826,7 @@ impl StateStore {
                         modified_ns,
                         parser_revision: row.get(4)?,
                         parsed_offset: row.get::<_, i64>(5)? as u64,
-                        tail_hash: row.get(6)?,
+                        prefix_hash: row.get(6)?,
                     },
                 ))
             })?;
@@ -2229,6 +2229,7 @@ impl StateStore {
                         &source.source.source_file_id,
                         hours.clone(),
                     )?;
+                    remember_partial_progress(&tx, agent, source)?;
                     dirty_hours.extend(hours);
                     changed += 1;
                     continue;
@@ -2264,7 +2265,7 @@ impl StateStore {
                 changed += tx.execute(
                     "INSERT INTO usage_file_index(
                     agent, source_file_id, identity, size, modified_ns, parser_revision,
-                    parsed_offset, tail_hash
+                    parsed_offset, prefix_hash
                  ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
                  ON CONFLICT(agent, source_file_id) DO UPDATE SET
                     identity = excluded.identity,
@@ -2272,7 +2273,7 @@ impl StateStore {
                     modified_ns = excluded.modified_ns,
                     parser_revision = excluded.parser_revision,
                     parsed_offset = excluded.parsed_offset,
-                    tail_hash = excluded.tail_hash",
+                    prefix_hash = excluded.prefix_hash",
                     params![
                         agent.as_str(),
                         source.source.source_file_id,
@@ -2281,7 +2282,7 @@ impl StateStore {
                         source.source.modified_ns.to_string(),
                         source.index.parser_revision,
                         source.index.parsed_offset as i64,
-                        source.index.tail_hash,
+                        source.index.prefix_hash,
                     ],
                 )?;
             }
@@ -2321,6 +2322,45 @@ impl StateStore {
             Ok(revision)
         })
     }
+}
+
+/// Remembers how far a source this scan could not finish was read.
+///
+/// The size and modification time are deliberately not stored: they are what makes the next
+/// scan skip a source it already read, and a source that came up short has to be tried again.
+/// What is worth keeping is the byte the last clean record ended on and the digest of
+/// everything before it, so the retry reads the part that was never read rather than the whole
+/// log, every refresh, forever.
+fn remember_partial_progress(
+    tx: &rusqlite::Transaction<'_>,
+    agent: UsageAgent,
+    source: &crate::usage::UsageSourceScan,
+) -> Result<(), StateError> {
+    if source.index.parsed_offset == 0 || source.index.prefix_hash.is_empty() {
+        return Ok(());
+    }
+    tx.execute(
+        "INSERT INTO usage_file_index(
+            agent, source_file_id, identity, size, modified_ns, parser_revision,
+            parsed_offset, prefix_hash
+         ) VALUES (?1, ?2, ?3, 0, '0', ?4, ?5, ?6)
+         ON CONFLICT(agent, source_file_id) DO UPDATE SET
+            identity = excluded.identity,
+            size = 0,
+            modified_ns = '0',
+            parser_revision = excluded.parser_revision,
+            parsed_offset = excluded.parsed_offset,
+            prefix_hash = excluded.prefix_hash",
+        params![
+            agent.as_str(),
+            source.source.source_file_id,
+            source.source.identity,
+            source.index.parser_revision,
+            source.index.parsed_offset as i64,
+            source.index.prefix_hash,
+        ],
+    )?;
+    Ok(())
 }
 
 fn validate_browser_session(
@@ -4692,6 +4732,42 @@ mod tests {
         let dirty = dirty_hours(&store);
         assert_eq!(dirty.len(), 2);
         assert!(dirty.iter().all(|hour| !hour.partial));
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    /// A source that came up short still says how far it was read, so the next refresh reads
+    /// the part that was never read instead of the whole log again, every five minutes,
+    /// forever. What it must not say is that the file is unchanged: that is what would make
+    /// the next scan skip it.
+    #[test]
+    fn a_partial_source_remembers_how_far_it_was_read_without_claiming_to_be_finished() {
+        let root = std::env::temp_dir().join(format!("quota-partial-resume-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let store = StateStore::open(&root).expect("state");
+        let mut partial = usage_scan(vec![usage_event("2026-08-10T12:15:00Z", 1)], 7);
+        partial.coverage.status = CoverageStatus::Partial;
+        partial.sources[0].coverage.status = CoverageStatus::Partial;
+        partial.sources[0].coverage.reasons = vec![crate::usage::CoverageReason {
+            code: crate::usage::CoverageReasonCode::MalformedJson,
+            count: 1,
+        }];
+        partial.sources[0].index.parsed_offset = 4_096;
+        partial.sources[0].index.prefix_hash = "a".repeat(64);
+
+        store
+            .apply_usage_scan(UsageAgent::Codex, &partial, 1)
+            .expect("partial scan");
+
+        let index = store
+            .usage_file_index(UsageAgent::Codex)
+            .expect("file index");
+        let entry = index.get("source-1").expect("row for the partial source");
+        assert_eq!(entry.parsed_offset, 4_096);
+        assert_eq!(entry.prefix_hash, "a".repeat(64));
+        // Not the size or the modification time the scan saw: the next scan has to look again.
+        assert_eq!(entry.size, 0);
+        assert_eq!(entry.modified_ns, 0);
         drop(store);
         fs::remove_dir_all(root).expect("cleanup");
     }

@@ -1,8 +1,8 @@
 use super::{
     CoverageReason, CoverageReasonCode, CoverageStatus, LocalUsageFile, MAX_COVERAGE_REASONS,
     MAX_DISCOVERY_DEPTH, MAX_DISCOVERY_ENTRIES, MAX_JSONL_LINE_BYTES, MAX_JSONL_RECORDS,
-    MAX_USAGE_FILES, NormalizedUsageRecord, ParsedLine, ScanCoverage, TAIL_HASH_BYTES, UsageAgent,
-    UsageError, UsageFileDiscoveryResult, UsageFileIndex, UsageScanResult, UsageSourceScan,
+    MAX_USAGE_FILES, NormalizedUsageRecord, ParsedLine, ScanCoverage, UsageAgent, UsageError,
+    UsageFileDiscoveryResult, UsageFileIndex, UsageScanResult, UsageSourceScan,
 };
 use sha2::{Digest, Sha256};
 use std::cell::RefCell;
@@ -384,9 +384,10 @@ where
         }
         scanned_source_count += 1;
         // The same log with more appended to it is read from where the last parse stopped, as
-        // long as the bytes behind that point are still the ones that were read. A rewritten
-        // or truncated file fails that check and is read whole.
-        let resume_at = options
+        // long as every byte behind that point is still the byte that was read. Growth alone
+        // is not that proof: a log rewritten to the same length, or edited in place before the
+        // offset, has to be read whole, so the whole prefix is hashed and compared.
+        let resumed = options
             .file_index
             .get(&current.source_file_id)
             .filter(|_| P::CONTEXT_FREE)
@@ -394,30 +395,36 @@ where
                 old.parser_revision == current_index.parser_revision
                     && old.identity == current_index.identity
                     && old.parsed_offset > 0
+                    && current.size > old.size
                     && current.size >= old.parsed_offset
             })
-            .filter(|old| {
-                tail_hash(&file.path, old.parsed_offset).as_deref() == Some(&old.tail_hash)
-            })
-            .map(|old| old.parsed_offset)
-            .unwrap_or(0);
+            .and_then(|old| {
+                let hasher = prefix_hasher(&file.path, old.parsed_offset)?;
+                (digest(hasher.clone()) == old.prefix_hash).then_some((old.parsed_offset, hasher))
+            });
+        let (resume_at, resumed_hasher) = match resumed {
+            Some((offset, hasher)) => (offset, Some(hasher)),
+            None => (0, None),
+        };
         let mut parser = parser_factory();
         let mut source_records = Vec::new();
         let source_reasons = RefCell::new(Vec::new());
         let mut parsed_offset = resume_at;
-        match File::open(&file.path) {
-            Ok(input) => {
-                let mut reader = BufReader::new(input);
-                let seeked = resume_at == 0 || reader.seek(SeekFrom::Start(resume_at)).is_ok();
-                if !seeked {
-                    push_reason(
-                        &mut source_reasons.borrow_mut(),
-                        CoverageReasonCode::SourceUnreadable,
-                    );
-                }
+        let mut prefix_hash = String::new();
+        let mut resumed_from = 0u64;
+        match open_for_resume(&file.path, resume_at) {
+            Ok((mut reader, opened_at)) => {
+                // A log that cannot be seeked is read whole rather than read from zero and
+                // labelled from an offset it never reached.
+                let resumed_hasher = (opened_at == resume_at).then_some(resumed_hasher).flatten();
+                let resume_at = opened_at;
+                parsed_offset = resume_at;
+                // A read that fails part-way answers for the prefix it already verified.
+                prefix_hash = resumed_hasher.clone().map(digest).unwrap_or_default();
                 match read_jsonl(
                     &mut reader,
                     resume_at,
+                    PrefixDigest::new(resumed_hasher.unwrap_or_default()),
                     |line, unterminated, line_start| {
                         if is_cancelled(options) {
                             push_reason(
@@ -475,12 +482,16 @@ where
                     },
                     |reason| push_reason(&mut source_reasons.borrow_mut(), reason),
                 ) {
-                    Ok(offset) => parsed_offset = offset,
+                    Ok((offset, read)) => {
+                        parsed_offset = offset;
+                        prefix_hash = read;
+                    }
                     Err(_error) => push_reason(
                         &mut source_reasons.borrow_mut(),
                         CoverageReasonCode::SourceUnreadable,
                     ),
                 }
+                resumed_from = resume_at;
                 if !stopped && !is_cancelled(options) {
                     let mut reasons = source_reasons.borrow_mut();
                     ignored_empty_records =
@@ -519,10 +530,10 @@ where
         let mut index = file_index(&source, &options.parser_revision);
         if P::CONTEXT_FREE {
             index.parsed_offset = parsed_offset;
-            index.tail_hash = tail_hash(&file.path, parsed_offset).unwrap_or_default();
+            index.prefix_hash = prefix_hash;
         }
         sources.push(UsageSourceScan {
-            append: resume_at > 0,
+            append: resumed_from > 0,
             index,
             source,
             records: source_records
@@ -657,7 +668,7 @@ pub(crate) fn file_index(file: &LocalUsageFile, parser_revision: &str) -> UsageF
         modified_ns: file.modified_ns,
         parser_revision: parser_revision.to_owned(),
         parsed_offset: 0,
-        tail_hash: String::new(),
+        prefix_hash: String::new(),
     }
 }
 
@@ -712,20 +723,27 @@ pub(crate) fn matching_file_info(
 
 /// Reads newline-delimited records, naming each line by the byte it starts at.
 ///
-/// The answer is the offset after the last complete line it consumed. An unterminated tail is
-/// still handed to the caller — the file is being written to — but it is not part of that
-/// offset, so the next scan reads it again once it is finished.
+/// The answer is the offset after the last complete line it consumed, and the digest of every
+/// byte before it — `digest` starts at whatever `start_offset` already covers. Hashing here
+/// rather than reading the file a second time afterwards is what keeps a first full scan the
+/// price of one pass over the log.
+///
+/// An unterminated tail is still handed to the caller — the file is being written to — but it
+/// is not part of that offset, so the next scan reads it again once it is finished, and the
+/// digest ends at the boundary in front of it.
 fn read_jsonl<R, L, O>(
     reader: &mut R,
     start_offset: u64,
+    digest: PrefixDigest,
     mut on_line: L,
     mut on_oversized: O,
-) -> Result<u64, UsageError>
+) -> Result<(u64, String), UsageError>
 where
     R: BufRead,
     L: FnMut(&[u8], bool, u64) -> bool,
     O: FnMut(CoverageReasonCode),
 {
+    let mut digest = digest;
     let mut pending = Vec::new();
     let mut discarding = false;
     let mut position = start_offset;
@@ -739,7 +757,16 @@ where
                     on_line(line, true, line_start);
                 }
             }
-            return Ok(position.saturating_sub(pending.len() as u64));
+            // Everything read is behind the answer unless a line was left unfinished, and then
+            // the answer is the boundary in front of it.
+            return Ok(if pending.is_empty() {
+                (position, digest.into_through())
+            } else {
+                (
+                    position.saturating_sub(pending.len() as u64),
+                    digest.into_boundary(),
+                )
+            });
         }
         let newline = buffer.iter().position(|byte| *byte == b'\n');
         let consumed = newline.map_or(buffer.len(), |index| index + 1);
@@ -754,34 +781,108 @@ where
                 pending.extend_from_slice(segment);
             }
         }
+        digest.read(&buffer[..consumed]);
         reader.consume(consumed);
         position = position.saturating_add(consumed as u64);
         if newline.is_some() {
             if !discarding && !pending.is_empty() {
                 let line = trim_cr(&pending);
                 if !line.is_empty() && !on_line(line, false, line_start) {
-                    return Ok(position);
+                    return Ok((position, digest.into_through()));
                 }
             }
             pending.clear();
             discarding = false;
             line_start = position;
+            digest.mark_boundary();
         }
     }
 }
 
-/// Digests the [`TAIL_HASH_BYTES`] a parse ended on, so a later scan can tell the same log
-/// from a file that was rewritten to the same length.
-fn tail_hash(path: &Path, end: u64) -> Option<String> {
-    if end == 0 {
-        return Some(String::new());
+/// The digest of everything a parse has read, and of the last line boundary behind it.
+///
+/// Two of them because the offset a parse answers with is not always where it stopped reading:
+/// a log still being appended to ends in a line that is not there yet, and the bytes of that
+/// line are read but not answered for.
+struct PrefixDigest {
+    through: Sha256,
+    boundary: Sha256,
+}
+
+impl PrefixDigest {
+    /// Starting from what `start_offset` already covers — an empty digest for a whole-file
+    /// read, and the prefix the resume gate verified for a resumed one.
+    fn new(covered: Sha256) -> Self {
+        Self {
+            boundary: covered.clone(),
+            through: covered,
+        }
     }
-    let mut file = File::open(path).ok()?;
-    let start = end.saturating_sub(TAIL_HASH_BYTES);
-    file.seek(SeekFrom::Start(start)).ok()?;
-    let mut buffer = vec![0u8; (end - start) as usize];
-    file.read_exact(&mut buffer).ok()?;
-    Some(sha256_bytes(&buffer))
+
+    fn read(&mut self, bytes: &[u8]) {
+        self.through.update(bytes);
+    }
+
+    fn mark_boundary(&mut self) {
+        self.boundary = self.through.clone();
+    }
+
+    fn into_through(self) -> String {
+        digest(self.through)
+    }
+
+    fn into_boundary(self) -> String {
+        digest(self.boundary)
+    }
+}
+
+/// Opens the log at the byte the last parse stopped on, and answers where reading will start.
+///
+/// A file that cannot be seeked is reopened and read whole. Reading it from zero while naming
+/// its records from an offset it never reached would have stored one line's facts under
+/// another line's key.
+fn open_for_resume(path: &Path, resume_at: u64) -> io::Result<(BufReader<File>, u64)> {
+    let mut reader = BufReader::new(File::open(path)?);
+    if resume_at == 0 || reader.seek(SeekFrom::Start(resume_at)).is_ok() {
+        return Ok((reader, resume_at));
+    }
+    Ok((BufReader::new(File::open(path)?), 0))
+}
+
+/// Digests `[0, end)` and keeps the digest open, so the parse that follows can carry it on
+/// rather than reading the same bytes twice.
+///
+/// The whole prefix, not a window at the end of it: a log rewritten to the same length, or
+/// edited in place anywhere behind the offset, is exactly what the resume gate exists to
+/// refuse, and a window only sees the last of it.
+fn prefix_hasher(path: &Path, end: u64) -> Option<Sha256> {
+    let mut hasher = Sha256::new();
+    if end == 0 {
+        return Some(hasher);
+    }
+    let file = File::open(path).ok()?;
+    let mut reader = BufReader::new(file.take(end));
+    let mut read = 0u64;
+    loop {
+        let buffer = reader.fill_buf().ok()?;
+        if buffer.is_empty() {
+            break;
+        }
+        hasher.update(buffer);
+        let consumed = buffer.len();
+        reader.consume(consumed);
+        read = read.saturating_add(consumed as u64);
+    }
+    (read == end).then_some(hasher)
+}
+
+fn digest(hasher: Sha256) -> String {
+    let bytes = hasher.finalize();
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push_str(&format!("{byte:02x}"));
+    }
+    output
 }
 
 fn trim_cr(value: &[u8]) -> &[u8] {

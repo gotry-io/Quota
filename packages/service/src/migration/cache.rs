@@ -68,7 +68,7 @@ fn migration_v1(tx: &rusqlite::Transaction<'_>, revision_floor: u64) -> Result<(
             modified_ns TEXT NOT NULL,
             parser_revision TEXT NOT NULL,
             parsed_offset INTEGER NOT NULL DEFAULT 0,
-            tail_hash TEXT NOT NULL DEFAULT '',
+            prefix_hash TEXT NOT NULL DEFAULT '',
             PRIMARY KEY(agent, source_file_id)
          );
          CREATE TABLE usage_file_records (

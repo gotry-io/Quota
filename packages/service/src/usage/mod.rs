@@ -37,7 +37,6 @@ pub const MAX_USAGE_FILES: usize = 20_000;
 pub const MAX_JSONL_RECORDS: usize = 2_000_000;
 pub const MAX_JSONL_LINE_BYTES: usize = 16 * 1024 * 1024;
 /// How much of an already-parsed prefix is digested to decide that it is still the same log.
-pub const TAIL_HASH_BYTES: u64 = 4 * 1024;
 pub const MAX_COVERAGE_REASONS: usize = 128;
 /// One upload replaces whole hours, so what bounds it is hours and the rows inside an hour.
 pub const MAX_USAGE_HOURS_PER_UPLOAD: usize = 256;
@@ -293,9 +292,10 @@ pub struct ScanCoverage {
 /// Stable identity used by the SQLite file index, and where the last parse of it stopped.
 ///
 /// A log this device already read is usually the same log with more appended to it.
-/// `parsed_offset` is the byte after the last complete line that was parsed, and `tail_hash`
-/// digests the [`TAIL_HASH_BYTES`] before it: when the file has only grown and that digest
-/// still matches, the appended bytes are parsed on their own instead of the whole file.
+/// `parsed_offset` is the byte after the last complete line that was parsed, and `prefix_hash`
+/// digests every byte before it. Appended bytes are parsed on their own only when the file has
+/// grown *and* that whole prefix still hashes to the same thing — a log rewritten to the same
+/// length, or edited anywhere behind the offset, is read again from the start.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct UsageFileIndex {
     pub source_file_id: String,
@@ -304,7 +304,7 @@ pub struct UsageFileIndex {
     pub modified_ns: u128,
     pub parser_revision: String,
     pub parsed_offset: u64,
-    pub tail_hash: String,
+    pub prefix_hash: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
