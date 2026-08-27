@@ -47,9 +47,14 @@ beforeEach(async () => {
   await applyD1Migrations(env.DB, inject("TEST_MIGRATIONS"));
   // Migrations are applied once per worker, so each case clears what the last one wrote.
   await env.DB.batch(
-    ["usage_daily", "usage_hourly", "quota_snapshots", "devices", "accounts"].map((table) =>
-      env.DB.prepare(`DELETE FROM ${table}`),
-    ),
+    [
+      "usage_daily",
+      "usage_hourly",
+      "usage_hour_scans",
+      "quota_snapshots",
+      "devices",
+      "accounts",
+    ].map((table) => env.DB.prepare(`DELETE FROM ${table}`)),
   );
   await env.DB.prepare(
     `INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES (?1, ?1, ?2, ?2)`,
@@ -91,6 +96,68 @@ describe("managed data v6 end to end", () => {
       ),
     ).toEqual({ outcome: "written", accepted: [], ignored: [hour] });
     expect(await storedModels("device_alpha")).toEqual(["claude-opus-5"]);
+  });
+
+  it("remembers the scan behind an hour it emptied", async () => {
+    await addDevice("alpha");
+    const usage = new D1UsageState(env.DB);
+    const hour = "2026-08-10T09:00:00Z";
+
+    expect(
+      await usage.recordUsage(
+        principal("alpha"),
+        upload([hourOf(hour, 5, ["gpt-5.6-sol"])]),
+        now.toISOString(),
+      ),
+    ).toEqual({ outcome: "written", accepted: [hour], ignored: [] });
+
+    // A scan that finds an hour empty is a reading of that hour like any other: the rows go and
+    // the version stays, so the hour is not left looking as if it had never been uploaded.
+    expect(
+      await usage.recordUsage(
+        principal("alpha"),
+        upload([{ bucket_start_utc: hour, scan_version: 6, partial: false, rows: [] }]),
+        now.toISOString(),
+      ),
+    ).toEqual({ outcome: "written", accepted: [hour], ignored: [] });
+    expect(await storedModels("device_alpha")).toEqual([]);
+    expect(await scanVersion("device_alpha", hour)).toBe(6);
+
+    expect(
+      await usage.recordUsage(
+        principal("alpha"),
+        upload([hourOf(hour, 5, ["gpt-5.6-sol"])]),
+        now.toISOString(),
+      ),
+    ).toEqual({ outcome: "written", accepted: [], ignored: [hour] });
+    expect(await storedModels("device_alpha")).toEqual([]);
+    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM usage_daily").first("count")).toBe(
+      0,
+    );
+  });
+
+  it("refuses inside the batch to overwrite an hour a newer scan already claimed", async () => {
+    await addDevice("alpha");
+    const hour = "2026-08-10T09:00:00Z";
+    await new D1UsageState(env.DB).recordUsage(
+      principal("alpha"),
+      upload([hourOf(hour, 9, ["claude-opus-5"])]),
+      now.toISOString(),
+    );
+
+    // The versions an upload compares itself against are read before its batch opens, so a
+    // second upload of the same hour can commit in between. Answering that read with nothing is
+    // exactly what that race looks like from inside this call.
+    const racing = new D1UsageState(env.DB);
+    Object.assign(racing, { storedScanVersions: async () => new Map<string, number>() });
+    await racing.recordUsage(
+      principal("alpha"),
+      upload([hourOf(hour, 4, ["gpt-5.6-sol"])]),
+      now.toISOString(),
+    );
+
+    expect(await storedModels("device_alpha")).toEqual(["claude-opus-5"]);
+    expect(await scanVersion("device_alpha", hour)).toBe(9);
   });
 
   it("leaves the daily rollup equal to a direct aggregation of the hours", async () => {
@@ -495,6 +562,15 @@ async function bearerFor(name: string): Promise<string> {
     )
     .run();
   return token;
+}
+
+async function scanVersion(deviceId: string, bucket: string): Promise<number | null> {
+  return env.DB.prepare(
+    `SELECT scan_version FROM usage_hour_scans
+     WHERE device_id = ?1 AND agent = 'codex' AND bucket_start_utc = ?2`,
+  )
+    .bind(deviceId, bucket)
+    .first<number>("scan_version");
 }
 
 async function storedModels(deviceId: string): Promise<string[]> {

@@ -819,6 +819,13 @@ export class D1AccountState implements AccountState {
         .bind(accountId, deviceId),
       this.database
         .prepare(
+          `DELETE FROM usage_hour_scans WHERE device_id = ?2 AND EXISTS (
+             SELECT 1 FROM devices WHERE id = ?2 AND account_id = ?1
+           )`,
+        )
+        .bind(accountId, deviceId),
+      this.database
+        .prepare(
           `DELETE FROM usage_daily WHERE device_id = ?2 AND EXISTS (
              SELECT 1 FROM devices WHERE id = ?2 AND account_id = ?1
            )`,
@@ -847,6 +854,9 @@ export class D1AccountState implements AccountState {
         .bind(accountId),
       this.database
         .prepare(`DELETE FROM usage_hourly WHERE device_id IN (${ownedDevices})`)
+        .bind(accountId),
+      this.database
+        .prepare(`DELETE FROM usage_hour_scans WHERE device_id IN (${ownedDevices})`)
         .bind(accountId),
       this.database
         .prepare(`DELETE FROM quota_snapshots WHERE device_id IN (${ownedDevices})`)
