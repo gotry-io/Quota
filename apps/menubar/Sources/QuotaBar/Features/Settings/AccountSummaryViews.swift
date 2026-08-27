@@ -10,34 +10,6 @@ private enum AccountDevicesPageState: Equatable {
   case content(summary: AccountSummary, refreshWarning: String?)
 }
 
-/// How recently a device spoke, from the two things Relay actually witnessed: when the device
-/// last called, and when the newest reading it sent was taken. A device that is asleep or closed
-/// is quiet, not broken, so nothing here claims a device is unhealthy.
-///
-/// The row states one age, not a list of instants, and it is the instant this verdict came from.
-struct AccountDeviceActivity: Equatable, Sendable {
-  enum Status: String, Equatable, Sendable {
-    case active = "Active"
-    case idle = "Idle"
-    case notReporting = "Not reporting"
-  }
-
-  let status: Status
-  let since: Date?
-
-  var label: String { status.rawValue }
-
-  static func make(for device: AccountDevice, now: Date) -> Self {
-    guard let newest = [device.lastSeenAt, device.lastObservedAt].compactMap({ $0 }).max() else {
-      return Self(status: .notReporting, since: nil)
-    }
-    let age = now.timeIntervalSince(newest)
-    if age < 30 * 60 { return Self(status: .active, since: newest) }
-    if age < 24 * 60 * 60 { return Self(status: .idle, since: newest) }
-    return Self(status: .notReporting, since: newest)
-  }
-}
-
 struct AccountDevicesView: View {
   @Bindable var model: MenuBarViewModel
 
@@ -102,7 +74,7 @@ struct AccountDevicesView: View {
           } else {
             VStack(alignment: .leading, spacing: 0) {
               ForEach(summary.devices) { device in
-                let activity = AccountDeviceActivity.make(for: device, now: now)
+                let activity = device.activity(now: now)
                 SettingsListRow(
                   title: device.displayName,
                   subtitle: deviceSubtitle(device, activity: activity, now: now),
@@ -136,7 +108,7 @@ struct AccountDevicesView: View {
 
   private func deviceSubtitle(
     _ device: AccountDevice,
-    activity: AccountDeviceActivity,
+    activity: DeviceActivity,
     now: Date
   ) -> String {
     let platform =

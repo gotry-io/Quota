@@ -1,4 +1,5 @@
 import Foundation
+import QuotaPresentation
 
 public enum BillingAgent: String, CaseIterable, Codable, Sendable, TolerantWireEnum {
   case codex
@@ -68,6 +69,18 @@ public enum UsageCostStatus: String, Codable, Sendable {
   case complete
   case partial
   case unavailable
+}
+
+extension UsageCostCoverage {
+  /// How the presentation layer reads a cost outcome's status. Every Apple surface formats the
+  /// same cost the same way, so the wire member is translated once, beside the type it belongs to.
+  public init(_ status: UsageCostStatus) {
+    switch status {
+    case .complete: self = .complete
+    case .partial: self = .partial
+    case .unavailable: self = .unavailable
+    }
+  }
 }
 
 public enum UsageCostAssumption: String, Codable, Sendable, TolerantWireEnum {

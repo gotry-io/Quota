@@ -8,8 +8,11 @@ import Testing
 
 @MainActor
 struct AppModelTests {
+  /// The verdict itself is `DeviceActivityTests` in `packages/apple-shared`; what the card owes
+  /// it is both witnessed instants, so a device quiet for a day but reporting minutes ago is
+  /// still active.
   @Test
-  func remoteDeviceActivityUsesTheNewerOfLastSeenAndLastReading() {
+  func deviceActivityUsesTheNewerOfLastSeenAndLastReading() {
     let now = Fixtures.date("2026-08-15T08:10:00Z")
     func device(lastSeenAt: Date?, lastObservedAt: Date? = nil) -> AccountDevice {
       AccountDevice(
@@ -21,26 +24,13 @@ struct AppModelTests {
       )
     }
 
+    #expect(device(lastSeenAt: now.addingTimeInterval(-300)).activity(now: now).status == .active)
     #expect(
-      RemoteDeviceActivity.make(
-        for: device(lastSeenAt: now.addingTimeInterval(-300)), now: now).status == .active)
-    // A device that has not called in a day can still have sent a reading minutes ago.
-    #expect(
-      RemoteDeviceActivity.make(
-        for: device(
-          lastSeenAt: now.addingTimeInterval(-86_400),
-          lastObservedAt: now.addingTimeInterval(-120)
-        ),
-        now: now).status == .active)
-    #expect(
-      RemoteDeviceActivity.make(
-        for: device(lastSeenAt: now.addingTimeInterval(-3 * 3_600)), now: now).status == .idle)
-    #expect(
-      RemoteDeviceActivity.make(
-        for: device(lastSeenAt: now.addingTimeInterval(-3 * 86_400)), now: now).status
-        == .notReporting)
-    #expect(
-      RemoteDeviceActivity.make(for: device(lastSeenAt: nil), now: now).status == .notReporting)
+      device(
+        lastSeenAt: now.addingTimeInterval(-86_400),
+        lastObservedAt: now.addingTimeInterval(-120)
+      ).activity(now: now).status == .active)
+    #expect(device(lastSeenAt: nil).activity(now: now).status == .notReporting)
   }
 
   @Test

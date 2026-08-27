@@ -193,7 +193,7 @@ final class MenuBarViewModel {
       return accountState == .signedIn ? "Unavailable" : "Sign in"
     }
     let now = Date()
-    let active = devices.filter { AccountDeviceActivity.make(for: $0, now: now).status == .active }
+    let active = devices.filter { $0.activity(now: now).status == .active }
       .count
     return active == devices.count ? "\(devices.count)" : "\(active)/\(devices.count) active"
   }

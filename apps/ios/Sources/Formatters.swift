@@ -60,13 +60,3 @@ enum QuotaFormat {
   }
 }
 
-extension UsageCostCoverage {
-  fileprivate init(_ status: UsageCostStatus) {
-    switch status {
-    case .complete: self = .complete
-    case .partial: self = .partial
-    case .unavailable: self = .unavailable
-    }
-  }
-}
-

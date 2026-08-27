@@ -119,33 +119,6 @@ struct OverviewView: View {
   }
 }
 
-/// How recently a device spoke, from the two things Relay actually witnessed: when the device
-/// last called, and when the newest reading it sent was taken. A device that is asleep or closed
-/// is quiet, not broken, so nothing here claims a device is unhealthy.
-///
-/// The row states one age, not a list of instants, and it is the instant this verdict came from.
-struct RemoteDeviceActivity: Equatable, Sendable {
-  enum Status: String, Equatable, Sendable {
-    case active = "Active"
-    case idle = "Idle"
-    case notReporting = "Not reporting"
-  }
-
-  let status: Status
-  let since: Date?
-
-  var label: String { status.rawValue }
-
-  static func make(for device: AccountDevice, now: Date) -> Self {
-    let instants = [device.lastSeenAt, device.lastObservedAt].compactMap { $0 }
-    guard let newest = instants.max() else { return Self(status: .notReporting, since: nil) }
-    let age = now.timeIntervalSince(newest)
-    if age < 30 * 60 { return Self(status: .active, since: newest) }
-    if age < 24 * 60 * 60 { return Self(status: .idle, since: newest) }
-    return Self(status: .notReporting, since: newest)
-  }
-}
-
 struct AccountDevicesCard: View {
   let devices: [AccountDevice]
 
@@ -166,7 +139,7 @@ struct AccountDevicesCard: View {
   }
 
   private func deviceRow(_ device: AccountDevice, now: Date) -> some View {
-    let activity = RemoteDeviceActivity.make(for: device, now: now)
+    let activity = device.activity(now: now)
     let details = deviceDetails(device, activity: activity, now: now)
     return VStack(alignment: .leading, spacing: 5) {
       HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -189,7 +162,7 @@ struct AccountDevicesCard: View {
 
   private func deviceDetails(
     _ device: AccountDevice,
-    activity: RemoteDeviceActivity,
+    activity: DeviceActivity,
     now: Date
   ) -> String {
     let platform = switch device.platform {
