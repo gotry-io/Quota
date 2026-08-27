@@ -46,6 +46,27 @@ describe("document routing helpers", () => {
     expect(rewritten.headers.get("ETag")).toBeNull();
     expect(rewritten).not.toBe(source);
   });
+
+  it("stamps the document headers and keeps a rendered page's own policy", () => {
+    const plain = withPrivateNoStore(new Response("ok"));
+    expect(plain.headers.get("Content-Security-Policy")).toBe(
+      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
+        "img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; " +
+        "base-uri 'none'; object-src 'none'; form-action 'self'",
+    );
+    expect(plain.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    expect(plain.headers.get("Referrer-Policy")).toBe("same-origin");
+    expect(plain.headers.get("X-Frame-Options")).toBe("DENY");
+
+    // A rendered page carries the nonce that lets its own inline scripts run; overwriting it
+    // with the static policy would leave a page whose scripts the browser refuses.
+    const rendered = withPrivateNoStore(
+      new Response("<html></html>", {
+        headers: { "Content-Security-Policy": "script-src 'self' 'nonce-abc'" },
+      }),
+    );
+    expect(rendered.headers.get("Content-Security-Policy")).toBe("script-src 'self' 'nonce-abc'");
+  });
 });
 
 describe("web document port", () => {

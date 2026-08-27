@@ -77,6 +77,15 @@ routes return `Cache-Control: no-store`; only the versioned pricing and model ca
 cacheable. `GET /api/v6/account/summary` and `GET /api/v6/account/usage/activity` are
 `private, no-cache` with a strong `ETag`, and answer a matching `If-None-Match` with 304 before
 running any Usage query.
+
+Every document response carries `X-Content-Type-Options: nosniff`, `Referrer-Policy: same-origin`,
+`X-Frame-Options: DENY`, and a Content Security Policy that allows scripts, styles, images, fonts,
+and connections from this origin only, frames nowhere, and no `<base>` or plugin content. A
+rendered page states the policy itself: `apps/web/svelte.config.js` declares the directives and
+SvelteKit stamps each response with the nonce its bootstrap script and the theme script in
+`app.html` claim, so nothing is hashed ahead of time. Responses SvelteKit does not render carry the
+same policy without a nonce.
+
 Production migration and deployment remain workflow-owned and must not be run manually without
 explicit authorization.
 

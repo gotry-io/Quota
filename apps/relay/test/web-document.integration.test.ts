@@ -44,6 +44,54 @@ describe("composed Worker documents", () => {
     expect(html).toContain('id="header-login"');
   });
 
+  it("locks every document down and still lets the inline theme script run", async () => {
+    for (const path of ["/", "/my"]) {
+      const response = await renderDocument(
+        path,
+        fakePort({ displayLabel: path === "/my" ? "octocat" : null }),
+      );
+      expect(response.status).toBe(200);
+      expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
+      expect(response.headers.get("Referrer-Policy")).toBe("same-origin");
+      expect(response.headers.get("X-Frame-Options")).toBe("DENY");
+      const policy = response.headers.get("Content-Security-Policy") ?? "";
+      for (const directive of [
+        "default-src 'self'",
+        "style-src 'self' 'unsafe-inline'",
+        "img-src 'self' data:",
+        "font-src 'self'",
+        "connect-src 'self'",
+        "frame-ancestors 'none'",
+        "base-uri 'none'",
+        "object-src 'none'",
+        "form-action 'self'",
+      ]) {
+        expect(policy).toContain(directive);
+      }
+      // Nothing is hashed ahead of time: the page states one nonce and every inline script it
+      // carries — SvelteKit's bootstrap and the theme script from `app.html` — claims it.
+      const nonce = /script-src 'self' 'nonce-([^']+)'/.exec(policy)?.[1];
+      expect(nonce).toBeTruthy();
+      const html = await response.text();
+      const inline = [...html.matchAll(/<script(?![^>]*\ssrc=)([^>]*)>/g)].map(
+        (match) => match[1] ?? "",
+      );
+      expect(inline.length).toBeGreaterThanOrEqual(2);
+      for (const attributes of inline) expect(attributes).toContain(`nonce="${nonce}"`);
+      expect(html).toContain('localStorage.getItem("quota-theme")');
+    }
+  });
+
+  it("stamps a policy on a document response SvelteKit does not render", async () => {
+    const response = await renderDocument(
+      "/my/__data.json",
+      fakePort({ displayLabel: "octocat", summary: true }),
+    );
+    expect(response.headers.get("Content-Security-Policy")).toContain("script-src 'self';");
+    expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    expect(response.headers.get("X-Frame-Options")).toBe("DENY");
+  });
+
   it("redirects unsigned /my and shipped /app bookmarks", async () => {
     const my = await fetchDocument("/my");
     expect(my.status).toBe(302);
