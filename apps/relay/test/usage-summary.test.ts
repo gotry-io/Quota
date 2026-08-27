@@ -6,6 +6,7 @@ import {
   type AccountUsageBoundary,
   buildAccountUsage,
   buildActivityDays,
+  UsageSummaryLimitError,
 } from "../src/usage-summary.ts";
 
 const today = "2026-08-10";
@@ -142,6 +143,30 @@ describe("Account Usage periods", () => {
     for (const model of ["😀".repeat(129), "model\nwith-control"]) {
       expect(() => accountUsage([{ ...usageRow(null, 0), model }])).toThrow();
     }
+  });
+
+  it("reports only a size it cannot fit as one, and everything else as itself", () => {
+    // A stored row the contract does not describe is this build's problem, not a caller asking
+    // for too much. Answering it with the same "too large" would leave the caller narrowing a
+    // request that was never the trouble, and the real failure unlogged.
+    const thrown = (() => {
+      try {
+        accountUsage([{ ...usageRow(null, 0), model: "model\nwith-control" }]);
+        return null;
+      } catch (error) {
+        return error;
+      }
+    })();
+    expect(thrown).not.toBeInstanceOf(UsageSummaryLimitError);
+    expect((thrown as Error).name).toBe("ZodError");
+
+    // A total that cannot be added without losing precision still is one.
+    expect(() =>
+      accountUsage([
+        { ...usageRow(null, 0), date: today, input_tokens: Number.MAX_SAFE_INTEGER },
+        { ...usageRow(null, 0), date: today, model: "second", input_tokens: 8 },
+      ]),
+    ).toThrow(UsageSummaryLimitError);
   });
 });
 

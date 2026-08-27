@@ -561,6 +561,34 @@ describe("quota protocol", () => {
     ).toBe(false);
   });
 
+  it("tells a payload that does not fit apart from one the contract does not describe", () => {
+    const upload = usageUpload();
+    const hour = upload.hours[0];
+    const tooMany = {
+      ...upload,
+      hours: [
+        {
+          ...hour,
+          rows: Array.from({ length: protocol.MAXIMUM_USAGE_ROWS_PER_HOUR + 1 }, (_, index) => ({
+            ...usageRow(),
+            model: `model-${index}`,
+          })),
+        },
+      ],
+    };
+    const oversized = UsageUploadSchema.safeParse(tooMany);
+    expect(oversized.success).toBe(false);
+    expect(protocol.exceedsContractBound(oversized.error)).toBe(true);
+
+    // A shape the contract does not describe is not a size, and neither is anything that is not
+    // a refusal at all.
+    const wrong = UsageUploadSchema.safeParse({ ...upload, agent: "not_an_agent" });
+    expect(wrong.success).toBe(false);
+    expect(protocol.exceedsContractBound(wrong.error)).toBe(false);
+    expect(protocol.exceedsContractBound(new Error("D1_ERROR"))).toBe(false);
+    expect(protocol.exceedsContractBound(undefined)).toBe(false);
+  });
+
   it("validates subscriptions and Usage as one normalized read summary", () => {
     expect(AccountSummarySchema.safeParse(accountSummary()).success).toBe(true);
     expect(

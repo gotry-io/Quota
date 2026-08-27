@@ -61,6 +61,18 @@ export const MAXIMUM_USAGE_COVERAGE_ITEMS = 2_048;
 export const MAXIMUM_UNPRICED_ITEMS = 100;
 export const MAXIMUM_PRICING_ENTRIES = 4_096;
 
+/**
+ * Whether a schema refused this value for overrunning a bound the contract states.
+ *
+ * A producer that cannot fit an answer inside the contract has something to tell its caller:
+ * ask for less. Nothing else a schema refuses means that — a shape the contract does not
+ * describe is the producer's own bug, and answering it with the same "too large" is how a bug
+ * stays invisible while the caller keeps narrowing a request that was never the problem.
+ */
+export function exceedsContractBound(error: unknown): boolean {
+  return error instanceof z.ZodError && error.issues.some((issue) => issue.code === "too_big");
+}
+
 const MAXIMUM_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
 const OPAQUE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
 const BILLING_DIMENSION_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:+-]*$/;

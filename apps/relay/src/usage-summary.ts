@@ -17,6 +17,7 @@ import {
   USAGE_OTHER_MODEL,
   type UsageActivityDay,
   UsageActivityDaySchema,
+  exceedsContractBound,
   type UsageCostOutcome,
   UsageCostOutcomeSchema,
   type UsagePeriod,
@@ -415,11 +416,21 @@ function hasTooManyUnpricedDetails(
   return false;
 }
 
+/**
+ * Run something that can overrun the contract, and say so when it does.
+ *
+ * Only two failures mean "this answer does not fit": a total this module cannot add without
+ * losing precision, and a schema refusing a value for overrunning a bound it states. Everything
+ * else — a bug here, a catalog that cannot be read, a stored row the contract does not describe —
+ * is a failure of this build and travels to the error handler as itself, so it is logged as a
+ * 500 rather than dressed up as a caller asking for too much.
+ */
 function boundedResult<Result>(operation: () => Result): Result {
   try {
     return operation();
   } catch (error) {
     if (error instanceof UsageSummaryLimitError) throw error;
-    throw new UsageSummaryLimitError();
+    if (exceedsContractBound(error)) throw new UsageSummaryLimitError();
+    throw error;
   }
 }
