@@ -350,8 +350,9 @@ pub struct StateStore {
     /// which ignores an event whose revision is not newer than the state it holds, keeps
     /// following along instead of going quiet until the count catches up.
     remembered_revision: AtomicU64,
-    /// Unix seconds of the last attempt-journal prune. Retention runs at open and hourly, never
-    /// inside the transaction that records a refresh.
+    /// Unix seconds of the last attempt-journal prune. Retention runs once at open, and after
+    /// that at most once an hour, in the transaction that records the attempt which found it
+    /// due — so the row and the prune commit together, and no refresh pays for it twice.
     last_attempt_prune: AtomicU64,
 }
 
@@ -1206,10 +1207,6 @@ impl StateStore {
     }
 
     /// The last revision this process observed, without touching SQLite.
-    pub fn remembered_revision(&self) -> u64 {
-        self.remembered_revision.load(Ordering::Acquire)
-    }
-
     /// Folds the cache's write-ahead log back into the image and hands freed pages back to the
     /// filesystem. A refresh rewrites every Usage record it re-reads, so without this the file
     /// keeps whatever size its largest transaction reached.
@@ -1865,6 +1862,7 @@ impl StateStore {
         })
     }
 
+    #[cfg(test)]
     pub fn make_usage_file_index_unreadable_for_test(&self) -> Result<(), StateError> {
         self.with_cache_mut(|conn| {
             conn.execute("DROP TABLE usage_file_index", [])?;
@@ -2007,6 +2005,7 @@ impl StateStore {
     }
 
     /// Marks an hour dirty without a scan behind it, for tests that only need the mark.
+    #[cfg(test)]
     pub fn insert_usage_dirty_hour_for_test(
         &self,
         agent: UsageAgent,
@@ -3197,7 +3196,6 @@ fn status_key(value: ComponentStatus) -> &'static str {
         ComponentStatus::Stale => "stale",
         ComponentStatus::AuthRequired => "auth_required",
         ComponentStatus::Unavailable => "unavailable",
-        ComponentStatus::Unsupported => "unsupported",
         ComponentStatus::Error => "error",
         ComponentStatus::SignedOut => "signed_out",
     }
@@ -3209,7 +3207,6 @@ fn parse_status(value: &str) -> Option<ComponentStatus> {
         "stale" => ComponentStatus::Stale,
         "auth_required" => ComponentStatus::AuthRequired,
         "unavailable" => ComponentStatus::Unavailable,
-        "unsupported" => ComponentStatus::Unsupported,
         "error" => ComponentStatus::Error,
         "signed_out" => ComponentStatus::SignedOut,
         _ => return None,
@@ -3768,8 +3765,6 @@ fn diagnostic_attempt_code_key(value: DiagnosticAttemptCode) -> &'static str {
         DiagnosticAttemptCode::MalformedData => "malformed_data",
         DiagnosticAttemptCode::TruncatedActiveSource => "truncated_active_source",
         DiagnosticAttemptCode::DeviceDeleted => "device_deleted",
-        DiagnosticAttemptCode::UploadDisabled => "upload_disabled",
-        DiagnosticAttemptCode::SignedOut => "signed_out",
     }
 }
 
@@ -3790,8 +3785,6 @@ fn parse_diagnostic_attempt_code(value: &str) -> Result<DiagnosticAttemptCode, r
         "malformed_data" => Ok(DiagnosticAttemptCode::MalformedData),
         "truncated_active_source" => Ok(DiagnosticAttemptCode::TruncatedActiveSource),
         "device_deleted" => Ok(DiagnosticAttemptCode::DeviceDeleted),
-        "upload_disabled" => Ok(DiagnosticAttemptCode::UploadDisabled),
-        "signed_out" => Ok(DiagnosticAttemptCode::SignedOut),
         _ => Err(invalid_diagnostic_column(9, value)),
     }
 }

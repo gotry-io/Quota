@@ -223,8 +223,6 @@ fn is_chatgpt_session_cookie_name(name: &str) -> bool {
 mod tests {
     use super::*;
     use std::collections::HashMap;
-    use std::io::{Read as _, Write as _};
-    use std::net::TcpListener;
     use std::path::PathBuf;
 
     fn context() -> CollectionContext {
@@ -244,27 +242,14 @@ mod tests {
     }
 
     /// One request, one canned answer, and the request head handed back for inspection.
+    /// A queue of responses, over the shared stub.
     fn serve(bodies: Vec<(u16, String)>) -> (String, std::thread::JoinHandle<Vec<String>>) {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
-        let address = listener.local_addr().expect("address").to_string();
-        let handle = std::thread::spawn(move || {
-            let mut heads = Vec::new();
-            for (status, body) in bodies {
-                let Ok((mut stream, _)) = listener.accept() else {
-                    break;
-                };
-                let mut request = [0_u8; 2048];
-                let read = stream.read(&mut request).unwrap_or(0);
-                heads.push(String::from_utf8_lossy(&request[..read]).to_lowercase());
-                let _ = write!(
-                    stream,
-                    "HTTP/1.1 {status} OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                    body.len()
-                );
-            }
-            heads
-        });
-        (address, handle)
+        crate::providers::common::serve_responses(
+            bodies
+                .into_iter()
+                .map(|(status, body)| (status, body.into_bytes()))
+                .collect(),
+        )
     }
 
     #[test]

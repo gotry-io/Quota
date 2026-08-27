@@ -172,8 +172,6 @@ fn diagnostic_attempt_code_wire(value: DiagnosticAttemptCode) -> &'static str {
         DiagnosticAttemptCode::MalformedData => "malformed_data",
         DiagnosticAttemptCode::TruncatedActiveSource => "truncated_active_source",
         DiagnosticAttemptCode::DeviceDeleted => "device_deleted",
-        DiagnosticAttemptCode::UploadDisabled => "upload_disabled",
-        DiagnosticAttemptCode::SignedOut => "signed_out",
     }
 }
 
@@ -341,6 +339,7 @@ impl NativeBackend {
 
     /// Discover providers through the same provider-owned credential paths used for collection.
     /// No account or Relay state is read or changed.
+    #[cfg(test)]
     pub fn configured_providers(&self) -> Result<Vec<ProviderId>, BackendError> {
         let context = self.collection_context(Arc::new(AtomicBool::new(false)))?;
         Ok(ProviderId::ALL

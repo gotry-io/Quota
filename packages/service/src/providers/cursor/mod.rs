@@ -668,25 +668,11 @@ mod tests {
 
     #[test]
     fn validation_maps_provider_auth_status_without_leaking_body() {
-        use std::io::{Read as _, Write as _};
-        use std::net::TcpListener;
-
-        for status in ["401 Unauthorized", "403 Forbidden"] {
-            let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
-            let address = listener.local_addr().expect("address");
-            let server = std::thread::spawn(move || {
-                let (mut stream, _) = listener.accept().expect("accept");
-                let mut request = [0_u8; 2048];
-                let _ = stream.read(&mut request);
-                let body = b"provider-secret-response";
-                write!(
-                    stream,
-                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                    body.len()
-                )
-                .expect("response headers");
-                stream.write_all(body).expect("response body");
-            });
+        for status in [401, 403] {
+            let (address, server) = crate::providers::common::serve_responses(vec![(
+                status,
+                b"provider-secret-response".to_vec(),
+            )]);
             let error = validate_at(
                 "wos-session=cookie-secret",
                 &CollectionContext::default(),

@@ -188,7 +188,7 @@ fn migration_v1(tx: &rusqlite::Transaction<'_>, revision_floor: u64) -> Result<(
                 'provider_error', 'access_denied', 'client_upgrade_required',
                 'partial_source', 'malformed_data',
                 'truncated_active_source',
-                'device_deleted', 'upload_disabled', 'signed_out'
+                'device_deleted'
             ))
          );
          CREATE INDEX diagnostic_attempts_recent_idx

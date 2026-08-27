@@ -199,7 +199,7 @@ fn collect_with_bearer(
 }
 
 fn resolve(context: &CollectionContext) -> Result<ApiKeyCredentials, ProviderError> {
-    resolve_api_key(context, ProviderId::Kimi)
+    resolve_api_key(context, ProviderId::Kimi, SOURCE)
 }
 
 fn load_cli_credentials(context: &CollectionContext) -> Option<CliCredentials> {
@@ -637,28 +637,14 @@ mod tests {
     }
 
     /// One request, one canned answer, and the request head handed back for inspection.
+    /// One response, over the shared stub.
     fn serve(status: u16, body: &str) -> (String, std::thread::JoinHandle<String>) {
-        use std::io::{Read as _, Write as _};
-        use std::net::TcpListener;
-
-        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
-        let address = listener.local_addr().expect("address").to_string();
-        let body = body.to_owned();
-        let handle = std::thread::spawn(move || {
-            let Ok((mut stream, _)) = listener.accept() else {
-                return String::new();
-            };
-            let mut request = [0_u8; 4096];
-            let read = stream.read(&mut request).unwrap_or(0);
-            let head = String::from_utf8_lossy(&request[..read]).to_lowercase();
-            let _ = write!(
-                stream,
-                "HTTP/1.1 {status} OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            );
-            head
-        });
-        (address, handle)
+        let (address, handle) =
+            crate::providers::common::serve_responses(vec![(status, body.as_bytes().to_vec())]);
+        (
+            address,
+            std::thread::spawn(move || handle.join().expect("server").remove(0)),
+        )
     }
 
     const CODING_USAGES: &str = r#"{"usages":[{"scope":"FEATURE_CODING","detail":{"limit":"100","used":"25","remaining":"75"},"limits":[{"window":{"duration":300,"timeUnit":"TIME_UNIT_MINUTE"},"detail":{"limit":"50","used":"10","remaining":"40"}}]}]}"#;

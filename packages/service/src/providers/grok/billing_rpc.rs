@@ -480,8 +480,6 @@ fn read_varint(data: &[u8], index: &mut usize) -> Option<u64> {
 mod tests {
     use super::*;
     use std::collections::HashMap;
-    use std::io::{Read as _, Write as _};
-    use std::net::TcpListener;
     use std::path::PathBuf;
 
     fn context() -> CollectionContext {
@@ -517,25 +515,13 @@ mod tests {
         frame
     }
 
+    /// One gRPC-web frame, over the shared stub.
     fn serve(body: Vec<u8>) -> (String, std::thread::JoinHandle<String>) {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
-        let address = listener.local_addr().expect("address").to_string();
-        let handle = std::thread::spawn(move || {
-            let Ok((mut stream, _)) = listener.accept() else {
-                return String::new();
-            };
-            let mut request = [0_u8; 2048];
-            let read = stream.read(&mut request).unwrap_or(0);
-            let head = String::from_utf8_lossy(&request[..read]).to_lowercase();
-            let _ = write!(
-                stream,
-                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                body.len()
-            );
-            let _ = stream.write_all(&body);
-            head
-        });
-        (address, handle)
+        let (address, handle) = crate::providers::common::serve_responses(vec![(200, body)]);
+        (
+            address,
+            std::thread::spawn(move || handle.join().expect("server").remove(0)),
+        )
     }
 
     #[test]

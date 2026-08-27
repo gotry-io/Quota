@@ -198,19 +198,6 @@ pub fn duration_seconds(start: Option<i64>, end: Option<i64>) -> Option<u64> {
     (seconds >= 0).then_some(seconds as u64)
 }
 
-pub fn provider_source(provider: &str) -> &'static str {
-    match provider {
-        "openrouter" => "openrouter_api",
-        "deepseek" => "deepseek_balance_api",
-        "kimi" => "kimi_code_usages_api",
-        "litellm" => "litellm_budget_api",
-        "codex" => "chatgpt_usage_api",
-        "claude" => "anthropic_oauth_usage_api",
-        "grok" => "grok_billing_api",
-        _ => "provider",
-    }
-}
-
 pub fn obj_get<'a>(value: &'a Value, key: &str) -> Option<&'a Value> {
     value.as_object()?.get(key)
 }

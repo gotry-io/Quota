@@ -366,11 +366,16 @@ pub fn cookie_named_value<'a>(header: &'a str, name: &str) -> Option<&'a str> {
     })
 }
 
+/// The `Cookie:` header this build will send for a stored browser session, or why it will
+/// not.
+///
+/// A header this build refuses is a browser session that was never usable, so that is the rung
+/// every refusal here names.
 pub fn normalize_browser_cookie_header(
     provider: ProviderId,
     header: &str,
 ) -> Result<String, ProviderError> {
-    let source = super::json::provider_source(provider.as_str());
+    let source = BROWSER_SESSION_SOURCE;
     let Some(spec) = provider.metadata().browser_session else {
         return Err(ProviderError::new(ErrorCategory::Unsupported, source));
     };

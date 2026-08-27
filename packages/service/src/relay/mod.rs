@@ -572,8 +572,8 @@ fn validate_usage_hour(value: &Value, agent: &str) -> Result<String, RelayError>
 
 /// The contract's lower bound on a coverage window, as the parser returns instants.
 ///
-/// A submission this device cannot upload blocks the outbox behind it, so the bound is checked
-/// here as well as at Relay rather than left for the rejection to teach us.
+/// Checked here as well as at Relay: an hour outside the bound is a request that can only be
+/// refused, and spending it to be told so costs a round trip and a diagnostic line.
 fn earliest_usage_instant() -> chrono::DateTime<chrono::FixedOffset> {
     chrono::DateTime::parse_from_rfc3339(crate::usage::EARLIEST_USAGE_INSTANT)
         .expect("EARLIEST_USAGE_INSTANT is a valid RFC 3339 instant")
@@ -1330,19 +1330,6 @@ impl AccountManager {
         Ok(outcome)
     }
 
-    /// Persists a validated login outcome using the same durable session boundary as the service.
-    /// If the first write fails, retain a logout-pending revoke record so issued refresh families
-    /// are never abandoned in memory.
-    pub fn persist_login(&self, outcome: &LoginOutcome) -> Result<(), BackendError> {
-        if self.state.write_session_json(&outcome.session).is_ok() {
-            return Ok(());
-        }
-        if let Some(pending) = pending_session_from_active(&outcome.session) {
-            let _ = self.state.write_session_json(&pending);
-        }
-        Err(BackendError::unavailable())
-    }
-
     fn finalize_login(&self, response: &Value) -> Result<LoginOutcome, BackendError> {
         let mut session = session_from_token_response(response).map_err(|_| BackendError {
             error: crate::protocol::IpcError::new(
@@ -1903,19 +1890,11 @@ fn snapshot_payload_from_quota_report<'a>(
     Ok((captured_at, snapshots))
 }
 
-/// Refuses a submission that does not belong to the session that would carry it.
-///
-/// Device identity is a local question and is answered here. Sequence ordering is
-/// not: the Relay owns that counter, refuses anything but `last + 1`, and reports
-/// `sequence_conflict` when it disagrees. Answering it locally from a cached copy
-/// of that counter only produced the same verdict unattested -- a refusal with no
-/// Relay outcome behind it, which is how a queue could sit wedged for a week
-/// reporting `attempted: 0`. An ordering the Relay will not take costs one
-/// rejected request; it can never be stored, because the Relay checks it too.
 /// This device's readings, in the shape Relay accepts.
 ///
 /// The device token names the device, so the envelope restates neither an id a caller could
-/// get wrong nor a sequence Relay would have to keep for it.
+/// get wrong nor a sequence Relay would have to keep for it: an hour is replaced by the
+/// version of the scan behind it, and there is no counter to agree on.
 pub(crate) fn snapshot_envelope(generation: u64, snapshots: Vec<Value>) -> Value {
     serde_json::json!({
         "protocol_version": MANAGED_DATA_PROTOCOL,
@@ -2208,9 +2187,6 @@ pub(crate) fn relay_error_for_backend(error: RelayError) -> crate::protocol::Ipc
             }
             "stale_generation" => {
                 crate::protocol::IpcError::new(ErrorCode::StaleGeneration, RecoveryAction::Login)
-            }
-            "sequence_conflict" => {
-                crate::protocol::IpcError::new(ErrorCode::InvalidState, RecoveryAction::Reinstall)
             }
             "invalid_request" | "invalid_response" => {
                 crate::protocol::IpcError::new(ErrorCode::InvalidResponse, RecoveryAction::Retry)

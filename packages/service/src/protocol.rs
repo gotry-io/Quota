@@ -49,7 +49,6 @@ pub enum ComponentStatus {
     Stale,
     AuthRequired,
     Unavailable,
-    Unsupported,
     Error,
     SignedOut,
 }
@@ -303,25 +302,6 @@ pub enum BrowserAccessDenialReason {
     StoreUnreadable,
 }
 
-impl BrowserAccessDenialReason {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::FullDiskAccess => "full_disk_access",
-            Self::KeychainRefused => "keychain_refused",
-            Self::StoreUnreadable => "store_unreadable",
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<Self> {
-        match value {
-            "full_disk_access" => Some(Self::FullDiskAccess),
-            "keychain_refused" => Some(Self::KeychainRefused),
-            "store_unreadable" => Some(Self::StoreUnreadable),
-            _ => None,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderBrowserAccessDenial {
@@ -426,18 +406,6 @@ pub struct ComponentState {
     pub updated_at: Option<String>,
     pub last_error: Option<IpcError>,
     pub refreshing: bool,
-}
-
-impl ComponentState {
-    pub fn empty(status: ComponentStatus) -> Self {
-        Self {
-            status,
-            value: None,
-            updated_at: None,
-            last_error: None,
-            refreshing: false,
-        }
-    }
 }
 
 /// What this device knows about the Account it is signed in to.
@@ -605,7 +573,6 @@ pub enum DiagnosticRecovery {
     ConfigureProvider,
     UpdateSource,
     CheckAccess,
-    Upgrade,
     Reinstall,
 }
 
@@ -702,8 +669,6 @@ pub enum DiagnosticAttemptCode {
     MalformedData,
     TruncatedActiveSource,
     DeviceDeleted,
-    UploadDisabled,
-    SignedOut,
 }
 
 /// One completed or still-running piece of work, as the copied report lists it.
