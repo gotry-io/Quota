@@ -13,9 +13,16 @@ Read the relevant source before changing that area:
 | System boundaries, data paths, package dependencies, runtime split | `docs/architecture.md` |
 | Credentials, trust, redaction, transport, storage safety | `docs/security.md` |
 | Provider registration catalog (ids, defaults, config) | `packages/provider/catalog.json` |
-| Codex, Claude Code, Grok, and OpenRouter collection strategies | `docs/provider-collection.md` |
+| Collection strategy for all eight providers, and every subprocess a refresh may start | `docs/provider-collection.md` |
 | CodexBar external platform capability baseline (quota/usage/fallback) | `docs/codexbar-platform-capabilities.md` |
 | Persistent Relay storage decision and rationale | `docs/decisions/0001-persistent-relay-storage.md` |
+| Observation merge that preserves what each device saw | `docs/decisions/0003-observation-preserving-subscription-merge.md` |
+| One private Rust service behind one entry point | `docs/decisions/0007-rust-native-local-service.md` |
+| Report-time model catalog, and why the raw model text is kept | `docs/decisions/0009-versioned-model-catalog.md` |
+| Browser-session acquisition, its consent gate, and its bounds | `docs/decisions/0010-provider-browser-session-auth.md` |
+| SvelteKit documents served through the Relay Worker | `docs/decisions/0011-sveltekit-document-worker.md` |
+| Freshness derived from the observation, not stamped on it | `docs/decisions/0017-derived-observation-freshness.md` |
+| One statement per contract, and where it is written | `docs/decisions/0019-one-statement-per-contract.md` |
 | Invalid provider/agent input isolation | `docs/decisions/0026-isolate-invalid-input-at-the-smallest-scope.md` |
 | Managed account, device, authentication, and deletion lifecycle | `docs/decisions/0006-managed-account-device-usage.md` |
 | Browser sign-in and the one session table behind every client | `docs/decisions/0025-one-session-system.md` |

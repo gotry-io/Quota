@@ -40,8 +40,7 @@ newest reading it sent was taken, so an Account device list says **Active** unde
 **Idle** up to a day, and **Not reporting** beyond that. No device asserts anything about another.
 
 QuotaBar's Diagnostics page becomes Support: the surfaces, the sources, Copy report, and Reset local
-data. QuotaCLI's `doctor` exits zero when operation is healthy, every surface's data is current or
-empty, and attention is not required.
+data.
 
 ## What was given up
 

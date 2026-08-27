@@ -4,9 +4,9 @@
 - Date: 2026-08-10
 - Supersedes: [ADR 0002](./0002-relay-device-code-pairing.md),
   [ADR 0004](./0004-anonymous-relay-owners.md), [ADR 0005](./0005-url-only-relay-enrollment.md)
-- Updated 2026-08-26 by [ADR 0025](./0025-one-session-system.md), [ADR 0024](./0024-hour-versioned-usage-and-daily-rollups.md), and [ADR 0027](./0027-one-token-per-client.md)
-
-> Updated 2026-08-26: one session per client, and no CLI or device grant ([ADR 0027](./0027-one-token-per-client.md)).
+- Updated 2026-08-26 by [ADR 0024](./0024-hour-versioned-usage-and-daily-rollups.md),
+  [ADR 0025](./0025-one-session-system.md), and [ADR 0027](./0027-one-token-per-client.md), which
+  left one session per client and no CLI or device grant
 
 ## Decision
 
@@ -25,15 +25,14 @@ inside one Account without becoming a cross-account identifier.
 only writer of installation identity, sessions, Usage state, and the Usage outbox. Login is
 Authorization Code with PKCE over a loopback callback, and issues one session that reads the Account
 and writes this Device ([ADR 0027](./0027-one-token-per-client.md)); its refresh token rotates with
-compare-and-swap semantics. The registered `quota-ios` public client is a
-read-only viewer ([ADR 0013](./0013-readonly-ios-account-client.md)), and Swift renders typed IPC
-state without reading credentials or service files.
+compare-and-swap semantics. The registered `quota-ios` public client is a read-only viewer
+([ADR 0013](./0013-readonly-ios-account-client.md)), and Swift renders typed IPC state without
+reading credentials or service files.
 
 **Raw work stays local.** The service converts supported Codex, Claude Code, Grok, OpenCode, Pi, and
 Cursor records into privacy-preserving hourly facts. An upload carries no prompt, completion, path,
-session id, conversation id, raw event, or provider credential, and preserves opaque model
-identifiers. Pricing uses an effective-dated managed catalog and keeps an unknown price explicitly
-unpriced rather than zero.
+session id, conversation id, raw event, or provider credential, and preserves opaque model ids.
+Pricing uses an effective-dated managed catalog and keeps an unknown price unpriced, never zero.
 
 **A durable per-installation Usage upload preference** belongs to the same service. Disabling it keeps
 local collection and display, stops staging and draining the outbox, and shows Usage from This Mac
@@ -47,11 +46,10 @@ D1 batch over the rows Relay keeps ([ADR 0025](./0025-one-session-system.md)). B
 require recent authentication and an exact same-origin request, which only a browser can make.
 
 OAuth and Device control keep their v2 contracts; quota, Usage, and Account summary follow the single
-managed data contract, which is v6 today
-([ADR 0024](./0024-hour-versioned-usage-and-daily-rollups.md)). The upload sequences, coverage
-metadata, and per-device health snapshot this decision originally described are gone: an hour carries
-the version of the scan behind it ([ADR 0024](./0024-hour-versioned-usage-and-daily-rollups.md)) and
-a Device reports only when it last spoke ([ADR 0022](./0022-minimal-diagnostics.md)).
+managed data contract, v6 today. The upload sequences, coverage metadata, and per-device health
+snapshot this decision originally described are gone: an hour carries the version of the scan behind
+it ([ADR 0024](./0024-hour-versioned-usage-and-daily-rollups.md)) and a Device reports only when it
+last spoke ([ADR 0022](./0022-minimal-diagnostics.md)).
 
 ## Consequences
 

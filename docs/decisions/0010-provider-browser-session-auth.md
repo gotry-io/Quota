@@ -1,8 +1,7 @@
 # ADR 0010: Provider browser-session authentication
 
-## Status
-
-Accepted
+- Status: Accepted
+- Date: 2026-08-13
 
 > Updated 2026-08-26: a consent popup gates the first cookie read, a refused store is its own
 > reported outcome, and `browser_session` is declared for every provider with a web session — as

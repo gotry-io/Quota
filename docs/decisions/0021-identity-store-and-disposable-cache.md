@@ -22,22 +22,25 @@ Two SQLite files in the same owner-only directory, both at schema v1.
 
 `identity.sqlite` holds `installation`, `session`, `usage_upload_context`, `usage_outbox`,
 `provider_browser_sessions`, and `preferences`. It is a few kilobytes, is written rarely, and folds
-its write-ahead log back in after every write transaction.
+its write-ahead log back in after every write transaction. A released image's staged uploads are
+not imported into it: they were requests in a contract this build no longer speaks, and the first
+scan recomputes every retained hour and sends it again.
 
-`cache.sqlite` holds everything else and is disposable. Any SQLite error opening, reading, or writing
-it other than busy, disk-full, or I/O means the file is deleted and recreated empty; the reader is
-told to retry, `cache_reset_at` is recorded in identity, and `get_state` reports
-`cache: { rebuilding, reset_at }` until one complete Usage scan has run. Disk-full and I/O errors are
-the machine rather than the file, so they answer `unavailable` and delete nothing.
+`cache.sqlite` holds everything else and is disposable. A SQLite error opening, reading, or writing
+it means the file is deleted and recreated empty; the reader is told to retry, `cache_reset_at` is
+recorded in identity, and `get_state` reports `cache: { rebuilding, reset_at }` until one complete
+Usage scan has run. What is exempt is everything that is about this machine right now rather than
+about the file: busy and locked, disk-full and I/O, a read-only or refused image, a failed
+allocation, an interrupted statement, and a row the schema refused. Those answer `unavailable` and
+delete nothing.
 
 An identity this service cannot open, or one with no `installation` row, makes the device a new
 installation: new installation id, signed out, and a `local_identity_reset` finding whose recovery is
 to sign in again. Signing in retires the finding.
 
 A released `state.sqlite` is imported into identity once at startup — installation, session, upload
-context, outbox, browser sessions, and the Usage upload preference — and the released image and every
-sidecar beside it are removed afterwards, whether or not it could be read.
-
+context, browser sessions, and the Usage upload preference, but not its staged uploads — and the
+released image and every sidecar beside it are removed afterwards, whether or not it could be read.
 Nothing is ever salvaged, and nothing is copied out of an image this service could not read whole.
 
 ## What was given up
@@ -51,8 +54,8 @@ A damaged identity costs the session and the staged upload queue outright. Salva
 recover those, but only by trusting selected rows of a file SQLite had already refused, and the
 verification that made that trust defensible was itself most of the deleted code.
 
-The repair session is gone from the wire, from QuotaBar, and from QuotaCLI. There is no progress to
-watch, no stuck state to retry, and no reason to refuse a quit.
+The repair session is gone from the wire and from QuotaBar. There is no progress to watch, no stuck
+state to retry, and no reason to refuse a quit.
 
 Schema history is gone. The v1–v13 ladder was deleted rather than carried forward; a cache written by
 a newer client is deleted like any other unreadable one, and a newer identity still fails closed and

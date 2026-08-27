@@ -52,11 +52,9 @@ The owner-only configuration and state root also moves from `~/.config/quotacli/
 too, so a Mac keeps its installation id and its provider keys rather than becoming a second Device
 on the same Account.
 
-Re-adding a command-line client later means restoring `apps/cli` from history and re-adding a
-device-code or loopback grant beside the browser one; the shared crate it was built on never moved.
-
 ## When to revisit
 
 If headless collection is scheduled — a build server, a container, a Linux workstation — the grant
-comes back before the product does, and it comes back as a second way to open the same `sessions`
-row rather than as a second session system.
+comes back before the product does, as a second way to open the same `sessions` row rather than as a
+second session system. Re-adding the client means restoring `apps/cli` from history; the shared
+crate it was built on never moved.
