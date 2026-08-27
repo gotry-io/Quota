@@ -1846,20 +1846,25 @@ impl NativeBackend {
     }
 
     /// Sends the staged hours, at most one agent and one request's worth at a time.
-    fn drain_outbox(&self) -> Result<(), BackendError> {
+    /// Sends the hours this device still owes its Account.
+    ///
+    /// Answers whether Relay took an hour it did not already have. An ignored hour left the
+    /// Account exactly as it was, so it is not a reason to read the Account again.
+    fn drain_outbox(&self) -> Result<bool, BackendError> {
+        let mut accepted_any = false;
         if !self
             .state
             .usage_upload_enabled()
             .map_err(|_| BackendError::unavailable())?
         {
-            return Ok(());
+            return Ok(accepted_any);
         }
         let Some((session, session_epoch)) = self
             .state
             .session_snapshot()
             .map_err(|_| BackendError::unavailable())?
         else {
-            return Ok(());
+            return Ok(accepted_any);
         };
         if session.get("status").and_then(Value::as_str) != Some("active")
             || !self
@@ -1867,7 +1872,7 @@ impl NativeBackend {
                 .active_session_at_epoch(session_epoch)
                 .map_err(|_| BackendError::unavailable())?
         {
-            return Ok(());
+            return Ok(accepted_any);
         }
         let account_id = session
             .get("account_id")
@@ -1897,7 +1902,7 @@ impl NativeBackend {
                     .usage_upload_enabled()
                     .map_err(|_| BackendError::unavailable())?
                 {
-                    return Ok(());
+                    return Ok(accepted_any);
                 }
                 let taken = usage_upload_batch_size(agent, generation, remaining);
                 if taken == 0 {
@@ -1929,13 +1934,17 @@ impl NativeBackend {
                     .flatten()
                     .filter_map(|value| value.as_str().map(str::to_owned))
                     .collect::<Vec<_>>();
+                accepted_any |= response
+                    .get("accepted")
+                    .and_then(Value::as_array)
+                    .is_some_and(|hours| !hours.is_empty());
                 self.state
                     .forget_outbox_hours(agent, &answered)
                     .map_err(|_| BackendError::unavailable())?;
                 remaining = &remaining[taken..];
             }
         }
-        Ok(())
+        Ok(accepted_any)
     }
 
     fn timezone(&self) -> String {
@@ -1993,6 +2002,37 @@ impl NativeBackend {
         cancel: &AtomicBool,
         updates: &dyn RefreshSink,
     ) -> Option<Result<Value, BackendError>> {
+        let value = self.account_read(cancel)?;
+        updates.account(value.clone());
+        Some(value)
+    }
+
+    /// Reads the Account once more, because this device's own upload just changed it.
+    ///
+    /// Without this, what a Mac uploaded would not appear in its own Account view until the
+    /// next refresh five minutes later. The read is conditional, so an Account that did not
+    /// actually move answers 304 and publishes nothing. A read that fails is not news — this
+    /// refresh already has an Account — so only a fresh answer, or one that says the session
+    /// has ended, replaces what was published.
+    fn reread_account(
+        &self,
+        cancel: &AtomicBool,
+        updates: &dyn RefreshSink,
+    ) -> Option<Result<Value, BackendError>> {
+        let value = self.account_read(cancel)?;
+        if value
+            .as_ref()
+            .err()
+            .is_some_and(|error| !error.error.code.requires_login())
+        {
+            return None;
+        }
+        updates.account(value.clone());
+        Some(value)
+    }
+
+    /// One Account read, with the periods it derives and the journal row it earns.
+    fn account_read(&self, cancel: &AtomicBool) -> Option<Result<Value, BackendError>> {
         if cancel.load(Ordering::Acquire) {
             return None;
         }
@@ -2019,7 +2059,6 @@ impl NativeBackend {
             self.clear_active_session();
         }
         self.finish_backend_result_attempt(attempt, &value);
-        updates.account(value.clone());
         Some(value)
     }
 
@@ -2478,16 +2517,25 @@ impl LocalBackend for NativeBackend {
                         let current_session =
                             self.state.session_json().ok().flatten().unwrap_or(session);
                         let mut account_sync_error = None;
+                        // Whether this refresh put something in the Account that was not there
+                        // when it read one.
+                        let mut uploaded = false;
                         if let Ok(quota_payload) = &quota_value {
                             let restated = failure_status_snapshots(
                                 quota_payload,
                                 previous_quota.as_ref(),
                                 Utc::now(),
                             );
-                            if let Err(error) =
-                                self.account.upload_quota_report(quota_payload, &restated)
-                            {
-                                record_account_sync_error(&mut account_sync_error, error);
+                            match self.account.upload_quota_report(quota_payload, &restated) {
+                                Ok(response) => {
+                                    uploaded |= response
+                                        .get("accepted")
+                                        .and_then(Value::as_array)
+                                        .is_some_and(|providers| !providers.is_empty());
+                                }
+                                Err(error) => {
+                                    record_account_sync_error(&mut account_sync_error, error);
+                                }
                             }
                         }
                         let usage_upload_enabled = match self.state.usage_upload_enabled() {
@@ -2537,7 +2585,8 @@ impl LocalBackend for NativeBackend {
                             let upload_attempt =
                                 self.begin_attempt(DiagnosticAttemptKind::UsageUpload, None);
                             match self.drain_outbox() {
-                                Ok(()) => {
+                                Ok(accepted) => {
+                                    uploaded |= accepted;
                                     let pending = self
                                         .state
                                         .outbox_entries()
@@ -2571,6 +2620,10 @@ impl LocalBackend for NativeBackend {
                         {
                             self.clear_active_session();
                             account_value = Some(Err(error));
+                        } else if uploaded
+                            && let Some(reread) = self.reread_account(cancel.as_ref(), updates)
+                        {
+                            account_value = Some(reread);
                         }
                     }
                     Err(error) => {
@@ -3089,33 +3142,77 @@ mod tests {
     use super::*;
     use std::fs;
 
-    /// A Relay that answers the given responses in order and then stops listening.
+    /// A Relay that answers the given responses in order.
     ///
-    /// Everything a refresh asks for after those is refused at connect, which is what a test
-    /// wants: only the calls it named are interesting, and the rest fail immediately instead of
-    /// waiting out a timeout.
-    fn spawn_relay(responses: Vec<String>) -> (String, std::thread::JoinHandle<Vec<String>>) {
+    /// It keeps listening until the test stops it, and a request the test did not plan for is
+    /// recorded and answered with a closed connection rather than ignored — so "this refresh
+    /// called the Account read twice" is something a test can see, not something it has to
+    /// infer from a call that hung.
+    struct MockRelay {
+        origin: String,
+        stop: Arc<AtomicBool>,
+        server: std::thread::JoinHandle<Vec<String>>,
+    }
+
+    impl MockRelay {
+        /// Stops listening and answers with every request head it saw, in order.
+        fn finish(self) -> Vec<String> {
+            self.stop.store(true, Ordering::Release);
+            self.server.join().expect("relay server")
+        }
+    }
+
+    fn spawn_relay(responses: Vec<String>) -> MockRelay {
         use std::io::{Read as _, Write as _};
 
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("relay listener");
+        listener.set_nonblocking(true).expect("relay nonblocking");
         let address = listener.local_addr().expect("relay address");
+        let stop = Arc::new(AtomicBool::new(false));
+        let stopping = stop.clone();
         let server = std::thread::spawn(move || {
             let mut recorded = Vec::new();
-            for response in responses {
-                let Ok((mut stream, _)) = listener.accept() else {
-                    break;
-                };
-                stream
-                    .set_read_timeout(Some(std::time::Duration::from_secs(5)))
-                    .expect("relay timeout");
-                let mut request = [0_u8; 8_192];
-                let read = stream.read(&mut request).unwrap_or(0);
-                recorded.push(String::from_utf8_lossy(&request[..read]).into_owned());
-                let _ = stream.write_all(response.as_bytes());
+            let mut responses = responses.into_iter();
+            while !stopping.load(Ordering::Acquire) {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        stream.set_nonblocking(false).expect("relay stream");
+                        stream
+                            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                            .expect("relay timeout");
+                        let mut request = [0_u8; 8_192];
+                        let read = stream.read(&mut request).unwrap_or(0);
+                        recorded.push(String::from_utf8_lossy(&request[..read]).into_owned());
+                        let _ = stream.write_all(responses.next().unwrap_or_default().as_bytes());
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(std::time::Duration::from_millis(2))
+                    }
+                    Err(_) => break,
+                }
             }
             recorded
         });
-        (format!("http://{address}"), server)
+        MockRelay {
+            origin: format!("http://{address}"),
+            stop,
+            server,
+        }
+    }
+
+    fn summary_requests(sent: &[String]) -> usize {
+        sent.iter()
+            .filter(|head| head.starts_with("GET /api/v6/account/summary"))
+            .count()
+    }
+
+    fn http_json_with_etag(value: &Value, etag: &str) -> String {
+        let body = serde_json::to_vec(value).expect("json");
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nETag: {etag}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            String::from_utf8(body).expect("utf8")
+        )
     }
 
     fn relay_json(value: &Value) -> String {
@@ -3193,7 +3290,8 @@ mod tests {
     #[test]
     fn the_account_read_does_not_queue_behind_provider_collection() {
         let summary = account_summary("octocat");
-        let (origin, server) = spawn_relay(vec![relay_json(&summary)]);
+        let relay_server = spawn_relay(vec![relay_json(&summary)]);
+        let origin = relay_server.origin.clone();
         let root =
             std::env::temp_dir().join(format!("quota-account-first-{}", uuid::Uuid::new_v4()));
         let home = root.join("home");
@@ -3269,13 +3367,14 @@ mod tests {
                 .is_some()
         );
 
-        let sent = server.join().expect("relay server");
-        assert_eq!(sent.len(), 1, "{sent:?}");
+        let sent = relay_server.finish();
+        // The Account was the first thing this refresh asked Relay for, before pricing, before
+        // the control check, before anything collection could have needed.
         assert!(
             sent[0].starts_with("GET /api/v6/account/summary"),
-            "{}",
-            sent[0]
+            "{sent:?}"
         );
+        assert_eq!(summary_requests(&sent), 1, "{sent:?}");
         drop(backend);
         drop(state);
         fs::remove_dir_all(root).expect("cleanup");
@@ -3289,12 +3388,13 @@ mod tests {
         // Pricing, the model catalog and the control call are all answered by a closed
         // connection — a network failure, not a session ending. The read that follows is the
         // one under test.
-        let (origin, server) = spawn_relay(vec![
+        let relay_server = spawn_relay(vec![
             String::new(),
             String::new(),
             String::new(),
             relay_json(&summary),
         ]);
+        let origin = relay_server.origin.clone();
         let root =
             std::env::temp_dir().join(format!("quota-account-late-{}", uuid::Uuid::new_v4()));
         let home = root.join("home");
@@ -3352,13 +3452,263 @@ mod tests {
             account
         );
 
-        let sent = server.join().expect("relay server");
+        let sent = relay_server.finish();
         assert_eq!(sent.len(), 4, "{sent:?}");
         assert!(
             sent[3].starts_with("GET /api/v6/account/summary"),
             "{}",
             sent[3]
         );
+        drop(backend);
+        drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    /// Records everything a refresh publishes, in order.
+    #[derive(Default)]
+    struct RecordingUpdates {
+        account: std::sync::Mutex<Vec<Result<Value, BackendError>>>,
+    }
+
+    impl RecordingUpdates {
+        fn published(&self) -> Vec<Value> {
+            self.account
+                .lock()
+                .expect("published accounts")
+                .iter()
+                .filter_map(|result| result.as_ref().ok().cloned())
+                .collect()
+        }
+    }
+
+    impl RefreshSink for RecordingUpdates {
+        fn account(&self, result: Result<Value, BackendError>) {
+            self.account
+                .lock()
+                .expect("published accounts")
+                .push(result);
+        }
+    }
+
+    fn active_session() -> Value {
+        json!({
+            "schema_version": 1,
+            "status": "active",
+            "account_id": "account_1",
+            "display_label": "octocat",
+            "device_id": "device_1",
+            "device_generation": 1,
+            "usage_sync_revision": 0,
+            "usage_deleted_before": null,
+            "upload_not_before": "1970-01-01T00:00:00Z",
+            "session": {
+                "access_token": "qb_access_token_synthetic",
+                "access_expires_at": "2099-01-01T00:00:00Z",
+                "refresh_token": "qbr_refresh_token_synthetic",
+                "refresh_expires_at": "2099-01-01T00:00:00Z"
+            }
+        })
+    }
+
+    fn device_control() -> String {
+        relay_json(&json!({
+            "protocol_version": crate::protocol::CONTROL_PROTOCOL,
+            "account_id": "account_1",
+            "device_id": "device_1",
+            "device_generation": 1,
+            "usage_deleted_before": null,
+            "usage_sync_revision": 0
+        }))
+    }
+
+    fn device_profile() -> String {
+        relay_json(&json!({
+            "protocol_version": crate::protocol::CONTROL_PROTOCOL,
+            "status": "updated",
+            "device_id": "device_1"
+        }))
+    }
+
+    fn snapshot_upload(accepted: Value, ignored: Value) -> String {
+        relay_json(&json!({
+            "protocol_version": MANAGED_DATA_PROTOCOL,
+            "device_id": "device_1",
+            "device_generation": 1,
+            "accepted": accepted,
+            "ignored": ignored
+        }))
+    }
+
+    /// A reading this device took a moment ago, still current, for a provider this refresh will
+    /// find no sign-in for — which is what makes the refresh restate and upload it.
+    fn previous_quota_report() -> Value {
+        json!({
+            "captured_at": Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
+            "results": [{
+                "provider": "codex",
+                "outcome": "success",
+                "snapshots": [{
+                    "provider": "codex",
+                    "account": {"fingerprint": "account_test", "fingerprint_scope": "global"},
+                    "windows": [{"id": "five_hour", "title": "5 hour", "used_percent": 40.0}],
+                    "status": "available",
+                    "observed_at": Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true)
+                }],
+                "sources": []
+            }]
+        })
+    }
+
+    fn signed_in_backend(root: &std::path::Path, origin: &str) -> (Arc<StateStore>, NativeBackend) {
+        let home = root.join("home");
+        fs::create_dir_all(&home).expect("home");
+        let state = Arc::new(StateStore::open(root).expect("state"));
+        state
+            .write_session_json(&active_session())
+            .expect("session");
+        state
+            .set_component(
+                crate::protocol::ComponentName::Account,
+                crate::protocol::ComponentStatus::Ready,
+                Some(json!({
+                    "auth_status": "signed_in",
+                    "account_id": "account_1",
+                    "display_label": "octocat",
+                    "device_id": "device_1",
+                    "device_generation": 1,
+                    "account_summary": null
+                })),
+                Some(now_rfc3339()),
+                None,
+                false,
+            )
+            .expect("account component");
+        let relay = Arc::new(crate::relay::RelayClient::for_test(origin).expect("relay"));
+        let mut backend = NativeBackend::new(state.clone(), relay, "QuotaTest", "test");
+        backend.home = home;
+        backend.environment.clear();
+        (state, backend)
+    }
+
+    /// What this Mac just uploaded belongs in its own Account view now, not in five minutes.
+    ///
+    /// The refresh reads the Account first — that is what makes it feel instant — and reads it
+    /// once more after an upload Relay actually took, so the panel ends the refresh holding the
+    /// Account that includes this device's own reading.
+    #[test]
+    fn an_upload_the_account_took_is_read_back_in_the_same_refresh() {
+        let before = account_summary("octocat");
+        let mut after = account_summary("octocat");
+        after["devices"] = json!([{
+            "id": "device_1",
+            "display_name": "Test Mac",
+            "platform": "macos",
+            "last_seen_at": "2026-08-27T00:00:00Z",
+            "last_observed_at": "2026-08-27T00:00:00Z"
+        }]);
+        let relay_server = spawn_relay(vec![
+            http_json_with_etag(&before, "\"before\""),
+            String::new(),
+            String::new(),
+            device_control(),
+            device_profile(),
+            snapshot_upload(json!(["codex"]), json!([])),
+            http_json_with_etag(&after, "\"after\""),
+        ]);
+        let root =
+            std::env::temp_dir().join(format!("quota-account-reread-{}", uuid::Uuid::new_v4()));
+        let (state, backend) = signed_in_backend(&root, &relay_server.origin);
+        state
+            .set_component(
+                crate::protocol::ComponentName::Quota,
+                crate::protocol::ComponentStatus::Ready,
+                Some(previous_quota_report()),
+                Some(now_rfc3339()),
+                None,
+                false,
+            )
+            .expect("previous quota");
+        let updates = RecordingUpdates::default();
+
+        let outcome = backend.refresh(Arc::new(AtomicBool::new(false)), &updates);
+
+        let account = outcome.account.expect("account outcome");
+        assert_eq!(account["account_summary"], after);
+        // Both reads were published, in the order they happened: the fast one, then the one that
+        // includes this device.
+        let published = updates.published();
+        assert_eq!(published.len(), 2, "{published:?}");
+        assert_eq!(published[0]["account_summary"], before);
+        assert_eq!(published[1]["account_summary"], after);
+
+        let sent = relay_server.finish();
+        assert!(
+            sent.iter()
+                .any(|head| head.starts_with("PUT /api/v6/device/snapshots")),
+            "{sent:?}"
+        );
+        assert_eq!(summary_requests(&sent), 2, "{sent:?}");
+        let reread = sent
+            .iter()
+            .filter(|head| head.starts_with("GET /api/v6/account/summary"))
+            .nth(1)
+            .expect("second account read");
+        // The second read is conditional on what the first one returned, so an Account that did
+        // not move costs a 304 and nothing else.
+        assert!(
+            reread
+                .to_ascii_lowercase()
+                .contains("if-none-match: \"before\""),
+            "{reread}"
+        );
+        drop(backend);
+        drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    /// An upload Relay took nothing new from left the Account exactly as this refresh read it,
+    /// so there is nothing to read again.
+    #[test]
+    fn an_upload_the_account_ignored_does_not_read_it_again() {
+        let summary = account_summary("octocat");
+        let relay_server = spawn_relay(vec![
+            http_json_with_etag(&summary, "\"only\""),
+            String::new(),
+            String::new(),
+            device_control(),
+            device_profile(),
+            snapshot_upload(json!([]), json!(["codex"])),
+        ]);
+        let root =
+            std::env::temp_dir().join(format!("quota-account-once-{}", uuid::Uuid::new_v4()));
+        let (state, backend) = signed_in_backend(&root, &relay_server.origin);
+        state
+            .set_component(
+                crate::protocol::ComponentName::Quota,
+                crate::protocol::ComponentStatus::Ready,
+                Some(previous_quota_report()),
+                Some(now_rfc3339()),
+                None,
+                false,
+            )
+            .expect("previous quota");
+        let updates = RecordingUpdates::default();
+
+        let outcome = backend.refresh(Arc::new(AtomicBool::new(false)), &updates);
+
+        assert_eq!(
+            outcome.account.expect("account outcome")["account_summary"],
+            summary
+        );
+        assert_eq!(updates.published().len(), 1);
+        let sent = relay_server.finish();
+        // The upload happened; Relay simply had nothing new to take from it.
+        assert!(
+            sent.iter()
+                .any(|head| head.starts_with("PUT /api/v6/device/snapshots")),
+            "{sent:?}"
+        );
+        assert_eq!(summary_requests(&sent), 1, "{sent:?}");
         drop(backend);
         drop(state);
         fs::remove_dir_all(root).expect("cleanup");

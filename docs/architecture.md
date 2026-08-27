@@ -233,6 +233,14 @@ the device control check, the quota upload, and the Usage outbox drain, in that 
 there that ends the session speaks for the account, so an upload a refresh could not deliver never
 takes back a summary it already read.
 
+A refresh whose upload Relay actually accepted — a snapshot or an hour it did not already hold —
+reads the Account once more before it ends, so what this Mac just sent appears in its own Account
+view in the same refresh rather than five minutes later. That read is the same conditional one, so
+an Account that did not move answers 304; an upload answered entirely with `ignored` changed nothing
+and is not read back at all. Both reads publish through the same path, which applies a component only
+when its value differs from the one already showing, so a re-read that says the same thing costs no
+write and emits no event.
+
 An Account-summary Device carries `last_seen_at` and `last_observed_at` and nothing it asserted about
 itself. Clients derive how recently it spoke from the newer of the two — Active under thirty minutes,
 Idle up to a day, Not reporting beyond that — because a quiet device is asleep, closed, or off rather

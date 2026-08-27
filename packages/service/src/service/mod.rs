@@ -1377,8 +1377,12 @@ impl LocalService {
     }
 }
 
-/// The running refresh's half of [`RefreshSink`]: it applies and announces what it is handed,
-/// and remembers it so the end of the refresh does not restate the same value.
+/// The running refresh's half of [`RefreshSink`].
+///
+/// It applies and announces what it is handed, and remembers it: a refresh can read the Account
+/// twice — once before it uploads and once after, when the upload changed it — and the end of
+/// the refresh restates it again. Only a value that differs from the one standing is applied, so
+/// a conditional read answered 304 costs nothing and announces nothing.
 struct RefreshUpdates {
     service: LocalService,
     account: Mutex<Option<Result<Value, BackendError>>>,
@@ -1401,6 +1405,9 @@ impl RefreshUpdates {
 impl RefreshSink for RefreshUpdates {
     fn account(&self, result: Result<Value, BackendError>) {
         let result = self.service.account_result_for_session(result);
+        if self.already_applied_account(&result) {
+            return;
+        }
         if let Ok(mut applied) = self.account.lock() {
             *applied = Some(result.clone());
         }
@@ -2433,6 +2440,9 @@ mod tests {
         fn refresh(&self, _: Arc<AtomicBool>, updates: &dyn RefreshSink) -> RefreshOutcome {
             updates.account(Ok(self.account()));
             self.collecting.hold();
+            // A conditional read answered 304 hands back the Account it already had. Restating
+            // it is not a change, and a window that is already showing it is not told again.
+            updates.account(Ok(self.account()));
             RefreshOutcome {
                 quota: Ok(serde_json::json!({"results": []})),
                 usage: Err(BackendError::unavailable()),
@@ -2584,6 +2594,18 @@ mod tests {
 
         collecting.release();
         wait_refresh_idle(&service);
+
+        // The unchanged second reading announced nothing: one account event stands for the one
+        // value the window is showing.
+        assert_eq!(
+            sink.0
+                .lock()
+                .expect("events")
+                .iter()
+                .filter(|event| event.changed_components == [ComponentName::Account])
+                .count(),
+            1
+        );
 
         // Ending the refresh neither restated the Account nor took it back.
         let settled = account_component(&service);
