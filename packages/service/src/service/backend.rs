@@ -203,33 +203,37 @@ pub struct NativeBackend {
     /// Held closed by a test in front of provider collection, so a refresh can be observed
     /// while collection is provably still running.
     #[cfg(test)]
-    collection_gate: Option<Arc<CollectionGate>>,
+    collection_gate: Option<Arc<RefreshGate>>,
+    /// Held closed by a test just after the refresh's own Account read has decided, so a test
+    /// can act on what that read found before anything else in the refresh moves.
+    #[cfg(test)]
+    account_read_gate: Option<Arc<RefreshGate>>,
 }
 
-/// A latch a test closes in front of provider collection.
+/// A latch a test closes inside a refresh.
 ///
-/// It reports when collection arrived, waits to be opened, and remembers whether it timed out
-/// rather than blocking forever — so ordering is proven by what actually released it rather than
-/// by how long a test slept.
+/// It reports when the refresh reached it, waits to be opened, and remembers whether it timed
+/// out rather than blocking forever — so ordering is proven by what actually released it rather
+/// than by how long a test slept.
 #[cfg(test)]
 #[derive(Default)]
-pub(crate) struct CollectionGate {
-    state: std::sync::Mutex<CollectionGateState>,
+pub(crate) struct RefreshGate {
+    state: std::sync::Mutex<RefreshGateState>,
     changed: std::sync::Condvar,
 }
 
 #[cfg(test)]
 #[derive(Default)]
-struct CollectionGateState {
+struct RefreshGateState {
     arrived: bool,
     open: bool,
     timed_out: bool,
 }
 
 #[cfg(test)]
-impl CollectionGate {
+impl RefreshGate {
     fn hold(&self) {
-        let mut state = self.state.lock().expect("collection gate");
+        let mut state = self.state.lock().expect("refresh gate");
         state.arrived = true;
         self.changed.notify_all();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
@@ -242,32 +246,32 @@ impl CollectionGate {
             let (guard, _) = self
                 .changed
                 .wait_timeout(state, remaining)
-                .expect("collection gate wait");
+                .expect("refresh gate wait");
             state = guard;
         }
     }
 
     pub(crate) fn wait_arrived(&self) {
-        let mut state = self.state.lock().expect("collection gate");
+        let mut state = self.state.lock().expect("refresh gate");
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while !state.arrived {
             let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-            assert!(!remaining.is_zero(), "provider collection never started");
+            assert!(!remaining.is_zero(), "the refresh never reached the gate");
             let (guard, _) = self
                 .changed
                 .wait_timeout(state, remaining)
-                .expect("collection gate wait");
+                .expect("refresh gate wait");
             state = guard;
         }
     }
 
     pub(crate) fn open(&self) {
-        self.state.lock().expect("collection gate").open = true;
+        self.state.lock().expect("refresh gate").open = true;
         self.changed.notify_all();
     }
 
     pub(crate) fn timed_out(&self) -> bool {
-        self.state.lock().expect("collection gate").timed_out
+        self.state.lock().expect("refresh gate").timed_out
     }
 }
 
@@ -293,6 +297,8 @@ impl NativeBackend {
             client_version: client_version.to_owned(),
             #[cfg(test)]
             collection_gate: None,
+            #[cfg(test)]
+            account_read_gate: None,
         }
     }
 
@@ -2002,7 +2008,14 @@ impl NativeBackend {
         cancel: &AtomicBool,
         updates: &dyn RefreshSink,
     ) -> Option<Result<Value, BackendError>> {
-        let value = self.account_read(cancel)?;
+        let read = self.account_read(cancel);
+        // A test latch that opens only once this read has decided, so what it decided — and in
+        // particular that it found no session — is a fact rather than a race.
+        #[cfg(test)]
+        if let Some(gate) = &self.account_read_gate {
+            gate.hold();
+        }
+        let value = read?;
         updates.account(value.clone());
         Some(value)
     }
@@ -3274,7 +3287,7 @@ mod tests {
     /// Records what a refresh publishes, and lets provider collection go the moment the Account
     /// arrives — so the ordering is proven by what released collection, not by a clock.
     struct GateOpeningUpdates {
-        gate: Arc<CollectionGate>,
+        gate: Arc<RefreshGate>,
         account: std::sync::Mutex<Option<Value>>,
     }
 
@@ -3331,7 +3344,7 @@ mod tests {
                 false,
             )
             .expect("account component");
-        let gate = Arc::new(CollectionGate::default());
+        let gate = Arc::new(RefreshGate::default());
         let relay = Arc::new(crate::relay::RelayClient::for_test(&origin).expect("relay"));
         let mut backend = NativeBackend::new(state.clone(), relay, "QuotaTest", "test");
         backend.home = home;
@@ -3400,57 +3413,41 @@ mod tests {
         let home = root.join("home");
         fs::create_dir_all(&home).expect("home");
         let state = Arc::new(StateStore::open(&root).expect("state"));
-        let gate = Arc::new(CollectionGate::default());
+        let reading = Arc::new(RefreshGate::default());
+        let collecting = Arc::new(RefreshGate::default());
         let relay = Arc::new(crate::relay::RelayClient::for_test(&origin).expect("relay"));
         let mut backend = NativeBackend::new(state.clone(), relay, "QuotaTest", "test");
         backend.home = home;
         backend.environment.clear();
-        backend.collection_gate = Some(gate.clone());
-        let updates = GateOpeningUpdates {
-            gate: Arc::new(CollectionGate::default()),
-            account: std::sync::Mutex::new(None),
-        };
+        backend.account_read_gate = Some(reading.clone());
+        backend.collection_gate = Some(collecting.clone());
+        let updates = RecordingUpdates::default();
 
         let outcome = std::thread::scope(|scope| {
             let refreshing =
                 scope.spawn(|| backend.refresh(Arc::new(AtomicBool::new(false)), &updates));
-            // The refresh is provably past its own Account read — it found no session — and is
-            // waiting on collection. The sign-in lands now.
-            gate.wait_arrived();
+            // Both halves of the refresh are parked. The Account read has already decided — it
+            // found no session — and collection has not finished. The sign-in lands between the
+            // two, with nothing about the ordering left to a clock.
+            reading.wait_arrived();
+            collecting.wait_arrived();
             state
-                .write_session_json(&json!({
-                    "schema_version": 1,
-                    "status": "active",
-                    "account_id": "account_1",
-                    "display_label": "octocat",
-                    "device_id": "device_1",
-                    "device_generation": 1,
-                    "session": {
-                        "access_token": "qb_access_token_synthetic",
-                        "access_expires_at": "2099-01-01T00:00:00Z",
-                        "refresh_token": "qbr_refresh_token_synthetic",
-                        "refresh_expires_at": "2099-01-01T00:00:00Z"
-                    }
-                }))
+                .write_session_json(&active_session())
                 .expect("session");
-            gate.open();
+            reading.open();
+            collecting.open();
             refreshing.join().expect("refresh")
         });
+        assert!(!reading.timed_out(), "the account read was never released");
+        assert!(!collecting.timed_out(), "collection was never released");
 
         let account = outcome
             .account
             .expect("the account this refresh signed in to");
         assert_eq!(account["auth_status"], "signed_in");
         assert_eq!(account["account_summary"], summary);
-        assert_eq!(
-            updates
-                .account
-                .lock()
-                .expect("published account")
-                .clone()
-                .expect("the account was published"),
-            account
-        );
+        // One read, published once: the refresh began with nothing to read.
+        assert_eq!(updates.published(), vec![account.clone()]);
 
         let sent = relay_server.finish();
         assert_eq!(sent.len(), 4, "{sent:?}");
